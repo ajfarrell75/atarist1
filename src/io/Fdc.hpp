@@ -27,6 +27,7 @@
 
 #include "core/Scheduler.hpp"
 #include "io/StxImage.hpp"
+#include "io/Acsi.hpp"
 
 class Bus;
 class YM2149;
@@ -67,6 +68,13 @@ public:
     // Monte/éjecte une image (.st ou .msa) dans le lecteur `drive` (0 = A, 1 = B).
     bool loadImage(const std::string& path, int drive = 0);
     void eject(int drive = 0);
+
+    // Monte une image de disque dur ACSI (dump de secteurs brut) sur la cible
+    // `target` (0-7, généralement 0). Le TOS/EmuTOS détecte le périphérique au boot,
+    // lit la table de partitions et monte les partitions FAT (C:, D:…). Cf. io/Acsi.hpp.
+    bool mountAcsi(const std::string& path, int target = 0) { return acsi_.mount(target, path); }
+    bool acsiActive() const { return acsi_.anyEnabled(); }
+    int  acsiPartitionCount() const { return acsi_.partitionCount(); }
     bool inserted(int drive = 0) const { return drive_[drive & 1].present(); }
     const std::string& mountedPath(int drive = 0) const { return drive_[drive & 1].path; }
 
@@ -202,17 +210,14 @@ private:
     void     setIntrqLine(bool on);             // pilote la ligne GPIP5 (+ canal 7 sur front)
 
     // --- Contrôleur ACSI (disque dur, $FF8606 bit DMA_CSACSI) -----------------
-    // Variante Atari de SCSI : commande de 6 octets envoyée octet par octet via la
-    // DMA ($FF8604) ; après chaque octet accepté, le contrôleur lève l'IRQ HDC
-    // (= INTRQ/GPIP5) pour que le CPU envoie le suivant (cf. Hatari Acsi_WriteCommandByte).
-    // Sans disque sur la cible → pas d'IRQ → le pilote conclut « pas de disque ».
-    void     writeAcsi(uint32_t addr, uint8_t v);
-    void     executeAcsi();                     // exécute la commande complète (DMA + statut)
-    std::vector<uint8_t> hd_;                    // disque dur virtuel (cible 0), alloué à la demande
-    uint8_t  acsiCmd_[6] = {0};
-    int      acsiByteCount_ = 0;
-    uint8_t  acsiTarget_ = 0;
-    uint8_t  acsiStatus_ = 0;                    // statut renvoyé (0 = OK)
+    // Le DMA/FDC route les accès $FF8604/06 vers le contrôleur ACSI `acsi_` (port de
+    // hdc.c) quand le bit DMA_CSACSI est posé. Réception octet par octet (broche A1 =
+    // DMA_A0), puis transfert DMA RAM↔image piloté ICI (on possède dmaAddr_/dmaMode_
+    // et le plan mémoire). Après chaque octet accepté, IRQ HDC (= INTRQ/GPIP5) levée
+    // si la cible est peuplée → le pilote/TOS poursuit ; cible vide → « pas de disque ».
+    Acsi     acsi_;
+    void     writeAcsi(uint32_t addr, uint8_t v);   // un octet de commande ACSI
+    void     acsiDmaTransfer();                      // transfert DMA RAM↔image (Acsi_DmaTransfer)
 
     int      currentSide() const;               // face d'après le port A du PSG
     int      selectedDrive() const;             // 0 = A, 1 = B, -1 = aucun (PSG port A)

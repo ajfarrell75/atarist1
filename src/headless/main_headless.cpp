@@ -45,6 +45,8 @@ void usage() {
         "  --cart FILE       monte une cartouche ($FA0000) : Test Kit diagnostic, etc.\n"
         "  --gemdos DIR      disque dur GEMDOS : mappe DIR sur C: (redirection des appels\n"
         "                    GEMDOS vers l'hôte, façon Hatari ; exclusif avec --cart)\n"
+        "  --acsi IMG        image disque dur ACSI (cible 0) : le TOS lit la table de\n"
+        "                    partitions et monte C:/D:… (alias --hd ; port de hdc.c)\n"
         "  --glue-selftest   auto-test de la machine Glue (bordures) puis quitte\n"
         "  --dump-at N A L F dump brut de L octets de RAM dès $A (hex) après la trame N → F\n"
         "  --screenshot PPM  dump du framebuffer final au format PPM\n"
@@ -133,6 +135,7 @@ int main(int argc, char** argv) {
     std::string romPath    = "roms/etos192us.img";
     std::string cartPath;
     std::string gemdosDir;                       // --gemdos DIR : disque dur GEMDOS (dossier hôte)
+    std::string acsiImg;                         // --acsi IMG : image disque dur ACSI (cible 0)
     bool        regs       = false;
     bool        irq        = false;
     bool        haveUntil  = false;
@@ -191,6 +194,7 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(a, "--fastfdc"))    fastFdc   = true;
         else if (!std::strcmp(a, "--cart"))       cartPath  = next(a);
         else if (!std::strcmp(a, "--gemdos"))     gemdosDir = next(a);
+        else if (!std::strcmp(a, "--acsi") || !std::strcmp(a, "--hd")) acsiImg = next(a);
         else if (!std::strcmp(a, "--walk-mouse")) walkMouse = true;
         else if (!std::strcmp(a, "--keys"))       keys      = next(a);
         else if (!std::strcmp(a, "--joy")) {      // état joystick maintenu : "P1" ou "P1,P0"
@@ -252,6 +256,11 @@ int main(int argc, char** argv) {
     } else if (!cartPath.empty()) {
         machine.loadCart(cartPath);   // cartouche $FA0000 (optionnelle)
     }
+    // Disque dur ACSI (--acsi/--hd) : le TOS détecte le périphérique, lit la table de
+    // partitions et monte les partitions FAT (C:, D:…). Indépendant du GEMDOS HD.
+    if (!acsiImg.empty() && machine.fdc.mountAcsi(acsiImg))
+        std::fprintf(stderr, "[headless] ACSI : %d partition(s) détectée(s)\n",
+                     machine.fdc.acsiPartitionCount());
     machine.mfp.setColorMonitor(!machineMono);   // --mono → moniteur mono (haute rés)
 
     // Capture du port série (RS-232) : les ROMs de diagnostic y impriment leur

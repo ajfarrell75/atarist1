@@ -188,7 +188,8 @@ ou `disks/stx/` (`.stx`).
 
 - [x] **GEMDOS HD** : monter un dossier hôte comme lecteur C: (`--gemdos DIR` /
   `NEOST_GEMDOS_DIR`) — port complet de `gemdos.c` (cf. CHANGELOG).
-- [ ] **ACSI complet** (jusqu'à 8 périphériques, boot disque dur TOS) — réf. `hdc.c`, MAME
+- [x] **ACSI complet** (jusqu'à 8 cibles, boot disque dur TOS depuis une image, R/W,
+  détection de partitions) — port de `hdc.c` (`io/Acsi`, `--acsi`/`--hd`, cf. CHANGELOG).
 - [ ] **SCC Z85C30 MegaSTE** : canaux A/B, IRQ niv5, baudrate *(gros contrôleur)* — réf.
   ```
   `scc.c`, MAME `z80scc`

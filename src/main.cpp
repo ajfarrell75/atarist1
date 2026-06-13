@@ -883,6 +883,11 @@ int main(int argc, char** argv) {
             std::fprintf(stderr, "[main] cartouche ignorée : incompatible avec GEMDOS HD\n");
         machine.gemdos.setDirectory(gd);
     }
+    // Disque dur ACSI (variable d'environnement NEOST_ACSI_IMG) : image de disque dur
+    // (cible 0) ; le TOS lit la table de partitions et monte C:/D:… Cf. io/Acsi.hpp.
+    if (const char* hd = std::getenv("NEOST_ACSI_IMG"))
+        if (machine.fdc.mountAcsi(hd))
+            std::fprintf(stderr, "[main] ACSI : %d partition(s)\n", machine.fdc.acsiPartitionCount());
     machine.mfp.setColorMonitor(!cfg.mono);   // moniteur mémorisé (avant le reset)
     machine.fdc.setFastFdc(cfg.fastfdc);      // FDC rapide mémorisé (accès disque ÷10)
     // Socket MC68881 (Mega STE uniquement, cf. Fpu.hpp) : sonde + trapping.

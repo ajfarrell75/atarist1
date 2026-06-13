@@ -117,6 +117,22 @@ Le bureau EmuTOS affiche alors une icône **DISK C** (disque dur). Si le dossier
 contient QUE des sous-dossiers d'une lettre (`C`, `D`…), chacun devient un lecteur.
 Exclusif d'une cartouche externe (`--cart`).
 
+## Disque dur ACSI (vraie image de disque)
+
+Pour booter depuis une **image de disque dur** réelle (dump de secteurs brut avec
+table de partitions Atari/AHDI ou DOS), NeoST émule le contrôleur ACSI (port de
+`hdc.c`). Le TOS/EmuTOS détecte le périphérique, lit la table de partitions et monte
+les partitions FAT (C:, D:…). Lecture **et écriture** sont persistées dans l'image.
+
+```sh
+./build/neost-headless roms/etos192us.img --acsi disque.hd        # headless (alias --hd)
+NEOST_ACSI_IMG=disque.hd ./build/neost                            # fenêtré
+```
+
+Contrairement au disque dur GEMDOS (redirection vers un dossier), l'ACSI utilise un
+vrai système de fichiers FAT dans l'image — idéal pour booter un environnement Atari
+complet. Jusqu'à 8 cibles. Indépendant du disque dur GEMDOS.
+
 ## Build WebAssembly (local)
 
 Nécessite l'[emsdk](https://emscripten.org/docs/getting_started/downloads.html) activé
