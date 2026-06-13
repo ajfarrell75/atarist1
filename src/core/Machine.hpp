@@ -26,6 +26,7 @@
 #include "io/Rtc.hpp"
 #include "io/MidiAcia.hpp"
 #include "io/GemdosHd.hpp"
+#include "io/Scc.hpp"
 
 class Machine {
 public:
@@ -73,6 +74,7 @@ public:
         psg.reset(); dmasnd.reset(/*cold=*/false); mfp.reset();
         bus.megaSteReset(); cpu.setMegaSteSpeed(false); bus.fpu.reset();
         gemdos.reset();    // ferme les fichiers HD GEMDOS ouverts (no-op si inactif)
+        scc.reset();       // SCC série (Mega STE) au repos
         cpu.reset();
     }
     // Reset à FROID (power-cycle) : efface toute la ST-RAM, ce qui invalide le
@@ -83,6 +85,7 @@ public:
         psg.reset(); dmasnd.reset(/*cold=*/true); mfp.reset();
         bus.megaSteReset(); cpu.setMegaSteSpeed(false); bus.fpu.reset();
         gemdos.reset();    // ferme les fichiers HD GEMDOS ouverts (no-op si inactif)
+        scc.reset();       // SCC série (Mega STE) au repos
         cpu.reset();
     }
 
@@ -95,6 +98,7 @@ public:
         bus.ram.assign(ramBytes, 0);
         bus.machine     = machine;
         machineType_    = machine;
+        bus.scc         = (machine == MachineType::MegaSte) ? &scc : nullptr;  // SCC (Mega STE)
         glue.memConfig_ = memConfigForBytes(ramBytes);
         bus.megaSteReset();                // $FF8E21 → 0 (8 MHz, cache invalidé)
         cpu.setMegaSteSpeed(false);
@@ -127,6 +131,7 @@ public:
     // Émulation disque dur GEMDOS (redirection vers un dossier hôte). Inactive tant
     // que le frontend n'a pas appelé gemdos.setDirectory(...) — cf. io/GemdosHd.hpp.
     GemdosHd  gemdos{bus, cpu};
+    Scc       scc;     // SCC série Z85C30 ($FF8C80) — Mega STE uniquement (cf. ctor/reconfigure)
     Scheduler sched;
 
 private:

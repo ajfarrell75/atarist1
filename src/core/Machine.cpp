@@ -55,6 +55,7 @@ Machine::Machine(std::size_t ramBytes, CpuCore cpuCore, MachineType machine)
     bus.rtc     = &rtc;     // horloge RP5C15 (Mega ST / Mega STE)
     bus.midi    = &midi;    // ACIA MIDI ($FFFC04) — bouclage OUT→IN
     bus.cpu     = &cpu;     // pour rafraîchir l'IPL après chaque accès MMIO
+    bus.scc     = (machine == MachineType::MegaSte) ? &scc : nullptr;  // SCC série (Mega STE)
     // Joypads STE ($FF9200/02) : seul le Mega STE expose les DIP switches motherboard
     // dans l'octet haut de $FF9200 (cf. StePads / IoMemTabMegaSTE_DIPSwitches_Read).
     bus.stePads.setMegaSte(machine == MachineType::MegaSte);

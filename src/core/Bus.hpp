@@ -29,6 +29,7 @@ class Blitter;
 class Rtc;
 class MidiAcia;
 class GemdosHd;
+class Scc;
 // -----------------------------------------------------------------------------
 //  Plan mémoire de l'Atari ST (bus d'adresses 24 bits → 16 Mo adressables).
 //  Les constantes documentent le POURQUOI de chaque zone.
@@ -168,6 +169,9 @@ public:
     // alors les opcodes magiques de la cartouche système (cf. Cpu68k::run). Posé par
     // le frontend via GemdosHd::setDirectory. Cf. io/GemdosHd.hpp.
     GemdosHd* gemdos = nullptr;
+    // Contrôleur série SCC Z85C30 ($FF8C80-$FF8C87) — Mega STE uniquement. IRQ niv5
+    // vectorisée gatée par le SCU. Posé par Machine (Mega STE). Cf. io/Scc.hpp.
+    Scc*     scc    = nullptr;
 
     // Profil machine : décide quel matériel optionnel répond (son DMA STE, etc.)
     // et où une bus error se produit. Posé par Machine. Défaut : 1040 STE.

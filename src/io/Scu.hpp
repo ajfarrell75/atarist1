@@ -56,9 +56,11 @@ public:
     }
 
     // Synchronise l'état SCU depuis les sources vivantes de NeoST (appelé avant le
-    // gating). MFP→niveau 6 (VmeIntState), VBL→4, HBL→2, soft IRQ1→1 (SysIntState).
-    void syncState(bool mfp6, bool vbl, bool hbl) {
-        vmeIntState = uint8_t((vmeIntState & ~0x40) | (mfp6 ? 0x40 : 0));            // niveau 6
+    // gating). MFP→niveau 6, SCC→niveau 5 (VmeIntState), VBL→4, HBL→2, soft IRQ1→1
+    // (SysIntState).
+    void syncState(bool mfp6, bool scc5, bool vbl, bool hbl) {
+        vmeIntState = uint8_t((vmeIntState & ~0x60)                                  // niveaux 6 et 5
+                              | (mfp6 ? 0x40 : 0) | (scc5 ? 0x20 : 0));
         uint8_t s = sysIntState & ~0x16;                                            // niveaux 4,2,1
         if (vbl)                  s |= 0x10;                                         // niveau 4
         if (hbl)                  s |= 0x04;                                         // niveau 2

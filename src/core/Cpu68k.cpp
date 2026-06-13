@@ -14,6 +14,7 @@
 #include "core/Tracer.hpp"
 #include "io/Mfp.hpp"
 #include "io/GemdosHd.hpp"
+#include "io/Scc.hpp"
 
 #include <cstdio>
 
@@ -187,6 +188,12 @@ public:
             neostUpdateIpl();
             return (v >= 0) ? moira::u16(v) : moira::u16(24);
         }
+        if (level == 5 && g_bus->scc) {                 // SCC série : vecteur vectorisé (IACK)
+            const int v = g_bus->scc->processIack();
+            if (g_tracer) g_tracer->onInterrupt(level, v);
+            neostUpdateIpl();
+            return (v >= 0) ? moira::u16(v) : moira::u16(24 + level);  // NV → auto-vecteur
+        }
         if (g_tracer) g_tracer->onInterrupt(level, 24 + level);   // VBL/HBL auto-vectorisés
         if (level == 4) g_vblPending = false; else if (level == 2) g_hblPending = false;
         neostUpdateIpl();
@@ -220,7 +227,8 @@ void neostUpdateIpl(bool commit) {
     // d'atteindre le CPU — toujours actif comme `SCU_IsEnabled()` d'Hatari (= MegaSTE/TT).
     // Tout OS MegaSTE programme le SCU tôt au boot (TOS 2.06, EmuTOS 256K, diagnostic).
     if (g_bus && g_bus->machine == MachineType::MegaSte) {
-        g_bus->scu.syncState(mfp6, g_vblPending, g_hblPending);   // état ← sources vivantes
+        const bool scc5 = g_bus->scc && g_bus->scc->irqActive();  // SCC série niveau 5
+        g_bus->scu.syncState(mfp6, scc5, g_vblPending, g_hblPending);  // état ← sources vivantes
         lvl = g_bus->scu.gatedLevel();                            // plus haut niveau autorisé
     } else {
         lvl = mfp6 ? 6 : g_vblPending ? 4 : g_hblPending ? 2 : 0;
