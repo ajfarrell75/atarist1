@@ -101,6 +101,22 @@ python3 tools/fetch_disk.py <url planetemu>  # télécharge une disquette de tes
 > ⚠ `fetch_disk.py` n'est à utiliser que pour des logiciels auxquels vous avez droit
 > (domaine public, freeware, démos), afin de tester l'émulateur.
 
+## Disque dur GEMDOS (dossier hôte → C:)
+
+Plutôt qu'émuler un contrôleur ACSI/IDE, NeoST peut monter un **dossier de l'hôte**
+comme lecteur **C:** en interceptant les appels GEMDOS et en les redirigeant vers le
+système de fichiers réel (technique d'Hatari). Lire, écrire, lister et **lancer des
+programmes** depuis C: fonctionnent ; un PRG placé dans `C:\AUTO\` est exécuté au boot.
+
+```sh
+./build/neost-headless roms/etos192us.img --gemdos /chemin/vers/dossier   # headless
+NEOST_GEMDOS_DIR=/chemin/vers/dossier ./build/neost                       # fenêtré
+```
+
+Le bureau EmuTOS affiche alors une icône **DISK C** (disque dur). Si le dossier ne
+contient QUE des sous-dossiers d'une lettre (`C`, `D`…), chacun devient un lecteur.
+Exclusif d'une cartouche externe (`--cart`).
+
 ## Build WebAssembly (local)
 
 Nécessite l'[emsdk](https://emscripten.org/docs/getting_started/downloads.html) activé

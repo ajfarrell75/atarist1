@@ -13,6 +13,7 @@
 #include "core/Bus.hpp"
 #include "core/Tracer.hpp"
 #include "io/Mfp.hpp"
+#include "io/GemdosHd.hpp"
 
 #include <cstdio>
 
@@ -289,6 +290,23 @@ int Cpu68k::run(int cycles) {
         g_inBusError = false;                        // nouvelle instruction → faute précédente retombée
         if (g_moira->isHalted()) { g_moira->setClock(cpuClockForBus(targetBus)); break; }  // double bus fault → CPU arrêté
         instrStartClock_ = static_cast<int64_t>(g_moira->getClock());   // repère « 1er accès » des wait states
+        // Interception GEMDOS HD (port de OpCode_GemDos/Pexec/SysInit + CpuDoNOP
+        // d'Hatari) : la cartouche système ($FA0000) place des opcodes « illégaux »
+        // magiques (8=GEMDOS, 9=PEXEC, 10=SYSINIT). Quand le HD GEMDOS est actif et
+        // que le PC est DANS la cartouche, on traite l'appel en C (lit/écrit les
+        // registres + pose les codes condition du SR), puis on remplace l'opcode par
+        // un NOP (0x4E71) : l'execute() ci-dessous le consomme, avançant PC et
+        // prefetch comme une instruction d'un mot — exactement comme CpuDoNOP. Hors
+        // cartouche, un vrai $0008 reste une instruction illégale normale.
+        if (g_bus->gemdos) {
+            const moira::u16 ird = g_moira->getIRD();
+            if (ird >= 0x0008 && ird <= 0x000A) {
+                const uint32_t pc0 = g_moira->getPC0() & 0x00FFFFFF;
+                if (pc0 >= 0xFA0000 && pc0 < 0xFC0000 &&
+                    g_bus->gemdos->handleOpcode(ird))
+                    g_moira->setIRD(0x4E71);         // → exécuté comme NOP
+            }
+        }
         g_moira->execute();                          // une instruction
         if (g_tracer) g_tracer->onInstruction(g_moira->getPC0());
         // Préemption : une écriture matérielle pendant cette instruction a pu
@@ -410,6 +428,18 @@ uint32_t Cpu68k::reg(int idx) const {
 
 uint16_t Cpu68k::sr() const {
     return g_moira->getSR();
+}
+
+void Cpu68k::setReg(int idx, uint32_t v) {
+    if (idx < 8) g_moira->setD(idx, v); else g_moira->setA(idx - 8, v);
+}
+
+void Cpu68k::setSr(uint16_t v) {
+    g_moira->setSR(v);
+}
+
+uint32_t Cpu68k::usp() const {
+    return g_moira->getUSP();
 }
 
 bool Cpu68k::triggerBusError(uint32_t addr, bool write) {

@@ -38,8 +38,10 @@ bool Bus::loadTos(const std::string& path) {
     // L'emplacement de la ROM dépend de la version de TOS (cf. stmap) : un TOS
     // de 192 Ko vit à $FC0000, sinon (224/256 Ko) à $E00000.
     romBase = (rom.size() <= 192u * 1024u) ? stmap::ROM_FC0000 : stmap::ROM_E00000;
-    std::fprintf(stderr, "[Bus] TOS chargé : %s (%zu Ko @ $%06X)\n",
-                 path.c_str(), rom.size() / 1024, romBase);
+    // Version du TOS : mot big-endian de l'en-tête à l'offset 2 (cf. adjustMachineForTos).
+    tosVersion = rom.size() >= 4 ? uint16_t((rom[2] << 8) | rom[3]) : 0;
+    std::fprintf(stderr, "[Bus] TOS chargé : %s (%zu Ko @ $%06X, version $%04X)\n",
+                 path.c_str(), rom.size() / 1024, romBase, tosVersion);
     return true;
 }
 
@@ -166,6 +168,23 @@ int64_t Bus::mmuTranslate(uint32_t addr) const {
     const uint32_t phys = (machineIsSte(machine) ? mmuXlatSTE(addr, ramSz, mmuSz)
                                                  : mmuXlatSTF(addr, ramSz, mmuSz)) + bankStart;
     return phys < ram.size() ? static_cast<int64_t>(phys) : -1;
+}
+
+// Pointeur hôte contigu dans ram[] pour [addr, addr+len) — cf. Bus.hpp. On traduit
+// le premier et le dernier octet : la plage n'est utilisable que si elle reste dans
+// la MÊME puce sans aliasing (octets physiques consécutifs), ce qui est le cas des
+// tampons normaux d'un programme. Tout le reste (banque vide, repli MMU, hors RAM)
+// renvoie nullptr → l'appelant retombe sur un accès octet par octet / une erreur.
+uint8_t* Bus::hostRamPtr(uint32_t addr, uint32_t len) {
+    addr &= stmap::ADDR_MASK;
+    if (len == 0) len = 1;
+    if (addr >= 0x400000 || addr + len > 0x400000) return nullptr;
+    const int64_t p0 = mmuTranslate(addr);
+    const int64_t p1 = mmuTranslate(addr + len - 1);
+    if (p0 < 0 || p1 < 0) return nullptr;
+    if (p1 - p0 != int64_t(len) - 1) return nullptr;          // non contigu (aliasing)
+    if (static_cast<std::size_t>(p0) + len > ram.size()) return nullptr;
+    return &ram[static_cast<std::size_t>(p0)];
 }
 
 // -----------------------------------------------------------------------------

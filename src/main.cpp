@@ -874,6 +874,15 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "[main] Aucune disquette montée (%s).\n", diskPath.c_str());
     if (!cartPath.empty() && !machine.loadCart(cartPath))
         std::fprintf(stderr, "[main] Aucune cartouche montée (%s).\n", cartPath.c_str());
+    // Disque dur GEMDOS (variable d'environnement NEOST_GEMDOS_DIR) : mappe un
+    // dossier hôte sur C: en redirigeant les appels GEMDOS (façon Hatari). Installe
+    // une cartouche système à $FA0000 → exclusif avec une cartouche externe. Cf.
+    // io/GemdosHd.hpp et l'option --gemdos du headless.
+    if (const char* gd = std::getenv("NEOST_GEMDOS_DIR")) {
+        if (!cartPath.empty())
+            std::fprintf(stderr, "[main] cartouche ignorée : incompatible avec GEMDOS HD\n");
+        machine.gemdos.setDirectory(gd);
+    }
     machine.mfp.setColorMonitor(!cfg.mono);   // moniteur mémorisé (avant le reset)
     machine.fdc.setFastFdc(cfg.fastfdc);      // FDC rapide mémorisé (accès disque ÷10)
     // Socket MC68881 (Mega STE uniquement, cf. Fpu.hpp) : sonde + trapping.

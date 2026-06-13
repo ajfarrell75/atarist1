@@ -43,6 +43,8 @@ void usage() {
         "  --fastfdc         FDC rapide (délais ÷10) — accélère les accès disque\n"
         "  --loopback        « branche » le connecteur de bouclage RS232 (test S série)\n"
         "  --cart FILE       monte une cartouche ($FA0000) : Test Kit diagnostic, etc.\n"
+        "  --gemdos DIR      disque dur GEMDOS : mappe DIR sur C: (redirection des appels\n"
+        "                    GEMDOS vers l'hôte, façon Hatari ; exclusif avec --cart)\n"
         "  --glue-selftest   auto-test de la machine Glue (bordures) puis quitte\n"
         "  --dump-at N A L F dump brut de L octets de RAM dès $A (hex) après la trame N → F\n"
         "  --screenshot PPM  dump du framebuffer final au format PPM\n"
@@ -130,6 +132,7 @@ int main(int argc, char** argv) {
     bool        fastFdc    = false;   // FDC rapide (--fastfdc) : délais commande/transfert ÷10
     std::string romPath    = "roms/etos192us.img";
     std::string cartPath;
+    std::string gemdosDir;                       // --gemdos DIR : disque dur GEMDOS (dossier hôte)
     bool        regs       = false;
     bool        irq        = false;
     bool        haveUntil  = false;
@@ -187,6 +190,7 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(a, "--diskb"))      diskBPath = next(a);
         else if (!std::strcmp(a, "--fastfdc"))    fastFdc   = true;
         else if (!std::strcmp(a, "--cart"))       cartPath  = next(a);
+        else if (!std::strcmp(a, "--gemdos"))     gemdosDir = next(a);
         else if (!std::strcmp(a, "--walk-mouse")) walkMouse = true;
         else if (!std::strcmp(a, "--keys"))       keys      = next(a);
         else if (!std::strcmp(a, "--joy")) {      // état joystick maintenu : "P1" ou "P1,P0"
@@ -239,7 +243,15 @@ int main(int argc, char** argv) {
     machine.loadDisk(diskPath);   // lecteur A (optionnel)
     if (!diskBPath.empty()) machine.loadDiskB(diskBPath);   // lecteur B (optionnel)
     machine.fdc.setFastFdc(fastFdc);   // FDC rapide (--fastfdc) : accès disque ÷10
-    if (!cartPath.empty()) machine.loadCart(cartPath);   // cartouche $FA0000 (optionnelle)
+    // Disque dur GEMDOS (--gemdos) : installe la cartouche système à $FA0000 →
+    // exclusif avec une cartouche externe (--cart), comme Hatari.
+    if (!gemdosDir.empty()) {
+        if (!cartPath.empty())
+            std::fprintf(stderr, "[headless] --cart ignoré : incompatible avec --gemdos\n");
+        machine.gemdos.setDirectory(gemdosDir);
+    } else if (!cartPath.empty()) {
+        machine.loadCart(cartPath);   // cartouche $FA0000 (optionnelle)
+    }
     machine.mfp.setColorMonitor(!machineMono);   // --mono → moniteur mono (haute rés)
 
     // Capture du port série (RS-232) : les ROMs de diagnostic y impriment leur

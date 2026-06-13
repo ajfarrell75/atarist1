@@ -569,6 +569,34 @@ taguées (0.1.x). Le restant est dans [`TODO.md`](TODO.md).
   anti-debug de certaines protections. Boot EmuTOS byte-identique, batterie Z des
   diagnostics inchangée.
 
+## Disque dur GEMDOS (émulation HD façon Hatari)
+- **Port complet de `gemdos.c`** (`io/GemdosHd.{hpp,cpp}`) : un dossier hôte est
+  monté comme lecteur **C:** (multi-partitions C..Z si le dossier ne contient que
+  des sous-dossiers d'une lettre) en INTERCEPTANT les appels GEMDOS (trap #1) et en
+  les redirigeant vers le système de fichiers hôte (POSIX). Activé par `--gemdos DIR`
+  (headless) ou `NEOST_GEMDOS_DIR` (GUI). Exclusif d'une cartouche externe.
+- **Mécanisme d'interception fidèle à Hatari** : une CARTOUCHE système (octets
+  assemblés de `cart_asm.s`/`cartData.c`) est exposée à `$FA0000` ; au boot le TOS
+  exécute son C-INIT (`sys_init`) qui installe un nouveau vecteur GEMDOS (`$84`)
+  pointant dans la cartouche et ajoute C: au masque `_drvbits` (`$4C2`). Le code
+  cartouche déclenche des **opcodes « illégaux » magiques** (8 = GEMDOS, 9 = PEXEC,
+  10 = SYSINIT) captés par le cœur Moira **avant `execute()`** (`Cpu68k::run`) : le
+  handler C traite l'appel, pose les codes condition N/Z/V du SR, puis l'opcode est
+  remplacé par un NOP consommé par `execute()` (port de `OpCode_*` + `CpuDoNOP`).
+- **Appels portés 1:1** : Dsetdrv/Dfree/Dcreate/Ddelete/Dsetpath/Dgetpath,
+  Fcreate/Fopen/Fclose/Fread/Fwrite/Fseek/Fdelete/Fattrib/Fdatime/Frename,
+  Fsfirst/Fsnext (DTA + cache circulaire), Fforce, et **Pexec** (création de
+  basepage par le TOS via la cartouche puis chargement+relocation du PRG depuis C:
+  par `GemDOS_LoadAndReloc`, démarrage par un Pexec « just-go »). Table de handles
+  internes (base 64), traduction de chemins ST↔hôte avec correspondance 8+3
+  insensible à la casse, gestion `..`/`.`, jokers.
+- **Validé headless** (EmuTOS 192 Ko, ST) : bureau affichant « GEMDOS drives: ABC »
+  et une icône **DISK C** de disque dur ; un PRG dans `C:\AUTO\` est **lancé via
+  Pexec** au boot, lit `C:\HELLO.TXT` et écrit `C:\OUTPUT.TXT` côté hôte à
+  l'identique (Pexec + Fopen + Fread + Fcreate + Fwrite + Fclose). Sans `--gemdos`,
+  boot inchangé (« GEMDOS drives: AB »). Helpers mémoire : `Bus::hostRamPtr`
+  (pointeur RAM contigu, traduction MMU) et `Bus::tosVersion`.
+
 ## Audio
 - **Bit PLAY ($FF8901) auto-effacé en fin de trame DMA one-shot** dans le MOTEUR DMA
   (`DmaSound::onFrameEnd`, port `DmaSnd_EndOfFrameReached` dmaSnd.c:510) et plus

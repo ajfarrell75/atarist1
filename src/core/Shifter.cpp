@@ -950,7 +950,6 @@ void Shifter::renderGlueFrame() {
     const int cpl       = g.cyclesPerLine;
     const int baseStart = g.dispStartLine;                 // scanline du haut de l'actif (buffer row activeY_)
     const int visFirst  = g.lineStartCycle - kBorderLeftPx;   // cycle au buffer x=0 (56-48=8)
-    const int bytePerPix = (frameMode_ == Mode::Medium) ? 4 : 2;  // px par octet (low=2, med=4)
 
     std::stable_sort(colorWrites_.begin(), colorWrites_.end(),
                      [](const ColorWrite& a, const ColorWrite& b){ return a.frameCycle < b.frameCycle; });
