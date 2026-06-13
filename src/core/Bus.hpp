@@ -28,6 +28,7 @@ class DmaSound;
 class Blitter;
 class Rtc;
 class MidiAcia;
+class GemdosHd;
 // -----------------------------------------------------------------------------
 //  Plan mémoire de l'Atari ST (bus d'adresses 24 bits → 16 Mo adressables).
 //  Les constantes documentent le POURQUOI de chaque zone.
@@ -162,6 +163,11 @@ public:
     Rtc*     rtc     = nullptr;   // horloge RP5C15 ($FFFC21) — Mega ST / Mega STE
     MidiAcia* midi   = nullptr;   // ACIA MIDI ($FFFC04) — bouclage OUT→IN
     Cpu68k*  cpu     = nullptr;   // pour rafraîchir l'IPL après un accès MMIO
+    // Émulation disque dur GEMDOS (redirection des appels GEMDOS vers un dossier
+    // hôte, port de Hatari gemdos.c). Non nul = HD GEMDOS actif : le CPU intercepte
+    // alors les opcodes magiques de la cartouche système (cf. Cpu68k::run). Posé par
+    // le frontend via GemdosHd::setDirectory. Cf. io/GemdosHd.hpp.
+    GemdosHd* gemdos = nullptr;
 
     // Profil machine : décide quel matériel optionnel répond (son DMA STE, etc.)
     // et où une bus error se produit. Posé par Machine. Défaut : 1040 STE.
@@ -181,6 +187,19 @@ public:
     std::vector<uint8_t> rom;
     std::vector<uint8_t> cart;        // ROM cartouche ($FA0000) — vide si absente
     uint32_t romBase = stmap::ROM_E00000;
+
+    // Version du TOS chargé (mot big-endian de l'en-tête ROM, offset 2 ; 0x0104,
+    // 0x0206…). Lue par loadTos, consultée par l'émulation GEMDOS HD (certains
+    // comportements diffèrent selon la version, cf. GemdosHd).
+    uint16_t tosVersion = 0;
+
+    // Pointeur DIRECT dans ram[] pour un accès hôte contigu de `len` octets à partir
+    // de l'adresse ST `addr` (traduction MMU incluse). Renvoie nullptr si la plage
+    // n'est pas entièrement en RAM peuplée et contiguë. Utilisé par l'émulation
+    // GEMDOS HD pour copier des données fichier en bloc (port de
+    // STMemory_STAddrToPointer + STMemory_CheckAreaType). NE PAS utiliser pour la
+    // MMIO ni au-delà de la RAM.
+    uint8_t* hostRamPtr(uint32_t addr, uint32_t len);
 
     // Overlay de boot : au reset, le 68000 lit SSP ($0) et PC ($4). Le GLUE
     // route ces tout premiers accès vers la ROM. On désactive l'overlay dès

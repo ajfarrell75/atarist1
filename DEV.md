@@ -177,6 +177,44 @@ attend du matériel.
 | `Fdc`                    | `fdc.c`, `floppy.c`, `hdc.c`                   |
 | `YM2149` / `DmaSound`    | `psg.c`, `sound.c`, `dmaSnd.c`                 |
 | `Blitter` / `Rtc`        | `blitter.c`, `rtc.c`                           |
+| `GemdosHd` (disque dur GEMDOS) | `gemdos.c`, `cpu/hatari-glue.c` (`OpCode_GemDos/Pexec/SysInit`), `cart.c`/`cart_asm.s`/`cartData.c` |
+
+### Disque dur GEMDOS (`GemdosHd`)
+
+Redirection des appels GEMDOS d'un lecteur virtuel (C:…) vers un dossier hôte, au
+lieu d'émuler un contrôleur ACSI/IDE. Activé par `--gemdos DIR` (headless) ou
+`NEOST_GEMDOS_DIR` (GUI) ; **exclusif d'une cartouche externe** (`--cart`).
+
+Mécanisme (port fidèle, adapté à Moira) :
+
+1. **Cartouche système à `$FA0000`** : `setDirectory` recopie les octets assemblés de
+   `cart_asm.s` (= `cartData.c`) dans `bus.cart`. Le TOS y détecte le magic
+   `$ABCDEF42` et exécute son C-INIT (`sys_init`) au boot (drapeau bit 3 = après
+   init GEMDOS, avant boot disque).
+2. **Opcodes « illégaux » magiques** : le code cartouche déclenche les opcodes
+   `$0008` (GEMDOS), `$0009` (PEXEC), `$000A` (SYSINIT). Hatari patche sa table
+   d'opcodes ; NeoST/Moira les capte dans `Cpu68k::run` **avant `execute()`** : si le
+   PC est dans la cartouche (`$FA0000-$FBFFFF`) et `bus.gemdos` actif, on appelle
+   `GemdosHd::handleOpcode`, puis on remplace l'IRD par un `NOP` (`$4E71`) que le
+   `execute()` suivant consomme (avance PC + prefetch + 4 cyc) — équivalent exact du
+   `CpuDoNOP()` d'Hatari.
+3. **`SYSINIT`** installe le hook : sauve l'ancien vecteur GEMDOS dans la cartouche
+   (`CART_OLDGEMDOS=$FA0024`, écrit DIRECTEMENT dans `bus.cart`), pose `$84` →
+   `CART_GEMDOS=$FA002A`, calcule `act_pd` (osheader+`$28`) et ajoute C: au masque
+   `_drvbits` (`$4C2`).
+4. **`GEMDOS`** (`GemdosHd::trap`) lit le n° de fonction sur la pile (USP si appelant
+   user, SSP+6 sinon), dispatche, pose D0 et les codes condition **N/Z/V** du SR que
+   le code cartouche teste : Z=1 → `rte` (traité), Z=0 → ancien vecteur (TOS), V=1 →
+   Pexec.
+5. **`PEXEC`** : `gemPexec` fait créer la basepage par le TOS (Pexec 5/7 via la
+   cartouche) puis `pexecBpCreated` charge+relocalise le PRG depuis C:
+   (`loadAndReloc`) et relance un Pexec « just-go » (6/4) pour l'exécuter.
+
+Helpers Bus : `hostRamPtr(addr,len)` (pointeur RAM contigu, traduction MMU — port de
+`STMemory_STAddrToPointer`+`CheckAreaType`) et `tosVersion` (en-tête ROM offset 2).
+Debug : `NEOST_GEMDOS_TRACE=1` journalise hook, traductions de chemin et appels
+fichier. Simplifications vs Hatari : `bUseTos` toujours vrai, pas d'images
+ACSI/IDE (lecteurs dès C:), pas d'autostart INF ni de conversion de charset.
 
 ## Pièges matériels (vérifiés en debug)
 

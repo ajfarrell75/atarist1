@@ -140,6 +140,14 @@ public:
     uint32_t reg(int idx) const;   // 0-7 = D0-D7, 8-15 = A0-A7
     uint16_t sr()  const;          // status register
 
+    // --- Accès écriture aux registres pour l'émulation GEMDOS HD --------------------
+    // L'interception d'un appel GEMDOS (trap #1 redirigé via la cartouche système)
+    // lit/modifie les registres et le SR du 68000 directement, comme le fait Hatari
+    // dans gemdos.c (Regs[REG_Dx], M68000_SetSR…). Index : 0-7 = D0-D7, 8-15 = A0-A7.
+    void     setReg(int idx, uint32_t v);
+    void     setSr(uint16_t v);
+    uint32_t usp() const;          // pointeur de pile UTILISATEUR (regs.usp)
+
     // Désassemble l'instruction à `addr` (lecture sans effet de bord via le bus) :
     // écrit le texte dans `str` (≥256 octets recommandés) et renvoie sa longueur en
     // octets. Utilisé par le Tracer et le mode --disasm du headless. Le désassembleur

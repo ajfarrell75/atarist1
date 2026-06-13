@@ -25,6 +25,7 @@
 #include "io/Fdc.hpp"
 #include "io/Rtc.hpp"
 #include "io/MidiAcia.hpp"
+#include "io/GemdosHd.hpp"
 
 class Machine {
 public:
@@ -71,6 +72,7 @@ public:
     void reset() {
         psg.reset(); dmasnd.reset(/*cold=*/false); mfp.reset();
         bus.megaSteReset(); cpu.setMegaSteSpeed(false); bus.fpu.reset();
+        gemdos.reset();    // ferme les fichiers HD GEMDOS ouverts (no-op si inactif)
         cpu.reset();
     }
     // Reset à FROID (power-cycle) : efface toute la ST-RAM, ce qui invalide le
@@ -80,6 +82,7 @@ public:
         bus.ram.assign(bus.ram.size(), 0);
         psg.reset(); dmasnd.reset(/*cold=*/true); mfp.reset();
         bus.megaSteReset(); cpu.setMegaSteSpeed(false); bus.fpu.reset();
+        gemdos.reset();    // ferme les fichiers HD GEMDOS ouverts (no-op si inactif)
         cpu.reset();
     }
 
@@ -121,6 +124,9 @@ public:
     Rtc       rtc;
     MidiAcia  midi{mfp};
     Cpu68k    cpu{bus};
+    // Émulation disque dur GEMDOS (redirection vers un dossier hôte). Inactive tant
+    // que le frontend n'a pas appelé gemdos.setDirectory(...) — cf. io/GemdosHd.hpp.
+    GemdosHd  gemdos{bus, cpu};
     Scheduler sched;
 
 private:

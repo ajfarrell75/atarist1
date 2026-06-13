@@ -131,11 +131,14 @@ void Mfp::write8(uint32_t addr, uint8_t v) {
         // VIVANT qui continue de décompter ; un timer ARRÊTÉ (ctrl=0) charge aussi le
         // compteur. Le nouveau délai s'applique au prochain rechargement.
         case 0x1F: timer_[0x1F] = v; taReload_ = v;                       // TADR
-                   if (timerCtrl(0) == 0) taCounter_ = v; break;
+                   if (timerCtrl(0) == 0) taCounter_ = v;
+                   break;
         case 0x21: tbReload_ = v;                                         // TBDR
-                   if (timerCtrl(1) == 0) tbCounter_ = v; break;
+                   if (timerCtrl(1) == 0) tbCounter_ = v;
+                   break;
         case 0x23: timer_[0x23] = v;                                      // TCDR
-                   if (timerCtrl(2) == 0) tcCounter_ = v; break;
+                   if (timerCtrl(2) == 0) tcCounter_ = v;
+                   break;
         case 0x25: timer_[0x25] = v;                                      // TDDR
                    if (timerCtrl(3) == 0) tdCounter_ = v;
                    updateSerialConfig(); break;   // nouveau diviseur → bauds USART (mfp.c:3311)
