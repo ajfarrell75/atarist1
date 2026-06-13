@@ -448,10 +448,11 @@ int Fdc::computeFloppyDensity(const FloppyDisk& dk, int track, int side) const {
     int trackSize;
     if (dk.imgType == FloppyDisk::IMG_STX && dk.stx) {
         StxImage::Track* t = dk.stx->findTrack(track, side);
-        if (!t)                  trackSize = BYTES_PER_TRACK;
-        else if (t->pTrackImage) trackSize = t->trackImageSize;
+        if (!t)                       trackSize = BYTES_PER_TRACK;
+        else if (t->writeReinterpreted) trackSize = t->writeMfmSize;   // piste réécrite (WRITE TRACK)
+        else if (t->pTrackImage)      trackSize = t->trackImageSize;
         else if ((t->flags & StxImage::TRACK_FLAG_SECTOR_BLOCK) == 0) trackSize = t->mfmSize / 8;
-        else                     trackSize = t->mfmSize;
+        else                          trackSize = t->mfmSize;
     } else {
         trackSize = (dk.spt >= 36) ? BYTES_PER_TRACK * 4
                   : (dk.spt >= 18) ? BYTES_PER_TRACK * 2
@@ -504,6 +505,7 @@ int Fdc::bytesPerTrackStx(int track, int side) const {
     if (!dk.stx) return BYTES_PER_TRACK;
     StxImage::Track* t = dk.stx->findTrack(track, side);
     if (!t) return BYTES_PER_TRACK;
+    if (t->writeReinterpreted) return t->writeMfmSize;          // piste réécrite (WRITE TRACK)
     if (t->pTrackImage) return t->trackImageSize;
     if ((t->flags & StxImage::TRACK_FLAG_SECTOR_BLOCK) == 0) return t->mfmSize / 8;  // MFMSize en bits
     return t->mfmSize;
@@ -845,39 +847,53 @@ void Fdc::writeBack(FloppyDisk& dk, uint32_t off, uint32_t len) {
 //  Champs ID RÉELS, statut FDC par secteur, bits fuzzy, timing variable. La
 //  position angulaire vient de BitPosition (en BITS, 1 bit = 32 cycles FDC).
 // =============================================================================
-static constexpr int MFM_BIT = 32;   // 4 µs/bit × 8 MHz = 32 cycles FDC (FDC_DELAY_CYCLE_MFM_BIT)
+static constexpr int MFM_BIT = 32;   // 4 µs/bit × 8 MHz = 32 cycles FDC (FDC_DELAY_CYCLE_MFM_BIT), en DD
 
 // Latence jusqu'au prochain champ ID + champs ID du secteur trouvé (stxNextSector_).
 // Cf. FDC_NextSectorID_FdcCycles_STX.
+//
+// DENSITÉ (correction au-delà de Hatari) : BitPosition est exprimée en CELLULES DD
+// dans le conteneur STX. Or `indexCurrentPosCycles` et `cyclesPerRev` suivent déjà
+// le débit du média (÷ densité). Pour qu'une piste HD/ED (2×/4× plus d'octets, donc
+// 2×/4× plus de bits) reste cohérente avec ce tour, on convertit bit→cycles et
+// octet→cycles à la densité courante (MFM_BIT/dens, MFM_BYTE/dens). En DD (dens=1)
+// les valeurs sont inchangées (32, 256) — aucune régression. Hatari multiplie par la
+// constante DD brute, ce qui désaligne ses positions sur les images HD.
 int Fdc::nextSectorIDStx(int* pFdcCycles) {
     const int curPos = indexCurrentPosCycles();
     if (curPos < 0) return RET_NO_DRIVE;
     FloppyDisk& dk = drive_[driveSel_];
     StxImage::Track* t = dk.stx->findTrack(dk.headTrack, side_);
-    if (!t || t->sectorsCount == 0) return RET_NO_DRIVE;
+    if (!t || t->sectorsCountView() == 0) return RET_NO_DRIVE;
+    const std::vector<StxImage::Sector>& secs = t->sectorsView();
+    const int nsec = int(secs.size());
+
+    const int dens    = densityFactor();
+    const int mfmBit  = MFM_BIT      / dens;     // cellule bit à la densité du média
+    const int mfmByte = int(MFM_BYTE) / dens;    // octet MFM à la densité du média
 
     int i;
-    for (i = 0; i < t->sectorsCount; ++i)
-        if (curPos < int(t->sectors[i].bitPosition) * MFM_BIT - 4 * int(MFM_BYTE)) break;
+    for (i = 0; i < nsec; ++i)
+        if (curPos < int(secs[i].bitPosition) * mfmBit - 4 * mfmByte) break;
 
     int delay;
-    if (i == t->sectorsCount) {                 // après le dernier ID → 1er secteur du tour suivant
+    if (i == nsec) {                            // après le dernier ID → 1er secteur du tour suivant
         const int trackSize = bytesPerTrackStx(dk.headTrack, side_);
-        delay = trackSize * int(MFM_BYTE) - curPos + int(t->sectors[0].bitPosition) * MFM_BIT;
+        delay = trackSize * mfmByte - curPos + int(secs[0].bitPosition) * mfmBit;
         stxNextSector_ = 0;
     } else {
-        delay = int(t->sectors[i].bitPosition) * MFM_BIT - curPos;
+        delay = int(secs[i].bitPosition) * mfmBit - curPos;
         stxNextSector_ = i;
     }
 
-    const StxImage::Sector& sec = t->sectors[stxNextSector_];
+    const StxImage::Sector& sec = secs[stxNextSector_];
     nextID_TR_  = sec.idTrack;
     nextID_SR_  = sec.idSector;
     nextID_LEN_ = sec.idSize;
     // RNF + CRC tous deux posés ⇒ champ ID à CRC erroné.
     nextID_CRCOK_ = ((sec.fdcStatus & StxImage::FLAG_RNF) && (sec.fdcStatus & StxImage::FLAG_CRC)) ? 0 : 1;
 
-    delay -= 4 * int(MFM_BYTE);                  // BitPosition pointe après l'IDAM → reculer aux 3×$A1
+    delay -= 4 * mfmByte;                        // BitPosition pointe après l'IDAM → reculer aux 3×$A1
     *pFdcCycles = delay;
     return RET_OK;
 }
@@ -887,8 +903,8 @@ int Fdc::nextSectorIDStx(int* pFdcCycles) {
 uint8_t Fdc::readSectorStx(int* pSize) {
     FloppyDisk& dk = drive_[driveSel_];
     StxImage::Track* t = dk.stx->findTrack(dk.headTrack, side_);
-    if (!t || stxNextSector_ >= t->sectorsCount) return STR_RNF;
-    StxImage::Sector& sec = t->sectors[stxNextSector_];
+    if (!t || stxNextSector_ >= t->sectorsCountView()) return STR_RNF;
+    StxImage::Sector& sec = t->sectorsView()[stxNextSector_];
     if (sec.fdcStatus & StxImage::FLAG_RNF) return STR_RNF;
 
     *pSize = sec.sectorSize;
@@ -939,8 +955,8 @@ uint8_t Fdc::readSectorStx(int* pSize) {
 uint8_t Fdc::writeSectorStx(int size) {
     FloppyDisk& dk = drive_[driveSel_];
     StxImage::Track* t = dk.stx->findTrack(dk.headTrack, side_);
-    if (!t || stxNextSector_ >= t->sectorsCount) return STR_RNF;
-    StxImage::Sector& sec = t->sectors[stxNextSector_];
+    if (!t || stxNextSector_ >= t->sectorsCountView()) return STR_RNF;
+    StxImage::Sector& sec = t->sectorsView()[stxNextSector_];
     if (sec.fdcStatus & StxImage::FLAG_RNF) return STR_RNF;
     if (sec.fdcStatus & StxImage::FLAG_CRC) return STR_CRC;
 
@@ -963,9 +979,10 @@ uint8_t Fdc::writeSectorStx(int size) {
 
 // WRITE TRACK sur STX (cf. Hatari FDC_WriteTrack_STX) : on CONSERVE le flux brut
 // écrit par le programme (timings ignorés) et on le persiste en bloc TRCK du
-// .wd1772. Comme Hatari, la piste réécrite n'est PAS ré-interprétée en lecture
-// (TODO partagé) — mais le write track PRIME sur les 'write sector' précédents de
-// la piste, qui sont invalidés.
+// .wd1772. Au-delà de Hatari (qui laisse la ré-interprétation en TODO), on PARSE
+// aussitôt ce flux en secteurs lisibles (reinterpretSaveTrack) → les LECTURES
+// suivantes voient le nouveau contenu. Le write track PRIME sur les 'write sector'
+// précédents de la piste, qui sont invalidés.
 uint8_t Fdc::writeTrackStx() {
     FloppyDisk& dk = drive_[driveSel_];
     StxImage::Track* t = dk.stx->findTrack(dk.headTrack, side_);
@@ -980,11 +997,12 @@ uint8_t Fdc::writeTrackStx() {
     st.side  = side_;
     st.data.assign(buf_.begin(), buf_.end());
 
-    for (StxImage::Sector& sec : t->sectors)
+    for (StxImage::Sector& sec : t->sectors)       // invalide les 'write sector' d'origine
         if (sec.saveIndex >= 0) {
             dk.stx->saveSectors[sec.saveIndex].used = false;
             sec.saveIndex = -1;
         }
+    dk.stx->reinterpretSaveTrack(*t);              // flux → secteurs relus à la place de l'original
     stxPersist(dk);
     return 0;
 }
@@ -1008,8 +1026,8 @@ void Fdc::stxPersist(FloppyDisk& dk) {
 uint8_t Fdc::readAddressStx() {
     FloppyDisk& dk = drive_[driveSel_];
     StxImage::Track* t = dk.stx->findTrack(dk.headTrack, side_);
-    if (!t || stxNextSector_ >= t->sectorsCount) return STR_RNF;
-    const StxImage::Sector& sec = t->sectors[stxNextSector_];
+    if (!t || stxNextSector_ >= t->sectorsCountView()) return STR_RNF;
+    const StxImage::Sector& sec = t->sectorsView()[stxNextSector_];
     bufferAdd(sec.idTrack);
     bufferAdd(sec.idHead);
     bufferAdd(sec.idSector);
@@ -1029,7 +1047,7 @@ uint8_t Fdc::readTrackStx(int track, int side) {
         for (int i = 0; i < bytesPerTrackStx(track, side); ++i) bufferAdd(uint8_t(rngNext()));
         return 0;
     }
-    if (t->pTrackImage) {                                // dump MFM complet de la piste
+    if (t->pTrackImage && !t->writeReinterpreted) {     // dump MFM complet de la piste d'origine
         const double readTime = 8000000.0 / 5.0;        // 1 tour à 300 tr/min
         double totalPrev = 0;
         for (int i = 0; i < t->trackImageSize; ++i) {
@@ -1040,10 +1058,10 @@ uint8_t Fdc::readTrackStx(int track, int side) {
         }
         return 0;
     }
-    // Pas d'image → reconstruire une piste standard à partir des secteurs.
-    int trackSize = t->mfmSize;
-    if ((t->flags & StxImage::TRACK_FLAG_SECTOR_BLOCK) == 0) trackSize /= 8;
-    if (t->sectorsCount == 0) {
+    // Pas d'image (ou piste réécrite) → reconstruire une piste standard à partir des secteurs.
+    int trackSize = t->writeReinterpreted ? t->writeMfmSize : t->mfmSize;
+    if (!t->writeReinterpreted && (t->flags & StxImage::TRACK_FLAG_SECTOR_BLOCK) == 0) trackSize /= 8;
+    if (t->sectorsCountView() == 0) {
         for (int i = 0; i < trackSize; ++i) bufferAdd(uint8_t(rngNext()));
         return 0;
     }
@@ -1052,8 +1070,9 @@ uint8_t Fdc::readTrackStx(int track, int side) {
         for (int k = 0; k < 8; ++k) c = (c & 0x8000) ? uint16_t((c << 1) ^ 0x1021) : uint16_t(c << 1);
     };
     for (int i = 0; i < GAP1; ++i) bufferAdd(0x4e);
-    for (int s = 0; s < t->sectorsCount; ++s) {
-        const StxImage::Sector& sec = t->sectors[s];
+    const std::vector<StxImage::Sector>& secs = t->sectorsView();
+    for (int s = 0; s < int(secs.size()); ++s) {
+        const StxImage::Sector& sec = secs[s];
         const int ssz = sec.sectorSize;
         if (bufferSize() + ssz + GAP2 + 10 + GAP3a + GAP3b + 4 + 2 + GAP4 >= trackSize) break;
         for (int i = 0; i < GAP2; ++i) bufferAdd(0x00);
