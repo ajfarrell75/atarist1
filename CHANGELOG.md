@@ -552,11 +552,37 @@ taguées (0.1.x). Le restant est dans [`TODO.md`](TODO.md).
   volontaire, record-type), **bits fuzzy** (données différentes à chaque lecture) et
   **timing variable** (vitesse par bloc de 16 o). Le FDC dispatche vers les variantes
   `nextSectorIDStx`/`readSectorStx`/`readAddressStx`/`readTrackStx`/`writeSectorStx`
-  (écriture en overlay mémoire). Position angulaire via `BitPosition` (1 bit = 32 cyc),
-  rotation par piste (`cyclesPerRev` dérivé de la longueur réelle). Débloque les jeux
-  **PROTÉGÉS** : ✅ **Dungeon Master** (fuzzy bits), **Stunt Car Racer**, **Tower of
-  Babel**, Golden Axe, Chessmaster… (séquence de lecture identique à Hatari, vérifiée à
-  l'oracle).   Quelques protections spécifiques restent à affiner (cf. TODO).
+  (écriture en overlay mémoire). Position angulaire via `BitPosition` (1 bit = 32 cyc
+  en DD, **÷ densité** pour HD/ED — cf. ci-dessous), rotation par piste (`cyclesPerRev`
+  dérivé de la longueur réelle). Débloque les jeux **PROTÉGÉS** : ✅ **Dungeon Master**
+  (fuzzy bits), **Stunt Car Racer**, **Tower of Babel**, Golden Axe, Chessmaster,
+  **Rick Dangerous** (secteur à erreur CRC volontaire), Tower Toppler, Eliminator…
+  (séquence de lecture identique à Hatari, vérifiée à l'oracle).
+- **STX — densité HD/ED + ré-interprétation WRITE TRACK** (deux finitions du chemin
+  Pasti, *au-delà de Hatari*) :
+  - `nextSectorIDStx` exprimait `BitPosition` et la taille de piste en cellules **DD
+    brutes** (32 cyc/bit, 256 cyc/octet — exactement comme Hatari). Or `cyclesPerRev`
+    et `indexCurrentPosCycles` suivent déjà le débit du média (÷ densité). Sur une image
+    **HD/ED** (2×/4× plus de bits par tour), les positions débordaient donc le tour d'un
+    facteur 2/4 → champs ID jamais alignés. Corrigé : conversion bit→cyc et octet→cyc à
+    la densité courante (`MFM_BIT/dens`, `MFM_BYTE/dens`). En **DD (dens=1) : valeurs
+    inchangées** (32/256) → **non-régression byte-identique** (Tower Toppler, Eliminator,
+    Rick Dangerous, Bubble Ghost re-vérifiés à l'écran).
+  - **WRITE TRACK ré-interprété en LECTURE** : Hatari conserve le flux écrit
+    (`pDataWrite`) mais laisse `pDataRead` à `NULL` (TODO « convert pDataWrite into
+    pDataRead ») → les lectures voient toujours l'original. NeoST PARSE désormais le flux
+    (IDAM `$FE` → champ ID, DAM `$FB`/`$F8` → données) en secteurs lisibles
+    (`StxImage::reinterpretSaveTrack`, vue active `Track::sectorsView`) → **les lectures
+    voient le nouveau contenu**. Reconstruit aussi au rechargement d'un `.wd1772`. Le flux
+    brut reste la source persistée. Validé : `tests/stx_writetrack_test.cpp` (flux forgé de
+    3 secteurs relus à la place des 10 d'origine, données octet-exactes, round-trip
+    sauvegarde→rechargement `.wd1772`).
+  - **Rick Dangerous.stx** (signalé « plante après titre ») : en fait **fonctionne** —
+    le rapport était périmé (le test headless n'injectait pas d'entrée). Chargement des
+    pistes 0-48 puis re-lecture de protection (piste 0, secteur 6 : **erreur CRC
+    volontaire + offset de données chevauchant**, correctement émulée) → **écran-titre
+    « RICK DANGEROUS »** (SPACE) → **jeu** (feu). Le secteur-protection à CRC erronée est
+    rendu fidèlement (statut bit 3, données lues, RNF absent).
 - **Masquage d'adresse DMA** (port `FDC_WriteDMAAddress` / `DMA_MaskAddressHigh`) :
   octet haut `&0x3f/0x7f/0xff` selon le modèle, bas forcé word-align `&0xfe`.
 - **Compteur de secteurs DMA non relisible** : lecture SCREG `$FF8604` renvoie

@@ -1,0 +1,104 @@
+// =============================================================================
+//  stx_writetrack_test.cpp — vérifie la ré-interprétation en LECTURE d'une piste
+//  réécrite par WRITE TRACK (StxImage::reinterpretSaveTrack) + le round-trip via
+//  le fichier compagnon .wd1772. Compilé/lancé hors CMake :
+//      g++ -std=c++17 -I src tests/stx_writetrack_test.cpp src/io/StxImage.cpp -o /tmp/wt
+//      /tmp/wt "disks/stx/Rick Dangerous - Firebird (UK) (France).stx"
+//
+//  (c) 2026 VERHILLE Arnaud — projet NeoST.
+// =============================================================================
+#include "io/StxImage.hpp"
+
+#include <cassert>
+#include <cstdint>
+#include <cstdio>
+#include <fstream>
+#include <vector>
+
+static void add(std::vector<uint8_t>& v, uint8_t b) { v.push_back(b); }
+static uint8_t expect(int s, int i) { return uint8_t((s + 1) * 0x10 + (i & 0x0f)); }
+
+// Forge un flux WRITE TRACK standard : GAP1, puis pour chaque secteur GAP2 + sync +
+// IDAM + champ ID + GAP3 + sync + DAM + données + GAP4. C'est ce qu'un formateur
+// envoie au WD1772 ; reinterpretSaveTrack doit en ressortir les secteurs.
+static std::vector<uint8_t> forgeFlux(uint8_t track, int nSectors) {
+    std::vector<uint8_t> f;
+    for (int i = 0; i < 60; ++i) add(f, 0x4e);                     // GAP1
+    for (int s = 1; s <= nSectors; ++s) {
+        for (int i = 0; i < 12; ++i) add(f, 0x00);                 // GAP2
+        add(f, 0xa1); add(f, 0xa1); add(f, 0xa1); add(f, 0xfe);    // sync + IDAM
+        add(f, track); add(f, 0); add(f, uint8_t(s)); add(f, 2);   // ID : tr/hd/sr/size(=512)
+        add(f, 0x12); add(f, 0x34);                                // ID CRC (ignoré à la relecture)
+        for (int i = 0; i < 22; ++i) add(f, 0x4e);                 // GAP3a
+        for (int i = 0; i < 12; ++i) add(f, 0x00);                 // GAP3b
+        add(f, 0xa1); add(f, 0xa1); add(f, 0xa1); add(f, 0xfb);    // sync + DAM
+        for (int i = 0; i < 512; ++i) add(f, expect(s - 1, i));    // données distinctes/secteur
+        add(f, 0x56); add(f, 0x78);                                // data CRC (ignoré)
+        for (int i = 0; i < 40; ++i) add(f, 0x4e);                 // GAP4
+    }
+    return f;
+}
+
+int main(int argc, char** argv) {
+    const char* path = argc > 1 ? argv[1] : "disks/stx/Rick Dangerous - Firebird (UK) (France).stx";
+
+    std::ifstream f(path, std::ios::binary | std::ios::ate);
+    if (!f) { std::fprintf(stderr, "FAIL: impossible d'ouvrir %s\n", path); return 2; }
+    const std::streamsize n = f.tellg(); f.seekg(0);
+    std::vector<uint8_t> raw; raw.resize(size_t(n)); f.read(reinterpret_cast<char*>(raw.data()), n);
+
+    StxImage stx;
+    if (!stx.parse(std::move(raw))) { std::fprintf(stderr, "FAIL: parse STX\n"); return 2; }
+
+    const int TR = 5, NS = 3;
+    StxImage::Track* t = stx.findTrack(TR, 0);
+    assert(t && "piste 5 absente");
+
+    // Avant : la piste a ses secteurs d'origine (10 pour Rick Dangerous).
+    const int origCount = t->sectorsCountView();
+    assert(!t->writeReinterpreted);
+
+    // --- Simule un WRITE TRACK : pousse la SaveTrack et réinterprète. ---
+    StxImage::SaveTrack st; st.track = TR; st.side = 0; st.data = forgeFlux(TR, NS);
+    stx.saveTracks.push_back(std::move(st));
+    t->saveTrackIndex = int(stx.saveTracks.size()) - 1;
+    stx.reinterpretSaveTrack(*t);
+
+    assert(t->writeReinterpreted && "ré-interprétation non armée");
+    assert(t->sectorsCountView() == NS && "mauvais nombre de secteurs relus");
+    assert(t->sectorsCountView() != origCount && "la vue n'a pas changé");
+
+    const std::vector<StxImage::Sector>& secs = t->sectorsView();
+    for (int s = 0; s < NS; ++s) {
+        assert(secs[s].idTrack == TR);
+        assert(secs[s].idHead == 0);
+        assert(secs[s].idSector == s + 1);
+        assert(secs[s].idSize == 2 && secs[s].sectorSize == 512);
+        assert(secs[s].pData != nullptr);
+        for (int i = 0; i < 512; ++i) assert(secs[s].pData[i] == expect(s, i));
+    }
+    assert(secs[0].bitPosition < secs[1].bitPosition);
+    assert(secs[1].bitPosition < secs[2].bitPosition);
+
+    // --- Round-trip .wd1772 : sauve, recharge dans une image neuve, re-vérifie. ---
+    const char* tmp = "/tmp/neost_wt_test.wd1772";
+    assert(stx.saveWd1772(tmp) && "saveWd1772");
+
+    std::ifstream f2(path, std::ios::binary | std::ios::ate);
+    const std::streamsize n2 = f2.tellg(); f2.seekg(0);
+    std::vector<uint8_t> raw2; raw2.resize(size_t(n2)); f2.read(reinterpret_cast<char*>(raw2.data()), n2);
+    StxImage stx2;
+    assert(stx2.parse(std::move(raw2)) && "parse #2");
+    assert(stx2.loadWd1772(tmp) && "loadWd1772");
+
+    StxImage::Track* t2 = stx2.findTrack(TR, 0);
+    assert(t2 && t2->writeReinterpreted && t2->sectorsCountView() == NS && "rechargement TRCK");
+    const std::vector<StxImage::Sector>& secs2 = t2->sectorsView();
+    for (int s = 0; s < NS; ++s)
+        for (int i = 0; i < 512; ++i) assert(secs2[s].pData[i] == expect(s, i));
+
+    std::printf("OK: WRITE TRACK ré-interprété (%d secteurs, vue %d→%d) + round-trip .wd1772\n",
+                NS, origCount, t->sectorsCountView());
+    std::remove(tmp);
+    return 0;
+}

@@ -58,9 +58,10 @@ ou `disks/stx/` (`.stx`).
   ```
   plante sur écran noir.
   ```
-- **Lethal Xcess** (`Lethal_Xcess_Disk_1.STX`, `Lethal_Xcess_Disk_2.STX`) — ne démarre
+- **Lethal Xcess** (`Lethal_Xcess_Disk_1.STX`, `Lethal_Xcess_Disk_2.STX`) — écran noir.
   ```
-  pas du tout (écran noir). Cf. §STX long tail protections.
+  Diagnostiqué : NON-STX (charge bien pistes 0-35), deadlock de l'afficheur fullscreen
+  sync-raster (`$604`/`$FF8209`). Détail → §FDC « écran noir » + §Bordures.
   ```
 - **Stardust Bloodhouse** (`stardust_bloodhouse_a/b/c.STX`) — plante au démarrage
   ```
@@ -124,6 +125,10 @@ ou `disks/stx/` (`.stx`).
   Homebrew (pas d'injection clavier headless : ni `keypress` debugger ni cmd-fifo) —
   rebuilder Hatari avec le debugger complet, ou breakpoint+memwrite sur la boucle
   de poll. Captures de réf. : /tmp/cuddly_keep/ (volatil).
+  (7) **Lethal Xcess (STX) — écran noir = MÊME famille** : son afficheur fullscreen poll
+  `$FF8209` pour caler ses splits `$FF820A`/`$FF8260` ; notre compteur vidéo non-cycle-exact
+  pendant le poll fait DEADLOCKER sa machine d'état VBL (`$604`). Étalon supplémentaire
+  pour ce chantier — détail §FDC « écran noir ».
   ```
 
 ## FDC WD1772 + DMA disquette
@@ -145,12 +150,28 @@ ou `disks/stx/` (`.stx`).
   (transfert bloc piloté par le CDB) — à ne corriger QUE si un diagnostic qui
   désaligne sector-count DMA et longueur CDB échoue un jour.
   ```
-- **STX — long tail protections** : jeux plantant après titre (`Rick Dangerous.stx`,
+- ~~STX HD/densité (`nextSectorIDStx`/`MFM_BIT` en cellules DD)~~ → **FAIT** : conversion
+  bit/octet→cycles à la densité du média (DD inchangé). Cf. `CHANGELOG.md`.
+- ~~Ré-interprétation en LECTURE d'une piste réécrite par WRITE TRACK~~ → **FAIT**
+  (au-delà de Hatari) : `StxImage::reinterpretSaveTrack` parse le flux en secteurs lus à
+  la place de l'original ; round-trip `.wd1772`. Cf. `CHANGELOG.md` + `tests/stx_writetrack_test.cpp`.
+- ~~`Rick Dangerous.stx` « plante après titre »~~ → **rapport périmé, FONCTIONNE**
+  (titre + jeu ; le test headless n'injectait pas d'entrée). Cf. `CHANGELOG.md`.
+- **« écran noir » Lethal Xcess / Stardust / onslaught — DIAGNOSTIQUÉ : PAS un bug STX**,
   ```
-  images STX HD/densité
-  (le débit suit déjà la densité, mais `nextSectorIDStx`/`MFM_BIT` restent en cellules DD) ;
-  ré-interprétation en LECTURE d'une piste réécrite par WRITE TRACK (TODO partagé
-  avec Hatari : le flux est conservé/persisté mais les lectures voient l'original).
+  mais le MÊME chantier sync-raster que §Bordures (Enchanted Land / Cuddly). Le loader STX
+  finit sa 1ʳᵉ salve (Lethal Xcess : pistes 0-35 face 0, TOUTES standard, dernier secteur
+  lu+INTRQ OK) ; le jeu installe alors un afficheur fullscreen piloté par un état VBL
+  (pointeur `$604`, phases `$139e8`/`$1499a`/`$149d4` qui incrémentent `$13a16`,
+  vs `$149dc` qui ne l'incrémente PAS et joue un script de splits `$FF820A`/`$FF8260`
+  synchronisé en pollant `$FF8209`). Boucle de calage `$14940` (attend que `$14ce8`,
+  maj par le handler Timer B event-count `$14cc4`, reste STABLE 20 trames) → puis
+  `$604=$149dc` + `bsr $13a18` (`clr $13a16` / `tst` / `beq`) : avec `$604=$149dc` rien
+  n'incrémente `$13a16` → **deadlock**. Le calage diverge de la machine réelle car
+  notre compteur vidéo `$FF8209` ne se comporte pas au cycle près pendant le poll
+  (cf. `Video_RestartVideoCounter` NON porté + géométrie verrouillée par trame,
+  `Shifter::videoCounter`). → à reprendre avec le chantier « géométrie par ligne /
+  bascule 50-60 Hz + compteur vidéo cycle-exact » (§Bordures, §Précision cycle), PAS ici.
   ```
 
 ## YM2149 PSG

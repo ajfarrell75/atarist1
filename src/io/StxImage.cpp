@@ -239,6 +239,67 @@ StxImage::Sector* StxImage::findSectorByPosition(int track, int side, uint16_t b
 }
 
 // =============================================================================
+//  Ré-interprétation d'une piste réécrite par WRITE TRACK (au-delà de Hatari, qui
+//  laisse « convert pDataWrite into pDataRead » en TODO). Le flux brut écrit par le
+//  programme est parcouru pour en extraire les secteurs : on cherche chaque IDAM
+//  ($FE) → champ ID (piste/face/secteur/taille), puis la première DAM ($FB normal /
+//  $F8 « deleted ») → données (128 << (taille & 3) octets). On tolère un sync $A1
+//  comme $F5 (on ne s'appuie que sur $FE/$FB, comme l'extracteur .ST éprouvé).
+//
+//  Les secteurs ainsi reconstruits remplacent ceux d'origine pour la LECTURE
+//  (Track::sectorsView). La position angulaire (BitPosition, en bits DD) vient de
+//  l'offset de l'octet ID dans le flux. Le statut FDC est neutre (CRC ré-générée) :
+//  on rend ce que le programme a écrit, pas une erreur de protection.
+// =============================================================================
+void StxImage::reinterpretSaveTrack(Track& t) {
+    t.writeReinterpreted = false;
+    t.writeSectors.clear();
+    t.writeData.clear();
+    t.writeMfmSize = 0;
+    if (t.saveTrackIndex < 0 || t.saveTrackIndex >= int(saveTracks.size())) return;
+
+    const std::vector<uint8_t>& flux = saveTracks[t.saveTrackIndex].data;
+    const int n = int(flux.size());
+    t.writeMfmSize = uint16_t(n);
+
+    struct Parsed { uint8_t tr, hd, sr, sz; int fePos, dataPos, dataLen; };
+    std::vector<Parsed> found;
+    for (int i = 0; i + 5 < n; ) {
+        if (flux[i] != 0xFE) { ++i; continue; }              // IDAM : champ d'adresse
+        const uint8_t tr = flux[i + 1], hd = flux[i + 2], sr = flux[i + 3], sz = flux[i + 4];
+        const int dataLen = 128 << (sz & 0x03);
+        int k = i + 5;                                       // cherche la marque de données
+        while (k < n && flux[k] != 0xFB && flux[k] != 0xF8) ++k;
+        if (k >= n || k + 1 + dataLen > n) { ++i; continue; }// DAM/données incomplètes → on passe
+        found.push_back({ tr, hd, sr, sz, i, k + 1, dataLen });
+        i = k + 1 + dataLen;
+    }
+    if (found.empty()) return;          // aucun secteur exploitable (piste non formatée)
+
+    t.writeData.resize(found.size());
+    t.writeSectors.resize(found.size());
+    for (std::size_t s = 0; s < found.size(); ++s) {
+        const Parsed& f = found[s];
+        t.writeData[s].assign(flux.begin() + f.dataPos, flux.begin() + f.dataPos + f.dataLen);
+        Sector& sec   = t.writeSectors[s];
+        sec.idTrack   = f.tr; sec.idHead = f.hd; sec.idSector = f.sr; sec.idSize = f.sz;
+        sec.idCrc     = crc16({ 0xa1, 0xa1, 0xa1, 0xfe, f.tr, f.hd, f.sr, f.sz });
+        sec.fdcStatus = 0;
+        sec.sectorSize  = uint16_t(f.dataLen);
+        sec.bitPosition = uint16_t((f.fePos + 1) * 8);       // « juste après l'IDAM » (octet ID piste)
+        sec.readTime    = 0;
+        sec.dataOffset  = 0;
+        sec.pFuzzy = nullptr; sec.pTiming = nullptr;
+        sec.saveIndex = -1;
+    }
+    // 2e passe : pointeurs de données (writeData n'est plus redimensionné ensuite).
+    for (std::size_t s = 0; s < found.size(); ++s)
+        t.writeSectors[s].pData = t.writeData[s].data();
+
+    t.writeReinterpreted = true;
+}
+
+// =============================================================================
 //  Persistance .wd1772 — format byte-compatible Hatari (STX_WriteDisk /
 //  STX_LoadSaveFile) : un fichier compagnon peut être échangé entre émulateurs.
 //
@@ -364,6 +425,7 @@ bool StxImage::loadWd1772(const std::string& path) {
             if (t) {
                 saveTracks.push_back(std::move(st));
                 t->saveTrackIndex = int(saveTracks.size()) - 1;
+                reinterpretSaveTrack(*t);          // flux rechargé → secteurs lisibles
             } else {
                 std::fprintf(stderr, "[STX] %s : bloc TRCK sans piste (piste %d face %d) "
                              "— ignoré\n", path.c_str(), st.track, st.side);

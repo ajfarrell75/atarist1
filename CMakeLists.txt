@@ -131,6 +131,14 @@ set_source_files_properties(src/headless/main_headless.cpp
     PROPERTIES COMPILE_OPTIONS "${NEOST_STRICT_OPTS}")
 
 # =============================================================================
+#  neost-stx-test — test autonome de la ré-interprétation WRITE TRACK (StxImage).
+#  Ne dépend QUE de StxImage (aucun GUI, aucun Moira). Lancer :
+#    ./build/neost-stx-test "disks/stx/Rick Dangerous - Firebird (UK) (France).stx"
+# =============================================================================
+add_executable(neost-stx-test EXCLUDE_FROM_ALL tests/stx_writetrack_test.cpp src/io/StxImage.cpp)
+target_include_directories(neost-stx-test PRIVATE "${CMAKE_SOURCE_DIR}/src")
+
+# =============================================================================
 #  neost-web — frontend WebAssembly (Emscripten + GLFW3 port + WebGL).
 #
 #  Réutilise tel quel neost_core ; remplace l'OpenGL immédiat par un shader

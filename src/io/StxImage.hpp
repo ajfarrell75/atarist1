@@ -63,6 +63,23 @@ public:
         uint16_t timingFlags = 0, timingSize = 0;
         const uint8_t* pTimingData   = nullptr;
         int saveTrackIndex = -1;        // index dans saveTracks (WRITE TRACK) ou -1
+
+        // Réinterprétation d'une piste réécrite par WRITE TRACK : le flux brut
+        // (saveTracks[saveTrackIndex].data) est PARSÉ en secteurs (IDAM $FE → champ
+        // ID, DAM $FB/$F8 → données) pour que les LECTURES voient le nouveau contenu
+        // et non plus l'original. C'est ce que Hatari laisse en TODO (« convert
+        // pDataWrite into pDataRead »). writeData possède les octets ; chaque
+        // writeSectors[i].pData y pointe (stable : tracks_ n'est jamais redimensionné).
+        std::vector<Sector>               writeSectors;
+        std::vector<std::vector<uint8_t>> writeData;
+        uint16_t writeMfmSize       = 0;       // longueur du flux écrit (octets MFM)
+        bool     writeReinterpreted = false;   // true ⇔ writeSectors fait foi
+
+        // Vue ACTIVE des secteurs : la piste réinterprétée si présente, sinon ceux
+        // d'origine. Le chemin FDC indexe TOUJOURS via ces accesseurs.
+        std::vector<Sector>&       sectorsView()       { return writeReinterpreted ? writeSectors : sectors; }
+        const std::vector<Sector>& sectorsView() const { return writeReinterpreted ? writeSectors : sectors; }
+        int  sectorsCountView() const { return writeReinterpreted ? int(writeSectors.size()) : int(sectorsCount); }
     };
 
     // Drapeaux de piste.
@@ -93,8 +110,10 @@ public:
         std::vector<uint8_t> data;
     };
     // Piste réécrite par WRITE TRACK : flux BRUT écrit par le programme (timings
-    // ignorés). Comme Hatari, on ne la ré-interprète pas en lecture (TODO partagé) ;
-    // on la conserve et on la persiste pour fidélité du fichier .wd1772.
+    // ignorés), conservé tel quel pour la persistance .wd1772. Contrairement à
+    // Hatari (qui laisse la ré-interprétation en TODO), NeoST PARSE ce flux en
+    // secteurs lisibles (Track::writeSectors) → les lectures voient le nouveau
+    // contenu. Le flux brut reste la source de vérité persistée.
     struct SaveTrack {
         uint8_t  track = 0, side = 0;
         std::vector<uint8_t> data;
@@ -108,6 +127,11 @@ public:
     bool saveWd1772(const std::string& path) const;
     bool loadWd1772(const std::string& path);
     Sector* findSectorByPosition(int track, int side, uint16_t bitPos);
+
+    // Réinterprète le flux WRITE TRACK associé à `t` (saveTracks[t.saveTrackIndex])
+    // en secteurs lisibles (cf. Track::writeSectors). Appelé juste après un WRITE
+    // TRACK et à chaque chargement d'un fichier compagnon .wd1772.
+    void reinterpretSaveTrack(Track& t);
 
 private:
     std::vector<uint8_t> buf_;          // octets bruts (les pointeurs ci-dessus pointent dedans)
