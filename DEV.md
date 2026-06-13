@@ -176,6 +176,7 @@ attend du matériel.
 | `Shifter` / `Machine`    | `video.c` (HBL/VBL/Timer B, bordures, spec512), `screen.c` |
 | `Fdc`                    | `fdc.c`, `floppy.c`                            |
 | `Acsi` (disque dur ACSI) | `hdc.c` (routage DMA via `Fdc`)                |
+| `Scc` (série Z85C30 Mega STE) | `scc.c` (IRQ niv5 via `Scu`)              |
 | `YM2149` / `DmaSound`    | `psg.c`, `sound.c`, `dmaSnd.c`                 |
 | `Blitter` / `Rtc`        | `blitter.c`, `rtc.c`                           |
 | `GemdosHd` (disque dur GEMDOS) | `gemdos.c`, `cpu/hatari-glue.c` (`OpCode_GemDos/Pexec/SysInit`), `cart.c`/`cart_asm.s`/`cartData.c` |

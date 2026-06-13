@@ -822,6 +822,22 @@ taguées (0.1.x). Le restant est dans [`TODO.md`](TODO.md).
   `C:\AUTO` recopiant `HELLO.TXT`→`OUTPUT.TXT` **persisté dans l'image** (WRITE(6),
   relu par mtools). _(Remplace l'ancien disque virtuel en mémoire, qui n'était qu'un
   bouchon pour le diagnostic « Hard Disk DMA Exerciser ».)_
+- **SCC Z85C30 — contrôleur série Mega STE** (`io/Scc`, port de `scc.c`,
+  `$FF8C80-$FF8C87`) : deux canaux A/B, jeu complet WR0-15 / RR0-15 par canal
+  (pointeur de registre via WR0, commandes WR0/WR9, reset matériel/canal), statut RR0
+  (TX buffer empty, RX char available, CTS/DCD au repos = assertés comme Hatari sans
+  TTY), vecteur RR2A/RR2B (+ statut, Status High/Low, VIS/NV), IP RR3 + sources
+  d'interruption, **IRQ niveau 5 vectorisée gatée par le SCU** (VmeIntState bit 5,
+  IACK → vecteur, IUS, `Reset Highest IUS`). Décodage des accès façon Hatari (octets
+  IMPAIRS seulement ; `$..81/85` = ctrl A/B, `$..83/87` = data A/B). TX immédiat
+  (puits série + **bouclage local** WR14 bit4) et RX par injection. Câblé via le SCU
+  (`Scu::syncState` niveau 5) et `Cpu68k::neostUpdateIpl`/`readIrqUserVector`.
+  Validé headless : **EmuTOS 256K et TOS 2.06 Mega STE initialisent les deux canaux**
+  (WR9=$C0 reset, WR4 async, WR2 vecteur, WR3/5 8 bits…) et **bootent au bureau** sans
+  plante ; bouclage TX→RX prouvé (programme superviseur via Supexec écrit `$42` sur le
+  canal A en loopback, le relit et le renvoie sur l'AUX → sortie série `<B>`).
+  _Non porté (faible valeur ici) : timers du BRG (Zero Count), baudrate temporisé,
+  série hôte réelle._
 - **PSG `$FF8802` relisible** (read-modify-write `bclr/bset` du port A).
 - **SCU MegaSTE — gate d'interruptions complet** (`$FF8E01-$FF8E0F`, port `scu_vme.c`,
   `Scu.hpp`) : sur MegaSTE, **toutes** les IRQ sont gatées par `SysIntMask`/`VmeIntMask`

@@ -15,6 +15,7 @@
 #include "core/Blitter.hpp"
 #include "io/Rtc.hpp"
 #include "io/MidiAcia.hpp"
+#include "io/Scc.hpp"
 
 #include <cstdio>
 #include <cstring>
@@ -600,6 +601,12 @@ uint8_t Bus::mmioRead8(uint32_t addr) {
     // SCU MegaSTE : registres d'interruption ($FF8E01-$FF8E0F). cf. Scu.hpp.
     if (machine == MachineType::MegaSte && addr >= 0xFF8E01 && addr <= 0xFF8E0F)
         return scu.read8(addr);
+    // SCC Z85C30 ($FF8C80-$FF8C87) — Mega STE. La lecture peut effacer une IRQ niv5.
+    if (machine == MachineType::MegaSte && scc && addr >= 0xFF8C80 && addr <= 0xFF8C87) {
+        const uint8_t v = scc->read8(addr);
+        if (cpu) cpu->updateIpl();
+        return v;
+    }
     if (glue)
         return glue->read8(addr);         // MMU et reste du MMIO
     return 0xFF;
@@ -691,6 +698,12 @@ void Bus::mmioWrite8(uint32_t addr, uint8_t v) {
     // recalcule l'IPL CPU. cf. Scu.hpp (gating conditionnel).
     if (machine == MachineType::MegaSte && addr >= 0xFF8E01 && addr <= 0xFF8E0F) {
         if (scu.write8(addr, v) && cpu) cpu->updateIpl();
+        return;
+    }
+    // SCC Z85C30 ($FF8C80-$FF8C87) — Mega STE. Une écriture peut (dé)masquer l'IRQ niv5.
+    if (machine == MachineType::MegaSte && scc && addr >= 0xFF8C80 && addr <= 0xFF8C87) {
+        scc->write8(addr, v);
+        if (cpu) cpu->updateIpl();
         return;
     }
     if (glue)
