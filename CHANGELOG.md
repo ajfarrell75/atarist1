@@ -805,9 +805,23 @@ taguées (0.1.x). Le restant est dans [`TODO.md`](TODO.md).
   EmuTOS/TOS négocier `9600 bauds, 8N1`. Comme chez Hatari c'est de la pure
   configuration (appliquée à son tty hôte) : le débit d'émission émulé reste
   instantané (`RS232_TSR_ReadByte`), backing-store des registres inchangé.
-- **Disque dur ACSI** (`Fdc`, `$FF8604/06` bit `DMA_CSACSI`, port `hdc.c`) : commande
-  6 octets, READ/WRITE(6), INQUIRY, READ CAPACITY, TEST UNIT READY ; disque virtuel
-  agrandi à la demande (64 Mo).
+- **Disque dur ACSI complet** (`io/Acsi`, port de `hdc.c` ; routage DMA via `Fdc`,
+  `$FF8604/06` bit `DMA_CSACSI`) : boot et lecture/écriture depuis une **vraie image
+  de disque dur** (dump de secteurs brut, `--acsi`/`--hd` ou `NEOST_ACSI_IMG`),
+  jusqu'à **8 cibles**. Paquets de commande 6 octets (classe 0) / 10 octets (classe 1)
+  reçus octet par octet (broche A1 = `DMA_A0`), transfert DMA RAM↔image piloté par le
+  `Fdc` (sens contrôlé par `DMA_WRBIT`, déclenché à la fin du paquet et sur
+  `HDC_DmaTransfer` à l'écriture $FF8606). Commandes SCSI portées 1:1 : TEST UNIT
+  READY, INQUIRY (LUN), REQUEST SENSE (sens court/long + `nLastBlockAddr`), MODE SENSE
+  (pages 0x00/0x04/0x3f), READ CAPACITY, READ/WRITE(6 et 10), SEEK, FORMAT, REPORT
+  LUNS, SHIP. Comptage de partitions (DOS MBR + Atari/AHDI, `partitionCount`). IRQ HDC
+  (INTRQ/GPIP5) + statut DMA acquittés par octet ; cible vide → « pas de disque ».
+  Validé headless (EmuTOS 192 Ko) : sonde ACSI (TEST UNIT READY → INQUIRY → READ
+  CAPACITY → lecture table de partitions LBA 0 + BPB LBA 1), bureau « GEMDOS drives:
+  ABC » avec icône **DISK C**, `_bootdev=C:`, **boot + Pexec depuis C:**, et un PRG
+  `C:\AUTO` recopiant `HELLO.TXT`→`OUTPUT.TXT` **persisté dans l'image** (WRITE(6),
+  relu par mtools). _(Remplace l'ancien disque virtuel en mémoire, qui n'était qu'un
+  bouchon pour le diagnostic « Hard Disk DMA Exerciser ».)_
 - **PSG `$FF8802` relisible** (read-modify-write `bclr/bset` du port A).
 - **SCU MegaSTE — gate d'interruptions complet** (`$FF8E01-$FF8E0F`, port `scu_vme.c`,
   `Scu.hpp`) : sur MegaSTE, **toutes** les IRQ sont gatées par `SysIntMask`/`VmeIntMask`

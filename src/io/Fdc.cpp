@@ -704,7 +704,7 @@ void Fdc::dmaResetFifo() {
     dmaBytesInSector_ = 512;
     dmaSectorCount_ = 0;            // après reset, compteur = 0 (vérifié sur STF réel)
     dmaError_ = false;
-    acsiByteCount_ = 0;            // réinitialise aussi l'état de commande ACSI
+    acsi_.resetCommand();          // réinitialise aussi l'état de commande ACSI
 }
 
 uint16_t Fdc::dmaStatusWord() const {
@@ -1862,7 +1862,7 @@ uint8_t Fdc::read8(uint32_t addr) {
             return 0;
         case 0x5:                                    // data, octet bas
             if (dmaMode_ & DMA_SCREG) return uint8_t(ff8604recent_);
-            if (dmaMode_ & DMA_CSACSI) { const uint8_t v = acsiStatus_; noteFf8604(v); return v; }
+            if (dmaMode_ & DMA_CSACSI) { const uint8_t v = acsi_.status(); noteFf8604(v); return v; }
             switch (dmaMode_ & (DMA_A1 | DMA_A0)) {
                 case 0: {             // FDC_CS : registre de statut
                     refreshDriveSide();
@@ -1946,6 +1946,10 @@ void Fdc::write8(uint32_t addr, uint8_t v) {
             const uint16_t prev = dmaMode_;
             dmaMode_ = uint16_t((ctrlHi_ << 8) | v);
             if ((prev ^ dmaMode_) & 0x0100) dmaResetFifo();  // bascule du bit 8 → reset DMA
+            // Fin de la phase « compteur de secteurs » → déclenche le transfert DMA
+            // ACSI en attente (port de HDC_DmaTransfer, fdc.c:FDC_DmaModeControl).
+            if ((prev & 0xC0) != 0 && (dmaMode_ & 0xC0) == 0 && acsi_.anyEnabled())
+                acsiDmaTransfer();
             return;
         }
         case 0x9:
@@ -1969,80 +1973,53 @@ void Fdc::write8(uint32_t addr, uint8_t v) {
 }
 
 // =============================================================================
-//  Contrôleur ACSI (disque dur). Port minimal de Hatari hdc.c : commande de 6
-//  octets (classe 0) reçue octet par octet via la DMA, transfert DMA, statut.
-//  Un disque virtuel EN MÉMOIRE (cible 0) suffit au « Hard Disk DMA Exerciser ».
+//  Contrôleur ACSI (disque dur) — délégation au port de hdc.c (cf. io/Acsi.cpp).
+//  Le DMA/FDC reçoit les octets de commande et orchestre le transfert RAM↔image ;
+//  toute la logique « disque » (commandes SCSI, accès image) est dans Acsi.
 // =============================================================================
-static constexpr uint32_t ACSI_DISK_CAP = 64u * 1024u * 1024u;   // plafond du disque virtuel
 
+// Réception d'un octet de commande ACSI (port de Acsi_WriteCommandByte).
 void Fdc::writeAcsi(uint32_t /*addr*/, uint8_t v) {
-    setIntrqLine(false);                   // efface l'IRQ (réarmée si l'octet est accepté)
-    // Le « pin A1 » de l'ACSI est câblé sur le bit de contrôle DMA_A0 (0x02) : 0 pour le
-    // 1er octet du paquet (sélection cible + opcode), 1 pour les octets suivants.
+    setIntrqLine(false);                   // efface l'IRQ HDC (réarmée si l'octet est accepté)
+    // La broche A1 de l'ACSI est câblée sur le bit de contrôle DMA_A0 (0x02) : 0 pour le
+    // 1er octet du paquet (sélection cible + opcode), 1 pour les octets suivants. On
+    // ignore A1 pour le 2e octet (byteCount==1), comme le vrai matériel (pilotes bogués).
     const bool a1 = (dmaMode_ & DMA_A0) != 0;
-    if (!a1 && acsiByteCount_ != 1) {
-        // 1er octet du paquet (A1=0) : bits 7-5 = cible, bits 4-0 = opcode.
-        acsiTarget_ = uint8_t((v >> 5) & 7);
-        acsiCmd_[0] = uint8_t(v & 0x1F);
-        acsiByteCount_ = 1;
+    if (!a1 && acsi_.byteCount() != 1) {
+        acsi_.selectTarget(uint8_t((v >> 5) & 7));        // cible = bits 7-5
+        if ((v & 0x1F) != 0x1F)                           // octet ordinaire (pas marqueur ICD)
+            acsi_.feedByte(uint8_t(v & 0x1F));            // opcode (1er octet ne termine jamais)
+        else
+            acsi_.setIcdOk();                             // marqueur ICD étendu : statut OK
     } else {
-        if (acsiByteCount_ < 6) acsiCmd_[acsiByteCount_++] = v;
-        if (acsiByteCount_ == 6) { executeAcsi(); acsiByteCount_ = 0; }
+        if (acsi_.feedByte(v) && acsi_.status() == 0 && acsi_.dataLen())
+            acsiDmaTransfer();                            // commande complète → transfert immédiat
     }
-    // Seule la cible 0 porte un disque : on acquitte (IRQ HDC = INTRQ/GPIP5) pour
-    // que le CPU poursuive. Toute autre cible reste muette → « pas de disque ».
-    if (acsiTarget_ == 0) setIntrqLine(true);
+    // Acquittement : IRQ HDC (INTRQ/GPIP5) + statut DMA si la cible est peuplée → le
+    // pilote envoie l'octet suivant ; cible vide → pas d'IRQ → « pas de disque ».
+    if (acsi_.targetEnabled()) {
+        dmaError_ = !acsi_.dmaError();   // bit0 de $FF8606 : 1 = pas d'erreur
+        setIntrqLine(true);
+    }
 }
 
-void Fdc::executeAcsi() {
-    bus_.megaSteCacheFlushIfEnabled();   // DMA disque dur via BGACK → cache invalidé
-    const uint8_t op = acsiCmd_[0];
-    const uint32_t lba = (uint32_t(acsiCmd_[1] & 0x1F) << 16) | (uint32_t(acsiCmd_[2]) << 8) | acsiCmd_[3];
-    const int      cnt = acsiCmd_[4] ? acsiCmd_[4] : 256;
-    acsiStatus_ = 0;                                      // OK par défaut
-    const uint64_t need = uint64_t(lba + uint32_t(cnt)) * 512u;
-    if (need <= ACSI_DISK_CAP && hd_.size() < need) hd_.resize(size_t(need), 0);
-    auto toRam = [&](const uint8_t* src, uint32_t n) {
-        for (uint32_t j = 0; j < n; ++j)
-            bus_.dmaWrite8(dmaAddr_ + j, src[j]);        // via le plan mémoire (MMU)
-        dmaAddr_ = (dmaAddr_ + n) & dmaAddressMask(bus_.ram.size());
-    };
-    switch (op) {
-        case 0x08: {                                     // READ(6) : disque → RAM
-            uint32_t off = lba * 512u;
-            for (int i = 0; i < cnt && off + 512u <= hd_.size(); ++i, off += 512u) toRam(&hd_[off], 512);
-            dmaSectorCount_ = 0; break;
-        }
-        case 0x0A: {                                     // WRITE(6) : RAM → disque
-            uint32_t off = lba * 512u, src = dmaAddr_;
-            for (int i = 0; i < cnt && off + 512u <= hd_.size(); ++i, off += 512u)
-                for (uint32_t j = 0; j < 512u; ++j)
-                    hd_[off + j] = bus_.dmaRead8(src + uint32_t(i) * 512u + j);   // via MMU
-            dmaAddr_ = (dmaAddr_ + uint32_t(cnt) * 512u) & dmaAddressMask(bus_.ram.size());
-            dmaSectorCount_ = 0; break;
-        }
-        case 0x12: {                                     // INQUIRY : identité du périphérique
-            uint8_t inq[36] = {0};
-            inq[0] = 0x00;          // type : disque à accès direct
-            inq[1] = 0x00;          // non amovible
-            inq[2] = 0x02;          // version SCSI-2
-            inq[4] = 31;            // longueur additionnelle
-            std::memcpy(inq + 8, "NeoST   NeoST Hard Disk  1.0 ", 28);
-            toRam(inq, uint32_t(acsiCmd_[4] ? acsiCmd_[4] : 36)); dmaSectorCount_ = 0; break;
-        }
-        case 0x25: {                                     // READ CAPACITY (classe 1, inoffensif ici)
-            const uint32_t last = ACSI_DISK_CAP / 512u - 1;
-            uint8_t cap[8] = { uint8_t(last >> 24), uint8_t(last >> 16), uint8_t(last >> 8), uint8_t(last),
-                               0, 0, 2, 0 };             // taille de bloc = 512
-            toRam(cap, 8); dmaSectorCount_ = 0; break;
-        }
-        case 0x00:                                       // TEST UNIT READY
-        case 0x03:                                       // REQUEST SENSE
-        case 0x04:                                       // FORMAT UNIT
-        case 0x0B:                                       // SEEK(6)
-        case 0x15:                                       // MODE SELECT
-        case 0x1A:                                       // MODE SENSE
-        default:
-            acsiStatus_ = 0; break;                      // accepté (pas d'erreur)
+// Transfert DMA RAM↔image (port de Acsi_DmaTransfer). dmaMode_/dmaAddr_ sont à nous.
+void Fdc::acsiDmaTransfer() {
+    if ((dmaMode_ & 0xC0) != 0x00 || acsi_.dataLen() == 0) return;   // pas un DMA ACSI / rien à faire
+    const bool modeWrite = (dmaMode_ & DMA_WRBIT) != 0;
+    if (acsi_.isWrite() != modeWrite) return;                        // sens DMA ≠ commande
+    bus_.megaSteCacheFlushIfEnabled();   // DMA disque dur via BGACK → cache Mega STE invalidé
+    const int len = acsi_.dataLen();
+    if (acsi_.isWrite()) {                                           // RAM → image
+        std::vector<uint8_t> tmp(len);
+        for (int i = 0; i < len; ++i) tmp[i] = bus_.dmaRead8(dmaAddr_ + uint32_t(i));
+        acsi_.writeToDisk(tmp.data(), len);
+    } else {                                                         // image → RAM
+        const uint8_t* src = acsi_.readBuffer();
+        for (int i = 0; i < len; ++i) bus_.dmaWrite8(dmaAddr_ + uint32_t(i), src[i]);
     }
+    dmaAddr_ = (dmaAddr_ + uint32_t(len)) & dmaAddressMask(bus_.ram.size());
+    acsi_.clearData();
+    dmaError_ = !acsi_.dmaError();
+    setIntrqLine(true);                  // IRQ HDC de fin de transfert
 }
