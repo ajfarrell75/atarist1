@@ -125,10 +125,19 @@ ou `disks/stx/` (`.stx`).
   Homebrew (pas d'injection clavier headless : ni `keypress` debugger ni cmd-fifo) —
   rebuilder Hatari avec le debugger complet, ou breakpoint+memwrite sur la boucle
   de poll. Captures de réf. : /tmp/cuddly_keep/ (volatil).
-  (7) **Lethal Xcess (STX) — écran noir = MÊME famille** : son afficheur fullscreen poll
-  `$FF8209` pour caler ses splits `$FF820A`/`$FF8260` ; notre compteur vidéo non-cycle-exact
-  pendant le poll fait DEADLOCKER sa machine d'état VBL (`$604`). Étalon supplémentaire
-  pour ce chantier — détail §FDC « écran noir ».
+  (7) **Lethal Xcess (STX) — écran noir = MÊME famille, ROOT-CAUSE PRÉCISE** : afficheur
+  fullscreen qui RETIRE la bordure HAUTE chaque trame (notre détection l'arme bien :
+  `detect remove top (nStartHBL=34)`). Son handler VBL (`$604=$149dc`) s'auto-cale en
+  pollant `$FF8209` puis **VÉRIFIE** que le compteur a avancé d'EXACTEMENT `$be`=190 sur
+  sa routine (`$14F0E` sauve start → script → `$14A26` sauve end ; `$14A36: cmp` veut
+  `end == start+$be`). Mesuré : on avance **0x90=144** au lieu de **0xbe=190** (écart 46 o)
+  → `bne $14b66` (échec) → le handler sort SANS avancer `$604` → `$13a16` jamais incrémenté
+  → la boucle principale `$13a1e` deadlocke (écran noir). Cause de l'écart : au moment du
+  poll (haut de trame), `syncWrites_` de la trame est encore VIDE (les écritures de retrait
+  arrivent plus loin dans le handler / via le handler Timer B), donc `videoCounter()` retombe
+  sur `liveStartHBL_=63` au lieu de la géométrie fullscreen (ligne 34) → le poll sort ligne
+  63 au lieu de 34 et l'avance est faussée. → exige le compteur vidéo CYCLE-EXACT sous
+  retraits multi-handlers (chantier ci-dessus). Étalon supplémentaire. Détail §FDC « écran noir ».
   ```
 
 ## FDC WD1772 + DMA disquette
