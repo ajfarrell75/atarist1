@@ -269,7 +269,17 @@ void Machine::onVbl() {
 //  d'événement en événement (carry du dépassement), puis on finit le décodage.
 // -----------------------------------------------------------------------------
 void Machine::runFrame() {
-    frameStart_ = sched.now();
+    // FIX1 (beam-sync) — ANCRE DE TRAME FIXE = VBL THÉORIQUE. Port de Hatari
+    // VBL_ClockCounter = CyclesGlobalClockCounter − PendingCyclesOver (video.c:4964) qui
+    // RETRANCHE le carry δ du dépassement de la dernière instruction enjambant frameEnd.
+    // Au lieu de frameStart_ = sched.now() (qui CAPTE δ et le fait varier trame à trame),
+    // on AVANCE frameStart_ de la longueur THÉORIQUE de la trame qui se termine (lpf_*cpl_
+    // encore posés par le beginFrame précédent). δ ne vit plus que dans l'horloge CPU
+    // (sched.now()) ; la grille d'events (scheduleFrameEvents) ET la datation
+    // beamClock_/liveFrameClock_ dérivent toutes de frameStart_ → co-ancrées au théorique,
+    // comme Hatari. Supprime le jitter de phase qui faisait sauter l'image (cf. workflow).
+    if (frameStartInit_) frameStart_ += static_cast<int64_t>(lpf_) * cpl_;
+    else { frameStart_ = sched.now(); frameStartInit_ = true; }
     // Le RTC avance désormais en PARESSEUX à la lecture (cf. Rtc::catchUp), piloté
     // par l'horloge émulée — rien à cadencer ici.
     scheduleFrameEvents();

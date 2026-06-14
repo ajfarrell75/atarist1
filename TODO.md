@@ -141,6 +141,24 @@ ou `disks/stx/` (`.stx`).
   (datation des accès bus)**, PAS longueur de ligne. Outils : `NEOST_VARLINE_TRACE`,
   `NEOST_SYNC_TRACE`, `NEOST_SYNC_OFF` ; Hatari `--trace video_sync` + `--cmd-fifo`.
   Réf. : Hatari /tmp/cudh_3150.png, NeoST /tmp/cud_02900.png.
+  ✅ FAIT (workflow oracle 8 agents + impl, 2026-06-14) — FIX1 + FIX2, conformes Hatari,
+  ÉTALONS PIXEL-EXACT INCHANGÉS, LX/EL non régressés :
+  • FIX1 = ancre de trame FIXE (VBL théorique) : `frameStart_` avance de `lpf_*cpl_` au lieu
+    de `sched.now()` (retranche le carry δ, port de `VBL_ClockCounter = GlobalClock −
+    PendingCyclesOver`, video.c:4964). Co-ancre events + datation (Machine.cpp:271).
+  • FIX2 = `syncCpuBus()` sur `$FF820A` (Shifter.cpp:1394), manquait alors que `$FF8260` /
+    palette l'avaient (port `wait_cpu_cycle_write`, align bus 4 cyc). Writes désormais
+    alignés (418→420).
+  ⚠ RÉSIDU NON RÉSOLU (le beam-sync SAUTE encore, Cuddly bordure basse 11%→15% seulement) :
+  (a) FIX1 n'a PAS réduit la variance du write cyc → la cause DOMINANTE n'est ni l'ancre ni
+  l'align bus, mais la **variance d'EXÉCUTION CPU trame-à-trame au write** (le menu anime →
+  chemin de code + δ varient → write freq à 416…444 selon la trame ; Hatari stable car CPU
+  et vidéo partagent UNE horloge au cycle près). (b) ÉCART SYSTÉMATIQUE +28 inexpliqué : pour
+  amener le write à cyc 444 (Hatari) il faut offset +40 vs +2 prédit par le modèle « fin
+  d'accès » — un fudge masquant ~+38 d'erreur, qui casserait EL (calibré +16). NON appliqué
+  (FIX3 abandonné). → prochain pas : comprendre le +28 (pourquoi NeoST date 28 cyc trop tôt
+  hors modèle) ET la précision-cycle de l'exécution/IRQ au write. Cf. analyse workflow
+  (transcript subagents/workflows/wf_61686c94-b41).
   (7) **Lethal Xcess (STX) — écran noir** : la calibration fullscreen (`$14ef6` poll
   `$FF8209`, exige avance `0xbe`=190) deadlocke à cause du TIMING de la lecture compteur
   (pas la géométrie ; l'ancienne analyse 144-vs-190 / `syncWrites_` vide était une fausse

@@ -1391,7 +1391,7 @@ void Shifter::write8(uint32_t addr, uint8_t v) {
             videoBase = (videoBase & 0xFF0000) | (uint32_t(v) << 8);
             if (ste) videoBase &= 0xFFFF00;
             return;
-        case 0xFF820A: recordSyncWrite(false, v); sync = v; return;   // synchro 50/60 Hz (+ détection bordures)
+        case 0xFF820A: syncCpuBus(); recordSyncWrite(false, v); sync = v; return;   // synchro 50/60 Hz (+ bordures + wait-state bus, FIX2 : aligne l'accès sur 4 cyc comme $FF8260/palette, port wait_cpu_cycle_write)
         // Compteur vidéo $FF8205/07/09 : INSCRIPTIBLE sur STE/TT seulement (port
         // Video_ScreenCounter_WriteByte) — immédiat hors affichage, différé sinon.
         case 0xFF8205: case 0xFF8207: case 0xFF8209:
