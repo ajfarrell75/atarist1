@@ -88,6 +88,112 @@ ou `disks/stx/` (`.stx`).
 > machine Glue live, VDE_On live, Spec512 pixel-perfect, bordures haut/bas/gauche/droite :
 > **FAIT** (cf. CHANGELOG).
 
+### 🏗️ CHANTIER MAJEUR — horloge CPU↔vidéo UNIQUE (façon Hatari) [beam-sync]
+
+> Dossier de reprise (recherches 2026-06-14, workflow oracle 8 agents + impl + diff Hatari).
+> C'est LA cause racine commune de plusieurs bugs ; cadrée et instrumentée, reste à
+> implémenter le fond. NE PAS re-creuser les pistes éliminées ci-dessous.
+
+**Symptôme (1 seul bug, 4 jeux) :** en jeu, l'image SAUTE trame à trame — **Lethal Xcess**
+(en jeu), **Enchanted Land** (sync-scroll), **Cuddly Demos** (menu robot : bordure basse
+qui clignote, scroller écrasé), **Super Hang-On** (écran de course : splits raster mélangés,
+table des rangs sur la route). Les écrans STATIQUES (menus, splash) sont OK ; seul le
+RENDU COMPOSÉ PAR RASTER (splits `$820A/$8260`/palette/base vidéo synchronisés au faisceau)
+casse.
+
+**Cause racine établie (diff oracle décisif) :** NeoST et Hatari **ne partagent pas une
+horloge CPU↔vidéo au cycle près**. Le CPU atteint un point de code (poll `$FF8209`, écriture
+`$820A`) à une **position-faisceau décalée** de Hatari — **moyenne ~28 cyc + jitter** trame à
+trame. Le jeu poll `$FF8209` puis écrit en conséquence ; comme la phase CPU↔faisceau dérive,
+l'écriture (ex. retrait bordure basse) tombe parfois à la bonne ligne, parfois non → clignote.
+
+**PISTES ÉLIMINÉES (ne pas y revenir) :**
+```
+✗ Longueur de ligne variable 508/512 : instrumentée (NEOST_VARLINE_TRACE) = −4 cyc seulement.
+✗ Décalage d'origine de trame (VblVideoCycleOffset=64 STF/68 STE) : testé NEOST_ORIGIN_OFF,
+  le write cyc reste INVARIANT (le jeu est self-référentiel via son poll) + ça dégrade.
+✗ Géométrie/base/startLine/formule du compteur : à pc=6097c (poll Cuddly juste avant le
+  write) le jeu lit la MÊME valeur 7dec0 dans NeoST et Hatari. Formule = port fidèle.
+✗ Offset de datation des writes (kSyncWriteOffsetCyc) : le besoin empirique +40 contredit
+  le modèle +2 → fudge, casserait Enchanted Land (calibré +16). Abandonné.
+La SEULE différence mesurée : le X (cycle dans la ligne) où le CPU échantillonne la valeur
+(figée en bordure droite) — NeoST L260 X=488 vs Hatari X=376. = phase CPU↔faisceau pure.
+```
+
+**FAIT (committé) :**
+```
+• 3811869 : wait-state +2 « valeur-d'abord » sur la LECTURE $FF8205/07/09 (Shifter::read8).
+  Aligne le timing des boucles serrées `move.b $8209,d0 / beq` (T 22→24 = Hatari). Débloque
+  Lethal Xcess (atteint $30142) et Enchanted Land (atteint son jeu). Étalons --max 0 OK.
+• fb3688f FIX1 : ancre frameStart_ au VBL THÉORIQUE (frameStart_ += lpf_*cpl_ au lieu de
+  sched.now(), retranche le carry δ), port VBL_ClockCounter (video.c:4964). Co-ancre events
+  + datation. (N.B. n'a PAS réduit le jitter Cuddly → la cause dominante est ailleurs.)
+• fb3688f FIX2 : syncCpuBus() sur $FF820A (manquait vs $FF8260/palette), aligne l'accès sur
+  4 cyc (port wait_cpu_cycle_write). Writes alignés (418→420).
+Reste : Cuddly bordure basse ouverte seulement ~15% (cible ~100%), l'image saute encore.
+```
+
+**MODÈLE DE RÉFÉRENCE Hatari (ce qu'il faut approcher) :** une SEULE horloge globale
+`CyclesGlobalClockCounter` partagée CPU+vidéo, avancée au cycle.
+```
+• Origine vidéo : VBL_ClockCounter = GlobalClock − PendingCyclesOver − VblVideoCycleOffset
+  (video.c:4964) → ancre théorique, carry retranché. "cycles since VBL" = GlobalClock − VBL_CC.
+• Datation accès : Video_GetCyclesSinceVbl_On{Read,Write}Access (video.c:1282,1289) =
+  cycles_since_vbl + Cycles_GetInternalCycleOn{Read,Write}Access (cycles.c:134,180) =
+  currcycle*2/CYCLE_UNIT + 4 (= FIN d'accès bus), APRÈS alignement 4 cyc (wait_cpu_cycle_*,
+  cpu/custom.c:140,235). Read = write − 8 sur le chemin ADRESSE seulement (video.c:1395).
+• L'accès bus MMIO patiente TOUJOURS jusqu'à la frontière de 4 cyc (slot=(GlobalClock+
+  currcycle*2)&3) AVANT get/put_byte → phase déterministe. VblVideoCycleOffset = 64/68.
+```
+
+**MODÈLE ACTUEL NeoST (à faire évoluer) :** CPU en QUANTA + ordonnanceur, pas une horloge
+unique cyclée.
+```
+• Machine::runFrame (Machine.cpp:271) : cpu.run(want) exécute par BLOCS jusqu'au prochain
+  event ; sched.runTo déclenche les handlers échus. beamClock_/liveFrameClock_ =
+  sched.liveNow() − frameStart_ ; liveNow = sched.now() + cpu.cyclesRunInQuantum()
+  (= horloge Moira live, Cpu68k.cpp:382). Datation : kVideoCounterReadOffsetCyc=−2 (read,
+  Shifter.cpp:61) + wait +2 ; kSyncWriteOffsetCyc=+16 (write, Shifter.cpp:576) ; syncCpuBus
+  align 4 cyc (Shifter.cpp:560).
+• Écart vs Hatari : (a) Moira date write8/read8 au MILIEU de l'accès (début+2,
+  MoiraDataflow_cpp.h:417) vs FIN (+4) chez Hatari ; (b) les wait-states bus (4-cyc align)
+  ne sont posés que sur CERTAINS registres, pas tout accès MMIO comme wait_cpu_cycle_* ;
+  (c) latence d'IRQ (HBL/Timer B) et timing instruction non strictement identiques → la
+  position-faisceau du CPU au poll dérive (moyenne ~28 + jitter).
+```
+
+**DIRECTION DU FIX (à valider incrémentalement) :**
+```
+Rapprocher NeoST du modèle horloge-unique : dater TOUT accès MMIO vidéo à la FIN d'accès
+bus (= +2 depuis le point Moira) AVEC alignement 4-cyc systématique (port complet de
+wait_cpu_cycle_read/write, pas seulement quelques registres) ; rendre la latence d'IRQ
+(prise d'exception) cycle-exacte vs Hatari ; vérifier que l'ancre théorique (FIX1) + ces
+wait-states donnent une phase CPU↔faisceau stable. Le but n'est PAS un offset constant
+(éliminé) mais que le CPU avance relativement au faisceau exactement comme sur l'horloge
+unique de Hatari. ⚠ RISQUE ÉLEVÉ étalons pixel-exact (overscan_top, spec512) → 1 changement
+à la fois, run_etalons.py --max 0 à CHAQUE pas.
+```
+
+**OUTILS & MÉTRIQUES de validation :**
+```
+• Traces NeoST (gated) : NEOST_VC_TRACE (lectures compteur, format = Hatari video_addr),
+  NEOST_SYNC_TRACE (écritures freq/res), NEOST_VARLINE_TRACE, NEOST_SYNC_OFF (offset write).
+• Oracle Hatari : binaire extern/hatari/build/src/hatari ; --trace video_addr/video_sync ;
+  --cmd-fifo + `hatari-event keypress 57` (SPACE) pour atteindre les MENUS in-game
+  (recette docs/HATARI_AUTOMATION.md ; le cmd-fifo désactive le fast-forward → temps réel).
+• Métrique Cuddly : taux d'ouverture bordure basse (NEOST_GLUE_STAT, end=310 ouverte /
+  end=263 fermée ; baseline 11%, FIX1+FIX2 15%, cible ~100%). Write $820A L262 cyc → 444.
+• Non-régression : tools/run_etalons.py TOUS OK (5 pixel-exact : overscan_top, spec512,
+  scroll_8264/8265, glue) + Lethal Xcess atteint $30142, Enchanted Land atteint son jeu.
+```
+
+**FICHIERS CLÉS :** NeoST `Machine.cpp` (runFrame/frameStart_/scheduleFrameEvents/lambdas),
+`Cpu68k.cpp` (run/quantum/addBusWaitCycles/cyclesRunInQuantum/horloge Moira), `Scheduler.*`,
+`Shifter.cpp` (videoCounter/recordSyncWrite/syncCpuBus). Hatari `video.c` (Video_GetCyclesSinceVbl_*,
+VBL_ClockCounter, Video_ConvertPosition), `cycles.c` (Cycles_GetInternalCycleOn*Access),
+`m68000.c` (M68000_WaitState/SyncCpuBus), `cpu/custom.c` (wait_cpu_cycle_read/write).
+Workflow d'analyse : `subagents/workflows/wf_61686c94-b41`.
+
 - **Contention DMA vidéo sur la RAM** *(précision cycle, reporté)* — modèle MAME
   ```
   (`stmmu.cpp::bus_contention`), **non porté depuis Hatari** (qui ne le modélise pas) ;
