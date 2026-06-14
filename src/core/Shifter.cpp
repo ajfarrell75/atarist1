@@ -924,6 +924,45 @@ void Shifter::replayGlue() {
         if (nLeft)  std::fprintf(stderr, "detect remove left x%d\n", nLeft);
         if (nRight) std::fprintf(stderr, "detect remove right x%d\n", nRight);
     }
+
+    // INSTRUMENTATION (gated NEOST_VARLINE_TRACE) — chantier « longueur de ligne variable » :
+    // calcule l'attribution ligne/lineCyc à LONGUEUR VARIABLE (508 pour une ligne 60 Hz,
+    // 512 pour 50 Hz, 224 hi — façon Hatari ShifterLines[].StartCycle / Video_ConvertPosition)
+    // et la compare à l'attribution FIXE (fc/cpl) utilisée actuellement. Ne change RIEN au
+    // comportement ; sert à mesurer la divergence avant de porter le modèle. La longueur d'une
+    // ligne est fixée par la freq au comparateur HBL (~cyc 502).
+    if (!syncWrites_.empty() && std::getenv("NEOST_VARLINE_TRACE")) {
+        int res = (frameMode_ == Mode::Medium) ? 1 : (frameMode_ == Mode::High ? 2 : 0);
+        int f50 = (frameSync_ & 0x02) ? 1 : 0;
+        int64_t cyc = 0; int vline = 0; std::size_t i = 0; int ndiff = 0, nshown = 0;
+        while (vline < lpf + 2 && i < nw) {
+            int r2 = res, f2 = f50; std::size_t j = i;        // freq au comparateur (~502)
+            while (j < nw && syncWrites_[j].frameCycle < cyc + 502) {
+                if (syncWrites_[j].isRes) r2 = syncWrites_[j].val & 3;
+                else                      f2 = (syncWrites_[j].val & 2) ? 1 : 0;
+                ++j;
+            }
+            const int freqHz = (r2 == 2) ? 71 : (f2 ? 50 : 60);
+            const int len = (freqHz == 71) ? 224 : (freqHz == 60 ? 508 : 512);
+            while (i < nw && syncWrites_[i].frameCycle < cyc + len) {
+                const SyncWrite& w = syncWrites_[i];
+                const int fixedLine = static_cast<int>(w.frameCycle / cpl);
+                if (fixedLine != vline) {
+                    ++ndiff;
+                    if (++nshown <= 24)
+                        std::fprintf(stderr, "[varline] %s=%02x fc=%d : fixe=L%d/c%d  var=L%d/c%d\n",
+                            w.isRes ? "res" : "frq", w.val, w.frameCycle, fixedLine,
+                            static_cast<int>(w.frameCycle % cpl), vline,
+                            static_cast<int>(w.frameCycle - cyc));
+                }
+                if (w.isRes) res = w.val & 3; else f50 = (w.val & 2) ? 1 : 0;
+                ++i;
+            }
+            cyc += len; ++vline;
+        }
+        std::fprintf(stderr, "[varline] %d/%zu writes mésattribués (fixe≠variable) | dérive finale=%lld cyc\n",
+                     ndiff, nw, static_cast<long long>(cyc - static_cast<int64_t>(vline) * cpl));
+    }
 }
 
 // Décode `nPix` index planaires à partir de l'adresse vidéo `base` (rendu fenêtré

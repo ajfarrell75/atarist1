@@ -128,12 +128,19 @@ ou `disks/stx/` (`.stx`).
   PUIS un `50Hz`. Hatari date ce 50Hz à la **ligne 263 cyc 16** (ligne SUIVANTE) → la
   décision bordure-basse de la ligne 262 reste « retirée ». NeoST le date à la **ligne
   262 cyc 492** (≤502) → `updateGlueState` RE-FERME (l.819, comme Hatari `Video_EndHBL`
-  2973, mais Hatari ne voit pas ce write sur la ligne 262). MÉSATTRIBUTION car NeoST date
-  avec `cyclesPerLine=512` FIXE alors qu'une **ligne 60Hz fait 508 cyc** → un write près
-  de la frontière bascule de ligne. → exige la **longueur de ligne 50/60Hz VARIABLE** dans
-  la datation (chantier §Précision-cycle « géométrie par ligne »). (5) le tearing du mur =
-  même cause (datation per-ligne). Outils : `NEOST_SYNC_TRACE=1` (NeoST), `--trace
-  video_sync` (Hatari). Réf. : menu robot Hatari /tmp/cudh_3150.png, NeoST /tmp/cud_02900.png.
+  2973, mais Hatari ne voit pas ce write sur la ligne 262).
+  ⚠ MISE À JOUR (instrumentation `NEOST_VARLINE_TRACE`, 2026-06-14) : la **longueur de ligne
+  variable N'EST PAS la cause** — le modèle 508/512 ne donne que **−4 cyc** de dérive sur le
+  menu (0/62 writes réattribués). VRAIE cause : la **datation du write est ~28 cyc trop TÔT**
+  (NeoST date `$FF820A` à fc 134560, cyc 416 ; **Hatari à 134588, cyc 444** — même ligne 262)
+  ET **jittery trame à trame** → le 50Hz traverse la frontière de ligne par intermittence
+  (`end=263` vs `310`) → bordure basse qui CLIGNOTE → image qui saute. C'est le **MÊME**
+  déterminisme de phase CPU↔vidéo que le wait-state Lethal Xcess. `NEOST_SYNC_OFF=28` ouvre
+  494/1331 frames SANS casser les étalons `--max 0`, mais le jitter demeure (pas un offset
+  constant). (5) tearing du mur = même cause. → chantier **phase CPU↔glue cycle-exacte
+  (datation des accès bus)**, PAS longueur de ligne. Outils : `NEOST_VARLINE_TRACE`,
+  `NEOST_SYNC_TRACE`, `NEOST_SYNC_OFF` ; Hatari `--trace video_sync` + `--cmd-fifo`.
+  Réf. : Hatari /tmp/cudh_3150.png, NeoST /tmp/cud_02900.png.
   (7) **Lethal Xcess (STX) — écran noir** : la calibration fullscreen (`$14ef6` poll
   `$FF8209`, exige avance `0xbe`=190) deadlocke à cause du TIMING de la lecture compteur
   (pas la géométrie ; l'ancienne analyse 144-vs-190 / `syncWrites_` vide était une fausse
