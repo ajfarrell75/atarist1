@@ -76,6 +76,7 @@ public:
         gemdos.reset();    // ferme les fichiers HD GEMDOS ouverts (no-op si inactif)
         scc.reset();       // SCC série (Mega STE) au repos
         cpu.reset();
+        frameStartInit_ = false;   // FIX1 : ré-ancre frameStart_ sur sched.now() à la 1re trame post-reset
     }
     // Reset à FROID (power-cycle) : efface toute la ST-RAM, ce qui invalide le
     // « memvalid » de TOS — il refait alors un boot COMPLET (re-détection mémoire,
@@ -87,6 +88,7 @@ public:
         gemdos.reset();    // ferme les fichiers HD GEMDOS ouverts (no-op si inactif)
         scc.reset();       // SCC série (Mega STE) au repos
         cpu.reset();
+        frameStartInit_ = false;   // FIX1 : ré-ancre frameStart_ sur sched.now() à la 1re trame post-reset
     }
 
     // Reconfigure la machine À CHAUD sans recréer l'objet (son adresse reste
@@ -154,6 +156,8 @@ private:
     MachineType machineType_ = MachineType::Ste;   // profil matériel (figé au boot)
 
     int64_t frameStart_ = 0;  // cycle (horloge continue) du début de la trame courante
+    bool    frameStartInit_ = false;  // FIX1 : frameStart_ ancré au VBL THÉORIQUE (avance de
+                                      // lpf_*cpl_) après la 1re trame, au lieu de sched.now()
     int renderLine_  = 0;     // prochaine scanline à décoder
     int tbLine_      = 0;     // prochaine ligne pour le tic Timer B
     int hblLine_     = 0;     // prochaine ligne pour le HBL niveau 2
