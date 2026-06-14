@@ -5,8 +5,15 @@ lecture des sources (`extern/hatari/src`), on peut **exécuter** Hatari de faço
 déterministe et **sans affichage** pour comparer son comportement à NeoST (boot, écran,
 détection HW, IRQ). Ce doc note la recette vérifiée (Hatari v2.6.1, macOS Silicon, juin 2026).
 
-Binaire : `/opt/homebrew/bin/hatari` (Homebrew). ⚠ Sous macOS **pas de `timeout`** — on
-s'appuie sur `--run-vbls` qui fait sortir Hatari tout seul.
+Binaire selon la machine :
+- **macOS** : `/opt/homebrew/bin/hatari` (Homebrew). ⚠ Pas de `timeout` — on s'appuie sur
+  `--run-vbls` qui fait sortir Hatari tout seul.
+- **Linux (CachyOS / Ubuntu)** : **le sous-module est déjà compilé** →
+  `extern/hatari/build/src/hatari` (v2.6.1, aligné sur la source de vérité du repo, plus
+  récent que le `hatari` d'apt en 2.4.1). Symlinké dans `~/.local/bin/hatari` (sur le PATH,
+  pas de `sudo`). `timeout` est disponible et conseillé comme garde-fou en plus de
+  `--run-vbls`. Recompiler au besoin : `cmake -B extern/hatari/build extern/hatari &&
+  cmake --build extern/hatari/build -j` (dépendances : `libsdl2-dev`, déjà présentes).
 
 ## Recette headless : boot → image PNG
 
@@ -41,6 +48,28 @@ ffmpeg -y -i /tmp/h.avi -vf "select=eq(n\,300)" -frames:v 1 -update 1 /tmp/h.png
 - `--parse FILE` : exécute des commandes du **débogueur** intégré (points d'arrêt, dump
   mémoire/registres après N cycles) → introspection scriptée.
 - `--log-file FILE`, `--log-level info|warn|...`.
+
+### Injection d'entrée headless (`--cmd-fifo`) — oracle des MENUS / IN-GAME
+
+Le build local (v2.6.1) supporte `--cmd-fifo <path>` : Hatari **crée** la fifo et lit des
+commandes runtime, dont **`hatari-event keypress <scancode>`** (SPACE=57, ENTER=28). Ça
+débloque l'oracle des scènes qui exigent une touche (menu Cuddly, démos) — jadis noté
+« impossible » dans le TODO. Pièges vérifiés :
+- Hatari **bloque** à l'ouverture de la fifo en lecture jusqu'à ce qu'un writer s'y connecte
+  → ouvrir le writer (`exec 3>fifo`) AVANT que Hatari ne tourne.
+- `--cmd-fifo` **désactive le fast-forward** → Hatari tourne en TEMPS RÉEL (~50 vbl/s). Donc
+  une touche au « titre » (vbl ~1500) s'envoie à **~30 s** réelles, pas après quelques sleeps.
+- Joystick : pas d'event direct ; passer par `--joystick <port>` (touches curseur) + une
+  touche de tir, ou injecter les scancodes.
+
+```sh
+FIFO=/tmp/h.fifo; rm -f "$FIFO"
+hatari ... --cmd-fifo "$FIFO" --run-vbls 3200 --avirecord --avi-file out.avi &
+while [ ! -p "$FIFO" ]; do sleep 0.05; done
+exec 3>"$FIFO"                                  # débloque Hatari
+sleep 30; for k in $(seq 12); do echo "hatari-event keypress 57" >&3; sleep 0.3; done
+exec 3>&- ; wait
+```
 
 ## Options machine utiles
 

@@ -93,6 +93,22 @@ taguées (0.1.x). Le restant est dans [`TODO.md`](TODO.md).
   d'etos192 sur MegaSTE (SCU non programmé). Pour le STE/Mega STE : EmuTOS 256 Ko ou TOS 1.62/2.06.
 
 ## Vidéo (Shifter)
+- **Wait-state de la lecture du compteur vidéo `$FF8205/07/09` (+2 cyc, valeur d'abord)** —
+  `Shifter::read8` échantillonne la valeur du compteur AU CYCLE D'ACCÈS (façon Hatari
+  `Cycles_GetCounterOnReadAccess`) PUIS retarde le CPU d'un wait-state FIXE de **+2 cyc bus**.
+  Mesuré à l'oracle Hatari sur DEUX jeux qui pollent `$FF8209` en boucle serrée pour caler
+  leurs effets raster : **Lethal Xcess** (`$14ef6 : move.b $8209,d0 / beq`) = 24 cyc/itér
+  chez Hatari vs **22** sans wait ; **Enchanted Land** (`$ee78`, sync-scroll) = 20 vs **18**.
+  L'**ordre** est crucial (valeur AVANT le wait) : retarder le CPU sans fausser la valeur lue
+  → étalons spec512 & overscan_top `--max 0` **pixel-exact inchangés**. C'est un wait-state
+  FIXE, ≠ l'align-4 variable des registres couleur/résolution (`syncCpuBus`) qui, lui,
+  jitterait et casserait EL. **Effet** : Lethal Xcess (STX) ne deadlocke plus sa calibration
+  fullscreen (l'avance compteur atteint enfin `0xbe`=190, `$14ef6` ~94k iters ≈ Hatari) et
+  **démarre** (écran-titre) ; Enchanted Land atteint son jeu au lieu de se bloquer. Diag :
+  `NEOST_VC_TRACE=1` (= format `--trace video_addr` de Hatari), override `NEOST_VC_WAIT`.
+  *Reste* (séparé) : le rendu cycle-exact des splits per-ligne (« beam-sync » : l'image saute
+  trame à trame en jeu — commun à Lethal Xcess en jeu / Enchanted Land / Cuddly Demos), cf.
+  TODO §Bordures.
 - **Sync-scroll / bordures EN JEU (Enchanted Land)** — chaîne complète :
   `videoCounter` consulte la machine Glue **LIVE** (VDE_On/Off + fenêtre DE réelle,
   re-fermeture comprise — l'ancien « sticky » mentait aux calibrations) ; tics

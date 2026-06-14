@@ -58,11 +58,10 @@ ou `disks/stx/` (`.stx`).
   ```
   plante sur écran noir.
   ```
-- **Lethal Xcess** (`Lethal_Xcess_Disk_1.STX`, `Lethal_Xcess_Disk_2.STX`) — écran noir.
-  ```
-  Diagnostiqué : NON-STX (charge bien pistes 0-35), deadlock de l'afficheur fullscreen
-  sync-raster (`$604`/`$FF8209`). Détail → §FDC « écran noir » + §Bordures.
-  ```
+- **Lethal Xcess** (`Lethal_Xcess_Disk_1.STX`) — ~~écran noir~~ **DÉMARRE (2026-06-14)** :
+  fix = wait-state +2 (valeur d'abord) sur la lecture `$FF8209`, validé oracle sur LX **et**
+  Enchanted Land (cf. CHANGELOG §Vidéo). *Reste* le beam-sync en jeu (image qui saute, voir
+  ci-dessous — commun à EL/Cuddly).
 - **Stardust Bloodhouse** (`stardust_bloodhouse_a/b/c.STX`) — plante au démarrage
   ```
   (écran noir).
@@ -111,33 +110,36 @@ ou `disks/stx/` (`.stx`).
 - **Bordures — raffinements** *(précision cycle, faible priorité)* :
   ```
   (1) wakeup-state WS3 (+1 cyc, sous-pixel) ; (2) med-res overscan ; (3) blank lines /
-  NO_SYNC ; (4) pixel-perfect L/D end-to-end ; (5) **Cuddly Demos — scrolling qui SAUTE**
-  quand le robot bouge ; (6) **scroller bordure BASSE** du menu Cuddly non rendu.
+  NO_SYNC ; (4) pixel-perfect L/D end-to-end ; (5) **BEAM-SYNC : l'image SAUTE trame à
+  trame** — bug COMMUN (rapport utilisateur 2026-06) à **Cuddly Demos** (scrolling robot),
+  **Enchanted Land** (en jeu) et **Lethal Xcess** (en jeu, après le fix wait-state) : les
+  lignes du beam ne sont pas synchronisées → décalage erratique trame après trame. Cœur =
+  rendu cycle-exact de la géométrie PER-LIGNE sous écritures sync-raster (`$820a/$8260`/
+  palette datées au cycle). Le wait-state `$FF8209` (cf. §FDC) corrige le FEEDBACK compteur
+  aux jeux mais PAS le rendu lui-même. 🎯 reproduire les 3 ; (6) **scroller bordure BASSE**
+  du menu Cuddly non rendu.
   🎯 étalons : `make_overscan_test.py` / `make_overscan_lr.py` (✅), **The Cuddly Demos**.
-  **Investigation (6) faite (2026-06)** : `renderGlueFrame` décode DÉJÀ correctement
-  la bordure basse retirée (rangées 229-275 du buffer, scanlines → 309) — le maillon
-  cassé est la DÉTECTION : sur le menu Cuddly, `recordSyncWrite`/`replayGlue` ne
-  voient AUCUN retrait (`NEOST_BORDER_TRACE=1` muet, `bordersTrick`_ jamais armé)
-  → tracer les écritures $FF820A/$FF8260 du menu (cycle dans la ligne, autour de
-  `RemoveBottomBorder_Pos=502`) et comparer à `Video_EndHBL`. Atteindre le menu :
-  SPACE au titre (`--keys-at 1500 " "`), menu ≈ trame 2800. (5) probablement même
-  chemin (géométrie par ligne). ⚠ Oracle Hatari du menu IMPOSSIBLE avec le binaire
-  Homebrew (pas d'injection clavier headless : ni `keypress` debugger ni cmd-fifo) —
-  rebuilder Hatari avec le debugger complet, ou breakpoint+memwrite sur la boucle
-  de poll. Captures de réf. : /tmp/cuddly_keep/ (volatil).
-  (7) **Lethal Xcess (STX) — écran noir = MÊME famille, ROOT-CAUSE PRÉCISE** : afficheur
-  fullscreen qui RETIRE la bordure HAUTE chaque trame (notre détection l'arme bien :
-  `detect remove top (nStartHBL=34)`). Son handler VBL (`$604=$149dc`) s'auto-cale en
-  pollant `$FF8209` puis **VÉRIFIE** que le compteur a avancé d'EXACTEMENT `$be`=190 sur
-  sa routine (`$14F0E` sauve start → script → `$14A26` sauve end ; `$14A36: cmp` veut
-  `end == start+$be`). Mesuré : on avance **0x90=144** au lieu de **0xbe=190** (écart 46 o)
-  → `bne $14b66` (échec) → le handler sort SANS avancer `$604` → `$13a16` jamais incrémenté
-  → la boucle principale `$13a1e` deadlocke (écran noir). Cause de l'écart : au moment du
-  poll (haut de trame), `syncWrites_` de la trame est encore VIDE (les écritures de retrait
-  arrivent plus loin dans le handler / via le handler Timer B), donc `videoCounter()` retombe
-  sur `liveStartHBL_=63` au lieu de la géométrie fullscreen (ligne 34) → le poll sort ligne
-  63 au lieu de 34 et l'avance est faussée. → exige le compteur vidéo CYCLE-EXACT sous
-  retraits multi-handlers (chantier ci-dessus). Étalon supplémentaire. Détail §FDC « écran noir ».
+  **ROOT-CAUSE (6) TROUVÉE (2026-06-14, oracle cmd-fifo) — mésattribution de ligne :**
+  Oracle du menu DÉSORMAIS POSSIBLE (le build local a `--cmd-fifo` → `hatari-event
+  keypress 57`, cf. `docs/HATARI_AUTOMATION.md` ; l'ancienne note « impossible » est
+  PÉRIMÉE). Diff : Hatari ouvre la bordure basse (`nEndHBL=310`, gros scroller « OUR
+  DAY! ») ; NeoST la garde fermée (`end=263`, scroller écrasé) la PLUPART des trames
+  (intermittent → l'image saute). Cause : le menu écrit à la ligne 262 `60Hz@cyc~440`
+  PUIS un `50Hz`. Hatari date ce 50Hz à la **ligne 263 cyc 16** (ligne SUIVANTE) → la
+  décision bordure-basse de la ligne 262 reste « retirée ». NeoST le date à la **ligne
+  262 cyc 492** (≤502) → `updateGlueState` RE-FERME (l.819, comme Hatari `Video_EndHBL`
+  2973, mais Hatari ne voit pas ce write sur la ligne 262). MÉSATTRIBUTION car NeoST date
+  avec `cyclesPerLine=512` FIXE alors qu'une **ligne 60Hz fait 508 cyc** → un write près
+  de la frontière bascule de ligne. → exige la **longueur de ligne 50/60Hz VARIABLE** dans
+  la datation (chantier §Précision-cycle « géométrie par ligne »). (5) le tearing du mur =
+  même cause (datation per-ligne). Outils : `NEOST_SYNC_TRACE=1` (NeoST), `--trace
+  video_sync` (Hatari). Réf. : menu robot Hatari /tmp/cudh_3150.png, NeoST /tmp/cud_02900.png.
+  (7) **Lethal Xcess (STX) — écran noir** : la calibration fullscreen (`$14ef6` poll
+  `$FF8209`, exige avance `0xbe`=190) deadlocke à cause du TIMING de la lecture compteur
+  (pas la géométrie ; l'ancienne analyse 144-vs-190 / `syncWrites_` vide était une fausse
+  piste invalidée par l'oracle). Fix candidat (`syncCpuBus` align) fait converger LX mais
+  RÉGRESSE le sync-scroll d'Enchanted Land (même famille, ce point !) → opt-in
+  `NEOST_VC_SYNC`. La VRAIE solution doit satisfaire LX **et** EL. Détail → §FDC « écran noir ».
   ```
 
 ## FDC WD1772 + DMA disquette
@@ -181,6 +183,40 @@ ou `disks/stx/` (`.stx`).
   (cf. `Video_RestartVideoCounter` NON porté + géométrie verrouillée par trame,
   `Shifter::videoCounter`). → à reprendre avec le chantier « géométrie par ligne /
   bascule 50-60 Hz + compteur vidéo cycle-exact » (§Bordures, §Précision cycle), PAS ici.
+  ⚠ ORACLE DISPO (2026-06-14) : Hatari tourne en headless **sous Linux** aussi (binaire
+  `extern/hatari/build/src/hatari`, cf. `docs/HATARI_AUTOMATION.md`). Référence visuelle
+  obtenue (écran-titre OK sous Hatari STE/TOS 1.62 vs noir sous NeoST). Vérité-terrain
+  cycle-exact du poll dispo via `--trace video_addr` (Hatari) et `NEOST_VC_TRACE=1` (NeoST,
+  même format : `base/addr/line/X/start/cpl/liveStart/sync/pc` à chaque lecture
+  $FF8205/07/09).
+  ```
+  **✅ RÉSOLU (2026-06-14, diff oracle) — wait-state +2 (valeur d'abord) sur la lecture `$FF8209` :**
+  *(fix dans `Shifter::read8`, validé sur LX ET Enchanted Land + étalons `--max 0`. Reste
+  le beam-sync en jeu, cf. §Bordures item (5).)*
+  ```
+  Diff Hatari↔NeoST de la calibration fullscreen (TOS 1.62us, Disk 1). Le code jeu :
+    $14ef6: move.b $8209,d0 / beq $14ef6   ; ATTEND octet bas != 0
+    $14f0e: move.b $8209,$14715            ; SAVE START (octet bas)
+            ... script splits $820a/$8260 ...
+    $14a26: move.b $8209,$14714            ; SAVE END
+    $14a32: add.b #$be,d0 / cmp / bne      ; exige (END-START)&0xff == 0xbe=190
+  Calibration : le jeu décale son script de 2 octets/trame et attend que l'avance mesurée
+  monte LINÉAIREMENT jusqu'à 190 pile. HATARI : START toujours @(ligne63,X=284), rampe
+  PROPRE 110,112,…,190 → converge → passe à la boucle de jeu $30142. NeoST : START JITTER
+  @X=282/284 ; la sortie de boucle $14ef6 alterne (X=62,low=2) / (X=72,low=8) — un JITTER
+  DE PHASE CPU↔faisceau d'~10 cyc au début de trame → deltas erratiques (jamais 190) →
+  spin infini dans $14ef6 → JAMAIS $30142 → écran noir. La géométrie est CORRECTE
+  (`cpl=512,start=56,liveStart=63` stables, = Hatari) : le repli `liveStartHBL=63` /
+  `syncWrites_` vide N'EST PAS la cause (hypothèse précédente INVALIDÉE par l'oracle).
+  CAUSE FINALE : la boucle sort à `E mod T` où T = durée d'itération `move.b $8209,d0/beq`.
+  T était 2 cyc TROP COURT car la lecture `$FF8209` n'avait pas son WAIT-STATE. Mesuré à
+  l'oracle (consécutifs `fc` au même PC) : LX `$14ef6` T=24 cyc chez Hatari vs 22 NeoST ;
+  EL `$ee78` T=20 vs 18 → **+2 cyc bus FIXE** sur les DEUX. FIX (retenu) : échantillonner
+  la VALEUR au cycle d'accès PUIS `addBusWaitCycles(2)` (ordre crucial : valeur intacte →
+  étalons `--max 0` OK ; CPU retardé → T=24/20 = Hatari). ⚠ Un align-4 (`syncCpuBus`) au
+  lieu d'un +2 FIXE jitterait et casserait EL — c'est pourquoi le 1ᵉʳ candidat (align)
+  régressait EL. Résultat : LX converge ($14ef6 ~94k iters, delta 190, $30142, titre) ET
+  EL atteint son jeu, AUCUNE régression étalon. Cf. CHANGELOG §Vidéo. Outil : `NEOST_VC_TRACE=1`.
   ```
 
 ## YM2149 PSG
