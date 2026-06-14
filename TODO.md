@@ -156,9 +156,21 @@ ou `disks/stx/` (`.stx`).
   et vidéo partagent UNE horloge au cycle près). (b) ÉCART SYSTÉMATIQUE +28 inexpliqué : pour
   amener le write à cyc 444 (Hatari) il faut offset +40 vs +2 prédit par le modèle « fin
   d'accès » — un fudge masquant ~+38 d'erreur, qui casserait EL (calibré +16). NON appliqué
-  (FIX3 abandonné). → prochain pas : comprendre le +28 (pourquoi NeoST date 28 cyc trop tôt
-  hors modèle) ET la précision-cycle de l'exécution/IRQ au write. Cf. analyse workflow
-  (transcript subagents/workflows/wf_61686c94-b41).
+  (FIX3 abandonné).
+  ✅ ORIGINE DU +28 TRANCHÉE (2026-06-14, diff oracle Cuddly video_addr + cmd-fifo) : ce
+  N'EST NI l'origine de trame (testé `NEOST_ORIGIN_OFF` : self-référentiel via le poll
+  compteur, ruled out + dégrade), NI la géométrie/formule du compteur (à pc=6097c, le poll
+  juste avant le write, le jeu lit la MÊME valeur `7dec0` dans NeoST ET Hatari). Le write
+  bordure-basse est PILOTÉ PAR UN POLL `$FF8209` (lit à pc=6097c → écrit `$820A` à pc=609c4).
+  La SEULE différence : le X (position faisceau) où le CPU échantillonne `7dec0` (figé en
+  bordure droite) — NeoST ligne 260 X=488, Hatari X=376. → le +28 est **irréductiblement
+  la PHASE CPU↔FAISCEAU au poll** (NeoST atteint le poll à une position décalée + jittery),
+  MÊME cause que le jitter et la boucle LX `$14ef6`. PAS un offset/origine/géométrie. Le
+  wait-state `$FF8209` (3811869) a réglé les boucles serrées `move.b/beq` ; les polls plus
+  complexes (Cuddly 6097c, rendu animé) gardent un résidu de phase. → chantier de fond =
+  précision-cycle de l'exécution CPU vs faisceau (timing instruction Moira + latence IRQ +
+  wait-states bus), à rapprocher de Hatari (horloge globale unique). Cf. workflow
+  wf_61686c94-b41.
   (7) **Lethal Xcess (STX) — écran noir** : la calibration fullscreen (`$14ef6` poll
   `$FF8209`, exige avance `0xbe`=190) deadlocke à cause du TIMING de la lecture compteur
   (pas la géométrie ; l'ancienne analyse 144-vs-190 / `syncWrites_` vide était une fausse
