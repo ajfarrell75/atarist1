@@ -585,6 +585,15 @@ void Shifter::recordSyncWrite(bool isRes, uint8_t val) {
     static const int syncOff = [] { const char* s = std::getenv("NEOST_SYNC_OFF"); return s ? std::atoi(s) : 0; }();
     fc += syncOff;
     if (fc < 0) fc = 0;
+    // DEBUG (NEOST_SYNC_TRACE) : trace TOUTES les écritures freq/res (ligne/cycle) pour
+    // diagnostiquer la détection des retraits de bordure (≠ NEOST_BORDER_TRACE qui n'émet
+    // QUE si un trick est déjà armé). Cf. menu Cuddly : retrait bordure basse non détecté.
+    if (std::getenv("NEOST_SYNC_TRACE")) {
+        const int cpl = geometry().cyclesPerLine;
+        std::fprintf(stderr, "[SYNC] %s val=%02x line=%lld cyc=%lld pc=%06x\n",
+            isRes ? "res " : "freq", val, static_cast<long long>(fc / cpl),
+            static_cast<long long>(fc % cpl), bus_.cpu ? bus_.cpu->pc() : 0);
+    }
     syncWrites_.push_back({ static_cast<int32_t>(fc), val, isRes });
     updateLiveStartHBL(static_cast<int32_t>(fc), isRes, val);   // VDE_On live (retrait haut)
     // Machine Glue LIVE : consomme l'écriture immédiatement (fenêtre DE de la ligne
@@ -1108,9 +1117,43 @@ uint8_t Shifter::read8(uint32_t addr) {
     // Une écriture du compteur pendant le DE est en attente (vcDelayedOffset_) : la
     // relecture doit déjà la refléter (port Video_ScreenCounter_ReadByte qui ajoute
     // VideoCounterDelayedOffset & ~1 à l'adresse calculée).
-    if (addr == 0xFF8205) return static_cast<uint8_t>((videoCounter() + (vcDelayedOffset_ & ~1)) >> 16);
-    if (addr == 0xFF8207) return static_cast<uint8_t>((videoCounter() + (vcDelayedOffset_ & ~1)) >> 8);
-    if (addr == 0xFF8209) return static_cast<uint8_t>(videoCounter() + (vcDelayedOffset_ & ~1));
+    if (addr == 0xFF8205 || addr == 0xFF8207 || addr == 0xFF8209) {
+        // Wait-state de la lecture du compteur vidéo $FF8205/07/09. ORDRE CRUCIAL : la
+        // VALEUR est échantillonnée au cycle d'ACCÈS (avant le wait, façon Hatari
+        // Cycles_GetCounterOnReadAccess), PUIS le CPU est retardé du wait-state → corrige
+        // le TIMING des boucles qui pollent $FF8209 SANS fausser la valeur lue (étalons
+        // spec512/overscan `--max 0` inchangés). Coût mesuré à l'oracle = +2 cyc bus FIXE
+        // (≠ l'align-4 variable des registres couleur/résolution `syncCpuBus`, qui ici
+        // jitterait) : boucle d'auto-synchro de Lethal Xcess `$14ef6 (move.b $8209,d0/beq)`
+        // = 24 cyc/itér chez Hatari vs 22 sans le wait ; sync-scroll d'Enchanted Land
+        // `$ee78` = 20 vs 18. Sans ce +2 : LX ne converge jamais sa calibration fullscreen
+        // (avance compteur ≠ 0xbe=190 attendu) → spin → écran noir ; EL sync-scroll cassé.
+        // Avec : LX démarre (atteint sa boucle de jeu $30142), EL atteint son jeu. Override
+        // de calibration : NEOST_VC_WAIT. Cf. mémoire lethal-xcess-black-screen-rootcause.
+        const uint32_t vc = videoCounter() + (vcDelayedOffset_ & ~1);
+        static const int vcWait = [] { const char* s = std::getenv("NEOST_VC_WAIT"); return s ? std::atoi(s) : 2; }();
+        if (vcWait && bus_.cpu) bus_.cpu->addBusWaitCycles(vcWait);
+        // DEBUG (oracle Hatari `--trace video_addr`) : trace chaque lecture du compteur
+        // vidéo avec assez d'état pour diff'er au cycle. Gated NEOST_VC_TRACE.
+        static const char* vctr = std::getenv("NEOST_VC_TRACE");
+        if (vctr) {
+            int64_t fc = beamClock_ ? beamClock_() : 0;
+            fc += kVideoCounterReadOffsetCyc;
+            const Geometry g = geometry();
+            const int ln = g.cyclesPerLine ? static_cast<int>(fc / g.cyclesPerLine) : 0;
+            const int X  = g.cyclesPerLine ? static_cast<int>(fc % g.cyclesPerLine) : 0;
+            const uint32_t pc = bus_.cpu ? bus_.cpu->pc() : 0;
+            std::fprintf(stderr,
+                "VC reg=%05x base=%06x addr=%06x fc=%lld line=%d X=%d start=%d cpl=%d "
+                "liveStart=%d sync=%zu pc=%06x\n",
+                addr, videoBase & 0xFFFFFFu, vc, static_cast<long long>(fc), ln, X,
+                g.lineStartCycle, g.cyclesPerLine, liveStartHBL_,
+                syncWrites_.size(), pc);
+        }
+        if (addr == 0xFF8205) return static_cast<uint8_t>(vc >> 16);
+        if (addr == 0xFF8207) return static_cast<uint8_t>(vc >> 8);
+        return static_cast<uint8_t>(vc);
+    }
     // Synchro $FF820A : bits inutilisés 2-7 forcés à 1 (ST et STE), cf. Hatari
     // Video_Sync_ReadByte (IoMem[0xff820a] |= 0xfc). On NE masque PAS le champ
     // stocké `sync` : videoCounter() s'en sert toujours via `sync & 2`.
