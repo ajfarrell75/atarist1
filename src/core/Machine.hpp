@@ -72,7 +72,7 @@ public:
     // port de Hatari MegaSTE_CPU_Cache_Reset) + FPU au repos.
     void reset() {
         psg.reset(); dmasnd.reset(/*cold=*/false); mfp.reset();
-        bus.megaSteReset(); cpu.setMegaSteSpeed(false); bus.fpu.reset();
+        bus.megaSteReset(); cpu.setMegaSteSpeed(false); bus.fpu.reset(); bus.scu.reset(/*cold=*/false);
         gemdos.reset();    // ferme les fichiers HD GEMDOS ouverts (no-op si inactif)
         scc.reset();       // SCC série (Mega STE) au repos
         cpu.reset();
@@ -84,7 +84,7 @@ public:
     void hardReset() {
         bus.ram.assign(bus.ram.size(), 0);
         psg.reset(); dmasnd.reset(/*cold=*/true); mfp.reset();
-        bus.megaSteReset(); cpu.setMegaSteSpeed(false); bus.fpu.reset();
+        bus.megaSteReset(); cpu.setMegaSteSpeed(false); bus.fpu.reset(); bus.scu.reset(/*cold=*/true);
         gemdos.reset();    // ferme les fichiers HD GEMDOS ouverts (no-op si inactif)
         scc.reset();       // SCC série (Mega STE) au repos
         cpu.reset();

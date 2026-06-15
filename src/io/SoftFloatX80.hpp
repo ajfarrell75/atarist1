@@ -31,8 +31,9 @@ struct f80 { uint16_t high; uint64_t low; };
 
 // Modes d'arrondi (valeurs SoftFloat ; le FPCR utilise un autre ordre, mappé côté Fpu).
 enum { round_nearest_even = 0, round_down = 1, round_up = 2, round_to_zero = 3 };
-// Drapeaux d'exception IEEE (valeurs SoftFloat).
-enum { flag_invalid = 0x01, flag_divzero = 0x04, flag_overflow = 0x08,
+// Drapeaux d'exception IEEE (valeurs SoftFloat). flag_signaling (extension 680x0) =
+// entrée SNaN → distinct de flag_invalid pour mapper sur FPSR.SNAN (et non OPERR).
+enum { flag_invalid = 0x01, flag_signaling = 0x02, flag_divzero = 0x04, flag_overflow = 0x08,
        flag_underflow = 0x10, flag_inexact = 0x20 };
 // Précision d'arrondi (bits 7-6 du FPCR → 80 étendu / 64 double / 32 simple).
 enum { prec_extended = 80, prec_double = 64, prec_single = 32 };
@@ -56,13 +57,20 @@ inline bool isSNaN(f80 a){ return isNaN(a) && !(a.low & 0x4000000000000000ull); 
 inline f80  defaultNaN() { return f80{ 0x7FFF, 0xFFFFFFFFFFFFFFFFull }; }     // QNaN 68881
 constexpr uint64_t INF_LOW = 0x8000000000000000ull;
 
+// Propagation des NaN (cf. Hatari propagateFloatx80NaN, chemin SOFTFLOAT_68K) :
+// renvoie l'opérande NaN RÉEL (signe + payload) quiété (bit 62 = 1), au lieu d'un
+// default-NaN ; une entrée SNaN lève flag_signaling (→ FPSR.SNAN, pas OPERR).
 inline f80 propagateNaN(Status& s, f80 a, f80 b) {
-    if (isSNaN(a) || isSNaN(b)) raise(s, flag_invalid);
-    return defaultNaN();
+    if (isSNaN(a) || isSNaN(b)) raise(s, flag_signaling);
+    f80 r = isNaN(a) ? a : b;
+    r.low |= 0x4000000000000000ull;        // SNaN → QNaN (quiet)
+    return r;
 }
 inline f80 propagateNaN1(Status& s, f80 a) {
-    if (isSNaN(a)) raise(s, flag_invalid);
-    return defaultNaN();
+    if (isSNaN(a)) raise(s, flag_signaling);
+    f80 r = a;
+    r.low |= 0x4000000000000000ull;
+    return r;
 }
 
 // --- Leaf multi-mots (via __uint128_t) -----------------------------------------

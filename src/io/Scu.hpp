@@ -81,6 +81,16 @@ public:
         return 0;
     }
 
+    // Reset matériel : tous les masques/états remis à 0 — le vrai SCU masque TOUT
+    // jusqu'à reprogrammation par l'OS (cf. Hatari SCU_Reset). GPR1 forcé à 0x01
+    // (contournement « TOS v2/v3 crash »). GPR2 effacé au cold boot, conservé au warm.
+    void reset(bool cold) {
+        sysIntMask = sysIntState = sysInterrupter = 0;
+        vmeIntMask = vmeIntState = vmeInterrupter = 0;
+        gpr1 = 0x01;
+        if (cold) gpr2 = 0;
+    }
+
     // Registres exposés (débogueur). GPR1 = 0x01 au reset : contournement Hatari
     // (« TOS v2/v3 crash sinon » sur MegaSTE/TT).
     uint8_t sysIntMask = 0, sysIntState = 0, sysInterrupter = 0;

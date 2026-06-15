@@ -144,7 +144,13 @@ Détail + basses cycle-exactes/niche (vidéo, FDC, son, blitter BL-R/BL-MST, bus
 `docs/HATARI_DIVERGENCES.md` §2ᵉ passe.
 
 ### 3ᵉ passe (2026-06-15) — sous-systèmes périphériques (RTC/ACSI/GEMDOS/FPU/SCU, jamais audités)
-Tous **bornés et corrigeables sans oracle** (logique pure). Cf. `docs/HATARI_DIVERGENCES.md` §3ᵉ passe.
+**✅ CORRIGÉS** (build + glue 19/0 + boots ST/STE/MegaSTE identiques + **FPU test ROM 9/9**) :
+SCU reset · FPU propagation NaN · FPU SNaN→SNAN · FPU masques FPCR/FPSR · FPU FSGLMUL (troncature
+24b) · ACSI INQUIRY buf[4]=31 · GEMDOS `.`/`..` en sous-répertoire (param subdir).
+**⏸️ Reste à faire** (complexe/plateforme/non vérifiable headless) : ACSI délai IRQ post-transfert ;
+GEMDOS only_invalid ; GEMDOS recomposition Unicode macOS ; FPU FSCALE ∞/NaN, arrondi précision
+FMOVE/FABS/FNEG, FMOVECR INEX2+arrondi, packed decimal bit-exact, octet AEXC.
+Cf. `docs/HATARI_DIVERGENCES.md` §3ᵉ passe.
 ```
 • [HAUTE] SCU jamais réinitialisé : aucun Scu::reset(), ni Machine::reset()/hardReset() ne le
   resettent → SysIntMask/VmeIntMask persistent au reset doux. Fix : Scu::reset(bool cold) + appel.

@@ -654,6 +654,10 @@ taguées (0.1.x). Le restant est dans [`TODO.md`](TODO.md).
   l'identique (Pexec + Fopen + Fread + Fcreate + Fwrite + Fclose). Sans `--gemdos`,
   boot inchangé (« GEMDOS drives: AB »). Helpers mémoire : `Bus::hostRamPtr`
   (pointeur RAM contigu, traduction MMU) et `Bus::tosVersion`.
+- **`Fsfirst`/`Fsnext` énumèrent « . » et « .. » en sous-répertoire** (paramètre `subdir` de
+  `fsfirst_match`, port Hatari) : à la racine d'un lecteur GEMDOS les `.*` restent ignorés, mais
+  dans un sous-dossier `.`/`..` sont retournés comme sur TOS réel → gestionnaires de fichiers /
+  archiveurs récursifs corrects.
 
 ## Audio
 - **Filtre de sortie YM par machine câblé** (`Machine` → `YM2149::setStfLowPass(!STE)`) : ST/Mega ST
@@ -912,6 +916,9 @@ taguées (0.1.x). Le restant est dans [`TODO.md`](TODO.md).
   `C:\AUTO` recopiant `HELLO.TXT`→`OUTPUT.TXT` **persisté dans l'image** (WRITE(6),
   relu par mtools). _(Remplace l'ancien disque virtuel en mémoire, qui n'était qu'un
   bouchon pour le diagnostic « Hard Disk DMA Exerciser ».)_
+- **ACSI INQUIRY — « Additional Length » fixe (31)** : `buf[4]` n'est plus écrasé par
+  `count()-5` (valeur variable erronée) → la longueur additionnelle reste 31 comme Hatari
+  (`HDC_Cmd_Inquiry` n'écrit jamais cet octet) ; un pilote HD lisant ce champ n'est plus trompé.
 - **SCC Z85C30 — contrôleur série Mega STE** (`io/Scc`, port de `scc.c`,
   `$FF8C80-$FF8C87`) : deux canaux A/B, jeu complet WR0-15 / RR0-15 par canal
   (pointeur de registre via WR0, commandes WR0/WR9, reset matériel/canal), statut RR0
@@ -943,6 +950,10 @@ taguées (0.1.x). Le restant est dans [`TODO.md`](TODO.md).
 - **Registre Cache/CPU MegaSTE `$FF8E21` relisible** (port `IoMemTabMegaSTE_CacheCpuCtrl_WriteByte`) :
   octet latché (bit0 = cache, bit1 = vitesse 8/16 MHz) avec la contrainte matérielle « cache
   impossible à 8 MHz » (bit0 forcé à 0 si bit1=0). Reset = 0.
+- **SCU réinitialisé au reset** (port `SCU_Reset`) : `Scu::reset(bool cold)` remet `SysIntMask`/
+  `VmeIntMask`/états à 0 (le SCU masque tout jusqu'à reprogrammation par l'OS), GPR1=0x01, GPR2
+  effacé au cold boot ; appelé par `Machine::reset()`/`hardReset()`. Avant, les masques persistaient
+  à travers un reset doux (non déterministe selon l'historique de session).
 - **Bascule CPU 8/16 MHz MegaSTE — EFFET RÉEL** (`$FF8E21` bit1, port
   `m68000.c:MegaSTE_CPU_Cache_Update` / `MegaSTE_CPU_Set_16Mhz`) : l'ordonnanceur et
   toutes les puces restent en cycles **bus 8 MHz** ; le cœur CPU convertit
@@ -1022,6 +1033,12 @@ taguées (0.1.x). Le restant est dans [`TODO.md`](TODO.md).
   cartouche n'a pas de test FPU dédié au menu : F = Floppy, V = VME) ;
   non-régression : écrans byte-identiques avec/sans `--fpu` (EmuTOS 256K,
   TOS 2.06 megaste) et gate EmuTOS 192K/ST intact.
+- **MC68881 — fidélité NaN / SNaN / masques / FSGLMUL** (recoupé `cpu/fpp*.c` softfloat) :
+  la **propagation des NaN** renvoie désormais l'opérande NaN réel quiété (signe + payload) au
+  lieu d'un default-NaN ; une **entrée SNaN** lève `FPSR.SNAN` (vecteur 54) et non plus OPERR
+  (flag softfloat `flag_signaling` distinct) ; les **masques FPCR/FPSR** forcent à 0 les bits
+  réservés (`&0xFFF0` / `&0x0FFFFFF8`) ; **FSGLMUL** tronque ses entrées à 24 bits avant le produit
+  (cf. `floatx80_sglmul`). Mini-ROM FPU **9/9 PASS** inchangé.
 - **Joypads STE COMPLETS + DIP MegaSTE** (`$FF9200-$FF9223`, port fidèle `joy.c` /
   `ioMemTabSTE.c`) : le stub « valeurs au repos » est remplacé par un vrai module
   `StePads` (`src/io/StePads.hpp`, membre `Bus::stePads`) — **multiplexage** par le
