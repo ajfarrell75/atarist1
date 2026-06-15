@@ -120,8 +120,12 @@ void Fpu::sfFold(uint8_t f) {
     if (f & sf::flag_invalid)   fpsr_ |= EXC_OPERR | AEXC_IOP;
     if (f & sf::flag_divzero)   fpsr_ |= EXC_DZ    | AEXC_DZ;
     if (f & sf::flag_overflow)  fpsr_ |= EXC_OVFL  | AEXC_OVFL;
-    if (f & sf::flag_underflow) fpsr_ |= EXC_UNFL  | AEXC_UNFL;
-    if (f & sf::flag_inexact)   fpsr_ |= EXC_INEX2 | AEXC_INEX;
+    if (f & sf::flag_underflow) fpsr_ |= EXC_UNFL;
+    if (f & sf::flag_inexact)   fpsr_ |= EXC_INEX2;
+    // Octet AEXC accumulé (cf. Hatari updateaccrued / fpsr_make_status) : UNFL n'est
+    // accumulé que si INEXACT l'est AUSSI ; INEX est accumulé sur INEX2 OU OVFL.
+    if ((f & sf::flag_underflow) && (f & sf::flag_inexact)) fpsr_ |= AEXC_UNFL;
+    if (f & (sf::flag_inexact | sf::flag_overflow))         fpsr_ |= AEXC_INEX;
 }
 
 // Livraison d'exception FP via le Response CIR (cf. Fpu.hpp). Octet enable du FPCR
@@ -572,6 +576,10 @@ void Fpu::genOp(uint16_t cmd, Ext src) {
             break;
         }
         case 0x26: {                                                          // FSCALE : d × 2^trunc(s)
+            // Exposant ∞/NaN : éviter l'UB de int(trunc(±inf/nan)) — NaN → propagation,
+            // ±∞ → OPERR + NaN par défaut (cf. Hatari floatx80_scale).
+            if (sf::isNaN(s))           { rf = sf::propagateNaN(st, d, s); break; }
+            if (sf::expOf(s) == 0x7FFF) { rf = sf::defaultNaN(); st.exceptionFlags |= sf::flag_invalid; break; }
             int n = int(std::trunc(extToD(src)));
             if (n > 16383) n = 16383; else if (n < -16383) n = -16383;
             int be = 0x3FFF + n; if (be < 1) be = 1; else if (be > 0x7FFE) be = 0x7FFE;

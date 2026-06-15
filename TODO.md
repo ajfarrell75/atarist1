@@ -146,10 +146,11 @@ Détail + basses cycle-exactes/niche (vidéo, FDC, son, blitter BL-R/BL-MST, bus
 ### 3ᵉ passe (2026-06-15) — sous-systèmes périphériques (RTC/ACSI/GEMDOS/FPU/SCU, jamais audités)
 **✅ CORRIGÉS** (build + glue 19/0 + boots ST/STE/MegaSTE identiques + **FPU test ROM 9/9**) :
 SCU reset · FPU propagation NaN · FPU SNaN→SNAN · FPU masques FPCR/FPSR · FPU FSGLMUL (troncature
-24b) · ACSI INQUIRY buf[4]=31 · GEMDOS `.`/`..` en sous-répertoire (param subdir).
-**⏸️ Reste à faire** (complexe/plateforme/non vérifiable headless) : ACSI délai IRQ post-transfert ;
-GEMDOS only_invalid ; GEMDOS recomposition Unicode macOS ; FPU FSCALE ∞/NaN, arrondi précision
-FMOVE/FABS/FNEG, FMOVECR INEX2+arrondi, packed decimal bit-exact, octet AEXC.
+24b) · FPU FSCALE ∞/NaN (NaN→propagation, ∞→OPERR, plus d'UB) · FPU octet AEXC (UNFL si INEXACT,
+INEX sur OVFL) · ACSI INQUIRY buf[4]=31 · GEMDOS `.`/`..` en sous-répertoire (param subdir).
+**⏸️ Reste à faire** (table de données / plateforme / plomberie / non vérifiable headless) : ACSI
+délai IRQ post-transfert ; GEMDOS only_invalid ; GEMDOS Unicode macOS ; FPU arrondi de précision
+FMOVE/FABS/FNEG (plomberie softfloat) ; FPU FMOVECR INEX2+arrondi (table rndoff) ; FPU packed decimal.
 Cf. `docs/HATARI_DIVERGENCES.md` §3ᵉ passe.
 Intentionnels / NeoST plus correct (NE PAS corriger) : RTC temps émulé (déterminisme headless),
 RTC Mega-only (RP5C15 physiquement Mega), SCU encodage bit IRQ1, transcendantes FPU host.
