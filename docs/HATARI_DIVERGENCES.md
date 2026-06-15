@@ -23,8 +23,9 @@ S1 (filtre LPF STF câblé), BU1 (miroir PSG), MIDI (master reset sans purge + R
 Validés : `glue-selftest` 19/0, boots ST/STE/MegaSTE **pixel-identiques** à avant. Les chantiers
 **cycle-exacts** (V1-V3 vidéo, S2 FIFO son, D3 stall FIFO) restent **différés** : leur
 validation exige l'oracle Hatari headless, **absent de ce conteneur** (cf. CLAUDE.md). Les
-points « choix de comportement » (SC1 loopback SCC, D1/D2 WRITE TRACK STX, NeoST plus correct
-en HD/ED) et marginaux (`$FF8264`, D4 6250, F1, M1) sont laissés documentés pour décision/suivi.
+points « choix de comportement » **tranchés** (SC1 loopback SCC honoré = datasheet, D1/D2 WRITE
+TRACK STX, NeoST plus correct en HD/ED — tous « NE PAS corriger ») et les marginaux (`$FF8264`,
+D4 6250, F1, M1) sont laissés documentés pour suivi.
 
 ---
 
@@ -59,7 +60,7 @@ en HD/ED) et marginaux (`$FF8264`, D4 6250, F1, M1) sont laissés documentés po
 | M1 | MFP | Lignes GPIP **on-chip** (ACIA/FDC/blitter) lèvent l'IRQ **sans la machine de fronts AER/DDR** | moyenne | `Mfp.hpp:115-127` + appels `Ikbd/Fdc/Blitter` | `MFP_GPIP_Set_Line_Input` `mfp.c:1180,1142` |
 | BU1 ✅ | Bus | **Miroir matériel du PSG `$FF8804-$FF88FF`** non routé vers le YM2149 (lit `0xFF`, écritures ignorées) | moyenne | `Bus.cpp:531,623` | `IoMem_Init` shadow PSG `ioMem.c:386-393` |
 | BL2 ✅ | Blitter | Accès **OCTET** aux registres mot/long non rejetés | moyenne | `Blitter.cpp:50-61` | `Blitter_CheckAccess_Byte` `blitter.c:972-989` |
-| SC1 | SCC | **TX émis immédiatement** (pas de cadence baud / Zero Count) ; `WR14` bit4 loopback peut-être actif au reset | moyenne *(à vérifier)* | `Scc.cpp:234,269-274`, reset `Scc.cpp:61` | `SCC_WriteDataReg` / `SCC_Process_TX` `scc.c:1655-1681,1986` |
+| SC1 | SCC | **TX émis immédiatement** (pas de cadence baud / Zero Count) ; `WR14` bit4 Local Loopback honoré (datasheet, absent d'Hatari) — **tranché : choix délibéré** | volontaire | `Scc.cpp:234,269-274`, reset `Scc.cpp:61` | `SCC_WriteDataReg` / `SCC_Process_TX` `scc.c:1655-1681,1986` |
 | D4 | FDC | Piste « standard » de repli **6268 o (NeoST) vs 6250 (Hatari)** | faible-moyenne | `Fdc.cpp:156` | `FDC_TRACK_BYTES_STANDARD` `stx.c:1418` |
 
 ---
@@ -218,13 +219,16 @@ Cœur registre/IRQ **fidèle** (RR/WR, `updateRR0/RR2/RR3`, `updateIRQ` IUS/prio
 reset HW/canal, IRQ niveau 5 gatée par le SCU).
 
 - **[SC1 — moyenne]** TX émis immédiatement à l'écriture data (`Scc.cpp:269-274`) sans timer baud
-  ni interruption Zero Count (BRG) vs `SCC_Process_TX` cadencé (`scc.c:1986,2231`). De plus
-  **`WR14` bit4 (loopback local) `|= 0x30` au reset** (`Scc.cpp:61`) → TX réel potentiellement
-  jamais sorti vers `sink_` tant que bit4=1. **À vérifier** (datasheet vs Hatari).
+  ni interruption Zero Count (BRG) vs `SCC_Process_TX` cadencé (`scc.c:1986,2231`) — conséquence
+  volontaire de l'absence de BRG cadencé (cible NeoST).
+- **[SC1b — TRANCHÉ : choix délibéré, NE PAS corriger]** **`WR14` bit4 (Local Loopback) `|= 0x30`
+  au reset** (`Scc.cpp:61`) → tant que bit4=1, TX reboucle en interne (TxD→RxD) et n'atteint pas
+  `sink_`. NeoST **honore** ce bit (datasheet Zilog Z85C30 §WR14) ; Hatari NE le modélise pas
+  (`SCC_Process_TX` émet toujours). **Inoffensif** : tout pilote série/LAN réécrit `WR14` (réglage
+  du BRG, bit4=0) avant d'émettre. NeoST reste donc plus fidèle au chip — cf. § « NeoST améliore
+  Hatari » ci-dessous. (`Scc.cpp:serialWriteByte`)
 - **[basse]** Horloges/baud (PCLK, BCLK, time constant `WR12/13`) entièrement absentes
   (`SCC_Compute_BaudRate` `scc.c:1027`) — conséquence de SC1, volontaire (cible NeoST).
-- *Note :* le bouclage local `WR14` bit4 n'existe pas chez Hatari mais correspond à la datasheet
-  Zilog → NeoST potentiellement **plus** fidèle au chip, mais divergent d'Hatari.
 
 ---
 

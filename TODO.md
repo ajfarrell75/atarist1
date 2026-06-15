@@ -99,12 +99,12 @@ chantier **beam-sync** ci-dessous :
 • Son DMA — FIFO 8 octets + avance HBL (S2). [recoupe §Son DMA STE]
 • FDC — flush FIFO↔RAM ne stalle pas le CPU (D3 : 32 cyc, fdc.c:1340/1396).
 ```
-**Décisions de comportement** (datasheet vs Hatari — à trancher) :
+**Décisions de comportement** *(tranchées)* :
 ```
-• SCC WR14 bit4 « loopback » actif au reset (SC1) : NeoST l'interprète comme bouclage local
-  (datasheet Zilog) ; Hatari met le même bit (0x30) mais NE le traite PAS comme loopback →
-  côté NeoST le TX réel ne sort jamais tant que bit4=1. Choisir : aligner sur Hatari (retirer
-  le loopback Scc.cpp:234) ou rester datasheet-fidèle. (scc.c reset l.611 = WR14|=0x30 aussi.)
+• ✅ SCC WR14 bit4 « loopback » actif au reset (SC1) — TRANCHÉ : NeoST HONORE le bit (Local
+  Loopback, datasheet Zilog Z85C30) ; Hatari ne le modélise pas. Inoffensif (tout pilote série/
+  LAN réécrit WR14 avant d'émettre) → NeoST reste plus fidèle au chip. NE PAS « corriger ».
+  Documenté Scc.cpp:serialWriteByte + docs/HATARI_DIVERGENCES.md (§« NeoST améliore Hatari »).
 ```
 **Marginaux** (faible valeur / risque > bénéfice) :
 ```
