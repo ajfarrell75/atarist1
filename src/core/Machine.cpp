@@ -82,6 +82,29 @@ Machine::Machine(std::size_t ramBytes, CpuCore cpuCore, MachineType machine)
     // Préemption : l'ordonnanceur peut couper le bloc CPU quand un événement plus
     // proche est armé (latence IRQ ~1 instruction, cf. Scheduler::schedule).
     sched.setEndSlice([this] { cpu.endTimeslice(); });
+    // V2 res-switch (opt-in NEOST_V2) : la Glue signale une impulsion hi-res PRÉCOCE
+    // (cyc ≤ 56) sur la ligne courante → on raccourcit la ligne (HBL reprogrammé à la
+    // position hi-res 220 au lieu de cpl-4) et on décale les lignes SUIVANTES de
+    // (cpl-224) via lineCarry_. Port de Hatari HBL_Pos/nCyclesPerLine (video.c:2249,
+    // Video_AddInterruptHBL 2849) : laisse dériver la phase du gestionnaire fullscreen.
+    v2_ = std::getenv("NEOST_V2") != nullptr;
+    shifter.setHblShorten([this] {
+        if (!v2_ || hblLine_ == v2ShortLine_ || hblLine_ >= lpf_) return;   // déjà raccourcie / hors trame
+        // Cycle DANS la ligne courante (grille décalée par lineCarry_). Seule une
+        // impulsion hi-res PRÉCOCE (≤ HDE_On_Low_50=56) raccourcit la ligne — comme
+        // les branches Hatari video.c:2246/2268/2288 (pas la branche right-off tardive).
+        const int64_t lineStart = static_cast<int64_t>(hblLine_) * cpl_ - lineCarry_;
+        const int64_t lineCyc   = (sched.liveNow() - frameStart_) - lineStart;
+        if (lineCyc < 0 || lineCyc > 56) return;
+        v2ShortLine_ = hblLine_;
+        constexpr int kHblPosHi = 220;                    // Hbl_Int_Pos_Hi (hi-res)
+        constexpr int kLineLenHi = 224;                   // CYCLES_PER_LINE_71HZ
+        sched.schedule(Scheduler::HBL, frameStart_ + lineStart + kHblPosHi);
+        lineCarry_ += cpl_ - kLineLenHi;                  // lignes suivantes décalées plus tôt
+        if (std::getenv("NEOST_V2_TRACE")) { static long n=0; if (++n % 500 == 0)
+            std::fprintf(stderr, "[v2] shorten #%ld line=%d cyc=%lld carry=%lld\n",
+                         n, hblLine_, (long long)lineCyc, (long long)lineCarry_); }
+    });
     // Connecteur de bouclage RS232 : les sorties RTS (port A bit3) et DTR (bit4) du
     // PSG recopient les entrées de contrôle du MFP — RTS→CTS (GPIP2), DTR→DCD (GPIP1)
     // ET DTR→RI (GPIP6) — comme le câble de test du diagnostic « S RS232 ». Le port A
@@ -197,6 +220,8 @@ void Machine::scheduleFrameEvents() {
     renderLine_ = 0;
     tbLine_     = 0;
     hblLine_    = 0;
+    lineCarry_   = 0;     // V2 : aucune ligne raccourcie au début de trame
+    v2ShortLine_ = -1;
     shifter.beginFrame();                          // verrouille résolution + fréquence
     // Géométrie de la trame (50/60/71 Hz) figée pour toute la trame, lue ici.
     const Shifter::Geometry g = shifter.geometry();
@@ -240,7 +265,7 @@ void Machine::onRender() {
     // L'index actif renderLine_ correspond à la scanline (dispStart_ + renderLine_).
     if (renderLine_ < h && dispStart_ + renderLine_ < lpf_)
         sched.schedule(Scheduler::RENDER,
-                       frameStart_ + static_cast<int64_t>(dispStart_ + renderLine_) * cpl_ + deEnd_);
+                       frameStart_ + static_cast<int64_t>(dispStart_ + renderLine_) * cpl_ + deEnd_ - lineCarry_);
 }
 
 void Machine::onTimerB() {
@@ -256,7 +281,7 @@ void Machine::onTimerB() {
     ++tbLine_;
     if (tbLine_ < lpf_)
         sched.schedule(Scheduler::TIMER_B,                         // position recalculée → suit
-                       frameStart_ + static_cast<int64_t>(tbLine_) * cpl_ + timerBPos());
+                       frameStart_ + static_cast<int64_t>(tbLine_) * cpl_ + timerBPos() - lineCarry_);
 }
 
 void Machine::onHbl() {
@@ -264,9 +289,10 @@ void Machine::onHbl() {
     ++hblLine_;
     // HBL émis à CHAQUE scanline (hblLine_ = numéro de ligne absolu 0..lpf-1), comme
     // sur le vrai matériel — y compris dans les bordures haut/bas (ancre Video_EndHBL).
+    // V2 : −lineCarry_ décale la ligne suivante du cumul des raccourcissements (=0 hors V2).
     if (hblLine_ < lpf_)
         sched.schedule(Scheduler::HBL,
-                       frameStart_ + static_cast<int64_t>(hblLine_) * cpl_ + (cpl_ - 4));
+                       frameStart_ + static_cast<int64_t>(hblLine_) * cpl_ + (cpl_ - 4) - lineCarry_);
 }
 
 void Machine::onVbl() {

@@ -127,6 +127,9 @@ public:
     // d'adresse vidéo $FF8205/07/09 (position courante du balayage). Cf. Hatari
     // Video_ScreenCounter_ReadByte / Video_CalculateAddress.
     void setBeamClock(std::function<int64_t()> fn) { beamClock_ = std::move(fn); }
+    // V2 res-switch : signalé à CHAQUE écriture hi-res $FF8260=2 ; la Machine décide
+    // si l'impulsion est PRÉCOCE et raccourcit la ligne (cf. Machine setHblShorten).
+    void setHblShorten(std::function<void()> fn) { hblShorten_ = std::move(fn); }
 
     // --- État exposé au débogueur (lecture directe) -------------------------
     uint32_t videoBase = 0;                 // adresse RAM du framebuffer (registres haut/milieu/bas)
@@ -343,4 +346,5 @@ private:
     uint8_t       frameSync_ = 0x02;        // fréquence ($FF820A) verrouillée pour la trame
     std::vector<uint32_t> frame_;           // curW_*curH_ pixels ARGB
     std::function<int64_t()> beamClock_;    // cycles dans la trame (cf. setBeamClock)
+    std::function<void()>    hblShorten_;   // V2 : signal d'impulsion hi-res (cf. setHblShorten)
 };
