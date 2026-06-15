@@ -147,10 +147,13 @@ Détail + basses cycle-exactes/niche (vidéo, FDC, son, blitter BL-R/BL-MST, bus
 **✅ CORRIGÉS** (build + glue 19/0 + boots ST/STE/MegaSTE identiques + **FPU test ROM 9/9**) :
 SCU reset · FPU propagation NaN · FPU SNaN→SNAN · FPU masques FPCR/FPSR · FPU FSGLMUL (troncature
 24b) · FPU FSCALE ∞/NaN (NaN→propagation, ∞→OPERR, plus d'UB) · FPU octet AEXC (UNFL si INEXACT,
-INEX sur OVFL) · ACSI INQUIRY buf[4]=31 · GEMDOS `.`/`..` en sous-répertoire (param subdir).
+INEX sur OVFL) · ACSI INQUIRY buf[4]=31 · GEMDOS `.`/`..` en sous-répertoire (param subdir) ·
+**GEMDOS only_invalid** (passe troncature + passe caractères-invalides séparées, `filenameInvalidChar`
+port de `Str_Filename_Invalid_Char`) · **FPU FMOVECR INEX2+arrondi** (table `fpp_cr` `inex`+`rnd[4]`
+RN/RZ/RM/RP portée → arme `EXC_INEX2`/`AEXC_INEX`).
 **⏸️ Reste à faire** (table de données / plateforme / plomberie / non vérifiable headless) : ACSI
-délai IRQ post-transfert ; GEMDOS only_invalid ; GEMDOS Unicode macOS ; FPU arrondi de précision
-FMOVE/FABS/FNEG (plomberie softfloat) ; FPU FMOVECR INEX2+arrondi (table rndoff) ; FPU packed decimal.
+délai IRQ post-transfert ; GEMDOS Unicode macOS ; FPU arrondi de précision FMOVE/FABS/FNEG (plomberie
+softfloat) ; FPU packed decimal.
 Cf. `docs/HATARI_DIVERGENCES.md` §3ᵉ passe.
 Intentionnels / NeoST plus correct (NE PAS corriger) : RTC temps émulé (déterminisme headless),
 RTC Mega-only (RP5C15 physiquement Mega), SCU encodage bit IRQ1, transcendantes FPU host.
@@ -193,12 +196,12 @@ IPL/SCU, wait-states) et E/S (StePads, paddles, JoystickInput). Cf. `docs/HATARI
    (~6 dB) — validables par dump WAV oracle (YM_250_DEBUG) + comparaison.
 4. [FDC] D3 stall FIFO 32 cyc · drive/side « push » — validables par trace FDC byte-exacte.
 5. [MFP] M1 GPIP on-chip via machine de fronts AER/DDR · UpdateTimers avant lecture IPR — vérif latence.
-6. [FPU] arrondi de précision FMOVE/FABS/FNEG · FMOVECR INEX2+rndoff — table extraite de fpp.c,
-   validable par ROM de test étendue.
+6. [FPU] arrondi de précision FMOVE/FABS/FNEG selon précision FPCR — validable par ROM de test
+   étendue (FMOVECR INEX2+rndoff désormais ✅ FAIT).
 ```
 **Sans oracle (faisables hors session SDL2) :** FPU packed decimal bit-exact (algorithme
-softfloat_decimal) ; GEMDOS only_invalid (port `Str_Filename_Invalid_Char`) ; GEMDOS Unicode macOS
-(sur une cible macOS) — tous documentés `docs/HATARI_DIVERGENCES.md`.
+softfloat_decimal) ; GEMDOS Unicode macOS (sur une cible macOS) — documentés
+`docs/HATARI_DIVERGENCES.md`.
 
 ---
 

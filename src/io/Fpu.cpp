@@ -162,34 +162,44 @@ double Fpu::roundMode(double v) const {
 // =============================================================================
 //  Constantes ROM FMOVECR (opclass 010, format 111) — patterns silicium exacts.
 // =============================================================================
-Fpu::Ext Fpu::romConstant(int off) {
-    struct Rom { uint8_t off; uint16_t se; uint64_t man; };
+Fpu::Ext Fpu::romConstant(int off, int roundMode, bool& inexact) {
+    struct Rom { uint8_t off; uint16_t se; uint64_t man; uint8_t inex; int8_t rnd[4]; };
+    // inex (drapeau INEX2) + rnd[mode] (ajustement ±1 ulp du mot bas selon l'arrondi
+    // {RN,RZ,RM,RP}) — port de fpp_cr[] (Hatari cpu/fpp.c) : sur le 68881, FMOVECR d'une
+    // constante inexacte arme INEX2 et ajuste le dernier ulp selon le mode d'arrondi courant.
     static const Rom rom[] = {
-        {0x00, 0x4000, 0xC90FDAA22168C235ull},   // pi
-        {0x0B, 0x3FFD, 0x9A209A84FBCFF798ull},   // log10(2)
-        {0x0C, 0x4000, 0xADF85458A2BB4A9Aull},   // e (1 ulp sous l'arrondi : silicium)
-        {0x0D, 0x3FFF, 0xB8AA3B295C17F0BCull},   // log2(e)
-        {0x0E, 0x3FFD, 0xDE5BD8A937287195ull},   // log10(e)
-        {0x0F, 0x0000, 0x0000000000000000ull},   // 0.0
-        {0x30, 0x3FFE, 0xB17217F7D1CF79ACull},   // ln(2)
-        {0x31, 0x4000, 0x935D8DDDAAA8AC17ull},   // ln(10)
-        {0x32, 0x3FFF, 0x8000000000000000ull},   // 1.0
-        {0x33, 0x4002, 0xA000000000000000ull},   // 10^1
-        {0x34, 0x4005, 0xC800000000000000ull},   // 10^2
-        {0x35, 0x400C, 0x9C40000000000000ull},   // 10^4
-        {0x36, 0x4019, 0xBEBC200000000000ull},   // 10^8
-        {0x37, 0x4034, 0x8E1BC9BF04000000ull},   // 10^16
-        {0x38, 0x4069, 0x9DC5ADA82B70B59Eull},   // 10^32
-        {0x39, 0x40D3, 0xC2781F49FFCFA6D5ull},   // 10^64
-        {0x3A, 0x41A8, 0x93BA47C980E98CE0ull},   // 10^128
-        {0x3B, 0x4351, 0xAA7EEBFB9DF9DE8Eull},   // 10^256
-        {0x3C, 0x46A3, 0xE319A0AEA60E91C7ull},   // 10^512
-        {0x3D, 0x4D48, 0xC976758681750C17ull},   // 10^1024
-        {0x3E, 0x5A92, 0x9E8B3B5DC53D5DE5ull},   // 10^2048
-        {0x3F, 0x7525, 0xC46052028A20979Bull},   // 10^4096
+        {0x00, 0x4000, 0xC90FDAA22168C235ull, 1, {0,-1,-1, 0}},   // pi
+        {0x0B, 0x3FFD, 0x9A209A84FBCFF798ull, 1, {0, 0, 0, 1}},   // log10(2)
+        {0x0C, 0x4000, 0xADF85458A2BB4A9Aull, 1, {0, 0, 0, 1}},   // e (1 ulp sous l'arrondi : silicium)
+        {0x0D, 0x3FFF, 0xB8AA3B295C17F0BCull, 1, {0,-1,-1, 0}},   // log2(e)
+        {0x0E, 0x3FFD, 0xDE5BD8A937287195ull, 0, {0, 0, 0, 0}},   // log10(e)
+        {0x0F, 0x0000, 0x0000000000000000ull, 0, {0, 0, 0, 0}},   // 0.0
+        {0x30, 0x3FFE, 0xB17217F7D1CF79ACull, 1, {0,-1,-1, 0}},   // ln(2)
+        {0x31, 0x4000, 0x935D8DDDAAA8AC17ull, 1, {0,-1,-1, 0}},   // ln(10)
+        {0x32, 0x3FFF, 0x8000000000000000ull, 0, {0, 0, 0, 0}},   // 1.0
+        {0x33, 0x4002, 0xA000000000000000ull, 0, {0, 0, 0, 0}},   // 10^1
+        {0x34, 0x4005, 0xC800000000000000ull, 0, {0, 0, 0, 0}},   // 10^2
+        {0x35, 0x400C, 0x9C40000000000000ull, 0, {0, 0, 0, 0}},   // 10^4
+        {0x36, 0x4019, 0xBEBC200000000000ull, 0, {0, 0, 0, 0}},   // 10^8
+        {0x37, 0x4034, 0x8E1BC9BF04000000ull, 0, {0, 0, 0, 0}},   // 10^16
+        {0x38, 0x4069, 0x9DC5ADA82B70B59Eull, 1, {0,-1,-1, 0}},   // 10^32
+        {0x39, 0x40D3, 0xC2781F49FFCFA6D5ull, 1, {0, 0, 0, 1}},   // 10^64
+        {0x3A, 0x41A8, 0x93BA47C980E98CE0ull, 1, {0,-1,-1, 0}},   // 10^128
+        {0x3B, 0x4351, 0xAA7EEBFB9DF9DE8Eull, 1, {0,-1,-1, 0}},   // 10^256
+        {0x3C, 0x46A3, 0xE319A0AEA60E91C7ull, 1, {0,-1,-1, 0}},   // 10^512
+        {0x3D, 0x4D48, 0xC976758681750C17ull, 1, {0, 0, 0, 1}},   // 10^1024
+        {0x3E, 0x5A92, 0x9E8B3B5DC53D5DE5ull, 1, {0,-1,-1, 0}},   // 10^2048
+        {0x3F, 0x7525, 0xC46052028A20979Bull, 1, {0,-1,-1, 0}},   // 10^4096
     };
     for (const auto& r : rom)
-        if (r.off == off) return Ext{r.se, r.man};
+        if (r.off == off) {
+            inexact = r.inex != 0;
+            uint64_t man = r.man;
+            const int8_t d = r.rnd[roundMode & 3];
+            if (d) { uint32_t lo = uint32_t(man) + uint32_t(int32_t(d)); man = (man & 0xFFFFFFFF00000000ull) | lo; }
+            return Ext{r.se, man};
+        }
+    inexact = false;
     return Ext{0, 0};                            // offsets non documentés → 0.0
 }
 
@@ -397,9 +407,13 @@ void Fpu::command(uint16_t cmd) {
         case 2: {                                // opclass 010 : <ea> → FPn / FMOVECR
             const int fmt = (cmd >> 10) & 7;
             if (fmt == 7) {                      // FMOVECR (offset ROM bits 6-0)
-                const Ext c = romConstant(cmd & 0x7F);
+                bool inexact = false;
+                const Ext c = romConstant(cmd & 0x7F, (fpcr_ >> 4) & 3, inexact);
                 fp_[(cmd >> 7) & 7] = c;
+                fpsr_ &= ~0x0000FF00u;            // EXC effacé (instruction courante)
+                if (inexact) fpsr_ |= EXC_INEX2 | AEXC_INEX;   // constante inexacte → INEX2
                 setCC(c);
+                checkException();                // livre l'exception INEX si armée dans le FPCR
                 break;                           // response déjà idle (PF=1)
             }
             armIn(fmtLen(fmt), After::GenOp);
