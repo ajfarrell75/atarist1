@@ -131,7 +131,8 @@ void Acsi::cmdInquiry() {
     memcpy(buf, inquiry_bytes, n);
     buf[0] = lun() == 0 ? 0 : 0x7F;        // LUN non géré → Peripheral Qualifier 0x7F
     if (n > 2) buf[2] = dev.scsiVersion;
-    if (n > 4) buf[4] = (uint8_t)(count() - 5);
+    // buf[4] (« Additional Length ») reste la valeur fixe 31 d'inquiry_bytes[4] (copiée
+    // par memcpy), comme Hatari (HDC_Cmd_Inquiry n'écrit jamais cet octet).
     status_ = HD_STATUS_OK;
     dev.lastError = HD_REQSENS_OK;
     dev.setLastBlockAddr = false;

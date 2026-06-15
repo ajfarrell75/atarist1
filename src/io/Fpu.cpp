@@ -116,6 +116,7 @@ sf::Status Fpu::sfStatus() const {
 // Replie les drapeaux d'exception softfloat dans le FPSR (octet EXC courant + octet
 // AEXC collant). invalid → OPERR (cause la plus courante), les autres 1:1.
 void Fpu::sfFold(uint8_t f) {
+    if (f & sf::flag_signaling) fpsr_ |= EXC_SNAN  | AEXC_IOP;   // entrée SNaN → SNAN (vecteur 54)
     if (f & sf::flag_invalid)   fpsr_ |= EXC_OPERR | AEXC_IOP;
     if (f & sf::flag_divzero)   fpsr_ |= EXC_DZ    | AEXC_DZ;
     if (f & sf::flag_overflow)  fpsr_ |= EXC_OVFL  | AEXC_OVFL;
@@ -464,8 +465,10 @@ void Fpu::completeInput() {
             break;
         case After::CtrlIn: {
             int p = 0;
-            if (cmd_ & 0x1000) { fpcr_  = get32(buf_ + p) & 0xFFFF; p += 4; }
-            if (cmd_ & 0x0800) { fpsr_  = get32(buf_ + p);          p += 4; }
+            // Masques 68881 (cf. Hatari get_features) : FPCR bits 3-0 et FPSR bits
+            // 0-2 / 28-31 sont réservés → forcés à 0 (relus à 0).
+            if (cmd_ & 0x1000) { fpcr_  = get32(buf_ + p) & 0xFFF0;     p += 4; }
+            if (cmd_ & 0x0800) { fpsr_  = get32(buf_ + p) & 0x0FFFFFF8; p += 4; }
             if (cmd_ & 0x0400) { fpiar_ = get32(buf_ + p);          p += 4; }
             setIdle();
             break;
@@ -585,7 +588,10 @@ void Fpu::genOp(uint16_t cmd, Ext src) {
         case 0x24: { sf::Status z = st; z.roundingPrecision = sf::prec_single;   // FSGLDIV
                      rf = sf::div(d, s, z); } break;
         case 0x27: { sf::Status z = st; z.roundingPrecision = sf::prec_single;   // FSGLMUL
-                     rf = sf::mul(d, s, z); } break;
+                     auto da = d, sa = s;                                        // entrées tronquées à
+                     da.low &= 0xFFFFFF0000000000ull;                            // 24 bits AVANT le produit
+                     sa.low &= 0xFFFFFF0000000000ull;                            // (cf. Hatari floatx80_sglmul)
+                     rf = sf::mul(da, sa, z); } break;
         case 0x38: case 0x39: {                                               // FCMP (0x39 alias)
             store = false;
             const int c = sf::compare(d, s);                                  // FPn − <ea>
