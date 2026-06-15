@@ -1043,6 +1043,10 @@ taguées (0.1.x). Le restant est dans [`TODO.md`](TODO.md).
   (flag softfloat `flag_signaling` distinct) ; les **masques FPCR/FPSR** forcent à 0 les bits
   réservés (`&0xFFF0` / `&0x0FFFFFF8`) ; **FSGLMUL** tronque ses entrées à 24 bits avant le produit
   (cf. `floatx80_sglmul`). Mini-ROM FPU **9/9 PASS** inchangé.
+- **MC68881 — FSCALE exposant ∞/NaN + octet AEXC** : **FSCALE** par un exposant ∞/NaN ne fait plus
+  d'UB (`int(trunc(±inf/nan))`) — NaN → propagation, ±∞ → OPERR + NaN par défaut (cf.
+  `floatx80_scale`) ; l'**octet AEXC accumulé** suit `updateaccrued`/`fpsr_make_status` (UNFL
+  accumulé seulement si INEXACT l'est aussi ; INEX accumulé sur INEX2 OU OVFL). Mini-ROM FPU 9/9 inchangé.
 - **Joypads STE COMPLETS + DIP MegaSTE** (`$FF9200-$FF9223`, port fidèle `joy.c` /
   `ioMemTabSTE.c`) : le stub « valeurs au repos » est remplacé par un vrai module
   `StePads` (`src/io/StePads.hpp`, membre `Bus::stePads`) — **multiplexage** par le
