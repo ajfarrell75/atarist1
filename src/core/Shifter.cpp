@@ -1015,6 +1015,13 @@ void Shifter::renderGlueFrame() {
     uint32_t addr = vcFrameBase_ & 0xFFFFFFu;              // compteur vidéo latché au VBL (≙ Video_ClearOnVBL)
     const int nLines = static_cast<int>(glueLines_.size());
 
+    // DIAG (gated NEOST_RENDER_TRACE=<numéro de trame>) : état per-ligne au rendu glue.
+    static int s_renderFrame = -1; ++s_renderFrame;
+    static const int traceFrame = []{ const char* s = std::getenv("NEOST_RENDER_TRACE"); return s ? std::atoi(s) : -1; }();
+    const bool rtr = (traceFrame >= 0 && s_renderFrame >= traceFrame);
+    if (rtr) std::fprintf(stderr, "[render f%d] base=%06x start=%d end=%d vover=%d\n",
+                          s_renderFrame, vcFrameBase_ & 0xFFFFFF, glueStartHBL_, glueEndHBL_, glueVOverscan_);
+
     uint8_t idx[700];                                      // max DE (462-4) + marge
     for (int row = 0; row < curH_; ++row) {
         const int sl = baseStart + (row - activeY_);       // scanline de cette ligne buffer
@@ -1023,6 +1030,8 @@ void Shifter::renderGlueFrame() {
         if (displayed) { const GlueLine& L = glueLines_[sl]; ds = L.displayStartCycle; de = L.displayEndCycle; bm = L.borderMask; shift = L.displayPixelShift; }
         const bool lineHasDE = displayed && !(bm & glue::NO_DE) && de > ds;
         const int  nPix = lineHasDE ? (de - ds) : 0;
+        if (rtr && displayed && sl < baseStart + 12)
+            std::fprintf(stderr, "  sl%d ds=%d de=%d bm=%03x nPix=%d addr=%06x\n", sl, ds, de, bm, nPix, addr & 0xFFFFFF);
         // decodeWindowIndices décode des GROUPES de 16 px : la plage valide de idx est
         // [0, nDec) avec nDec arrondi au groupe supérieur → marge pour le DisplayPixelShift.
         const int  nDec = lineHasDE ? ((nPix + 15) / 16) * 16 : 0;
@@ -1390,6 +1399,16 @@ void Shifter::write8(uint32_t addr, uint8_t v) {
         case 0xFF8203:
             videoBase = (videoBase & 0xFF0000) | (uint32_t(v) << 8);
             if (ste) videoBase &= 0xFFFF00;
+            // DIAG beam-sync (gated NEOST_BASE_TRACE) : ligne/cycle/valeur des écritures de
+            // base vidéo. Une base jittery trame à trame (joueur immobile) = la boucle de
+            // calibration fullscreen du jeu ne converge pas (résidu phase CPU↔faisceau),
+            // PAS un trick glue res-switch — cf. EL en jeu (scramble).
+            static const bool baseTrace_ = std::getenv("NEOST_BASE_TRACE") != nullptr;
+            if (baseTrace_ && liveFrameClock_) {
+                const int64_t fc = liveFrameClock_(); const int cpl = geometry().cyclesPerLine;
+                std::fprintf(stderr, "[base] $8203=%02x line=%lld cyc=%lld\n", v,
+                             (long long)(fc>=0?fc/cpl:-1), (long long)(fc>=0?fc%cpl:-1));
+            }
             return;
         case 0xFF820A: syncCpuBus(); recordSyncWrite(false, v); sync = v; return;   // synchro 50/60 Hz (+ bordures + wait-state bus, FIX2 : aligne l'accès sur 4 cyc comme $FF8260/palette, port wait_cpu_cycle_write)
         // Compteur vidéo $FF8205/07/09 : INSCRIPTIBLE sur STE/TT seulement (port
