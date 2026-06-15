@@ -29,25 +29,28 @@ uint8_t MidiAcia::read8(uint32_t addr) {
             s |= ACIA_IRQ;
         return s;
     }
-    // $FFFC06 : donnée reçue → consomme un octet (efface RDRF).
-    if (rx_.empty()) return 0x00;
-    const uint8_t b = rx_.front();
+    // $FFFC06 : donnée reçue → consomme un octet (efface RDRF). À vide, le 6850
+    // renvoie le DERNIER octet reçu (RDR persistant, cf. acia.c ACIA_Read_RDR), pas 0.
+    if (rx_.empty()) return rdr_;
+    rdr_ = rx_.front();
     rx_.pop_front();
     raiseIfReady();                  // octet suivant éventuel → ré-arme l'IRQ
-    return b;
+    return rdr_;
 }
 
 void MidiAcia::write8(uint32_t addr, uint8_t v) {
     if ((addr & 2) == 0) {
-        // $FFFC04 : contrôle. Bits 5-6 = contrôle émetteur (01 → TIE, cf.
-        // ACIA_Write_CR) ; bits 0-1 = 11 → master reset (vide la file, SR à TDRE).
+        // $FFFC04 : contrôle. Bits 5-6 = contrôle émetteur (01 → TIE, cf. ACIA_Write_CR) ;
+        // bits 0-1 = 11 → master reset.
         control_ = v;
         txEnableInt_ = ((v & 0x60) == 0x20);
         if (!txEnableInt_) {                 // TIE coupé → émetteur réputé prêt
             tdre_ = true;
             if (sched_) sched_->cancel(Scheduler::MIDI_TX);
         }
-        if ((v & 0x03) == 0x03) rx_.clear();
+        // Master reset : NE PURGE PAS la file RX — le 6850 ne perd pas l'octet en
+        // transit (cf. acia.c ; note ikbd.c « don't clear bytes in transit »).
+        // L'ACIA clavier (Ikbd) applique déjà ce choix ; on s'aligne.
         raiseIfReady();
         return;
     }

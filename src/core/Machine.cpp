@@ -124,6 +124,9 @@ Machine::Machine(std::size_t ramBytes, CpuCore cpuCore, MachineType machine)
     // STE/Mega STE : le YM2149 est mixé à DEMI-amplitude (marge pour le son DMA, évite la
     // saturation) ; ST/Mega ST : pleine amplitude. Cf. YM2149::setOutputScale.
     psg.setOutputScale(machineIsSte(machineType_) ? 0.5f : 1.0f);
+    // Filtre de sortie YM (cf. Hatari Sound_Update_Filters) : ST/Mega ST utilisent le
+    // passe-bas analogique (C10, LPF_STF) ; STE/Mega STE le PWM (front montant passe-tout).
+    psg.setStfLowPass(!machineIsSte(machineType_));
 
     installSchedulerCallbacks();
 }

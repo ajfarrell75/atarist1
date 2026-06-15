@@ -17,6 +17,15 @@ divergence ne casse un boot EmuTOS (ST/STE/MegaSTE) ni un boot disquette `.ST` n
 écarts restants sont surtout des cas-limites matériels, des tricks de démos « hardcore », et
 quelques branches spécifiques STE/STF non câblées.
 
+**Statut des corrections (passe du 2026-06-15).** Les écarts **bornés et vérifiables** ont été
+corrigés (✅ ci-dessous) : B1 (Blitter 65536), BL2 (rejet accès octet aux registres mot),
+S1 (filtre LPF STF câblé), BU1 (miroir PSG), MIDI (master reset sans purge + RDR persistant).
+Validés : `glue-selftest` 19/0, boots ST/STE/MegaSTE **pixel-identiques** à avant. Les chantiers
+**cycle-exacts** (V1-V3 vidéo, S2 FIFO son, D3 stall FIFO) restent **différés** : leur
+validation exige l'oracle Hatari headless, **absent de ce conteneur** (cf. CLAUDE.md). Les
+points « choix de comportement » (SC1 loopback SCC, D1/D2 WRITE TRACK STX, NeoST plus correct
+en HD/ED) et marginaux (`$FF8264`, D4 6250, F1, M1) sont laissés documentés pour décision/suivi.
+
 ---
 
 ## Bilan de fidélité par sous-système
@@ -38,18 +47,18 @@ quelques branches spécifiques STE/STF non câblées.
 
 | # | Sous-système | Divergence | Sévérité | NeoST | Hatari |
 |---|---|---|---|---|---|
-| B1 | Blitter | Compteur X/Y écrit à `0` non interprété comme **65536** (blit avorté au lieu de maximal) | **HAUTE** | `Blitter.cpp:99-101` | `Blitter_WordsPerLine/LinesPerBitblock_WriteWord` `blitter.c:1343-1366` |
+| B1 ✅ | Blitter | Compteur X/Y écrit à `0` non interprété comme **65536** (blit avorté au lieu de maximal) | **HAUTE** | `Blitter.cpp:99-101` | `Blitter_WordsPerLine/LinesPerBitblock_WriteWord` `blitter.c:1343-1366` |
 | V1 | Vidéo | **Branche STE de la Glue absente** (timings preload STE, `LEFT_OFF_2_STE`) | moyenne | `Shifter.cpp:670-839` | `Video_Update_Glue_State` (branche STE) `video.c:2442-2652` |
 | V2 | Vidéo | **Tricks par changement de résolution** non répliqués (overscan med-res, scroll hardware hi/med/lo) | moyenne | — (absent) | `Video_WriteToGlueRes` `video.c:1618-1820` |
 | V3 | Vidéo | Pas de **changement de géométrie mid-trame** (50↔60 Hz, RestartVideoCounter) | moyenne | `Shifter.cpp:160-163` (figé) | `video.c:2857-2876`, `Video_RestartVideoCounter` `video.c:4608` |
-| S1 | Son | **Filtre passe-bas STF (C10) jamais activé** → STF/Mega ST en PWM (code mort) | moyenne | `setStfLowPass` jamais appelé, `YM2149.hpp:165` | `Sound_Update_Filters` `sound.c:1946-1951` |
+| S1 ✅ | Son | **Filtre passe-bas STF (C10) jamais activé** → STF/Mega ST en PWM (code mort) | moyenne | `setStfLowPass` jamais appelé, `YM2149.hpp:165` | `Sound_Update_Filters` `sound.c:1946-1951` |
 | S2 | Son | **DMA STE sans FIFO 8 octets ni avance HBL** (réalignement mono→stéréo non modélisé) | moyenne | `DmaSound.cpp:288-301` | `DmaSnd_FIFO_*` / `DmaSnd_STE_HBL_Update` `dmaSnd.c:342-438,727-741` |
 | D1 | FDC/DMA | **WRITE TRACK STX réinterprété** en secteurs (CRC « nettoyé », statut neutralisé) | moyenne | `StxImage.cpp:254-300`, `Fdc.cpp:986-1008` | `FDC_WriteTrack_STX` (TODO, pas de relecture) `stx.c:2027-2134` |
 | D2 | FDC/DMA | **READ TRACK STX** renvoie la piste réécrite (conséquence de D1) | moyenne | `Fdc.cpp:1050,1062` | `FDC_ReadTrack_STX` `stx.c:1863` |
 | D3 | FDC/DMA | Flush FIFO↔RAM **ne stalle pas le CPU** (wait-state 32 cyc manquant) — cycle-exactness | moyenne *(à confirmer)* | `Fdc.cpp:667-702` (`fifoPush`/`fifoPull`) | `FDC_DMA_FIFO_Push/Pull` `fdc.c:1340,1396` |
 | M1 | MFP | Lignes GPIP **on-chip** (ACIA/FDC/blitter) lèvent l'IRQ **sans la machine de fronts AER/DDR** | moyenne | `Mfp.hpp:115-127` + appels `Ikbd/Fdc/Blitter` | `MFP_GPIP_Set_Line_Input` `mfp.c:1180,1142` |
-| BU1 | Bus | **Miroir matériel du PSG `$FF8804-$FF88FF`** non routé vers le YM2149 (lit `0xFF`, écritures ignorées) | moyenne | `Bus.cpp:531,623` | `IoMem_Init` shadow PSG `ioMem.c:386-393` |
-| BL2 | Blitter | Accès **OCTET** aux registres mot/long non rejetés | moyenne | `Blitter.cpp:50-61` | `Blitter_CheckAccess_Byte` `blitter.c:972-989` |
+| BU1 ✅ | Bus | **Miroir matériel du PSG `$FF8804-$FF88FF`** non routé vers le YM2149 (lit `0xFF`, écritures ignorées) | moyenne | `Bus.cpp:531,623` | `IoMem_Init` shadow PSG `ioMem.c:386-393` |
+| BL2 ✅ | Blitter | Accès **OCTET** aux registres mot/long non rejetés | moyenne | `Blitter.cpp:50-61` | `Blitter_CheckAccess_Byte` `blitter.c:972-989` |
 | SC1 | SCC | **TX émis immédiatement** (pas de cadence baud / Zero Count) ; `WR14` bit4 loopback peut-être actif au reset | moyenne *(à vérifier)* | `Scc.cpp:234,269-274`, reset `Scc.cpp:61` | `SCC_WriteDataReg` / `SCC_Process_TX` `scc.c:1655-1681,1986` |
 | D4 | FDC | Piste « standard » de repli **6268 o (NeoST) vs 6250 (Hatari)** | faible-moyenne | `Fdc.cpp:156` | `FDC_TRACK_BYTES_STANDARD` `stx.c:1418` |
 
@@ -134,9 +143,10 @@ byte-compatible, `.MSA`/`.DIM` : **conformes** (vérifiés ligne à ligne).
 ### Son (YM2149 + DMA STE) — `YM2149.cpp`, `DmaSound.cpp` ↔ `psg.c`, `dmaSnd.c`, `sound.c`
 Moteur 250 kHz, table DAC 32³, ET logique ton/bruit, LFSR, enveloppe, demi-amplitude STE,
 PWM+HPF, FIR anti-repliement DMA, Microwire/LMC (gains/panoramique), XSINT→GPIP7+Timer A,
-cold/warm reset : **conformes** (le doc `SOUND_HATARI_DIFF.md` décrit un état antérieur, périmé).
+cold/warm reset : **conformes** (l'ancien doc `SOUND_HATARI_DIFF.md`, périmé, a été **supprimé**).
 
-- **[S1 — moyenne]** Filtre passe-bas STF (C10) jamais câblé : `setStfLowPass()` défini mais
+- **[S1 — moyenne] ✅ corrigé** — `setStfLowPass(!STE)` est désormais appelé (`Machine.cpp`/`Machine.hpp`)
+  → ST/Mega ST utilisent `applyLpfStf250`. *Avant :* filtre câblé mais `setStfLowPass()` défini mais
   **jamais appelé** (`YM2149.hpp:165`) → STF/Mega ST en PWM au lieu de `LPF_STF`
   (`sound.c:1946-1951`). Code `applyLpfStf250` mort. *Impact : timbre YM plus dur sur ST.*
 - **[S2 — moyenne]** DMA STE sans FIFO 8 octets ni `DmaSnd_STE_HBL_Update` (`dmaSnd.c:342-438,727`) :
@@ -153,16 +163,15 @@ cold/warm reset : **conformes** (le doc `SOUND_HATARI_DIFF.md` décrit un état 
 **Très complet** : modèle TIE, master reset 6850, overrun/cadence série, fenêtre critique de
 reset, buffer borné 1024, pause `$13`, toutes les commandes `$07-$9A`, les 6 handlers 6301
 custom (Froggies, Transbeauce, Dragonnels, Chaos, Audio Sculpture), quirks reset, duplication
-feu/boutons : **conformes** (le doc `IKBD_HATARI_DIFF.md` est périmé).
+feu/boutons : **conformes** (l'ancien doc `IKBD_HATARI_DIFF.md`, périmé, a été **supprimé**).
 
 - **[basse]** Délai variable de « réflexion » des réponses (`$16`/`$1C`/`$0D`/`$21`/`$87-$9A`) non
   modélisé — seul l'espacement série inter-octets (~10240 cyc) est présent (`IKBD_Cmd_Return_Byte_Delay`).
 - **[basse]** Froggies : délai 7000 cyc sur l'octet `$83` non répliqué (espacement série joue le rôle).
 - **[basse]** Cadence autosend liée au VBL (pas au timer 150000 cyc) ; **taux monitoring `$17` ignoré**.
 - **[basse]** `IKBD_CheckForDoubleClicks` et joystick→barre d'espace absents (confort fast-forward, non matériel).
-- **[basse]** MIDI : master reset **purge** la file RX (`MidiAcia.cpp:50`) — trop agressif vs note Hatari.
-- **[basse]** MIDI : lecture RDR à vide rend `0x00` au lieu du dernier octet ; pas de bit OVRN ;
-  SR sans DCD/CTS/FE/PE (modèle réduit, sans impact sur ST). *L'ACIA **clavier** gère tout cela correctement.*
+- **[basse] ✅ corrigé** — MIDI : master reset ne **purge plus** la file RX (`MidiAcia.cpp`), aligné sur l'ACIA clavier et la note Hatari (« don't clear bytes in transit »).
+- **[basse] ✅ partiel** — MIDI : lecture RDR à vide rend désormais le **dernier octet** (`rdr_` persistant, comme le 6850). Restent non modélisés (sans impact ST) : bit OVRN, SR sans DCD/CTS/FE/PE (modèle réduit).
 
 ### Bus / mémoire / bus-error — `Bus.cpp` ↔ `ioMem*.c`, `memory.c`, `stMemory.c`
 MMU/banques ST vs STE (`ConfToBank` : `bank1=bank0` sur STE), aliasing RAS/CAS, whitelist
@@ -170,9 +179,9 @@ bus-error par modèle (octet par octet, patches MegaST/MegaSTE, SCU octets impai
 ROM, accès DMA (retour 0/écriture ignorée en zone fautive), protection superviseur `<0x800`,
 règle word/long : **conformes**.
 
-- **[BU1 — moyenne]** Miroir matériel du PSG `$FF8804-$FF88FF` non routé vers le YM2149 :
-  lit `0xFF` (`Glue::read8`), écritures ignorées, wait-states non appliqués (`Bus.cpp:531,623`)
-  vs shadow `ioMem.c:386-393`. *Impact : protections/effets via le miroir PSG.*
+- **[BU1 — moyenne] ✅ corrigé** — Miroir matériel du PSG `$FF8804-$FF88FF` désormais routé vers
+  le YM2149 (`Bus.cpp` : plage étendue à `+0x100`, décodage `addr&3`, wait-states inclus), comme
+  le shadow Hatari `ioMem.c:386-393`.
 - **[basse]** `$FF8264` STE (scroll fin) lu comme void `0xFF` au lieu du registre réel
   (`Video_HorScroll_Read_8264` `ioMemTabSTE.c:122`).
 - **[basse]** Distinction `IoMem_VoidRead`(0xFF)/`_00`(0x00) gérée seulement pour les registres
@@ -188,11 +197,15 @@ règle word/long : **conformes**.
 Logique de données **fidèle** (HOP/LOP 16 cas + tables `need_src`/`need_dst`, FXSR/NFSR, smudge,
 halftone, masques de bord, bug « 63 accès », IRQ GPIP3 fin de blit, arbitration MegaSTE/STE).
 
-- **[B1 — HAUTE]** Compteur X **ou** Y écrit à `0` non interprété comme **65536** :
+- **[B1 — HAUTE] ✅ corrigé** — Compteur X **ou** Y écrit à `0` désormais interprété comme **65536**
+  (`Blitter.cpp` : early-return dégénéré supprimé ; X via bouclage 16 bits, Y via `int 0→65536`).
+  *Description initiale :* compteur à `0` non interprété comme **65536** :
   `start()` traite `xc==0 || yc==0` comme blit dégénéré « rien à faire » et efface BUSY/HOG
   (`Blitter.cpp:99-101`). Hatari : `x_count==0 → 65536`, `y_count==0 → 65536`
   (`blitter.c:1343-1366`). *Impact : un blit chargeant 0 pour 65536 (légal) est avorté ; bug latent.*
-- **[BL2 — moyenne]** Accès **octet** aux registres mot/long non rejetés (`Blitter.cpp:50-61`)
+- **[BL2 — moyenne] ✅ corrigé** — `write8` ignore désormais un accès octet aux registres MOT
+  (`off < 0x3A`, `Blitter.cpp`) ; seuls HOP/LOP/contrôle/skew restent accessibles en octet.
+  *Avant :* accès **octet** aux registres mot/long non rejetés (`Blitter.cpp:50-61`)
   vs `Blitter_CheckAccess_Byte` (`blitter.c:972`) qui les ignore.
 - **[basse]** Pas de masquage `&0xFFFE` des incréments à l'écriture (`blitter.c:1229`).
 - **[basse]** Découpe non-hog seulement à la frontière de mot (dépasse le budget de ≤3 accès) vs
@@ -215,15 +228,16 @@ reset HW/canal, IRQ niveau 5 gatée par le SCU).
 
 ---
 
-## Documents internes à retirer / réécrire (périmés)
+## Documents internes périmés — ✅ SUPPRIMÉS
 
-Deux docs décrivent un état du code **antérieur** et listent comme « absents » des comportements
-aujourd'hui implémentés (faux positifs) — à remplacer par le présent document :
+Deux docs décrivaient un état du code **antérieur** et listaient comme « absents » des
+comportements aujourd'hui implémentés (faux positifs). Ils ont été **supprimés** et remplacés
+par le présent document :
 
-- **`docs/IKBD_HATARI_DIFF.md`** : TIE, master reset, `$08`/`$1A`/`$19`/`$20`/`$21`/`$87-$9A`,
-  pause `$13`, overrun, cadence série, buffer borné, quirks reset — **tous implémentés** désormais.
-- **`docs/SOUND_HATARI_DIFF.md`** : table DAC, ET ton/bruit, filtres, FIFO/anti-repliement,
-  start==end, cold/warm reset, reset port A, `Mfp::reset()` — **tous implémentés** désormais.
+- ~~`docs/IKBD_HATARI_DIFF.md`~~ : TIE, master reset, `$08`/`$1A`/`$19`/`$20`/`$21`/`$87-$9A`,
+  pause `$13`, overrun, cadence série, buffer borné, quirks reset — tous implémentés.
+- ~~`docs/SOUND_HATARI_DIFF.md`~~ : table DAC, ET ton/bruit, filtres, FIFO/anti-repliement,
+  start==end, cold/warm reset, reset port A, `Mfp::reset()` — tous implémentés.
 
 ## Cas où NeoST améliore Hatari (choix à préserver / documenter)
 
