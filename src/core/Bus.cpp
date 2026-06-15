@@ -330,7 +330,10 @@ void Bus::buildIoFault() const {
         for (uint32_t a : voidAddr) clear(a, 1);
         clear(0xFF8002, 0x0C);                   // $FF8002-$FF800D void
     } else if (machine == MachineType::MegaSte) {
-        clear(0xFF8E01, 0x0F);                   // SCU (comme TT)
+        // SCU MegaSTE (comme TT) : registres aux adresses IMPAIRES uniquement
+        // ($FF8E01/03/…/0F) — même câblage que le MFP plus bas ; les octets PAIRS
+        // $FF8E02-$FF8E0E ne sont pas décodés → bus error (cf. Hatari ioMem.c).
+        for (uint32_t a = 0xFF8E01; a <= 0xFF8E0F; a += 2) clear(a, 1);
         clear(0xFF8E20, 0x04);                   // cache/CPU control
         clear(0xFF8C80, 0x08);                   // SCC série Z85C30
         clear(0xFF860E, 0x02);                   // mode densité DD/HD

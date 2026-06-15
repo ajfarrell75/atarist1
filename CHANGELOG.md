@@ -310,6 +310,10 @@ taguées (0.1.x). Le restant est dans [`TODO.md`](TODO.md).
 
 ## Interruptions (MFP 68901)
 - IER/IPR/IMR/ISR + registre vecteur, modes auto et software-EOI.
+- **Bascule software→automatique (VR bit3 1→0) efface les in-service ISRA/ISRB**
+  (port `MFP_VectorReg_WriteByte`) : sinon un in-service resté posé bloquerait pour
+  toujours les IRQ de priorité inférieure. EmuTOS (mode software-EOI, bit3=1) inchangé ;
+  corrige les handlers/replays qui rebasculent en EOI automatique en cours de route.
 - **Modèle recharge/compteur des timers fidèle à Hatari** (port des
   `MFP_TimerXCtrl/Data_WriteByte` + `MFP_ReadTimer_AB/CD`) : écrire TxDR pendant qu'un
   délai court ne touche NI le compteur NI l'échéance (seule la RECHARGE change, appliquée
@@ -777,6 +781,9 @@ taguées (0.1.x). Le restant est dans [`TODO.md`](TODO.md).
   (`Bus::buildIoFault`, carte octet par octet) + zones void + fixups ST/MegaST/MegaSTE.
   Hors IO : `$400000-$F9FFFF` et `$FF0000-$FF7FFF` fautent. Règle word/long : faute
   seulement si TOUS les octets fautent (`busFaultN`). Suivi par les DEUX cœurs.
+- **SCU Mega STE décodé sur les adresses IMPAIRES uniquement** (`$FF8E01/03/…/0F`, même
+  câblage que le MFP) : les octets PAIRS `$FF8E02-$FF8E0E` ne sont pas décodés → bus error
+  en accès octet (cf. `ioMem.c`). Boot EmuTOS 256 Mega STE (qui programme le SCU) inchangé.
 - **Fenêtre ROM complète** (`Bus::romWindowSize`, port `memory.c` map_banks ROMmem) :
   une ROM à `$E00000` répond sur TOUT `$E00000-$EFFFFF` (1 Mo, 16 banques), pas
   seulement sur la taille du fichier — lire au-delà du TOS chargé renvoie 0 (tampon
