@@ -175,7 +175,8 @@ private:
     void createHostFileName(int drive, const std::string& gemName, std::string& out);
     bool addPathComponent(std::string& path, const std::string& origname, bool isDir);
     void addRemainingPath(const std::string& src, std::string& dstpath);
-    std::string matchHostDirEntry(const std::string& path, const std::string& name, bool pattern);
+    std::string matchHostDirEntry(const std::string& path, const std::string& name,
+                                  bool pattern, bool onlyInvalid = false);
 
     // ---- Opérations GEMDOS (un handler par appel, port 1:1) -------------------
     bool gemPterm0(uint32_t p);

@@ -106,7 +106,7 @@ private:
     static Ext    dToExt(double d);
     void          setCC(const Ext& v);     // FPSR N/Z/I/NAN d'après une valeur
     double        roundMode(double v) const;
-    static Ext    romConstant(int off);    // table ROM FMOVECR (bit-exacte)
+    static Ext    romConstant(int off, int roundMode, bool& inexact);  // table ROM FMOVECR (rndoff par mode)
 
     // ---- Softfloat 80 bits (mantisse 64 bits réelle) : helpers définis dans le .cpp ----
     sf::Status sfStatus() const;           // état d'arrondi softfloat depuis le FPCR
