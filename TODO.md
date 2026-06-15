@@ -242,8 +242,20 @@ l'écriture (ex. retrait bordure basse) tombe parfois à la bonne ligne, parfois
   write) le jeu lit la MÊME valeur 7dec0 dans NeoST et Hatari. Formule = port fidèle.
 ✗ Offset de datation des writes (kSyncWriteOffsetCyc) : le besoin empirique +40 contredit
   le modèle +2 → fudge, casserait Enchanted Land (calibré +16). Abandonné.
+✗ ALIGNEMENT BUS PAR-ACCÈS (RAM ou I/O) — FALSIFIÉ À L'ORACLE (2026-06-15). La source
+  Hatari (memory.c:1777-1798) aligne au créneau 4-cyc la RAM ST (CHIP16/wait_cpu_cycle) mais
+  PAS l'I/O ni la ROM (FAST16, « no bus wait for IO memory »/« from ROM », mesuré sur STF).
+  MAIS un chipWait8 par-accès (miroir 8 MHz du chipWait16 MegaSTE, gated NEOST_RAM_SLOT)
+  SUR-COMPTE : boucle de poll $FF8207 overscan_top pc=1736 = **32 cyc/itér dans NeoST flag-OFF
+  ET dans Hatari (oracle --trace video_addr)** ; flag-ON → 36 (+4 parasite). ⇒ le timing
+  d'instruction de Moira intègre DÉJÀ le bus ; le répliquer explicitement double-compte.
+  L'écart réel est CHIRURGICAL par boucle (LX $14ef6 22 vs 24 ; EL $ee78 18 vs 20 ; +2 sur
+  motifs NON slot-phasés), pas un alignement uniforme. NE PAS re-tenter l'alignement par-accès.
 La SEULE différence mesurée : le X (cycle dans la ligne) où le CPU échantillonne la valeur
 (figée en bordure droite) — NeoST L260 X=488 vs Hatari X=376. = phase CPU↔faisceau pure.
+↳ DIRECTION CONFIRMÉE (oracle 2026-06-15) : périodes de boucle = Hatari → l'offset ~28 cyc +
+  jitter vient de la PHASE D'ENTRÉE trame/boucle (prise d'IRQ VBL/Timer-B + entrée exception),
+  PAS du timing d'instruction ni du bus. Attaquer la latence IRQ/exception cycle-exacte d'abord.
 ```
 
 **FAIT (committé) :**
