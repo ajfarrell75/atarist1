@@ -44,6 +44,16 @@ namespace {
     // Hatari cpucycleunit = CYCLE_UNIT/2 dans clocks_timings.c/newcpu).
     int     g_cpuMul  = 1;   // 1 = 8 MHz, 2 = 16 MHz
     int64_t g_cpuBias = 0;   // biais de conversion (0 tant qu'on reste à 8 MHz)
+    // Synchro E-clock à l'entrée des IRQ auto-vectorisées (cf. NeostMoira::willInterrupt).
+    // OPT-IN (`NEOST_ECLOCK_ON`) : mécanisme FIDÈLE (Moira, 68000 générique, n'a pas la
+    // synchro E-clock Atari de l'IACK auto-vecteur), mais NON validable en jeu headless
+    // (écrans cassés EL/LX/Cuddly/SHO inatteignables sans navigation ; overscan_lr rendu
+    // à plat). Étalons pixel-exact INCHANGÉS dans les deux états. Risque résiduel de
+    // double-comptage avec les hacks de datation vidéo empiriques (mêmes que chipWait8) →
+    // resté gated tant que l'oracle in-game ne le tranche pas. À activer/calibrer lors de
+    // la refonte coordonnée (retrait des hacks + ajout des mécanismes fidèles ensemble).
+    bool    g_eclockOn    = []{ const char* s = std::getenv("NEOST_ECLOCK_ON"); return s && std::atoi(s) != 0; }();
+    int     g_eclockPhase = []{ const char* s = std::getenv("NEOST_ECLOCK_PHASE"); return s ? std::atoi(s) : 0; }();
     inline int64_t busOfClock(int64_t c) {
         return g_cpuMul == 1 ? c + g_cpuBias : (c + g_cpuBias) >> 1;
     }
@@ -179,6 +189,24 @@ public:
         setIPL(lvl);                       // broche (+ CHECK_IRQ si changement)
         reg.ipl = lvl;                     // déjà échantillonné : visible immédiatement
         flags |= moira::State::CHECK_IRQ;  // force le re-test même si la broche n'a pas bougé
+    }
+
+    // Synchro E-clock à l'ENTRÉE d'exception (port de Hatari M68000_WaitEClock,
+    // m68000.c:810 + iack_cycle newcpu.c:2971-2990) : les IRQ AUTO-VECTORISÉES HBL
+    // (niv 2) et VBL (niv 4) attendent le prochain front de l'E-clock (bus/10 =
+    // 0,8 MHz) avant de lire leur vecteur → 0..8 cyc selon la phase de l'horloge
+    // BUS au moment de l'IACK (motif déterministe {0,8,6,4,2}). Les IRQ VECTORISÉES
+    // MFP (niv 6) et SCC (niv 5) n'ont PAS d'attente E-clock (elles fournissent leur
+    // vecteur). C'est CE jitter d'entrée qui manquait à NeoST et déphasait le CPU
+    // vis-à-vis du faisceau trame à trame. willInterrupt est appelé AVANT
+    // l'empilement de trame (MoiraExceptions_cpp.h:508) → latence d'entrée PURE,
+    // le timing des instructions reste intact.
+    void willInterrupt(moira::u8 level) override {
+        if (!g_eclockOn || (level != 2 && level != 4)) return;    // opt-in ; auto-vecteurs HBL/VBL seulement
+        const int64_t busClk = busOfClock(static_cast<int64_t>(getClock())) + g_eclockPhase;
+        int wait = 10 - static_cast<int>(busClk % 10);           // cycles BUS jusqu'au prochain front E
+        if (wait == 10) wait = 0;                                // déjà aligné
+        if (wait) setClock(getClock() + static_cast<int64_t>(wait) * g_cpuMul);
     }
 
     moira::u16 readIrqUserVector(moira::u8 level) const override {
