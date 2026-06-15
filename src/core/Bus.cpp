@@ -528,7 +528,10 @@ void Bus::write32(uint32_t addr, uint32_t v) {
 uint8_t Bus::mmioRead8(uint32_t addr) {
     if (addr >= stmap::SHIFTER_BASE && addr <= stmap::SHIFTER_END && shifter)
         return shifter->read8(addr);
-    if (addr >= stmap::PSG_BASE && addr < stmap::PSG_BASE + 4 && psg) {
+    // Le YM2149 (2 registres : sélecteur $FF8800, donnée $FF8802) est MIROIRÉ sur tout
+    // $FF8800-$FF88FF (le matériel ne décode que A1, cf. Hatari IoMem_Init shadow PSG) :
+    // psg->read8 décode par (addr & 3), donc le miroir est géré tel quel.
+    if (addr >= stmap::PSG_BASE && addr < stmap::PSG_BASE + 0x100 && psg) {
         if (cpu) cpu->addPsgWaitCycles();     // wait state YM2149 (4 cyc / 1er accès instr.)
         return psg->read8(addr);
     }
@@ -620,7 +623,8 @@ void Bus::mmioWrite8(uint32_t addr, uint8_t v) {
         shifter->write8(addr, v);
         return;
     }
-    if (addr >= stmap::PSG_BASE && addr < stmap::PSG_BASE + 4 && psg) {
+    // Miroir matériel du YM2149 sur tout $FF8800-$FF88FF (cf. read8 / Hatari shadow PSG).
+    if (addr >= stmap::PSG_BASE && addr < stmap::PSG_BASE + 0x100 && psg) {
         if (cpu) cpu->addPsgWaitCycles();      // wait state YM2149 (4 cyc / 1er accès instr.)
         psg->write8(addr, v);
         return;

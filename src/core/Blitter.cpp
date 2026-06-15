@@ -49,6 +49,12 @@ uint8_t Blitter::read8(uint32_t addr) { return reg_[addr & 0x3F]; }
 
 void Blitter::write8(uint32_t addr, uint8_t v) {
     const uint32_t off = addr & 0x3F;
+    // Accès OCTET valides UNIQUEMENT pour les registres 8 bits HOP/LOP/contrôle/
+    // skew ($FF8A3A-$FF8A3D) ; un accès octet à un registre MOT (halftone RAM,
+    // adresses, incréments, endmasks, compteurs : $FF8A00-$FF8A39) est IGNORÉ,
+    // comme sur le vrai blitter (cf. Hatari Blitter_CheckAccess_Byte). Les
+    // écritures mot/long, elles, passent par write16/write32 (Bus).
+    if (off < 0x3A) return;
     reg_[off] = v;
     if (off == 0x3C) {
         // Écriture du registre contrôle ($FF8A3C) : BUSY (bit7) à 1 → démarre ou
@@ -93,12 +99,12 @@ void Blitter::write32(uint32_t addr, uint32_t v) {
 //  suite (le blitter prend le bus en premier), puis alternance via l'ordonnanceur.
 // -----------------------------------------------------------------------------
 void Blitter::start() {
-    // Transfert dégénéré (xCount==0 ou yCount==0) : « déjà complet » → efface
-    // BUSY (bit7) ET HOG (bit6), comme Hatari Blitter_Control_WriteByte. Pas
-    // d'IRQ GPIP3 ici (la ligne GPU_DONE ne bouge qu'à une vraie fin de blit).
+    // Compteur X/Y écrit à 0 = 65536 (cf. Hatari Blitter_WordsPerLine_WriteWord /
+    // Blitter_LinesPerBitblock_WriteWord), et NON un blit « vide » : il n'existe
+    // aucun cas dégénéré qui effacerait BUSY ici. Côté X, le bouclage 16 bits
+    // (fin de ligne à xCount==1) parcourt bien 65536 mots quand xReset_=0 ; côté
+    // Y, runSlice interprète un y_count de 0 comme 65536 lignes.
     const uint16_t xc = uint16_t((reg_[0x36] << 8) | reg_[0x37]);
-    const uint16_t yc = uint16_t((reg_[0x38] << 8) | reg_[0x39]);
-    if (xc == 0 || yc == 0) { reg_[0x3C] &= ~0xC0; midBlit_ = false; return; }
 
     if (!midBlit_) {                       // vrai départ (pas une reprise de pause)
         xReset_   = xc;                    // latch de la recharge X (Hatari x_count_reset)
@@ -222,7 +228,8 @@ bool Blitter::runSlice(int maxBusAccesses) {
     uint32_t       dstAddr = rd32(0x32) & 0xFFFFFE;
     const uint16_t xReset  = xReset_;
     uint16_t       xCount  = rd16(0x36);              // compteur VIVANT (relisible)
-    uint16_t       yCount  = rd16(0x38);
+    int            yCount  = rd16(0x38);              // y_count = 0 ⇒ 65536 lignes (Hatari)
+    if (yCount == 0) yCount = 65536;
     int            htLine  = ctrl & 0x0F;             // ligne halftone courante
 
     // Registre à décalage source (32 bits) + dernier mot ayant transité sur le BUS.
@@ -335,7 +342,7 @@ bool Blitter::runSlice(int maxBusAccesses) {
     wr16(0x24, uint16_t(srcAddr >> 16)); wr16(0x26, uint16_t(srcAddr));
     wr16(0x32, uint16_t(dstAddr >> 16)); wr16(0x34, uint16_t(dstAddr));
     wr16(0x36, xCount);
-    wr16(0x38, yCount);
+    wr16(0x38, uint16_t(yCount));          // 65536 → 0 (16 bits) : readback fidèle au matériel
 
     if (yCount > 0) {                       // tranche finie, transfert pas terminé
         reg_[0x3C] = uint8_t(0x80 | (ctrl & 0x70) | (htLine & 0x0F));   // BUSY maintenu

@@ -400,6 +400,10 @@ taguées (0.1.x). Le restant est dans [`TODO.md`](TODO.md).
 ## Clavier, souris, joystick (ACIA 6850 / IKBD HD6301)
 - ACIA clavier + file de scancodes ; mapping GLFW → scancodes ST. Ligne **GPIP4** câblée
   sur RDRF de l'ACIA. **Réponse de reset IKBD différée** (`$F1` ~502000 cyc après `$80,$01`).
+- **ACIA MIDI alignée sur le 6850** : le master reset ne **purge plus** la file de réception
+  (l'octet en transit est conservé, cf. note Hatari « don't clear bytes in transit ») et la lecture
+  du registre de données à vide renvoie le **dernier octet reçu** (RDR persistant) au lieu de `0x00`,
+  comme l'ACIA clavier. Cf. `docs/HATARI_DIVERGENCES.md` (MIDI).
 - **Analyseur de commandes multi-octets** (table de longueurs + buffer d'accumulation).
 - **Tampon de sortie IKBD borné à 1024 octets** (port `IKBD_OutputBuffer_CheckFreeCount`,
   SIZE_KEYBOARD_BUFFER) : chaque émetteur de paquet (souris/clavier/joystick) teste la place
@@ -650,6 +654,10 @@ taguées (0.1.x). Le restant est dans [`TODO.md`](TODO.md).
   (pointeur RAM contigu, traduction MMU) et `Bus::tosVersion`.
 
 ## Audio
+- **Filtre de sortie YM par machine câblé** (`Machine` → `YM2149::setStfLowPass(!STE)`) : ST/Mega ST
+  passent par le passe-bas analogique STF (`applyLpfStf250`, condensateur C10), STE/Mega STE par le
+  PWM (front montant passe-tout) — comme `Sound_Update_Filters` (sound.c). Le code STF existait mais
+  n'était jamais activé (toutes machines en PWM). Cf. `docs/HATARI_DIVERGENCES.md` (S1).
 - **Sortie STÉRÉO + panoramique LMC1992 + son DMA horodaté** (`src/audio/Audio.{cpp,hpp}`,
   `src/core/DmaSound.{cpp,hpp}`, `YM2149.{cpp,hpp}`) — la chaîne native passe en **2 canaux
   entrelacés** : le son DMA STE conserve sa vraie image **L/R** (au lieu d'être moyennée) et
@@ -782,6 +790,9 @@ taguées (0.1.x). Le restant est dans [`TODO.md`](TODO.md).
 - **Son PSG en WASM** : export `neost_audio_render` tiré par un `ScriptProcessorNode`.
 
 ## Bus error & cartouches de diagnostic
+- **Miroir matériel du YM2149** : tout `$FF8800-$FF88FF` (et plus seulement `$FF8800-03`) est routé
+  vers le PSG (décodage `addr & 3`, wait-states inclus), comme le shadow PSG d'Hatari (`ioMem.c`
+  `IoMem_Init`). Cf. `docs/HATARI_DIVERGENCES.md` (BU1).
 - **Modèle bus error = port fidèle Hatari** (`ioMem.c`+`ioMemTabST/STE.c`+`cpu/memory.c`) :
   tout `$FF8000-$FFFFFF` faute par défaut, whitelist des registres câblés par modèle
   (`Bus::buildIoFault`, carte octet par octet) + zones void + fixups ST/MegaST/MegaSTE.
@@ -850,6 +861,11 @@ taguées (0.1.x). Le restant est dans [`TODO.md`](TODO.md).
     `Blitter_ReadWord/WriteWord`) réinjecté par NFSR — et non plus la dernière source.
   - **2ᵉ passe du cas spécial NFSR** (`x_count==1`) après l'écriture + **persistance** du
     registre à décalage `buffer`/`bus_word` entre blits (remis à 0 au seul reset matériel).
+- **Blitter — compteur X/Y à 0 = 65536** (port `Blitter_WordsPerLine_WriteWord` /
+  `Blitter_LinesPerBitblock_WriteWord`) : un compteur de mots/lignes écrit à 0 lance un transfert
+  **maximal** (65536), et non un blit « vide » avorté. **Accès OCTET aux registres MOT ignoré**
+  (`off < 0x3A` ; seuls HOP/LOP/contrôle/skew sont accessibles en octet, cf.
+  `Blitter_CheckAccess_Byte`). Boots STE/Mega STE pixel-identiques. Cf. `docs/HATARI_DIVERGENCES.md` (B1, BL2).
 - **RTC RP5C15** (Mega ST/Mega STE, `$FFFC21-$FFFC3F`) : modèle paresseux déterministe
   (cycle CPU du dernier top de seconde + rattrapage), registre RESET, débordement BCD
   calendaire. Corrige « C0 No clock installed » + « C1 clock increment error ».
