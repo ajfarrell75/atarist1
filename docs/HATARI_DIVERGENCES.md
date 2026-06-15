@@ -322,6 +322,17 @@ GEMDOS HD, FPU MC68881, SCU**. Verdict : portages globalement **très fidèles**
 divergences ne casse le boot. Trouvailles actionnables ci-dessous (terrain neuf → vrais bugs).
 
 ### 🔴 Actionnables (par sévérité)
+
+> **Statut des corrections (2026-06-15).** ✅ **CORRIGÉS** (validés : build, `glue-selftest` 19/0,
+> boots ST/STE/MegaSTE pixel-identiques, **FPU test ROM 9/9**) : **SCU reset** (`Scu::reset(cold)`
+> + appels `Machine::reset/hardReset`) · **FPU propagation NaN** (renvoie l'opérande NaN quiété) ·
+> **FPU SNaN→SNAN** (flag softfloat `flag_signaling` distinct → `EXC_SNAN`) · **FPU masques
+> FPCR/FPSR** (`&0xFFF0` / `&0x0FFFFFF8`) · **FPU FSGLMUL** (entrées tronquées 24 bits) ·
+> **ACSI INQUIRY `buf[4]`** (valeur fixe 31) · **GEMDOS `.`/`..` en sous-répertoire** (paramètre
+> `subdir`). ⏸️ **DIFFÉRÉS** (complexes / plateforme / non vérifiables headless) : ACSI délai IRQ
+> post-transfert · GEMDOS `only_invalid` · GEMDOS recomposition Unicode macOS · FPU FSCALE ∞/NaN,
+> arrondi de précision FMOVE/FABS/FNEG, FMOVECR INEX2+arrondi, packed decimal bit-exact, octet AEXC.
+
 - **SCU — jamais réinitialisé au reset** *(HAUTE)* : il n'existe **aucun `Scu::reset()`**, et ni
   `Machine::reset()` ni `hardReset()` ne réinitialisent le SCU → `SysIntMask`/`VmeIntMask`/états
   **persistent** au reset doux (Hatari `SCU_Reset` les met à 0, GPR1=0x01, cold/warm). *Fix :

@@ -132,9 +132,15 @@ uint32_t errno2gemdos(int error, bool pathType) {
 }
 
 // Correspondance d'un nom TOS à un masque (fsfirst_match), port 1:1.
-bool fsfirst_match(const char* pat, const char* name) {
+// `subdir` : on est dans un SOUS-répertoire (pas la racine du lecteur) → « . » et
+// « .. » sont énumérés (cf. Hatari fsfirst_match) ; à la racine, tous les « .* » sont
+// ignorés (le root d'un lecteur GEMDOS n'a pas de « . »/« .. »).
+bool fsfirst_match(const char* pat, const char* name, bool subdir) {
     const char *dot, *p = pat, *n = name;
-    if (name[0] == '.') return false;                   // ignore .*
+    if (name[0] == '.') {
+        if (!subdir) return false;                       // racine : ignore tous les .*
+        if (strcmp(name, ".") && strcmp(name, "..")) return false;  // sous-rép : garde . et .. seulement
+    }
     dot = strrchr(name, '.');
     if (dot && p[0] == '*' && p[1] == 0) return false;  // '*' seul n'inclut pas d'extension
     while (*n) {
@@ -500,7 +506,7 @@ std::string GemdosHd::matchHostDirEntry(const std::string& path, const std::stri
     struct dirent* e;
     while ((e = readdir(dir))) {
         const char* dn = e->d_name;
-        if (pattern) { if (fsfirst_match(name.c_str(), dn)) { match = dn; break; } }
+        if (pattern) { if (fsfirst_match(name.c_str(), dn, /*subdir=*/false)) { match = dn; break; } }
         else          { if (strcasecmp(name.c_str(), dn) == 0) { match = dn; break; } }
     }
     closedir(dir);
@@ -1048,10 +1054,21 @@ bool GemdosHd::gemSFirst(uint32_t p) {
     closedir(dir);
     std::sort(all.begin(), all.end());
 
+    // Racine du lecteur ? (dirPath == dossier hôte de base) → on N'énumère PAS « . »/« .. » ;
+    // en sous-répertoire, on les inclut (comme TOS sur un lecteur GEMDOS HD).
+    bool subdir = true;
+    if (drive >= 2) {
+        auto strip = [](std::string s) {
+            while (!s.empty() && (s.back() == '/' || s.back() == '\\')) s.pop_back();
+            return s;
+        };
+        subdir = (strip(dirPath) != strip(emudrives_[drive - 2].hdEmuDir));
+    }
+
     dtas_[useidx].centry = 0;
     dtas_[useidx].found.clear();
     for (auto& dn : all)
-        if (fsfirst_match(mask.c_str(), dn.c_str())) dtas_[useidx].found.push_back(dn);
+        if (fsfirst_match(mask.c_str(), dn.c_str(), subdir)) dtas_[useidx].found.push_back(dn);
 
     if (dtas_[useidx].found.empty()) { setD0(cpu_, GEMDOS_EFILNF); return true; }
 
