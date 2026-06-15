@@ -156,6 +156,22 @@ float YM2149::applyPwm250(float x0) {
     return y;
 }
 
+// Passe-bas du condensateur C10 du STF (port fidèle de LowPassFilter, sound.c:453-466) :
+// contrairement au PWMaliasFilter (front montant passe-tout), il lisse LES DEUX fronts
+//  • montant  (x0 ≥ y0) : y = (3·(x0+x1) + 2·y0) / 8   (fc ≈ 7,6 kHz)
+//  • descendant         : y = (   (x0+x1) + 6·y0) / 8   (fc ≈ 2,0 kHz)
+// Supprime le contenu HF des ondes carrées qui, sinon, se replie au rééchantillonnage.
+float YM2149::applyLpfStf250(float x0) {
+    float y;
+    if (x0 >= lpf250Y0_)
+        y = (3.0f * (x0 + lpf250X1_) + 2.0f * lpf250Y0_) * 0.125f;
+    else
+        y = ((x0 + lpf250X1_) + 6.0f * lpf250Y0_) * 0.125f;
+    lpf250X1_ = x0;
+    lpf250Y0_ = y;
+    return y;
+}
+
 void YM2149::doSamples250(int n) {
     const auto& dac  = dacTable();
     const auto& envW = envWaves();
@@ -196,7 +212,7 @@ void YM2149::doSamples250(int n) {
         }
         tone3 &= uint16_t(env3 | vol3_);
 
-        float s = applyPwm250(dac[tone3]);
+        float s = useStfLpf_ ? applyLpfStf250(dac[tone3]) : applyPwm250(dac[tone3]);
         buf250_[pos] = s;
         pos = (pos + 1) & YM_BUF_250_MASK;
     }

@@ -37,17 +37,18 @@ Audio::~Audio() { stop(); }
 // transitoires (drums) passent et la musique continue se perd ; l'anneau mettrait des
 // dizaines de secondes à se remplir. Après tout underrun, on RÉ-AMORCE le coussin.
 void Audio::render(float* out, uint32_t frames, uint32_t /*sampleRate*/) {
+    const uint32_t need = frames * 2;                       // sortie stéréo entrelacée
     // Diagnostic : taille réelle des blocs demandés par le backend (3 premiers
     // callbacks). Un bloc PLUS GRAND que le coussin (primeSamples_) rendrait
     // l'underrun STRUCTUREL : chaque callback viderait l'anneau tout juste amorcé.
     static int dbg = 0;
-    if (dbg < 3) { std::fprintf(stderr, "[Audio] callback: %u frames (anneau %zu, coussin %u)\n",
+    if (dbg < 3) { std::fprintf(stderr, "[Audio] callback: %u frames (anneau %zu floats, coussin %u frames)\n",
                                 frames, ring_.available(), primeSamples_); ++dbg; }
     if (!primed_) {
-        if (ring_.available() < primeSamples_) { std::fill(out, out + frames, 0.0f); return; }
+        if (ring_.available() < size_t(primeSamples_) * 2) { std::fill(out, out + need, 0.0f); return; }
         primed_ = true;                                   // coussin atteint → on démarre la lecture
     }
-    if (ring_.pull(out, frames) < frames) {                 // underrun → on reconstitue le coussin
+    if (ring_.pull(out, need) < need) {                     // underrun → on reconstitue le coussin
         primed_ = false;
         underruns_.fetch_add(1, std::memory_order_relaxed); // diagnostic « son haché »
     }
@@ -58,7 +59,11 @@ void Audio::render(float* out, uint32_t frames, uint32_t /*sampleRate*/) {
 // (synthesizeFrame → modulations sous-buffer : digidrums, sync-buzzer), puis on mixe le
 // son DMA STE, le volume/tonalité LMC1992 et les bruits de lecteur, avant clamp.
 void Audio::produceFrame(int64_t frameCycles) {
-    if (!started_) { psg_.clearEvents(); return; }    // pas de périphérique : on draine juste les événements
+    if (!started_) {                                  // pas de périphérique : on draine juste les événements
+        psg_.clearEvents();
+        if (dma_) dma_->clearEvents();
+        return;
+    }
 
     // Nombre d'échantillons pour cette trame = durée émulée × fréquence de sortie, avec
     // report fractionnaire (le débit moyen colle EXACTEMENT au temps émulé). Puis
@@ -70,27 +75,40 @@ void Audio::produceFrame(int64_t frameCycles) {
     sampleCarry_ += double(frameCycles) * rate_ / CPU_HZ;
     int n = int(sampleCarry_);
     sampleCarry_ -= n;
-    int adj = (int(primeSamples_) - int(ring_.available())) / 256;   // P : erreur vers la cible
+    // ring_.available() est en FLOATS (entrelacé) → ÷2 pour comparer aux FRAMES.
+    int adj = (int(primeSamples_) - int(ring_.available() / 2)) / 256;   // P : erreur vers la cible
     if      (adj >  8) adj =  8;
     else if (adj < -8) adj = -8;
     n += adj;
-    if (n <= 0) return;
+    if (n <= 0) { psg_.clearEvents(); if (dma_) dma_->clearEvents(); return; }   // anneau saturé : on draine
 
-    if (int(scratch_.size()) < n) scratch_.assign(n, 0.0f);
-    float* out = scratch_.data();
+    // Tampons : YM mono (n), bruits lecteur mono (n), sortie stéréo entrelacée (2n).
+    if (int(ymScratch_.size())    < n)     ymScratch_.assign(n, 0.0f);
+    if (int(scratch_.size())      < 2 * n) scratch_.assign(2 * n, 0.0f);
+    float* ym = ymScratch_.data();
+    float* st = scratch_.data();
 
-    psg_.synthesizeFrame(out, uint32_t(n), rate_, frameCycles);   // (1) PSG horodaté → out (écrase)
+    psg_.synthesizeFrame(ym, uint32_t(n), rate_, frameCycles);   // (1) PSG horodaté → ym mono (écrase)
     if (dma_) {
-        dma_->mix(out, uint32_t(n), rate_);               // (2) son DMA STE → additionné (mixing LMC géré dedans)
-        const float g = dma_->masterGain();               // (3) volume maître LMC1992
-        if (g != 1.0f) for (int i = 0; i < n; ++i) out[i] *= g;
-        dma_->applyTone(out, uint32_t(n), rate_);          // (4) basses/aigus LMC1992
+        dma_->mixStereo(st, ym, uint32_t(n), rate_, frameCycles);   // (2) DMA STE horodaté → stéréo L/R
+        const float gL = dma_->gainLeft(), gR = dma_->gainRight();   // (3) volume maître × G/D (panoramique)
+        if (gL != 1.0f || gR != 1.0f)
+            for (int i = 0; i < n; ++i) { st[2 * i] *= gL; st[2 * i + 1] *= gR; }
+        dma_->applyToneStereo(st, uint32_t(n), rate_);     // (4) basses/aigus LMC1992 (L/R indépendants)
+    } else {
+        for (int i = 0; i < n; ++i) { st[2 * i] = ym[i]; st[2 * i + 1] = ym[i]; }   // ST sans DMA : YM centré
     }
-    if (drive_) drive_->mix(out, uint32_t(n));            // (5) bruits lecteur (hors LMC1992)
-    for (int i = 0; i < n; ++i)                            // garde-fou anti-saturation
-        out[i] = std::max(-1.0f, std::min(1.0f, out[i]));
+    if (drive_) {                                          // (5) bruits lecteur (mono, hors LMC1992) → centrés
+        if (int(driveScratch_.size()) < n) driveScratch_.assign(n, 0.0f);
+        float* dv = driveScratch_.data();
+        std::fill(dv, dv + n, 0.0f);
+        drive_->mix(dv, uint32_t(n));
+        for (int i = 0; i < n; ++i) { st[2 * i] += dv[i]; st[2 * i + 1] += dv[i]; }
+    }
+    for (int i = 0; i < 2 * n; ++i)                        // garde-fou anti-saturation
+        st[i] = std::max(-1.0f, std::min(1.0f, st[i]));
 
-    ring_.push(out, size_t(n));                           // → thread audio (render). Surplus jeté si plein.
+    ring_.push(st, size_t(2 * n));                        // → thread audio (render). Surplus jeté si plein.
 
     // Diagnostic : un underrun isolé peut arriver (chargement, déplacement de fenêtre) ;
     // RÉPÉTÉ, c'est que la boucle d'émulation ne tient pas la cadence des trames (son
@@ -117,7 +135,7 @@ bool Audio::start() {
     auto* dev = new ma_device();
     ma_device_config cfg = ma_device_config_init(ma_device_type_playback);
     cfg.playback.format   = ma_format_f32;   // on synthétise en float
-    cfg.playback.channels = 1;               // PSG mono (+ bruits lecteur mono)
+    cfg.playback.channels = 2;               // STÉRÉO : son DMA STE L/R + panoramique LMC1992
     cfg.sampleRate        = 48000;
     cfg.dataCallback      = dataCallback;
     cfg.pUserData         = this;            // le callback reçoit l'instance Audio
@@ -140,7 +158,7 @@ bool Audio::start() {
     ring_.clear();
     primed_      = false;                     // ré-amorçage propre
     sampleCarry_ = 0.0;
-    std::printf("[Audio] miniaudio démarré : %u Hz mono, latence ~%u ms (modèle push : PSG horodaté + DMA + lecteur)\n",
+    std::printf("[Audio] miniaudio démarré : %u Hz STÉRÉO, latence ~%u ms (modèle push : PSG horodaté + DMA L/R + lecteur)\n",
                 rate_, primeSamples_ * 1000 / rate_);
     std::fflush(stdout);   // visible même si l'appli est tuée (diagnostic)
     return true;
