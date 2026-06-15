@@ -270,6 +270,14 @@ void Machine::onHbl() {
 }
 
 void Machine::onVbl() {
+    // DIAG beam-sync : dépassement (carry) du service VBL vs cycle théorique 64/68
+    // = équivalent du pending_cyc d'Hatari (video_vbl). Compare la phase CPU↔faisceau.
+    static const bool vblTrace = std::getenv("NEOST_VBL_TRACE") != nullptr;
+    if (vblTrace) {
+        const int64_t evt = frameStart_ + (machineIsSte(machineType_) ? 68 : 64);
+        std::fprintf(stderr, "[vbl] over=%lld now=%lld\n",
+                     static_cast<long long>(sched.now() - evt), static_cast<long long>(sched.now()));
+    }
     cpu.raiseVbl();   // interruption trame (niveau 4) — une fois par trame
     // Tic VBL de l'IKBD (horloge interne $1B/$1C + report joystick auto). La durée
     // d'une trame en µs se déduit de la géométrie COURANTE : (lignes × cycles/ligne)
