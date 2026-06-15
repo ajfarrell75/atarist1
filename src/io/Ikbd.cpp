@@ -589,18 +589,17 @@ void Ikbd::sendAutoJoysticks(uint8_t joy0, uint8_t joy1) {
     // (cf. Hatari IKBD_SendAutoJoysticks) : $FE = joystick 0 / souris, $FF =
     // joystick 1. L'état reçu a déjà subi la duplication feu/boutons (onVbl).
     if (joy0 != prevJoy0_) {
-        pushRx(0xFE);
-        pushRx(joy0);
-        prevJoy0_ = joy0;
+        if (rxFree(2)) { pushRx(0xFE); pushRx(joy0); }   // paquet $FE entier ou rien
+        prevJoy0_ = joy0;                     // PrevJoyData mis à jour quoi qu'il arrive (Hatari)
     }
     if (joy1 != prevJoy1_) {
-        pushRx(0xFF);
-        pushRx(joy1);
+        if (rxFree(2)) { pushRx(0xFF); pushRx(joy1); }   // paquet $FF entier ou rien
         prevJoy1_ = joy1;
     }
 }
 
 void Ikbd::sendAutoJoysticksMonitoring(uint8_t joy0, uint8_t joy1) {
+    if (!rxFree(2)) return;                   // paquet monitoring (2 octets) entier ou rien
     pushRx(uint8_t(((joy0 & 0x80) >> 6) | ((joy1 & 0x80) >> 7)));
     pushRx(uint8_t(((joy0 & 0x0F) << 4) | (joy1 & 0x0F)));
 }
@@ -695,6 +694,7 @@ void Ikbd::keyEvent(uint8_t scancode, bool pressed) {
     // En ExeMode, le scan clavier normal est supprimé (cf. Hatari IKBD_Cmd_Return_Byte) :
     // seul le handler custom peut émettre, via customReadDispatch().
     if (exeMode_) { customReadDispatch(); return; }
+    if (!rxFree(1)) return;                   // scancode (1 octet) jeté si tampon plein
     pushRx(pressed ? scancode : uint8_t(scancode | 0x80));
 }
 
@@ -729,9 +729,13 @@ void Ikbd::sendRelMousePacket(int dx, int dy, bool left, bool right) {
             (by < 0 && by <= -yThreshold_) || (by > 0 && by >= yThreshold_);
         const bool btnChanged = (bOldL_ != left) || (bOldR_ != right);
         if (!overThr && !btnChanged) break;
-        pushRx(uint8_t(0xF8 | (right ? 0x01 : 0) | (left ? 0x02 : 0)));
-        pushRx(static_cast<uint8_t>(static_cast<int8_t>(bx)));
-        pushRx(static_cast<uint8_t>(static_cast<int8_t>(by * yAxis_)));
+        // paquet $F8 (3 octets) entier ou rien ; tampon plein → ce paquet
+        // est jeté mais le Δ reste décrémenté (comme Hatari).
+        if (rxFree(3)) {
+            pushRx(uint8_t(0xF8 | (right ? 0x01 : 0) | (left ? 0x02 : 0)));
+            pushRx(static_cast<uint8_t>(static_cast<int8_t>(bx)));
+            pushRx(static_cast<uint8_t>(static_cast<int8_t>(by * yAxis_)));
+        }
         dX -= bx;
         dY -= by;
         bOldL_ = left;
@@ -744,6 +748,8 @@ void Ikbd::sendOnMouseAction(bool left, bool right) {
     if (mouseAction_ & 0x4) {
         // Boutons remontés comme scancodes touche (0x74 gauche / 0x75 droit ;
         // |0x80 au relâchement). Les bits 0/1 sont ignorés quand le bit2 est mis.
+        // place pour les DEUX scancodes possibles, sinon on jette le tout.
+        if (!rxFree(2)) return;
         if (left && !bOldL_)       pushRx(0x74);
         else if (!left && bOldL_)  pushRx(0x74 | 0x80);
         if (right && !bOldR_)      pushRx(0x75);
@@ -776,6 +782,7 @@ void Ikbd::sendAbsMousePos(bool curL, bool curR) {
     const uint8_t prev = prevAbsButtons_;
     prevAbsButtons_ = buttons;
     buttons &= uint8_t(~prev);
+    if (!rxFree(6)) return;                   // paquet $F7 (6 octets) entier ou rien
     pushRx(0xF7);
     pushRx(buttons);
     pushRx(uint8_t(absX_ >> 8));
@@ -792,18 +799,22 @@ void Ikbd::sendCursorKeys(int dx, int dy, bool left, bool right) {
     int dX = dx, dY = dy;
     for (int i = 0; i < 10 &&
                     (dX != 0 || dY != 0 || bOldL_ != left || bOldR_ != right); ++i) {
+        // chaque paire de flèches (2 octets) est gardée séparément ; tampon
+        // plein → la paire est jetée mais le Δ est quand même décrémenté (Hatari).
         if (dX != 0) {
-            if (dX <= -keyCodeDeltaX_) { pushRx(75); pushRx(75 | 0x80); dX += keyCodeDeltaX_; }  // gauche
-            if (dX >=  keyCodeDeltaX_) { pushRx(77); pushRx(77 | 0x80); dX -= keyCodeDeltaX_; }  // droite
+            if (dX <= -keyCodeDeltaX_) { if (rxFree(2)) { pushRx(75); pushRx(75 | 0x80); } dX += keyCodeDeltaX_; }  // gauche
+            if (dX >=  keyCodeDeltaX_) { if (rxFree(2)) { pushRx(77); pushRx(77 | 0x80); } dX -= keyCodeDeltaX_; }  // droite
         }
         if (dY != 0) {
-            if (dY <= -keyCodeDeltaY_) { pushRx(72); pushRx(72 | 0x80); dY += keyCodeDeltaY_; }  // haut
-            if (dY >=  keyCodeDeltaY_) { pushRx(80); pushRx(80 | 0x80); dY -= keyCodeDeltaY_; }  // bas
+            if (dY <= -keyCodeDeltaY_) { if (rxFree(2)) { pushRx(72); pushRx(72 | 0x80); } dY += keyCodeDeltaY_; }  // haut
+            if (dY >=  keyCodeDeltaY_) { if (rxFree(2)) { pushRx(80); pushRx(80 | 0x80); } dY -= keyCodeDeltaY_; }  // bas
         }
-        if (left && !bOldL_)       pushRx(0x74);
-        else if (!left && bOldL_)  pushRx(0x74 | 0x80);
-        if (right && !bOldR_)      pushRx(0x75);
-        else if (!right && bOldR_) pushRx(0x75 | 0x80);
+        if (rxFree(2)) {                      // paire de boutons gardée à part
+            if (left && !bOldL_)       pushRx(0x74);
+            else if (!left && bOldL_)  pushRx(0x74 | 0x80);
+            if (right && !bOldR_)      pushRx(0x75);
+            else if (!right && bOldR_) pushRx(0x75 | 0x80);
+        }
         bOldL_ = left;
         bOldR_ = right;
     }
@@ -843,8 +854,24 @@ void Ikbd::updateClock(int64_t vblMicro) {
     }
 }
 
+bool Ikbd::rxFree(std::size_t n) const {
+    // Place pour `n` octets dans le tampon de sortie de l'IKBD (port de Hatari
+    // IKBD_OutputBuffer_CheckFreeCount). Capacité = SIZE_KEYBOARD_BUFFER = 1024 ;
+    // on compte AUSSI l'octet déjà livré au RDR (il occupe encore la liaison). Un
+    // émetteur de paquet teste la taille TOTALE avant son 1er pushRx → entier ou rien.
+    constexpr std::size_t kBufSize = 1024;
+    const std::size_t used = rx_.size() + (rdrf_ ? 1u : 0u);
+    return kBufSize - used >= n;
+}
+
 void Ikbd::pushRx(uint8_t b) {
     if (duringResetCriticalTime_)
+        return;
+    // Tampon de sortie borné à 1024 octets (SIZE_KEYBOARD_BUFFER du vrai HD6301) :
+    // plein → l'octet est jeté. Les émetteurs de paquets testent rxFree() avant le
+    // 1er octet (jamais de demi-paquet) ; ce garde ne fait que borner les pushRx
+    // isolés (réponses de commande, quirks) — robustesse mémoire absolue.
+    if (rx_.size() + (rdrf_ ? 1u : 0u) >= 1024)
         return;
     rx_.push_back(b);
     armRx();
