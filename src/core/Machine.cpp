@@ -108,6 +108,18 @@ Machine::Machine(std::size_t ramBytes, CpuCore cpuCore, MachineType machine)
     psg.setPortBSink([this](uint8_t b) {
         if (mfp.loopback()) { mfp.setBusyLine((b & 0x80) != 0); cpu.updateIpl(); }
     });
+    // Imprimante Centronics : sur chaque FRONT de strobe (R14 bit5), l'octet du port B
+    // est capturé dans le fichier imprimante (si activé via setPrinterFile) et la ligne
+    // BUSY (GPIP0) est assertée bas — port fidèle de psg.c:388-390 (Printer_TransferByteTo
+    // + MFP_GPIP_Set_Line_Input LINE0 LOW). Sans fichier imprimante : no-op (le défaut, donc
+    // comportement inchangé tant que l'imprimante n'est pas explicitement activée).
+    psg.setPrinterSink([this](uint8_t b) {
+        if (!printerFile_) return;
+        std::fputc(b, printerFile_);
+        std::fflush(printerFile_);
+        mfp.setBusyLine(true);
+        cpu.updateIpl();
+    });
     ikbd.setJoystickProbe([this](uint8_t& joy0, uint8_t& joy1) {
         // Hors fixture de bouclage : conserver l'état hôte déjà amorcé par l'IKBD
         // (manette USB / émulation clavier posée par le frontend via setJoystick).
