@@ -403,7 +403,9 @@ taguées (0.1.x). Le restant est dans [`TODO.md`](TODO.md).
 - **ACIA MIDI alignée sur le 6850** : le master reset ne **purge plus** la file de réception
   (l'octet en transit est conservé, cf. note Hatari « don't clear bytes in transit ») et la lecture
   du registre de données à vide renvoie le **dernier octet reçu** (RDR persistant) au lieu de `0x00`,
-  comme l'ACIA clavier. Cf. `docs/HATARI_DIVERGENCES.md` (MIDI).
+  comme l'ACIA clavier. Cf. `docs/HATARI_DIVERGENCES.md` (MIDI). **Bit RDRF distinct de la file** :
+  le master reset efface RDRF (SR → TDRE seul, cf. `ACIA_MasterReset`) **sans purger** la file →
+  l'octet reste relisible et RDRF retombe correctement (cf. §2ᵉ passe, M-MIDI).
 - **Analyseur de commandes multi-octets** (table de longueurs + buffer d'accumulation).
 - **Tampon de sortie IKBD borné à 1024 octets** (port `IKBD_OutputBuffer_CheckFreeCount`,
   SIZE_KEYBOARD_BUFFER) : chaque émetteur de paquet (souris/clavier/joystick) teste la place
@@ -866,6 +868,14 @@ taguées (0.1.x). Le restant est dans [`TODO.md`](TODO.md).
   **maximal** (65536), et non un blit « vide » avorté. **Accès OCTET aux registres MOT ignoré**
   (`off < 0x3A` ; seuls HOP/LOP/contrôle/skew sont accessibles en octet, cf.
   `Blitter_CheckAccess_Byte`). Boots STE/Mega STE pixel-identiques. Cf. `docs/HATARI_DIVERGENCES.md` (B1, BL2).
+- **Blitter — ligne GPU_DONE (GPIP3) ré-armée à chaque blit** (port `Blitter_Start`) : la ligne est
+  dé-assertée (« pas fini ») au (re)démarrage de chaque blit et rabaissée à l'achèvement, au lieu de
+  rester « fini » dès le 1ᵉʳ blit → un programme qui scrute GPIP3 / son IRQ pour la fin de blit voit
+  désormais un front correct à chaque blit. Cf. `docs/HATARI_DIVERGENCES.md` §2ᵉ passe (BL-GPIP3).
+- **Bus — largeur d'accès `ioAccessWidth_` non fuitée par le blitter** : `write16`/`write32`
+  restaurent la largeur sauvegardée avant leur `return` de la branche blitter ; sans ça, après le
+  1ᵉʳ blit mot, les bus-errors d'accès **octet** ($FF9200/lightpen/FDC) restaient désarmées en
+  permanence. Cf. `docs/HATARI_DIVERGENCES.md` §2ᵉ passe (BUS-LEAK).
 - **RTC RP5C15** (Mega ST/Mega STE, `$FFFC21-$FFFC3F`) : modèle paresseux déterministe
   (cycle CPU du dernier top de seconde + rattrapage), registre RESET, débordement BCD
   calendaire. Corrige « C0 No clock installed » + « C1 clock increment error ».

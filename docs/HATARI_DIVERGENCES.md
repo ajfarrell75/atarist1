@@ -265,19 +265,15 @@ divergence HAUTE**, les 4 correctifs sont CORRECTS. La passe remonte surtout des
 - ✅ **BU1** (miroir PSG) — CORRECT : décodage `addr&3`, plage close à `$FF88FF` (pas de chevauchement `$FF8900`), wait-states inclus.
 - ✅ **MIDI** (no-purge + RDR persistant) — CORRECT, mais effet de bord **M-MIDI** (ci-dessous).
 
-### 🔴 Nouveaux — BUGS NETS actionnables
-- **BUS-LEAK** *(basse-moyenne, bug réel)* — `Bus::write16`/`write32` branche blitter font `return`
-  **sans restaurer `ioAccessWidth_ = saved`** (`Bus.cpp:504-521`). Après le 1ᵉʳ blit mot (donc dès
-  le 1ᵉʳ blit VDI d'EmuTOS sur Mega ST/STE/MegaSTE), `ioAccessWidth_` reste ≥2 en permanence →
-  les bus-errors d'accès **octet** de `$FF9200` (joypad), du lightpen `$FF9220-23` et du FDC
-  `$FF8604-07` (`==1` requis) sont **désarmées définitivement**. *Fix : restaurer `ioAccessWidth_`
-  avant le `return`, ou poser la largeur dans read8/write8.*
-- **BL-GPIP3** *(moyenne, bug réel)* — la ligne GPU_DONE (GPIP3) du blitter est posée à
-  `finishTransfer` (`Blitter.cpp:194`) mais **jamais ré-armée haute** ; Hatari la met haute au
-  démarrage (`blitter.c:895`) et basse à l'achèvement (`:916`). → après le 1ᵉʳ blit, GPIP3 lit
-  « fini » en permanence ; les blits suivants ne génèrent **plus de front** → un programme qui
-  *scrute* GPIP3 / son IRQ pour la fin de blit voit un faux positif dès le 2ᵉ blit. *Fix : ligne
-  haute au (re)démarrage dans `start()`.* (Lié à M1.)
+### 🔴 Nouveaux — BUGS NETS actionnables — ✅ CORRIGÉS
+- **BUS-LEAK ✅ corrigé** *(basse-moyenne, bug réel)* — `Bus::write16`/`write32` branche blitter
+  faisaient `return` **sans restaurer `ioAccessWidth_`** → après le 1ᵉʳ blit mot, les bus-errors
+  d'accès **octet** ($FF9200/lightpen/FDC) restaient désarmées en permanence. **Fix :**
+  `ioAccessWidth_ = saved` ajouté avant le `return` des deux branches blitter (`Bus.cpp`).
+- **BL-GPIP3 ✅ corrigé** *(moyenne, bug réel)* — la ligne GPU_DONE (GPIP3) était posée à
+  `finishTransfer` mais **jamais ré-armée haute** → blit-done « toujours vrai » dès le 2ᵉ blit.
+  **Fix :** `start()` dé-asserte la ligne (`setBlitterLine(false)`) au (re)démarrage de chaque blit
+  (`Blitter.cpp`), comme Hatari `Blitter_Start` (blitter.c:895) ; `finishTransfer` la rabaisse.
 
 ### 🟠 Nouveaux — MOYENNES (fidélité)
 - **MFP** — pas de dispatch des timers échus (`MFP_UpdateTimers`) avant lecture des registres
@@ -288,9 +284,10 @@ divergence HAUTE**, les 4 correctifs sont CORRECTS. La passe remonte surtout des
 - **FDC** — changement lecteur/face « **pull** » (`refreshDriveSide` au prochain accès registre)
   au lieu de « push » (immédiat à l'écriture PSG, `FDC_SetDriveSide`) → index ré-ancré tard ; un
   flip de face en plein transfert utilise l'ancienne face. Boot `.ST`/TOS non affectés.
-- **MIDI M-MIDI** — l'ACIA MIDI fusionne RDRF avec `!rx_.empty()` (pas de `rdrf_` séparé). Comme le
-  correctif préserve `rx_` au master reset, le SR montre **RDRF=1 juste après reset** si un octet
-  restait (Hatari efface RDRF, garde l'octet dans RDR). *Fix complet : `rdrf_` MIDI distinct.*
+- **MIDI M-MIDI ✅ corrigé** — l'ACIA MIDI a désormais un `rdrf_` **distinct** de `!rx_.empty()`
+  (`MidiAcia.cpp/.hpp`) : le master reset l'efface (SR → TDRE seul, conforme `ACIA_MasterReset`)
+  **sans purger la file** → l'octet reste relisible via RDR, et RDRF retombe correctement. Le
+  bouclage « M MIDI » reste fonctionnel (file vide au reset du diagnostic).
 
 ### 🟡 Nouveaux — BASSES (cas-limites/cosmétiques)
 - **Vidéo** : filtre « écriture redondante » absent (freq/res rejouées même inchangées) ; `$FF8260`
@@ -307,6 +304,11 @@ divergence HAUTE**, les 4 correctifs sont CORRECTS. La passe remonte surtout des
   simple ; `$FF8A3E/3F`→0x00 au lieu de 0xFF ; trou MMU STF bank0=128K/bank1=2048K non émulé.
 
 ### Conclusion
-La 1ʳᵉ passe avait capté l'essentiel ; les 4 correctifs sont validés. Priorités issues de la 2ᵉ
-passe : **BUS-LEAK** (bug clair, fix trivial) et **BL-GPIP3** (bug fonctionnel pour le polling de
-fin de blit), puis S3 (gain LMC) et les moyennes de fidélité. Le reste est cas-limite.
+La 1ʳᵉ passe avait capté l'essentiel ; les 4 correctifs sont validés. **Corrigés à la 2ᵉ passe
+(✅)** : BUS-LEAK, BL-GPIP3, MIDI M-MIDI — validés `glue-selftest` 19/0 + boots ST/STE/MegaSTE
+pixel-identiques. **Différés** (validation impossible ici) : **S3 gain LMC** (audio non vérifiable
+sans WAV oracle ni écoute — risque de déséquilibre/clip), **FDC drive/side push** (ré-ancrage
+d'index du modèle rotationnel — risque de régresser des chargements disque sans oracle byte-exact),
+**MFP UpdateTimers** (dispatch d'événements avant lecture IPR = risque de réentrance), et les basses
+**cycle-exactes** (vidéo) / niche (bus N2-N5, blitter BL-R/BL-MST). À reprendre quand l'oracle
+Hatari headless (`extern/hatari/build/src/hatari`) est bâti.
