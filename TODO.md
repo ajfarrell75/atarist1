@@ -276,6 +276,16 @@ La SEULE différence mesurée : le X (cycle dans la ligne) où le CPU échantill
   validation HBL-raster (et donc E-clock). À corriger pour débloquer un étalon HBL fonctionnel.
   Diag dispo : NEOST_VBL_TRACE (dépassement service VBL = pending_cyc Hatari ; NeoST ~7.8 vs 4.3),
   tools/beamsync_diff.sh (diff cycle NeoST↔oracle IRQ/VBL/compteur).
+✅ SYMPTÔME EL EN JEU ATTEINT + ROOT-CAUSÉ (2026-06-16). Recette navigation headless :
+  `--frames 13000 --joy-at 3100 0x80` (fire maintenu dès le logo Thalion ~3000 → jeu rocheux ~13000).
+  L'image SCRAMBLE plein écran trame à trame : les trames avec impulsions **hi-res per-ligne** (res=02/
+  res=00) scramblent, celles à `frq` seul sont propres. PROUVÉ que ce N'EST PAS le timing CPU↔faisceau :
+  E-clock neutre (OFF==ON), VC_WAIT/VC_OFF sans effet, SYNC_OFF ne bascule que scramble↔hang noir
+  (aucune valeur propre). **VRAIE CAUSE = V2 (changement de résolution)** : la machine Glue ne gère pas
+  les res-switch hi-res intra-ligne (ouverture bordures G/D fullscreen) → état de ligne faux → scramble +
+  calibration qui ne converge jamais. ⇒ Le « beam-sync » EL/Cuddly est en fait le chantier **V2**
+  (`Video_WriteToGlueRes`, overscan med-res, rendu mixte hi/med/lo), PAS l'IRQ/bus/E-clock. La phase
+  CPU↔faisceau est, elle, cycle-accurate (détection des tricks OK, périodes = Hatari, pas de décalage).
 ```
 
 **FAIT (committé) :**
