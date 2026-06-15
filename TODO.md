@@ -286,6 +286,17 @@ La SEULE différence mesurée : le X (cycle dans la ligne) où le CPU échantill
   calibration qui ne converge jamais. ⇒ Le « beam-sync » EL/Cuddly est en fait le chantier **V2**
   (`Video_WriteToGlueRes`, overscan med-res, rendu mixte hi/med/lo), PAS l'IRQ/bus/E-clock. La phase
   CPU↔faisceau est, elle, cycle-accurate (détection des tricks OK, périodes = Hatari, pas de décalage).
+  ⚠ MÉCANISME PRÉCIS (vérifié source, 2026-06-16) : EL en jeu écrit ses impulsions hi-res à cyc
+  **8-16 (PRÉCOCES)** → branches Hatari `video.c:2246/2268/2288` qui posent `HBL_Pos=220` +
+  `nCyclesPerLine_new=224` → **la ligne est RACCOURCIE à 224 cyc** (HBL reprogrammé, `Video_AddInterruptHBL`
+  video.c:2849). NeoST garde le HBL à `cpl-4` FIXE chaque ligne (grille trame figée) → phase du
+  gestionnaire fullscreen NE DÉRIVE PAS → scramble. **Le port exige une LONGUEUR DE LIGNE VARIABLE**
+  (224/512 par ligne, vs grille 512 fixe actuelle) + couplage live Shifter↔Scheduler pour
+  reprogrammer le HBL — CHANGEMENT ARCHITECTURAL du modèle de timing trame (Machine::runFrame/
+  scheduleFrameEvents), RISQUÉ (le HBL ancre top/bottom + Timer-B). ⚠ **overscan_lr N'EST PAS un
+  oracle valide** (calibré POUR NeoST, `make_overscan_lr.py` PAD1=12 → blanc plein VOULU = ce que
+  NeoST produit ; les bandes Hatari = PAD NeoST inadaptés à Hatari). Valider le port sur EL en jeu
+  (recette `--frames 13000 --joy-at 3100 0x80`) + oracle, PAS overscan_lr. Workflow diag wf_3184aab0-31c.
 ```
 
 **FAIT (committé) :**
