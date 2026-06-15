@@ -10,9 +10,9 @@
 //  Modèle fonctionnel fidèle : jeu complet WR0-15 / RR0-15 par canal (pointeur de
 //  registre via WR0), commandes WR0/WR9, reset matériel/canal, RR0 (statut TX/RX +
 //  lignes), RR2 (vecteur + statut), RR3 (IP), sources d'interruption, IRQ niv5 +
-//  IACK vectorisé. TX immédiat (puits série + bouclage local WR14 bit4) ; RX par
-//  injection externe. Non porté (faible valeur ici) : timers du BRG (Zero Count),
-//  baudrate temporisé, série hôte réelle.
+//  IACK vectorisé. TX immédiat (puits série, ou bouclage local interne si WR14 bit4=1,
+//  cf. note dans serialWriteByte) ; RX par injection externe. Non porté (faible valeur
+//  ici) : timers du BRG (Zero Count), baudrate temporisé, série hôte réelle.
 //
 //  (c) 2026 VERHILLE Arnaud — projet NeoST.
 // =============================================================================

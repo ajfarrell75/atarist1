@@ -231,7 +231,14 @@ void Scc::copyTdrTsr(int c, uint8_t tdr) {
 
 void Scc::serialWriteByte(int c, uint8_t v) {
     if (trace_) std::fprintf(stderr, "[scc] TX %c: $%02X\n", 'A' + c, v);
-    if (chn_[c].WR[14] & 0x10) { receiveByte(c, v); return; }   // bouclage local (WR14 bit4)
+    // Bouclage local interne (WR14 bit4 = Local Loopback, Zilog Z85C30 §WR14) : TxD est
+    // relié à RxD à l'intérieur de la puce et la ligne externe reste au repos → on réinjecte
+    // l'octet en RX et on NE l'émet PAS sur le puits. CHOIX DÉLIBÉRÉ « plus correct qu'Hatari » :
+    // Hatari NE modélise PAS ce bit (SCC_Process_TX émet toujours), alors que le datasheet le
+    // définit. ⚠ Le reset matériel met WR14=$30 (bit4=1) : un programme qui transmet SANS
+    // reconfigurer WR14 boucle donc sur lui-même — inoffensif en pratique car tout pilote
+    // série/LAN réécrit WR14 (réglage du BRG, bit4=0) avant d'émettre. NE PAS « corriger ».
+    if (chn_[c].WR[14] & 0x10) { receiveByte(c, v); return; }
     if (sink_) sink_(c, v);
 }
 
