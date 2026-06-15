@@ -312,3 +312,66 @@ d'index du modèle rotationnel — risque de régresser des chargements disque s
 **MFP UpdateTimers** (dispatch d'événements avant lecture IPR = risque de réentrance), et les basses
 **cycle-exactes** (vidéo) / niche (bus N2-N5, blitter BL-R/BL-MST). À reprendre quand l'oracle
 Hatari headless (`extern/hatari/build/src/hatari`) est bâti.
+
+---
+
+## 🧩 3ᵉ passe — sous-systèmes périphériques (2026-06-15, workflow 5 agents)
+
+Couvre les sous-systèmes **NON audités** par les passes 1-2 : **RTC RP5C15, ACSI/DMA HD,
+GEMDOS HD, FPU MC68881, SCU**. Verdict : portages globalement **très fidèles** ; aucune des
+divergences ne casse le boot. Trouvailles actionnables ci-dessous (terrain neuf → vrais bugs).
+
+### 🔴 Actionnables (par sévérité)
+- **SCU — jamais réinitialisé au reset** *(HAUTE)* : il n'existe **aucun `Scu::reset()`**, et ni
+  `Machine::reset()` ni `hardReset()` ne réinitialisent le SCU → `SysIntMask`/`VmeIntMask`/états
+  **persistent** au reset doux (Hatari `SCU_Reset` les met à 0, GPR1=0x01, cold/warm). *Fix :
+  ajouter `Scu::reset(bool cold)` et l'appeler.* (`Scu.hpp`, `Machine.hpp:73-92`)
+- **FPU — propagation des NaN perd le payload** *(ÉLEVÉE)* : `propagateNaN` renvoie toujours le
+  default-NaN `0x7FFF8000…` au lieu de l'opérande NaN quiété (signe+payload). (`SoftFloatX80.hpp:59-66`
+  vs `softfloat-specialize.h:321-365`)
+- **FPU — SNaN lève OPERR au lieu de SNAN** *(ÉLEVÉE)* : le bit `EXC_SNAN`/vecteur 54 n'est jamais
+  posé ; une entrée SNaN replie `flag_invalid → OPERR` (vecteur 52). (`SoftFloatX80.hpp:60,64`,
+  `Fpu.cpp:119` vs `fpp.c:88-89`)
+- **ACSI — INQUIRY `buf[4]` erroné** *(MOYENNE)* : NeoST écrase l'« Additional Length » avec
+  `count()-5` (variable) au lieu de la valeur fixe **31** d'Hatari → pilote HD lisant ce champ
+  trompé. (`Acsi.cpp:134` vs `hdc.c:218-246`)
+- **ACSI — pas de délai d'IRQ post-transfert** *(MOYENNE)* : IRQ HDC levée immédiatement ; Hatari
+  la diffère de `ACSI_TRANSFER_MIN_CYCLES=1000` (requis par « Idris OS »). (`Fdc.cpp:2043` vs `hdc.c:1162`)
+- **GEMDOS — `Fsfirst`/`Fsnext` n'énumèrent jamais `.`/`..` en sous-répertoire** *(MOYENNE)* :
+  `fsfirst_match` rejette tout nom en `.` sans paramètre `subdir` → gestionnaires de fichiers /
+  archiveurs récursifs affectés. (`GemdosHd.cpp:135-149` vs `gemdos.c:433-484`)
+- **GEMDOS — matching « caractères invalides » (`only_invalid`) absent** *(MOYENNE)* : un `?` issu
+  d'un `+` matche n'importe quel caractère → risque d'ouvrir/écraser le mauvais fichier hôte (rare).
+  (`GemdosHd.cpp:517-547` vs `gemdos.c:1374-1396`)
+- **GEMDOS — recomposition Unicode NFD→NFC macOS non portée** *(MOYENNE, macOS)* :
+  `Str_DecomposedToPrecomposedUtf8` absent → fichiers accentués introuvables sur macOS (nul sur Linux).
+- **FPU — divers** *(MOYENNE)* : FSGLMUL ne tronque pas les entrées à 24 bits ; FSCALE par ∞/NaN =
+  UB + résultat faux (pas d'OPERR) ; FMOVE/FABS/FNEG n'arrondissent pas selon la précision FPCR ;
+  FMOVECR n'arme pas INEX2 ni l'ajustement d'arrondi RZ/RM/RP ; packed decimal via libc hôte
+  (drapeaux INEX1/OPERR du format P absents) ; octet AEXC accumulé (UNFL non conditionné par INEX2).
+- **FPU — masques FPCR/FPSR non appliqués** *(BASSE)* : bits réservés (FPCR 3-0, FPSR 0-2/28-31)
+  conservés au lieu d'être forcés à 0 (`fpcr_mask=0xfff0`, `fpsr_mask=0x0ffffff8`). (`Fpu.cpp:467-469`)
+
+### Choix intentionnels / NeoST plus correct que Hatari (NE PAS « corriger »)
+- **RTC temps émulé** (cycles) vs `localtime()` hôte — déterminisme headless (assumé).
+- **RTC Mega-only** — le RP5C15 n'existe **physiquement que sur Mega** (NeoST > simplification Hatari
+  qui l'expose sur toute ST/STE).
+- **RTC registre reset / bissextile** — NeoST suit le datasheet RP5C15.
+- **SCU encodage bit IRQ1 logicielle** — NeoST utilise le bit 1 (correct) vs bit 0 chez Hatari.
+- **FPU transcendantes** en double hôte ; socket vide → « not found » — corrects/hors périmètre.
+
+### Confirmé FIDÈLE 1:1 (scruté cette passe)
+ACSI : réception paquet (A1/ICD/LUN), **toutes** les commandes SCSI (TUR/REQ SENSE/RD-WR 6-10/
+INQUIRY/READ CAPACITY/MODE SENSE 00-04-3f/SEEK/FORMAT/SHIP/REPORT LUNS), MODE SENSE géométrie,
+table de partitions DOS+Atari, incrément/masque adresse DMA, court-circuit FIFO. · GEMDOS : table
+d'interception (23 opcodes), Fopen/Fcreate/Fread/Fwrite/Fseek/Fattrib/Fdatime/Frename/Fdelete,
+Dcreate/Ddelete/Dsetpath/Dgetpath/Dfree, handles+aliasing, Pexec/LoadAndReloc/reloc, conversion
+chemins, codes d'erreur, multi-partitions C..Z. · FPU : cœur softfloat add/sub/mul/div/sqrt/rem/mod/
+roundToInt, vecteurs d'exception+priorités, prédicats FBcc/FScc, **valeurs** des constantes FMOVECR,
+FCMP/FTST, octet quotient FMOD/FREM, FSAVE/FRESTORE (idle $1F18/null). · RTC : 16 registres, bank
+AM/PM, mode, adresses impaires, init heure hôte. · SCU : gating IRQ (masques Sys/Vme), MFP6/SCC5 sur
+VmeIntMask, niveaux 4/2/1, IRQ niveau 5 vectorisée, décodage adresses impaires.
+
+**Bilan 3ᵉ passe** : 1 HAUTE (SCU reset) + 2 ÉLEVÉES FPU (NaN/SNaN) + ~8 moyennes — tous **bornés et
+corrigeables sans oracle** (logique pure, pas de cycle-exactness). C'est la passe la plus productive
+en correctifs actionnables, justifiant le ciblage des sous-systèmes vierges plutôt qu'un re-balayage.

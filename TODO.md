@@ -143,6 +143,25 @@ Hatari ; déjà notés « FAIT » en §FDC, à NE PAS « corriger » vers Hatari
 Détail + basses cycle-exactes/niche (vidéo, FDC, son, blitter BL-R/BL-MST, bus N2-N5) →
 `docs/HATARI_DIVERGENCES.md` §2ᵉ passe.
 
+### 3ᵉ passe (2026-06-15) — sous-systèmes périphériques (RTC/ACSI/GEMDOS/FPU/SCU, jamais audités)
+Tous **bornés et corrigeables sans oracle** (logique pure). Cf. `docs/HATARI_DIVERGENCES.md` §3ᵉ passe.
+```
+• [HAUTE] SCU jamais réinitialisé : aucun Scu::reset(), ni Machine::reset()/hardReset() ne le
+  resettent → SysIntMask/VmeIntMask persistent au reset doux. Fix : Scu::reset(bool cold) + appel.
+• [ÉLEVÉE] FPU — propagation NaN perd le payload (renvoie default-NaN au lieu de l'opérande quiété).
+• [ÉLEVÉE] FPU — SNaN lève OPERR (vecteur 52) au lieu de SNAN (bit14/vecteur 54).
+• [MOYENNE] ACSI — INQUIRY buf[4] = count()-5 au lieu de 31 fixe (Acsi.cpp:134).
+• [MOYENNE] ACSI — pas de délai d'IRQ post-transfert (ACSI_TRANSFER_MIN_CYCLES=1000 ; « Idris OS »).
+• [MOYENNE] GEMDOS — Fsfirst/Fsnext sans « . »/« .. » en sous-répertoire (param subdir absent).
+• [MOYENNE] GEMDOS — matching only_invalid absent (un '?' issu de '+' matche tout → mauvais fichier).
+• [MOYENNE] GEMDOS — recomposition Unicode NFD→NFC macOS non portée (fichiers accentués, macOS only).
+• [MOYENNE] FPU — FSGLMUL pas de troncature 24b ; FSCALE ∞/NaN UB ; FMOVE/FABS/FNEG pas d'arrondi
+  précision ; FMOVECR pas d'INEX2 ni d'ajustement RZ/RM/RP ; packed decimal via libc ; octet AEXC.
+• [BASSE] FPU — masques FPCR/FPSR (0xfff0 / 0x0ffffff8) non appliqués aux bits réservés.
+```
+Intentionnels / NeoST plus correct (NE PAS corriger) : RTC temps émulé (déterminisme headless),
+RTC Mega-only (RP5C15 physiquement Mega), SCU encodage bit IRQ1, transcendantes FPU host.
+
 ---
 
 ## 🎯 Précision cycle
