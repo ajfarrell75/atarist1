@@ -330,10 +330,12 @@ divergences ne casse le boot. Trouvailles actionnables ci-dessous (terrain neuf 
 > FPCR/FPSR** (`&0xFFF0` / `&0x0FFFFFF8`) · **FPU FSGLMUL** (entrées tronquées 24 bits) ·
 > **ACSI INQUIRY `buf[4]`** (valeur fixe 31) · **GEMDOS `.`/`..` en sous-répertoire** (paramètre
 > `subdir`) · **FPU FSCALE ∞/NaN** (NaN→propagation, ∞→OPERR+NaN, plus d'UB) · **FPU octet AEXC**
-> (UNFL accumulé seulement si INEXACT ; INEX sur INEX2 OU OVFL). ⏸️ **DIFFÉRÉS** (table de données /
-> plateforme / plomberie / non vérifiables headless) : ACSI délai IRQ post-transfert · GEMDOS
-> `only_invalid` · GEMDOS recomposition Unicode macOS · FPU arrondi de précision FMOVE/FABS/FNEG
-> (plomberie softfloat) · FPU FMOVECR INEX2+arrondi (table rndoff) · FPU packed decimal bit-exact.
+> (UNFL accumulé seulement si INEXACT ; INEX sur INEX2 OU OVFL) · **GEMDOS `only_invalid`** (passe
+> « caractères invalides » séparée de la troncature, `?` ne matche que les caractères invalides) ·
+> **FPU FMOVECR INEX2+arrondi** (table `fpp_cr` portée : `inex` + `rnd[4]` par mode RN/RZ/RM/RP,
+> arme `EXC_INEX2`/`AEXC_INEX`). ⏸️ **DIFFÉRÉS** (table de données / plateforme / plomberie / non
+> vérifiables headless) : ACSI délai IRQ post-transfert · GEMDOS recomposition Unicode macOS · FPU
+> arrondi de précision FMOVE/FABS/FNEG (plomberie softfloat) · FPU packed decimal bit-exact.
 
 - **SCU — jamais réinitialisé au reset** *(HAUTE)* : il n'existe **aucun `Scu::reset()`**, et ni
   `Machine::reset()` ni `hardReset()` ne réinitialisent le SCU → `SysIntMask`/`VmeIntMask`/états
@@ -353,16 +355,20 @@ divergences ne casse le boot. Trouvailles actionnables ci-dessous (terrain neuf 
 - **GEMDOS — `Fsfirst`/`Fsnext` n'énumèrent jamais `.`/`..` en sous-répertoire** *(MOYENNE)* :
   `fsfirst_match` rejette tout nom en `.` sans paramètre `subdir` → gestionnaires de fichiers /
   archiveurs récursifs affectés. (`GemdosHd.cpp:135-149` vs `gemdos.c:433-484`)
-- **GEMDOS — matching « caractères invalides » (`only_invalid`) absent** *(MOYENNE)* : un `?` issu
-  d'un `+` matche n'importe quel caractère → risque d'ouvrir/écraser le mauvais fichier hôte (rare).
-  (`GemdosHd.cpp:517-547` vs `gemdos.c:1374-1396`)
+- ✅ **GEMDOS — matching « caractères invalides » (`only_invalid`)** *(MOYENNE)* : `addPathComponent`
+  fait désormais DEUX passes distinctes comme Hatari — troncature (`*`, `onlyInvalid=false`) puis
+  caractères invalides (`+`→`?`, `onlyInvalid=true`) — et `fsfirst_match` ne fait matcher un `?`
+  « invalide » qu'un caractère réellement invalide pour Atari (`filenameInvalidChar`, port de
+  `Str_Filename_Invalid_Char`). Plus de risque d'ouvrir le mauvais fichier hôte.
+  (`GemdosHd.cpp` vs `gemdos.c:1374-1396`)
 - **GEMDOS — recomposition Unicode NFD→NFC macOS non portée** *(MOYENNE, macOS)* :
   `Str_DecomposedToPrecomposedUtf8` absent → fichiers accentués introuvables sur macOS (nul sur Linux).
 - **FPU — divers** *(MOYENNE)* : ✅ FSGLMUL tronque désormais ses entrées à 24 bits ; ✅ FSCALE par
   ∞/NaN gère NaN→propagation / ∞→OPERR (plus d'UB) ; ✅ octet AEXC corrigé (UNFL conditionné par
-  INEXACT, INEX sur OVFL). ⏸️ Reste : FMOVE/FABS/FNEG n'arrondissent pas selon la précision FPCR ;
-  FMOVECR n'arme pas INEX2 ni l'ajustement d'arrondi RZ/RM/RP ; packed decimal via libc hôte
-  (drapeaux INEX1/OPERR du format P absents) ; octet AEXC accumulé (UNFL non conditionné par INEX2).
+  INEXACT, INEX sur OVFL) ; ✅ FMOVECR arme INEX2/AEXC_INEX et applique l'ajustement d'arrondi
+  RN/RZ/RM/RP (table `fpp_cr` `inex`+`rnd[4]` portée). ⏸️ Reste : FMOVE/FABS/FNEG n'arrondissent
+  pas selon la précision FPCR ; packed decimal via libc hôte (drapeaux INEX1/OPERR du format P
+  absents) ; octet AEXC accumulé (UNFL non conditionné par INEX2).
 - **FPU — masques FPCR/FPSR non appliqués** *(BASSE)* : bits réservés (FPCR 3-0, FPSR 0-2/28-31)
   conservés au lieu d'être forcés à 0 (`fpcr_mask=0xfff0`, `fpsr_mask=0x0ffffff8`). (`Fpu.cpp:467-469`)
 

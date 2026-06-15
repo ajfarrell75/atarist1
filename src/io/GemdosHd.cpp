@@ -131,11 +131,30 @@ uint32_t errno2gemdos(int error, bool pathType) {
     }
 }
 
+// Un caractère du nom HÔTE est-il INVALIDE pour un nom de fichier Atari ? (port de
+// Str_Filename_Invalid_Char) : contrôle, * : ? \ / et les points « en trop » (sauf « .. »).
+bool filenameInvalidChar(const char* name, int offset) {
+    char c = name[offset];
+    if (c < 32 || c == 127) return true;
+    switch (c) {
+        case '*': case ':': case '?': case '\\': case '/': return true;
+        case '.': {
+            const char* dot = strrchr(name, '.');
+            if (dot != name + offset && std::strlen(name) > 2) return true;
+            return false;
+        }
+        default: return false;
+    }
+}
+
 // Correspondance d'un nom TOS à un masque (fsfirst_match), port 1:1.
 // `subdir` : on est dans un SOUS-répertoire (pas la racine du lecteur) → « . » et
 // « .. » sont énumérés (cf. Hatari fsfirst_match) ; à la racine, tous les « .* » sont
 // ignorés (le root d'un lecteur GEMDOS n'a pas de « . »/« .. »).
-bool fsfirst_match(const char* pat, const char* name, bool subdir) {
+// `onlyInvalid` : un « ? » ne matche QUE les caractères invalides pour un nom Atari
+// (cf. Str_Filename_Invalid_Char) — utilisé pour la passe « caractère invalide » de
+// addPathComponent, distincte de la passe troncature.
+bool fsfirst_match(const char* pat, const char* name, bool subdir, bool onlyInvalid = false) {
     const char *dot, *p = pat, *n = name;
     if (name[0] == '.') {
         if (!subdir) return false;                       // racine : ignore tous les .*
@@ -145,7 +164,7 @@ bool fsfirst_match(const char* pat, const char* name, bool subdir) {
     if (dot && p[0] == '*' && p[1] == 0) return false;  // '*' seul n'inclut pas d'extension
     while (*n) {
         if (*p == '*') { while (*n && n != dot) n++; p++; }
-        else if (*p == '?' && *n) { n++; p++; }
+        else if (*p == '?' && *n && (!onlyInvalid || filenameInvalidChar(name, int(n - name)))) { n++; p++; }
         else if (toupper((unsigned char)*p++) != toupper((unsigned char)*n++)) return false;
     }
     while (p[0] == '*') p++;
@@ -499,14 +518,15 @@ int GemdosHd::fileName2HardDriveID(const std::string& name) {
 // -----------------------------------------------------------------------------
 //  Conversion d'un nom GEMDOS en chemin hôte (port de gemdos.c)
 // -----------------------------------------------------------------------------
-std::string GemdosHd::matchHostDirEntry(const std::string& path, const std::string& name, bool pattern) {
+std::string GemdosHd::matchHostDirEntry(const std::string& path, const std::string& name,
+                                        bool pattern, bool onlyInvalid) {
     DIR* dir = opendir(path.c_str());
     if (!dir) return "";
     std::string match;
     struct dirent* e;
     while ((e = readdir(dir))) {
         const char* dn = e->d_name;
-        if (pattern) { if (fsfirst_match(name.c_str(), dn, /*subdir=*/false)) { match = dn; break; } }
+        if (pattern) { if (fsfirst_match(name.c_str(), dn, /*subdir=*/false, onlyInvalid)) { match = dn; break; } }
         else          { if (strcasecmp(name.c_str(), dn) == 0) { match = dn; break; } }
     }
     closedir(dir);
@@ -535,20 +555,31 @@ bool GemdosHd::addPathComponent(std::string& path, const std::string& origname, 
         if (!match.empty()) { path += match; return true; }
     }
 
-    bool modified = false;
-    for (char& c : name) if (c == INVALID_CHAR) { c = '?'; modified = true; }
-
+    // Passe TRONCATURE : un nom Atari a pu être tronqué à 8+3 — on transforme
+    // « emulated.too » → « emulated*.too* » etc. et on retente avec un masque.
+    // Les '+' (INVALID_CHAR) restent LITTÉRAUX ici (cf. Hatari add_path_component).
+    bool usePattern = false;
     int dot = 0;
     while (dot < (int)name.size() && name[dot] != '.') dot++;
-    if (namelen - dot > 3) { name.push_back('*'); namelen++; modified = true; }
+    if (namelen - dot > 3) { name.push_back('*'); namelen++; usePattern = true; }
     if (namelen > 8 && (int)name.size() > 8 && name[8] == '.') {
-        name.insert(name.begin() + 8, '*'); namelen++; modified = true;
+        name.insert(name.begin() + 8, '*'); namelen++; usePattern = true;
     } else if (namelen == 8 && dot >= (int)name.size()) {
-        name.push_back('*'); namelen++; modified = true;
+        name.push_back('*'); namelen++; usePattern = true;
     }
 
-    if (modified) {
-        match = matchHostDirEntry(path, name, true);
+    if (usePattern) {
+        match = matchHostDirEntry(path, name, /*pattern=*/true, /*onlyInvalid=*/false);
+        if (!match.empty()) { path += match; return true; }
+    }
+
+    // Passe CARACTÈRES INVALIDES : les '+' deviennent des '?' qui ne matchent QUE
+    // des caractères réellement invalides côté hôte (onlyInvalid), pour ne pas
+    // attraper un nom valide par accident (cf. Hatari, passe séparée de la troncature).
+    usePattern = false;
+    for (char& c : name) if (c == INVALID_CHAR) { c = '?'; usePattern = true; }
+    if (usePattern) {
+        match = matchHostDirEntry(path, name, /*pattern=*/true, /*onlyInvalid=*/true);
         if (!match.empty()) { path += match; return true; }
     }
 

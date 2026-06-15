@@ -658,6 +658,13 @@ taguées (0.1.x). Le restant est dans [`TODO.md`](TODO.md).
   `fsfirst_match`, port Hatari) : à la racine d'un lecteur GEMDOS les `.*` restent ignorés, mais
   dans un sous-dossier `.`/`..` sont retournés comme sur TOS réel → gestionnaires de fichiers /
   archiveurs récursifs corrects.
+- **Résolution de chemin — passe « caractères invalides » (`only_invalid`)** (`addPathComponent`,
+  port `add_path_component`/`Str_Filename_Invalid_Char`) : la conversion nom GEMDOS → chemin hôte
+  fait désormais DEUX passes de masque séparées comme Hatari — d'abord la **troncature** 8+3
+  (`*`, les `+` restant littéraux), puis les **caractères invalides** (`+`→`?`). Dans cette
+  seconde passe un `?` ne matche QUE des caractères réellement invalides pour un nom Atari
+  (`filenameInvalidChar`), au lieu de n'importe quel caractère → plus de risque d'ouvrir/écraser
+  le mauvais fichier hôte quand un nom contient `: ? \ /` ou des points en trop.
 
 ## Audio
 - **Filtre de sortie YM par machine câblé** (`Machine` → `YM2149::setStfLowPass(!STE)`) : ST/Mega ST
@@ -1052,6 +1059,11 @@ taguées (0.1.x). Le restant est dans [`TODO.md`](TODO.md).
   d'UB (`int(trunc(±inf/nan))`) — NaN → propagation, ±∞ → OPERR + NaN par défaut (cf.
   `floatx80_scale`) ; l'**octet AEXC accumulé** suit `updateaccrued`/`fpsr_make_status` (UNFL
   accumulé seulement si INEXACT l'est aussi ; INEX accumulé sur INEX2 OU OVFL). Mini-ROM FPU 9/9 inchangé.
+- **MC68881 — FMOVECR arrondi par mode + INEX2** (`romConstant`, port table `fpp_cr` de `fpp.c`) :
+  les constantes ROM portent désormais une colonne `inex` (la valeur est-elle inexacte en étendu ?)
+  et `rnd[4]` (ajustement des 32 bits de poids faible par mode d'arrondi RN/RZ/RM/RP). `FMOVECR`
+  applique l'ajustement selon le mode FPCR, puis arme `EXC_INEX2`/`AEXC_INEX` et déclenche la
+  livraison d'exception si activée — au lieu de toujours renvoyer la valeur RN sans drapeau. Mini-ROM FPU 9/9.
 - **Joypads STE COMPLETS + DIP MegaSTE** (`$FF9200-$FF9223`, port fidèle `joy.c` /
   `ioMemTabSTE.c`) : le stub « valeurs au repos » est remplacé par un vrai module
   `StePads` (`src/io/StePads.hpp`, membre `Bus::stePads`) — **multiplexage** par le
