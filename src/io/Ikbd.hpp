@@ -14,6 +14,7 @@
 // =============================================================================
 #pragma once
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <functional>
@@ -90,6 +91,10 @@ public:
 
 private:
     void pushRx(uint8_t b);                  // empile un octet IKBD → CPU (livraison cadencée)
+    // Place pour `n` octets dans le tampon de sortie IKBD borné à 1024 (port de
+    // Hatari IKBD_OutputBuffer_CheckFreeCount) : un émetteur de PAQUET teste la
+    // taille TOTALE avant son 1er pushRx → paquet entier ou rien (jamais coupé).
+    bool rxFree(std::size_t n) const;
     void armRx();                            // date la livraison du prochain octet de la file
     void raiseIfReady();                     // tire GPIP4 si une cause d'IRQ ACIA est active
     bool irqActive() const;                  // cause d'IRQ : RX (RDRF & RIE) OU TX (TIE & TDRE)

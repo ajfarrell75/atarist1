@@ -401,6 +401,12 @@ taguées (0.1.x). Le restant est dans [`TODO.md`](TODO.md).
 - ACIA clavier + file de scancodes ; mapping GLFW → scancodes ST. Ligne **GPIP4** câblée
   sur RDRF de l'ACIA. **Réponse de reset IKBD différée** (`$F1` ~502000 cyc après `$80,$01`).
 - **Analyseur de commandes multi-octets** (table de longueurs + buffer d'accumulation).
+- **Tampon de sortie IKBD borné à 1024 octets** (port `IKBD_OutputBuffer_CheckFreeCount`,
+  SIZE_KEYBOARD_BUFFER) : chaque émetteur de paquet (souris/clavier/joystick) teste la place
+  AVANT son 1er octet → paquet jeté ENTIER si plein (jamais de demi-paquet) ; `pushRx` borne
+  en dernier ressort les octets isolés (réponses de commande, quirks). Reproduit la saturation
+  du vrai HD6301 (vieux paquets perdus, pas de retard qui s'accumule) et borne la mémoire.
+  Hors saturation : comportement strictement identique (boots pixel-identiques).
 - Souris **relative** (paquets `$F8`|boutons + Δx/Δy) **et absolue** (`$09`/`$0D`/`$0E`).
   Port fidèle de `IKBD_SendRelMousePacket` : **seuil d'émission** (`$0B`), **échelle** absolue
   (`$0C`), **signe d'axe Y** (`$0F`/`$10`), drain des gros Δ en plusieurs paquets, et émission
