@@ -151,22 +151,20 @@ SCU reset · FPU propagation NaN · FPU SNaN→SNAN · FPU masques FPCR/FPSR · 
 GEMDOS only_invalid ; GEMDOS recomposition Unicode macOS ; FPU FSCALE ∞/NaN, arrondi précision
 FMOVE/FABS/FNEG, FMOVECR INEX2+arrondi, packed decimal bit-exact, octet AEXC.
 Cf. `docs/HATARI_DIVERGENCES.md` §3ᵉ passe.
-```
-• [HAUTE] SCU jamais réinitialisé : aucun Scu::reset(), ni Machine::reset()/hardReset() ne le
-  resettent → SysIntMask/VmeIntMask persistent au reset doux. Fix : Scu::reset(bool cold) + appel.
-• [ÉLEVÉE] FPU — propagation NaN perd le payload (renvoie default-NaN au lieu de l'opérande quiété).
-• [ÉLEVÉE] FPU — SNaN lève OPERR (vecteur 52) au lieu de SNAN (bit14/vecteur 54).
-• [MOYENNE] ACSI — INQUIRY buf[4] = count()-5 au lieu de 31 fixe (Acsi.cpp:134).
-• [MOYENNE] ACSI — pas de délai d'IRQ post-transfert (ACSI_TRANSFER_MIN_CYCLES=1000 ; « Idris OS »).
-• [MOYENNE] GEMDOS — Fsfirst/Fsnext sans « . »/« .. » en sous-répertoire (param subdir absent).
-• [MOYENNE] GEMDOS — matching only_invalid absent (un '?' issu de '+' matche tout → mauvais fichier).
-• [MOYENNE] GEMDOS — recomposition Unicode NFD→NFC macOS non portée (fichiers accentués, macOS only).
-• [MOYENNE] FPU — FSGLMUL pas de troncature 24b ; FSCALE ∞/NaN UB ; FMOVE/FABS/FNEG pas d'arrondi
-  précision ; FMOVECR pas d'INEX2 ni d'ajustement RZ/RM/RP ; packed decimal via libc ; octet AEXC.
-• [BASSE] FPU — masques FPCR/FPSR (0xfff0 / 0x0ffffff8) non appliqués aux bits réservés.
-```
 Intentionnels / NeoST plus correct (NE PAS corriger) : RTC temps émulé (déterminisme headless),
 RTC Mega-only (RP5C15 physiquement Mega), SCU encodage bit IRQ1, transcendantes FPU host.
+
+### 4ᵉ passe (2026-06-15) — couches d'intégration (CPU/Moira, E/S) — dernier terrain LOGIQUE
+**✅ CORRIGÉ** (build + glue 19/0 + boots ST/STE/MegaSTE identiques) : CPU — SCC No-Vector renvoyait
+l'auto-vecteur 29 ($74) au lieu du vecteur spurious 24 ($60) sur IACK niveau 5 (`Cpu68k.cpp`).
+**⏸️ Reste à faire** : Centronics — GPIP0 (BUSY) non pulsé sur impression réelle (asserté seulement
+sous `loopback()`) → décision produit (sortie imprimante ?). [moyenne, niche]
+Reste **fidèle** : intégration CPU (trame bus-error, double-fault→HALT, IACK MFP, reset, gating
+IPL/SCU, wait-states) et E/S (StePads, paddles, JoystickInput). Cf. `docs/HATARI_DIVERGENCES.md` §4ᵉ passe.
+
+> 🚧 **Terrain LOGIQUE épuisé** (4 passes : toutes les puces + périphériques + intégration). Les
+> divergences restantes sont **cycle-exactes** (beam-sync ci-dessous, S2/D3/M1, latence exception/IPL)
+> → bloquées tant que l'oracle Hatari n'est pas bâti (**SDL2 absent du conteneur**).
 
 ---
 
