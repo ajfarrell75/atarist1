@@ -24,8 +24,8 @@ uint8_t MidiAcia::read8(uint32_t addr) {
         // RX plein si le bouclage a livré un octet ; IRQ si une cause RX ou TX
         // est active (cf. acia.c ACIA_UpdateIRQ).
         uint8_t s = tdre_ ? ACIA_TDRE : 0;
-        if (!rx_.empty()) s |= ACIA_RDRF;
-        if ((!rx_.empty() && (control_ & 0x80)) || (txEnableInt_ && tdre_))
+        if (rdrf_) s |= ACIA_RDRF;
+        if ((rdrf_ && (control_ & 0x80)) || (txEnableInt_ && tdre_))
             s |= ACIA_IRQ;
         return s;
     }
@@ -34,6 +34,7 @@ uint8_t MidiAcia::read8(uint32_t addr) {
     if (rx_.empty()) return rdr_;
     rdr_ = rx_.front();
     rx_.pop_front();
+    rdrf_ = !rx_.empty();            // RDRF ne reste vrai que s'il reste un octet en file
     raiseIfReady();                  // octet suivant éventuel → ré-arme l'IRQ
     return rdr_;
 }
@@ -48,9 +49,11 @@ void MidiAcia::write8(uint32_t addr, uint8_t v) {
             tdre_ = true;
             if (sched_) sched_->cancel(Scheduler::MIDI_TX);
         }
-        // Master reset : NE PURGE PAS la file RX — le 6850 ne perd pas l'octet en
-        // transit (cf. acia.c ; note ikbd.c « don't clear bytes in transit »).
-        // L'ACIA clavier (Ikbd) applique déjà ce choix ; on s'aligne.
+        // Master reset (bits 0-1 = 11) : efface RDRF (SR → TDRE seul, cf. acia.c
+        // ACIA_MasterReset) mais NE PURGE PAS la file RX — le 6850 ne perd pas
+        // l'octet en transit (note ikbd.c « don't clear bytes in transit »). RDRF
+        // distinct de la file → on peut l'effacer tout en gardant l'octet relisible.
+        if ((v & 0x03) == 0x03) rdrf_ = false;
         raiseIfReady();
         return;
     }
@@ -64,6 +67,7 @@ void MidiAcia::write8(uint32_t addr, uint8_t v) {
         sched_->schedule(Scheduler::MIDI_TX, sched_->now() + kMidiTxByteCycles);
     }
     rx_.push_back(v);
+    rdrf_ = true;                    // un octet bouclé est disponible (RDRF)
     raiseIfReady();
 }
 
@@ -77,7 +81,7 @@ void MidiAcia::onTxEmpty() {
 void MidiAcia::raiseIfReady() {
     // L'ACIA active sa ligne d'IRQ dès qu'une cause RX (octet dispo + RIE) ou TX
     // (TDRE + TIE) est active → canal 6 du MFP via GPIP4 (cf. ACIA_UpdateIRQ).
-    const bool active = (!rx_.empty() && (control_ & 0x80)) || (txEnableInt_ && tdre_);
+    const bool active = (rdrf_ && (control_ & 0x80)) || (txEnableInt_ && tdre_);
     mfp_.setAciaLineMidi(active);
     if (active) mfp_.raise(Mfp::SRC_ACIA);
 }

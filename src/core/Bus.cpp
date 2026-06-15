@@ -503,6 +503,7 @@ void Bus::write16(uint32_t addr, uint16_t v) {
     // d'icône désalignés). Cf. Blitter::write16.
     if (addr >= 0xFF8A00 && addr + 1 <= 0xFF8A3F && blitter && machineHasBlitter(machine)) {
         blitter->write16(addr, v);
+        ioAccessWidth_ = saved;        // NE PAS fuiter la largeur (sinon les bus-errors octet restent désarmées)
         return;
     }
     write8(addr,     static_cast<uint8_t>(v >> 8));
@@ -514,6 +515,7 @@ void Bus::write32(uint32_t addr, uint32_t v) {
     ioAccessWidth_ = 4;
     if (addr >= 0xFF8A00 && addr + 3 <= 0xFF8A3F && blitter && machineHasBlitter(machine)) {
         blitter->write32(addr, v);    // écriture LONG atomique (idem write16)
+        ioAccessWidth_ = saved;        // restaure la largeur (cf. write16)
         return;
     }
     write16(addr,     static_cast<uint16_t>(v >> 16));
