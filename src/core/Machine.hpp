@@ -106,6 +106,7 @@ public:
         cpu.setMegaSteSpeed(false);
         cpu.setCore(cpuCore);              // bascule de cœur 68000 si nécessaire
         psg.setOutputScale(machineIsSte(machine) ? 0.5f : 1.0f);   // ½ ampli YM sur STE (cf. ctor)
+        psg.setStfLowPass(!machineIsSte(machine));                 // LPF_STF sur ST/Mega ST, PWM sur STE
     }
 
     // Exécute UNE trame complète : 313 lignes de cycles CPU, 4 tics Timer C
