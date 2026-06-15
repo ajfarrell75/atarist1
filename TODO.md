@@ -79,6 +79,48 @@ ou `disks/stx/` (`.stx`).
 
 ---
 
+## 🔬 Divergences Hatari restantes — cf. [docs/HATARI_DIVERGENCES.md](docs/HATARI_DIVERGENCES.md)
+
+Audit complet NeoST↔Hatari (workflow 8 agents, 2026-06-15). Fidélité globale **très élevée**.
+**Corrigés cette passe** (✅) : Blitter compteur 0=65536 + rejet accès octet, filtre LPF STF
+câblé, miroir PSG `$FF8800-$FF88FF`, MIDI (master-reset sans purge / RDR persistant). Le doc
+ci-dessus est l'inventaire maître (sévérité + impact + `fichier:ligne` des deux côtés).
+**Différés** (ordre = valeur décroissante) :
+
+**Cycle-exact** — bloqués par l'oracle Hatari headless (le binaire `extern/hatari/build/src/hatari`
+n'est PAS bâti dans un conteneur frais ; à reconstruire pour valider au pixel). Recoupent le
+chantier **beam-sync** ci-dessous :
+```
+• Vidéo — branche STE de la Glue (V1) : timings preload STE, LEFT_OFF_2_STE (video.c:2442-2652).
+• Vidéo — tricks par changement de résolution (V2) : overscan med-res, scroll hardware
+  hi/med/lo (Video_WriteToGlueRes video.c:1618). [recoupe §Vidéo « med-res overscan »]
+• Vidéo — géométrie mid-trame (V3) : 50↔60 Hz en cours de trame, Video_RestartVideoCounter
+  (video.c:2857,4608). [recoupe le chantier beam-sync §Précision cycle]
+• Son DMA — FIFO 8 octets + avance HBL (S2). [recoupe §Son DMA STE]
+• FDC — flush FIFO↔RAM ne stalle pas le CPU (D3 : 32 cyc, fdc.c:1340/1396).
+```
+**Décisions de comportement** (datasheet vs Hatari — à trancher) :
+```
+• SCC WR14 bit4 « loopback » actif au reset (SC1) : NeoST l'interprète comme bouclage local
+  (datasheet Zilog) ; Hatari met le même bit (0x30) mais NE le traite PAS comme loopback →
+  côté NeoST le TX réel ne sort jamais tant que bit4=1. Choisir : aligner sur Hatari (retirer
+  le loopback Scc.cpp:234) ou rester datasheet-fidèle. (scc.c reset l.611 = WR14|=0x30 aussi.)
+```
+**Marginaux** (faible valeur / risque > bénéfice) :
+```
+• $FF8264 STE (scroll « no prefetch ») lu en void 0xFF au lieu du registre réel — valeur
+  floue chez Hatari (latch IoMem, Video_HorScroll_Read_8264 ne renvoie rien).
+• FDC piste « standard » de repli 6268 vs 6250 (D4) — partagé avec la détection densité .ST,
+  à isoler (constante STX dédiée) avant de changer.
+• FDC reset DMA : ne pas effacer le bit « erreur » dans dmaResetFifo (F1, cf. fdc.c:1233).
+• MFP — lignes GPIP on-chip (ACIA/FDC/blitter) lèvent l'IRQ hors machine de fronts AER/DDR
+  (M1) — risque de régression IRQ, faible impact (EmuTOS laisse AER=0).
+```
+*(D1/D2 — ré-interprétation WRITE/READ TRACK STX — sont des choix où NeoST fait MIEUX que
+Hatari ; déjà notés « FAIT » en §FDC, à NE PAS « corriger » vers Hatari.)*
+
+---
+
 ## 🎯 Précision cycle
 
 > Plan : `[docs/CYCLE_ACCURACY.md](docs/CYCLE_ACCURACY.md)` · Inventaire :
