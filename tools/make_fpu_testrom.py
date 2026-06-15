@@ -133,11 +133,36 @@ movel_absl_dn(OPER, 0); cmpil_dn(0x00000010, 0); bne_to("fail7")
 command(0x9000)                          # FPCR ← 0 (ne pas polluer la suite)
 movel_imm_absl(0x00000000, OPER)
 
+# Test 8 : FDIV.X 1.0/3.0 relu en FMOVE.X — prouve la MANTISSE 64 BITS réelle.
+# Étendu exact = $3FFD AAAAAAAA_AAAAAAAB (arrondi au plus près) ; un calcul en
+# `double` (53 bits) donnerait $3FFD AAAAAAAA_AAAAA800 → l'octet final $AB tranche.
+command(0x4800)                          # FMOVE.X <ea> → FP0
+movel_imm_absl(0x3FFF0000, OPER); movel_imm_absl(0x80000000, OPER); movel_imm_absl(0x00000000, OPER)  # 1.0
+command(0x4820)                          # FDIV.X
+movel_imm_absl(0x40000000, OPER); movel_imm_absl(0xC0000000, OPER); movel_imm_absl(0x00000000, OPER)  # 3.0
+command(0x6800)                          # FMOVE.X FP0 → mem (12 octets)
+movel_absl_dn(OPER, 0); cmpil_dn(0x3FFD0000, 0); bne_to("fail8")   # signe/exposant
+movel_absl_dn(OPER, 1); cmpil_dn(0xAAAAAAAA, 1); bne_to("fail8")   # mantisse 63..32
+movel_absl_dn(OPER, 2); cmpil_dn(0xAAAAAAAB, 2); bne_to("fail8")   # mantisse 31..0 (64 bits !)
+
+# Test 9 : livraison d'exception FP. On ACTIVE DZ dans le FPCR (bit10), puis FDIV
+# par 0 → le Response CIR doit livrer « Take Pre-Instruction Exception » (CA=0,
+# vecteur DZ $32 en octet bas) = $7032 au lieu du null $0802.
+command(0x9000)                          # FMOVEM <ea> → FPCR
+movel_imm_absl(0x00000400, OPER)         # enable DZ (bit 10)
+command(0x4400)                          # FMOVE.S 1.0 → FP0
+movel_imm_absl(0x3F800000, OPER)         # 1.0f
+command(0x4420)                          # FDIV.S (poll sort sur $9501)
+movel_imm_absl(0x00000000, OPER)         # ÷ 0.0f → DZ activée → response = take-exc
+movew_absl_dn(RESP, 0)
+cmpiw_dn(0x7032, 0)                      # take-pre-instruction-exc, vecteur DZ $32
+bne_to("fail9")
+
 # PASS : D7 = 42, boucle stable.
 w16(0x7E2A)                              # moveq #42,d7
 w16(0x60FE)                              # bra.s *
 
-for n in range(1, 8):                    # FAILn : D7 = -n, boucle stable
+for n in range(1, 10):                   # FAILn : D7 = -n, boucle stable
     labels[f"fail{n}"] = len(code)
     w16(0x7E00 | ((-n) & 0xFF))          # moveq #-n,d7
     w16(0x60FE)                          # bra.s *

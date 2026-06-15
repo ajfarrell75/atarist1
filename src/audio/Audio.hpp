@@ -48,9 +48,14 @@ private:
     void*       device_  = nullptr;   // ma_device opaque (évite d'inclure miniaudio ici)
 
     // --- Modèle « push » (Phase C) : anneau émulation → audio --------------------
-    SampleRing         ring_{32768};     // SPSC : produceFrame (émulation) → render (audio) ; ~680 ms de marge
-    std::vector<float> scratch_;         // tampon de travail de produceFrame (thread émulation)
-    uint32_t           rate_ = 48000;    // fréquence de sortie réelle du périphérique
+    // L'anneau stocke des échantillons ENTRELACÉS L/R (2 floats par frame). `primeSamples_`,
+    // `n`, `sampleCarry_` sont comptés en FRAMES (par canal) ; ring_.available()/space()
+    // comptent en floats → toujours convertir (×2 / ÷2) au passage de frontière.
+    SampleRing         ring_{32768};     // SPSC entrelacé : ~340 ms de marge à 48 kHz stéréo
+    std::vector<float> scratch_;         // sortie stéréo entrelacée (2×frames) de produceFrame
+    std::vector<float> ymScratch_;       // voie YM mono intermédiaire (frames)
+    std::vector<float> driveScratch_;    // bruits lecteur mono intermédiaires (frames)
+    uint32_t           rate_ = 48000;    // fréquence de sortie réelle du périphérique (frames/s)
     double             sampleCarry_ = 0.0; // report fractionnaire (nb d'échantillons/trame exact à long terme)
     uint32_t           primeSamples_ = 4000; // coussin cible (≈ latence visée, ~85 ms) — amorçage + asservissement
     bool               primed_ = false;  // (thread audio) : l'anneau a-t-il atteint le coussin ? sinon → silence

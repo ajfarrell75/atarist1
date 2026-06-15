@@ -34,15 +34,26 @@ public:
         // → 0xFF (psg.c:283).
         switch (addr & 3) {
             case 1: case 3: return 0xFF;
-            default:
+            case 0:        // $FF8800 : registre de DONNÉE relu via le READ-LATCH (psg.c:PSG_Get_DataRegister)
+                // Le YM2149 relit en $FF8800 la DERNIÈRE donnée vue : valeur masquée du registre
+                // au moment du choix ($FF8800 write), MAIS valeur NON masquée après une écriture
+                // donnée ($FF8802) — d'où le latch séparé de regs_[] (qui, lui, est masqué).
+                return (selected_ < 16) ? regReadData_ : uint8_t(0xFF);
+            default:       // $FF8802 : relecture du registre (déviation diagnostic NeoST, cf. CHANGELOG)
                 return (selected_ < 16) ? regs_[selected_] : uint8_t(0xFF);
         }
     }
     void write8(uint32_t addr, uint8_t v) {
         switch (addr & 3) {
-            case 0: selected_ = v;  break;                // $FF8800 : choix du registre (8 bits NON masqués, psg.c:258)
-            case 2:                                       // $FF8802 : écriture donnée
+            case 0:                                       // $FF8800 : choix du registre (8 bits NON masqués, psg.c:258)
+                selected_ = v;
+                // Au changement de sélecteur, $FF8800 relira la valeur (masquée) du registre choisi,
+                // ou 0xFF si sélecteur invalide (psg.c:PSG_Set_SelectRegister).
+                regReadData_ = (selected_ < 16) ? regs_[selected_] : uint8_t(0xFF);
+                break;
+            case 2: {                                     // $FF8802 : écriture donnée
                 if (selected_ >= 16) break;               // registre invalide (≥16) → écriture ignorée (psg.c:335)
+                regReadData_ = v;                         // read-latch : valeur NON masquée (psg.c:346)
                 // Masque les bits inutilisés À L'ÉCRITURE (psg.c:351-358) → la relecture
                 // renvoie la valeur masquée, comme le YM2149 : tons grossiers A/B/C (R1/3/5)
                 // et forme d'enveloppe (R13) sur 4 bits ; ampli A/B/C (R8/9/10) et bruit (R6)
@@ -64,11 +75,20 @@ public:
                 }
                 // R14 = port A (I/O) : pilote sélection lecteur/face, strobe Centronics,
                 // et les sorties RS232 RTS (bit3)/DTR (bit4). Notifie l'abonné éventuel.
-                if (selected_ == 14 && portAsink_) portAsink_(v);
+                if (selected_ == 14) {
+                    // Strobe Centronics (bit5) : un FRONT DESCENDANT envoie l'octet du port B
+                    // (R15) à l'imprimante (port de psg.c:382-397 : test LastStrobe → 0). Sans
+                    // imprimante câblée (printerSink_ nul) : simple suivi du front, no-op.
+                    const bool strobe = v & 0x20;
+                    if (lastStrobe_ && !strobe && printerSink_) printerSink_(regs_[15]);
+                    lastStrobe_ = strobe;
+                    if (portAsink_) portAsink_(v);
+                }
                 // R15 = port B = données du port parallèle (Centronics). Abonné éventuel
                 // (fixture de bouclage parallèle→BUSY/joystick du diagnostic).
                 if (selected_ == 15 && portBsink_) portBsink_(v);
                 break;
+            }
             default: break;
         }
     }
@@ -78,6 +98,9 @@ public:
     // un connecteur de bouclage (cf. Machine).
     void setPortASink(std::function<void(uint8_t)> s) { portAsink_ = std::move(s); }
     void setPortBSink(std::function<void(uint8_t)> s) { portBsink_ = std::move(s); }
+    // Abonné « imprimante Centronics » : reçoit l'octet du port B sur chaque FRONT DESCENDANT
+    // du strobe (R14 bit5), comme le vrai handshake parallèle (cf. write8). Optionnel.
+    void setPrinterSink(std::function<void(uint8_t)> s) { printerSink_ = std::move(s); }
 
     // Reset matériel du PSG : remet tous les registres à 0 → volumes 0 = SILENCE
     // immédiat (et tonalités/bruit/enveloppe coupés), réarme l'état de synthèse.
@@ -98,6 +121,8 @@ public:
         buf250_.fill(0.0f); buf250Wr_ = buf250Rd_ = 0;
         resampleFracN_ = 0;
         envReload_  = false;
+        regReadData_ = 0;        // read-latch remis à 0 (psg.c:221)
+        lastStrobe_  = false;    // strobe Centronics au repos (psg.c:229) — pas de transfert parasite au boot
         lpf250X1_ = lpf250Y0_ = 0.0f;
         hpfX1_ = hpfY0_ = 0.0;
         updateFromRegs(regs_.data());
@@ -131,6 +156,14 @@ public:
     // NON remise à zéro par reset() (c'est une propriété figée du matériel, pas de l'état).
     void setOutputScale(float s) { outScale_ = s; }
 
+    // Choix du filtre de sortie selon la machine (port Hatari sound.c:1945-1952) :
+    //  • STF/Mega ST  → LowPassFilter (condensateur C10 réel : filtre LES DEUX fronts),
+    //  • STE/Mega STE/TT → PWMaliasFilter (front montant passe-tout, défaut historique).
+    // Le STF doit utiliser le passe-bas C10, sinon le contenu HF des carrés se replie
+    // (aliasing) au rééchantillonnage → « bruit blanc » audible (ex. Super Hang-On).
+    // Propriété figée du matériel : NON remise à zéro par reset().
+    void setStfLowPass(bool b) { useStfLpf_ = b; }
+
     // --- Synthèse (appelée par le thread audio miniaudio) -------------------
     // Remplit `out` (mono, float -1..+1) à la fréquence sampleRate.
     void synthesize(float* out, uint32_t frames, uint32_t sampleRate);
@@ -159,6 +192,8 @@ private:
     float nextResampleWeightedN(uint32_t sampleRate);
     // Passe-bas PWM appliqué à 250 kHz (PWMaliasFilter, sound.c).
     float applyPwm250(float x0);
+    // Passe-bas C10 du STF (LowPassFilter, sound.c:453) : filtre les DEUX fronts.
+    float applyLpfStf250(float x0);
     // Table des 16 formes d'enveloppe (YmEnvWaves, construite une fois).
     static const std::array<std::array<uint16_t, 96>, 16>& envWaves();
 
@@ -198,6 +233,7 @@ private:
     // Filtres de sortie : PWM à 250 kHz, HPF à la fréquence de sortie (comme Hatari).
     float  lpf250X1_ = 0.0f, lpf250Y0_ = 0.0f;
     double hpfX1_ = 0.0, hpfY0_ = 0.0;
+    bool   useStfLpf_ = false;        // true → LowPassFilter STF ; false → PWMaliasFilter STE
 
     // Échelle de sortie (1.0 ST, 0.5 STE) — propriété machine, voir setOutputScale().
     float  outScale_ = 1.0f;
@@ -211,4 +247,11 @@ private:
 
     std::function<void(uint8_t)> portAsink_;  // abonné aux écritures du port A (R14)
     std::function<void(uint8_t)> portBsink_;  // abonné aux écritures du port B (R15)
+    std::function<void(uint8_t)> printerSink_; // abonné « imprimante » (octet sur front strobe)
+
+    // Read-latch $FF8800 (psg.c:PSGRegisterReadData) : dernière donnée relisible en $FF8800.
+    // Distinct de regs_[] (masqué) : après une écriture $FF8802, vaut la valeur NON masquée.
+    uint8_t regReadData_ = 0;
+    // Dernier état du strobe Centronics (R14 bit5) pour détecter le front descendant (psg.c:LastStrobe).
+    bool    lastStrobe_  = false;
 };

@@ -28,9 +28,12 @@ namespace {
 // ---- Bits du FPSR (MC68881 UM §4) -------------------------------------------
 constexpr uint32_t CC_N   = 1u << 27, CC_Z = 1u << 26, CC_I = 1u << 25,
                    CC_NAN = 1u << 24;
-constexpr uint32_t EXC_BSUN = 1u << 15, EXC_OPERR = 1u << 13, EXC_OVFL = 1u << 12,
-                   EXC_DZ = 1u << 10, EXC_INEX2 = 1u << 9;
-constexpr uint32_t AEXC_IOP = 1u << 7, AEXC_OVFL = 1u << 6,
+// Octet EXC (bits 15-8) : exceptions de l'instruction courante.
+constexpr uint32_t EXC_BSUN = 1u << 15, EXC_SNAN = 1u << 14, EXC_OPERR = 1u << 13,
+                   EXC_OVFL = 1u << 12, EXC_UNFL = 1u << 11, EXC_DZ = 1u << 10,
+                   EXC_INEX2 = 1u << 9, EXC_INEX1 = 1u << 8;
+// Octet AEXC (bits 7-3) : exceptions accumulées (collantes).
+constexpr uint32_t AEXC_IOP = 1u << 7, AEXC_OVFL = 1u << 6, AEXC_UNFL = 1u << 5,
                    AEXC_DZ = 1u << 4, AEXC_INEX = 1u << 3;
 
 // Octets big-endian ↔ entiers.
@@ -93,6 +96,52 @@ void Fpu::setCC(const Ext& v) {
     else if (v.man == 0)
         cc |= CC_Z;
     fpsr_ = (fpsr_ & 0x00FFFFFF) | cc;
+}
+
+// État d'arrondi softfloat depuis le FPCR : mode (bits 5-4) + précision (bits 7-6).
+// Le FPCR ordonne RN/RZ/RM/RP ; softfloat ordonne RN/RM/RP/RZ → remappage explicite.
+sf::Status Fpu::sfStatus() const {
+    static const int rm[4] = { sf::round_nearest_even, sf::round_to_zero,
+                               sf::round_down, sf::round_up };
+    sf::Status s;
+    s.roundingMode = rm[(fpcr_ >> 4) & 3];
+    switch ((fpcr_ >> 6) & 3) {
+        case 1:  s.roundingPrecision = sf::prec_single; break;   // simple
+        case 2:  s.roundingPrecision = sf::prec_double; break;   // double
+        default: s.roundingPrecision = sf::prec_extended; break; // étendu (00) / réservé (11)
+    }
+    return s;
+}
+
+// Replie les drapeaux d'exception softfloat dans le FPSR (octet EXC courant + octet
+// AEXC collant). invalid → OPERR (cause la plus courante), les autres 1:1.
+void Fpu::sfFold(uint8_t f) {
+    if (f & sf::flag_invalid)   fpsr_ |= EXC_OPERR | AEXC_IOP;
+    if (f & sf::flag_divzero)   fpsr_ |= EXC_DZ    | AEXC_DZ;
+    if (f & sf::flag_overflow)  fpsr_ |= EXC_OVFL  | AEXC_OVFL;
+    if (f & sf::flag_underflow) fpsr_ |= EXC_UNFL  | AEXC_UNFL;
+    if (f & sf::flag_inexact)   fpsr_ |= EXC_INEX2 | AEXC_INEX;
+}
+
+// Livraison d'exception FP via le Response CIR (cf. Fpu.hpp). Octet enable du FPCR
+// (bits 15-8) ET octet status du FPSR (bits 15-8) alignés → `fpcr_ & fpsr_ & 0xFF00`.
+void Fpu::checkException() {
+    const uint32_t pend = fpcr_ & fpsr_ & 0xFF00u;
+    if (!pend) return;
+    // Priorité décroissante 68881 et vecteurs FP ($30-$36).
+    static const struct { uint32_t bit; uint8_t vec; } tab[] = {
+        { EXC_BSUN, 48 }, { EXC_SNAN, 54 }, { EXC_OPERR, 52 }, { EXC_OVFL, 53 },
+        { EXC_UNFL, 51 }, { EXC_DZ,   50 }, { EXC_INEX2, 49 }, { EXC_INEX1, 49 },
+    };
+    for (const auto& t : tab)
+        if (pend & t.bit) {
+            excVector_ = t.vec;
+            // « Take Pre-Instruction Exception » : CA=0 (terminal → la scrutation SFP004
+            // sort), vecteur en octet bas. Encodage pragmatique cohérent avec le schéma
+            // CIR NeoST (cf. setIdle) ; aucun logiciel ST en mode périphérique ne le décode.
+            response_ = uint16_t(0x7000 | t.vec);
+            return;
+        }
 }
 
 // Arrondi d'une valeur à l'entier selon le mode FPCR (bits 5-4).
@@ -245,6 +294,7 @@ void Fpu::reset() {
     for (auto& r : fp_) r = Ext{};               // NaN, comme le 68881 au reset
     fpcr_ = fpsr_ = fpiar_ = 0;
     for (auto& b : latch_) b = 0;
+    excVector_ = 0;
     setIdle();
     traceCount_ = 0;
 }
@@ -479,6 +529,7 @@ void Fpu::condition(uint16_t pred) {
         fpsr_ |= EXC_BSUN | AEXC_IOP;
     response_ = uint16_t(0x0802 | (t ? 1 : 0));  // null : PF=1, TF=prédicat
     bufLen_ = bufPos_ = 0; bufIn_ = false; after_ = After::None;
+    checkException();                            // BSUN activé → livraison d'exception
 }
 
 // =============================================================================
@@ -489,123 +540,111 @@ void Fpu::genOp(uint16_t cmd, Ext src) {
     const int op = cmd & 0x7F;
     fpsr_ &= ~0x0000FF00u;                       // EXC effacé en début d'instruction
 
-    // FMOVE pur : copie bit-exacte, sans repasser par le double hôte.
-    if (op == 0x00) {
-        fp_[dn] = src;
-        setCC(src);
-        setIdle();
-        return;
-    }
+    // -------- Opérations BIT-EXACTES (pas de calcul) ------------------------
+    if (op == 0x00) { fp_[dn] = src; setCC(src); setIdle(); checkException(); return; }   // FMOVE
+    if (op == 0x18) { Ext r = src; r.se &= 0x7FFF; fp_[dn] = r; setCC(r); setIdle(); checkException(); return; }  // FABS
+    if (op == 0x1A) { Ext r = src; r.se ^= 0x8000; fp_[dn] = r; setCC(r); setIdle(); checkException(); return; }  // FNEG
 
-    const double s = extToD(src);
-    const double d = extToD(fp_[dn]);
-    double r = 0.0;
-    bool store = true;
+    // -------- Opérations ALGÉBRIQUES en softfloat 80 bits (mantisse 64 bits) -
+    sf::Status st = sfStatus();
+    const sf::f80 s = toF(src), d = toF(fp_[dn]);
+    bool handled = true, store = true;
+    sf::f80 rf{};
     switch (op) {
-        case 0x01: r = roundMode(s);     break;  // FINT
-        case 0x02: r = std::sinh(s);     break;  // FSINH
-        case 0x03: r = std::trunc(s);    break;  // FINTRZ
-        case 0x04: case 0x05:                    // FSQRT (0x05 = alias non doc.)
-            r = std::sqrt(s);
-            if (s < 0) { fpsr_ |= EXC_OPERR | AEXC_IOP; }
+        case 0x04: case 0x05: rf = sf::sqrt_(s, st);    break;                 // FSQRT (0x05 alias)
+        case 0x20: rf = sf::div(d, s, st);              break;                 // FDIV
+        case 0x22: rf = sf::add(d, s, st);              break;                 // FADD
+        case 0x23: rf = sf::mul(d, s, st);              break;                 // FMUL
+        case 0x28: rf = sf::sub(d, s, st);              break;                 // FSUB
+        case 0x01: rf = sf::roundToInt(s, st);          break;                 // FINT
+        case 0x03: { sf::Status z = st; z.roundingMode = sf::round_to_zero;    // FINTRZ
+                     rf = sf::roundToInt(s, z); }       break;
+        case 0x1F: rf = sf::getMan(s, st);              break;                 // FGETMAN
+        case 0x1E: {                                                           // FGETEXP
+            bool sp; int32_t e = sf::getExpUnbiased(s, sp);
+            if (!sp)                          rf = toF(dToExt(double(e)));
+            else if (sf::isNaN(s))            rf = s;
+            else if (sf::expOf(s) == 0x7FFF){ rf = sf::defaultNaN(); st.exceptionFlags |= sf::flag_invalid; }
+            else                              rf = s;                          // ±0 → ±0
             break;
-        case 0x06: r = std::log1p(s);    break;  // FLOGNP1
-        case 0x08: r = std::expm1(s);    break;  // FETOXM1
-        case 0x09: r = std::tanh(s);     break;  // FTANH
-        case 0x0A: r = std::atan(s);     break;  // FATAN
-        case 0x0C: r = std::asin(s);     break;  // FASIN
-        case 0x0D: r = std::atanh(s);    break;  // FATANH
-        case 0x0E: r = std::sin(s);      break;  // FSIN
-        case 0x0F: r = std::tan(s);      break;  // FTAN
-        case 0x10: r = std::exp(s);      break;  // FETOX
-        case 0x11: r = std::exp2(s);     break;  // FTWOTOX
-        case 0x12: r = std::pow(10.0, s); break; // FTENTOX
-        case 0x14: r = std::log(s);      break;  // FLOGN
-        case 0x15: r = std::log10(s);    break;  // FLOG10
-        case 0x16: r = std::log2(s);     break;  // FLOG2
-        case 0x18: r = std::fabs(s);     break;  // FABS
-        case 0x19: r = std::cosh(s);     break;  // FCOSH
-        case 0x1A: r = -s;               break;  // FNEG
-        case 0x1C: r = std::acos(s);     break;  // FACOS
-        case 0x1D: r = std::cos(s);      break;  // FCOS
-        case 0x1E:                               // FGETEXP
-            if (s == 0.0) r = s;
-            else if (std::isinf(s) || std::isnan(s)) { r = std::nan(""); fpsr_ |= EXC_OPERR | AEXC_IOP; }
-            else r = double(std::ilogb(s));
+        }
+        case 0x26: {                                                          // FSCALE : d × 2^trunc(s)
+            int n = int(std::trunc(extToD(src)));
+            if (n > 16383) n = 16383; else if (n < -16383) n = -16383;
+            int be = 0x3FFF + n; if (be < 1) be = 1; else if (be > 0x7FFE) be = 0x7FFE;
+            rf = sf::mul(d, sf::pack(0, be, sf::INF_LOW), st);
             break;
-        case 0x1F:                               // FGETMAN
-            if (s == 0.0) r = s;
-            else if (std::isinf(s) || std::isnan(s)) { r = std::nan(""); fpsr_ |= EXC_OPERR | AEXC_IOP; }
-            else { int e; r = std::frexp(s, &e) * 2.0; }   // mantisse ∈ [1,2)
-            break;
-        case 0x20:                               // FDIV
-            r = d / s;
-            if (s == 0.0 && d != 0.0 && !std::isnan(d)) fpsr_ |= EXC_DZ | AEXC_DZ;
-            break;
-        case 0x21: case 0x25: {                  // FMOD (tronqué) / FREM (au plus près)
-            const double q = (op == 0x21) ? std::trunc(d / s) : std::nearbyint(d / s);
-            r = (op == 0x21) ? std::fmod(d, s) : std::remainder(d, s);
-            // Octet quotient : signe (bit 23) + 7 bits de poids faible.
-            uint32_t qb = std::isfinite(q) ? uint32_t(int64_t(std::fabs(q))) & 0x7F : 0;
-            if (q < 0) qb |= 0x80;
+        }
+        case 0x21: case 0x25: {                                               // FMOD / FREM
+            uint64_t qq; int ss;
+            rf = sf::rem(d, s, qq, ss, op == 0x21, st);
+            uint32_t qb = uint32_t(qq & 0x7F); if (ss) qb |= 0x80;            // octet quotient FPSR
             fpsr_ = (fpsr_ & 0xFF00FFFFu) | (qb << 16);
             break;
         }
-        case 0x22: r = d + s;            break;  // FADD
-        case 0x23: r = d * s;            break;  // FMUL
-        case 0x24:                               // FSGLDIV (précision simple)
-            r = double(float(d / s));
-            if (s == 0.0 && d != 0.0 && !std::isnan(d)) fpsr_ |= EXC_DZ | AEXC_DZ;
-            break;
-        case 0x26: {                             // FSCALE : d × 2^trunc(s)
-            double t = std::trunc(s);
-            if (t > 16384.0) t = 16384.0; else if (t < -16384.0) t = -16384.0;
-            r = std::ldexp(d, int(t));
-            break;
-        }
-        case 0x27: r = double(float(d * s)); break;   // FSGLMUL
-        case 0x28: r = d - s;            break;  // FSUB
-        case 0x30: case 0x31: case 0x32: case 0x33:   // FSINCOS : cos → FPc,
-        case 0x34: case 0x35: case 0x36: case 0x37: { //           sin → FPn
-            const Ext c = dToExt(std::cos(s));
-            fp_[op & 7] = c;
-            r = std::sin(s);
-            break;
-        }
-        case 0x38: case 0x39: {                  // FCMP (0x39 = alias non doc.)
+        case 0x24: { sf::Status z = st; z.roundingPrecision = sf::prec_single;   // FSGLDIV
+                     rf = sf::div(d, s, z); } break;
+        case 0x27: { sf::Status z = st; z.roundingPrecision = sf::prec_single;   // FSGLMUL
+                     rf = sf::mul(d, s, z); } break;
+        case 0x38: case 0x39: {                                               // FCMP (0x39 alias)
             store = false;
+            const int c = sf::compare(d, s);                                  // FPn − <ea>
             uint32_t cc = 0;
-            if (std::isnan(d) || std::isnan(s)) cc = CC_NAN;
-            else {
-                if (d == s) cc |= CC_Z;
-                if (d < s || (d == s && std::signbit(d))) cc |= CC_N;
-            }
+            if (c == 2) cc = CC_NAN;
+            else { if (c == 0) cc |= CC_Z; if (c < 0) cc |= CC_N; }
             fpsr_ = (fpsr_ & 0x00FFFFFF) | cc;
             break;
         }
-        case 0x3A: case 0x3B:                    // FTST (0x3B = alias non doc.)
-            store = false;
-            setCC(src);
-            break;
-        default:
-            trace("opmode non implémenté", cmd);
-            store = false;
-            break;
+        case 0x3A: case 0x3B: store = false; setCC(src); break;               // FTST (0x3B alias)
+        default: handled = false; break;                                      // → chemin transcendantes
+    }
+    if (handled) {
+        sfFold(st.exceptionFlags);
+        if (store) { fp_[dn] = toE(rf); setCC(fp_[dn]); }
+        setIdle(); checkException();
+        return;
     }
 
-    if (store) {
-        // Exceptions simples : NaN né d'opérandes valides → OPERR ; débordement.
-        if (std::isnan(r) && !std::isnan(s) && !std::isnan(d))
-            fpsr_ |= EXC_OPERR | AEXC_IOP;
-        if (std::isinf(r) && !std::isinf(s) && !std::isinf(d))
-            fpsr_ |= EXC_OVFL | AEXC_OVFL | EXC_INEX2 | AEXC_INEX;
-        // Contrainte de précision FPCR (bits 7-6 : 01=simple, 10=double).
-        if (((fpcr_ >> 6) & 3) == 1) r = double(float(r));
+    // -------- Transcendantes (et opmodes restants) : via le FPU hôte --------
+    // Le 68881 les approxime lui-même (CORDIC/polynômes) ; la bit-exactitude est
+    // hors de portée — on calcule en `double` hôte puis on convertit (cf. Fpu.hpp,
+    // comme MAME/Previous). L'arithmétique algébrique, elle, est en 64 bits ci-dessus.
+    const double sd = extToD(src);
+    double r = 0.0;
+    bool store2 = true;
+    switch (op) {
+        case 0x02: r = std::sinh(sd);     break;  // FSINH
+        case 0x06: r = std::log1p(sd);    break;  // FLOGNP1
+        case 0x08: r = std::expm1(sd);    break;  // FETOXM1
+        case 0x09: r = std::tanh(sd);     break;  // FTANH
+        case 0x0A: r = std::atan(sd);     break;  // FATAN
+        case 0x0C: r = std::asin(sd);     break;  // FASIN
+        case 0x0D: r = std::atanh(sd);    break;  // FATANH
+        case 0x0E: r = std::sin(sd);      break;  // FSIN
+        case 0x0F: r = std::tan(sd);      break;  // FTAN
+        case 0x10: r = std::exp(sd);      break;  // FETOX
+        case 0x11: r = std::exp2(sd);     break;  // FTWOTOX
+        case 0x12: r = std::pow(10.0, sd); break; // FTENTOX
+        case 0x14: r = std::log(sd);      break;  // FLOGN
+        case 0x15: r = std::log10(sd);    break;  // FLOG10
+        case 0x16: r = std::log2(sd);     break;  // FLOG2
+        case 0x19: r = std::cosh(sd);     break;  // FCOSH
+        case 0x1C: r = std::acos(sd);     break;  // FACOS
+        case 0x1D: r = std::cos(sd);      break;  // FCOS
+        case 0x30: case 0x31: case 0x32: case 0x33:   // FSINCOS : cos → FPc, sin → FPn
+        case 0x34: case 0x35: case 0x36: case 0x37:
+            fp_[op & 7] = dToExt(std::cos(sd)); r = std::sin(sd); break;
+        default: trace("opmode non implémenté", cmd); store2 = false; break;
+    }
+    if (store2) {
+        if (std::isnan(r) && !std::isnan(sd))                  fpsr_ |= EXC_OPERR | AEXC_IOP;
+        if (std::isinf(r) && !std::isinf(sd))                  fpsr_ |= EXC_OVFL | AEXC_OVFL | EXC_INEX2 | AEXC_INEX;
+        if (((fpcr_ >> 6) & 3) == 1) r = double(float(r));     // précision simple
         const Ext res = dToExt(r);
-        fp_[dn] = res;
-        setCC(res);
+        fp_[dn] = res; setCC(res);
     }
     setIdle();
+    checkException();
 }
 
 // =============================================================================

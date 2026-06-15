@@ -387,10 +387,11 @@ Workflow d'analyse : `subagents/workflows/wf_61686c94-b41`.
 - ~~MC68881 — arithmétique flottante~~ → **FAIT** (cf. `CHANGELOG.md`,
 `src/io/Fpu.{hpp,cpp}`) : FP0-7 étendu 80 bits, formats B/W/L/S/D/X/P, dialogue
 Command/Response/Operand/Condition/Save/Restore complet, FMOVECR bit-exact ;
-validé mini-ROM SFP004 (`tools/make_fpu_testrom.py`, 7/7) + diag MegaSTE
-« FPU idle ». *Reste (faible priorité) : mantisse 64 bits réelle (softfloat —
-les calculs passent par le double hôte, 53 bits) ; IRQ d'exception FP non
-câblée (le socket se scrute, la glue SFP004 n'en a pas besoin).*
+validé mini-ROM SFP004 (`tools/make_fpu_testrom.py`, **9/9**) + diag MegaSTE
+« FPU idle ». **Mantisse 64 bits réelle (softfloat 80 bits, `SoftFloatX80.hpp`)** pour
+toute l'arithmétique algébrique + **livraison d'exception FP** via le Response CIR — FAIT.
+*Reste hors périmètre : les transcendantes en double hôte (le 68881 les approxime lui-même,
+non bit-exact, comme MAME/Previous).*
 
 ## Stockage & contrôleurs
 

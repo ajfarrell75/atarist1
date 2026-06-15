@@ -640,6 +640,15 @@ taguées (0.1.x). Le restant est dans [`TODO.md`](TODO.md).
   (pointeur RAM contigu, traduction MMU) et `Bus::tosVersion`.
 
 ## Audio
+- **Sortie STÉRÉO + panoramique LMC1992 + son DMA horodaté** (`src/audio/Audio.{cpp,hpp}`,
+  `src/core/DmaSound.{cpp,hpp}`, `YM2149.{cpp,hpp}`) — la chaîne native passe en **2 canaux
+  entrelacés** : le son DMA STE conserve sa vraie image **L/R** (au lieu d'être moyennée) et
+  les gains gauche/droite du LMC1992 réalisent le **panoramique** (`mixStereo`, `gainLeft/
+  Right`, `applyToneStereo`). En plus, les transitions PLAY/STOP du DMA sont **horodatées au
+  cycle** (`setCycleClock`/`recordEvent`) et rejouées par segments (modèle « push » du YM) →
+  un **bruitage one-shot court** intra-trame n'est plus avalé et la **queue d'un sample** n'est
+  plus écrêtée par l'effacement CPU du bit PLAY. Le PSG gagne aussi le **read-latch `$FF8800`**
+  et le **strobe Centronics** (port B). Chemin mono WASM inchangé. Boot ST/STE non régressé.
 - **Bit PLAY ($FF8901) auto-effacé en fin de trame DMA one-shot** dans le MOTEUR DMA
   (`DmaSound::onFrameEnd`, port `DmaSnd_EndOfFrameReached` dmaSnd.c:510) et plus
   seulement dans le mixeur hôte (qui ne tourne pas en headless). Le handler VBL du TOS
@@ -938,6 +947,17 @@ taguées (0.1.x). Le restant est dans [`TODO.md`](TODO.md).
   détecte le FPU** (lecture du Response CIR observée, cookie `_FPU`) et le dialogue
   CIR est **journalisé** sur stderr (trapping : tout usage flottant réel est visible).
   L'arithmétique 68881 n'est PAS émulée (cf. `TODO.md`).
+- **MC68881 — mantisse 64 bits RÉELLE (softfloat) + livraison d'exception FP**
+  (`src/io/SoftFloatX80.hpp`, `src/io/Fpu.{cpp,hpp}`) : l'arithmétique ALGÉBRIQUE
+  (FADD/FSUB/FMUL/FDIV/FSQRT/FCMP/FINT/FINTRZ/FREM/FMOD/FSCALE/FGETEXP/FGETMAN/FSGLxxx) ne
+  passe plus par le `double` hôte (53 bits) mais par un **portage propre de SoftFloat-2a
+  (Hauser), format étendu 80 bits** → **64 bits de mantisse réels**, 4 modes d'arrondi FPCR,
+  précision étendu/double/simple et drapeaux d'exception IEEE exacts (leaf multi-mots via
+  `__uint128_t`). Les transcendantes restent en `double` hôte (le 68881 les approxime — comme
+  MAME/Previous). Les **exceptions FP activées dans le FPCR** sont en plus **LIVRÉES** via le
+  Response CIR (primitive « Take Pre-Instruction Exception »). Validé : `make_fpu_testrom.py`
+  étendu à **9/9 PASS**, dont `1.0/3.0` relu en FMOVE.X = `$3FFD AAAAAAAA_AAAAAAAB` exact (un
+  calcul 53 bits donnerait `…A800`) et FDIV par 0 avec DZ activée → Response CIR `$7032`.
 - **MC68881 FONCTIONNEL — mode périphérique complet** (`src/io/Fpu.{hpp,cpp}`) : le
   niveau « sonde + trapping » devient une vraie émulation du 68881 câblé en
   périphérique (MC68881 UM §7 + AN-947 ; Hatari n'émule pas ce socket — rien à

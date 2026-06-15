@@ -78,6 +78,7 @@ void DmaSound::startNewFrame() {
     frameEndAddr_    = endAddr_;
     frameStartCycle_ = sched_ ? sched_->liveNow() : 0;
     playing_ = true;
+    recordEvent(0);                                    // PLAY start daté (modèle push audio)
     setXsint(true);                                    // début de trame : XSINT → HAUT (→ GPIP7)
     scheduleFrameEnd();                                // date la fin de trame (→ Timer A)
 }
@@ -104,6 +105,11 @@ void DmaSound::reset(bool cold) {
     mode_  = 0;
     phase_ = 0.0;
     haveCur_ = false; dmaCur_ = 0.0f; lpW0_ = lpW1_ = 0.0f;   // FIR anti-repliement à zéro
+    dmaCurL_ = dmaCurR_ = 0.0f; lpW0L_ = lpW1L_ = lpW0R_ = lpW1R_ = 0.0f;   // idem chemin stéréo
+    bx1R_ = bx2R_ = by1R_ = by2R_ = 0; tx1R_ = tx2R_ = ty1R_ = ty2R_ = 0;   // filtres tonalité D
+    aPlaying_ = false; aStart_ = aEnd_ = aAddr_ = 0; aMode_ = 0;            // état audio « push »
+    aRepeat_ = false; aPhase_ = 0.0; aHaveCur_ = false;
+    events_.clear();
     startAddr_ = endAddr_ = curAddr_ = 0;          // Hatari met start/end à 0 même au warm reset (fix 'Brace')
     mwShift_ = 0; mwSteps_ = 0;                     // transfert série Microwire éventuel annulé
     setXsint(false);                               // son DMA inactif au reset → XSINT BAS
@@ -222,6 +228,37 @@ void DmaSound::applyTone(float* out, uint32_t frames, uint32_t sampleRate) {
     }
 }
 
+// Idem que applyTone mais sur le tampon ENTRELACÉ L/R : les coefficients sont calculés
+// une fois (basses+aigus identiques sur les deux canaux), chaque canal gardant son
+// propre état de filtre (G = sans suffixe, D = *R_) pour ne pas mélanger les retards.
+void DmaSound::applyToneStereo(float* st, uint32_t frames, uint32_t sampleRate) {
+    if ((mwBass_ == 6 && mwTreble_ == 6) || sampleRate == 0) return;   // 0/0 dB → bypass
+    const int bassCode = mwBass_   < 12 ? mwBass_   : 12;
+    const int trebCode = mwTreble_ < 12 ? mwTreble_ : 12;
+    const double bassDb = (bassCode - 6) * 2.0;
+    const double trebDb = (trebCode - 6) * 2.0;
+    double bb0, bb1, bb2, ba1, ba2, tb0, tb1, tb2, ta1, ta2;
+    shelfCoeffs(true,  bassDb, 200.0,  sampleRate, bb0, bb1, bb2, ba1, ba2);
+    shelfCoeffs(false, trebDb, 8000.0, sampleRate, tb0, tb1, tb2, ta1, ta2);
+
+    for (uint32_t i = 0; i < frames; ++i) {
+        // Canal gauche (état sans suffixe).
+        const double xl = st[2 * i];
+        const double ybl = bb0 * xl + bb1 * bx1_ + bb2 * bx2_ - ba1 * by1_ - ba2 * by2_;
+        bx2_ = bx1_; bx1_ = xl;  by2_ = by1_; by1_ = ybl;
+        const double ytl = tb0 * ybl + tb1 * tx1_ + tb2 * tx2_ - ta1 * ty1_ - ta2 * ty2_;
+        tx2_ = tx1_; tx1_ = ybl; ty2_ = ty1_; ty1_ = ytl;
+        st[2 * i] = static_cast<float>(ytl);
+        // Canal droit (état *R_).
+        const double xr = st[2 * i + 1];
+        const double ybr = bb0 * xr + bb1 * bx1R_ + bb2 * bx2R_ - ba1 * by1R_ - ba2 * by2R_;
+        bx2R_ = bx1R_; bx1R_ = xr;  by2R_ = by1R_; by1R_ = ybr;
+        const double ytr = tb0 * ybr + tb1 * tx1R_ + tb2 * tx2R_ - ta1 * ty1R_ - ta2 * ty2R_;
+        tx2R_ = tx1R_; tx1R_ = ybr; ty2R_ = ty1R_; ty1R_ = ytr;
+        st[2 * i + 1] = static_cast<float>(ytr);
+    }
+}
+
 float DmaSound::masterGain() const {
     // Pas de 2 dB ; valeurs au-delà du max = 0 dB. Sortie mono → moyenne G/D.
     const double mdB = (mwMaster_ >= 40 ? 0 : (mwMaster_ - 40) * 2);
@@ -232,6 +269,19 @@ float DmaSound::masterGain() const {
     return static_cast<float>((gL + gR) * 0.5);
 }
 
+// Gains linéaires par canal (volume maître × gauche / × droite) — réalisent le
+// panoramique STE. Réf. Hatari : lmc1992.left_gain = leftVolume × masterVolume.
+float DmaSound::gainLeft() const {
+    const double mdB = (mwMaster_ >= 40 ? 0 : (mwMaster_ - 40) * 2);
+    const double ldB = (mwLeft_   >= 20 ? 0 : (mwLeft_   - 20) * 2);
+    return static_cast<float>(std::pow(10.0, (mdB + ldB) / 20.0));
+}
+float DmaSound::gainRight() const {
+    const double mdB = (mwMaster_ >= 40 ? 0 : (mwMaster_ - 40) * 2);
+    const double rdB = (mwRight_  >= 20 ? 0 : (mwRight_  - 20) * 2);
+    return static_cast<float>(std::pow(10.0, (mdB + rdB) / 20.0));
+}
+
 // Lecture d'un échantillon (mono -128..127). En stéréo, moyenne L+R (sortie mono).
 // Le DMA son traverse le plan mémoire complet (traduction MMU / aliasing de
 // banques) comme le DMA disque — port STMemory_DMA_ReadByte, cf. Bus::dmaRead8.
@@ -240,6 +290,43 @@ int DmaSound::sampleAt(uint32_t addr, bool stereo) const {
         return static_cast<int8_t>(bus_.dmaRead8(a));
     };
     return stereo ? (rd(addr) + rd(addr + 1)) / 2 : rd(addr);
+}
+
+// Lecture STÉRÉO : octets pairs/impairs → L/R séparés (mono → L=R). Conserve la
+// séparation au lieu de la moyenner (cf. sampleAt). Port STMemory_DMA_ReadByte.
+void DmaSound::sampleAtLR(uint32_t addr, bool stereo, int& l, int& r) const {
+    const int b0 = static_cast<int8_t>(bus_.dmaRead8(addr));
+    if (stereo) { l = b0; r = static_cast<int8_t>(bus_.dmaRead8(addr + 1)); }
+    else        { l = r = b0; }
+}
+
+// FIR anti-repliement (1,2,1)/4 à état EXTERNE (cf. lowPassPull) — partagé par les
+// deux canaux du chemin stéréo, chacun avec ses propres retards w0/w1.
+static inline float fir121(float& w0, float& w1, int in, bool enabled) {
+    const float x = float(in);
+    const float y = enabled ? (w0 + 2.0f * w1 + x) : (w1 * 4.0f);
+    w0 = w1; w1 = x;
+    return y;
+}
+
+// Enregistre une transition de trame DMA datée au cycle frame-relatif courant (modèle
+// push, cf. mixStereo). PLAY start (kind 0) latche start/end/mode/repeat ; STOP (kind 1)
+// = effacement CPU du bit PLAY. Sans horloge câblée (headless/WASM) : no-op.
+void DmaSound::recordEvent(uint8_t kind) {
+    if (!cycleClock_) return;
+    int64_t c = cycleClock_();
+    if (c < 0) c = 0;
+    events_.push_back({ uint32_t(c), kind, startAddr_, endAddr_, mode_, bool(ctrl_ & 0x02) });
+}
+
+// Repli SANS horloge push : aligne l'état audio sur l'état CPU live au début de trame.
+// Reproduit l'ancien rendu « échantillonné par trame » (le bit PLAY pilote tout).
+void DmaSound::syncAudioFromCpu() {
+    if (playing_ && !aPlaying_) {                  // démarrage vu côté CPU → (re)cale l'audio
+        aStart_ = startAddr_; aEnd_ = endAddr_; aMode_ = mode_;
+        aRepeat_ = ctrl_ & 0x02; aAddr_ = curAddr_; aPhase_ = phase_; aHaveCur_ = false;
+    }
+    aPlaying_ = playing_;
 }
 
 // Position live du compteur de trame DMA — forme fermée depuis le cycle de début
@@ -295,6 +382,7 @@ void DmaSound::write8(uint32_t addr, uint8_t v) {
                 startNewFrame();                       // recale + arme la fin (gère start==end)
             } else if (!(ctrl_ & 0x01)) {              // bit play à 0 : arrêt
                 playing_ = false;
+                recordEvent(1);                        // STOP daté (modèle push audio)
                 setXsint(false);                       // arrêt : XSINT → BAS
                 if (sched_) sched_->cancel(Scheduler::DMASND);
             }
@@ -381,4 +469,76 @@ void DmaSound::mix(float* out, uint32_t frames, uint32_t sampleRate) {
             dmaCur_ = lowPassPull(sampleAt(curAddr_, stereo), lowPass);
         }
     }
+}
+
+// Rend `count` échantillons stéréo (entrelacés dans `st`) depuis l'état AUDIO (aXxx_),
+// qu'il avance. `ym` est aligné sur le 1er échantillon du segment. DMA audio inactif →
+// YM recopié L=R. Même moteur que mix() (resample bloquant-zéro + FIR anti-repliement),
+// mais sur l'état audio découplé du CPU (cf. en-tête mixStereo).
+void DmaSound::mixSegment(float* st, const float* ym, uint32_t count, uint32_t sampleRate) {
+    if (!aPlaying_ || sampleRate == 0) {                      // DMA inactif → YM seul (L=R)
+        for (uint32_t i = 0; i < count; ++i) { st[2 * i] = ym[i]; st[2 * i + 1] = ym[i]; }
+        return;
+    }
+    const double inc    = kRate[aMode_ & 0x03] / sampleRate;
+    const bool   stereo = !(aMode_ & 0x80);
+    const uint32_t step = stereo ? 2u : 1u;
+    const bool lowPass  = kRate[aMode_ & 0x03] > double(sampleRate);
+    const bool addYm    = (mwMixing_ == 1);                   // 1 = YM+DMA, sinon DMA écrase YM (live)
+
+    for (uint32_t i = 0; i < count; ++i) {
+        if (!aHaveCur_) {
+            int l, r; sampleAtLR(aAddr_, stereo, l, r);
+            dmaCurL_ = fir121(lpW0L_, lpW1L_, l, lowPass);
+            dmaCurR_ = fir121(lpW0R_, lpW1R_, r, lowPass);
+            aHaveCur_ = true;
+        }
+        const float dl = (dmaCurL_ / 4.0f / 128.0f) * kDmaGain;
+        const float dr = (dmaCurR_ / 4.0f / 128.0f) * kDmaGain;
+        if (addYm) { st[2 * i] = ym[i] + dl; st[2 * i + 1] = ym[i] + dr; }
+        else       { st[2 * i] = dl;         st[2 * i + 1] = dr; }
+        aPhase_ += inc;
+        while (aPhase_ >= 1.0) {
+            aPhase_ -= 1.0;
+            aAddr_ += step;
+            if (aAddr_ >= aEnd_) {
+                if (aRepeat_) {
+                    aAddr_ = aStart_;
+                } else {                                       // one-shot fini : YM passe sur le reste
+                    aPlaying_ = false;
+                    for (uint32_t j = i + 1; j < count; ++j) { st[2 * j] = ym[j]; st[2 * j + 1] = ym[j]; }
+                    return;
+                }
+            }
+            int l, r; sampleAtLR(aAddr_, stereo, l, r);
+            dmaCurL_ = fir121(lpW0L_, lpW1L_, l, lowPass);
+            dmaCurR_ = fir121(lpW0R_, lpW1R_, r, lowPass);
+        }
+    }
+}
+
+// Version stéréo « push » : rejoue les transitions PLAY/STOP de la trame à leur cycle
+// exact (segments entre événements), comme YM2149::synthesizeFrame. Sans horloge
+// câblée : repli sur un segment unique aligné sur l'état CPU live (ancien comportement).
+void DmaSound::mixStereo(float* st, const float* ym, uint32_t frames, uint32_t sampleRate, int64_t frameCycles) {
+    if (!cycleClock_) {                                       // repli legacy (pas de timeline)
+        syncAudioFromCpu();
+        mixSegment(st, ym, frames, sampleRate);
+        return;
+    }
+    if (frameCycles <= 0) frameCycles = 1;
+    uint32_t pos = 0;
+    for (const DmaEvent& e : events_) {
+        uint32_t off = uint32_t(int64_t(e.cycle) * frames / frameCycles);
+        if (off > frames) off = frames;
+        if (off > pos) { mixSegment(st + 2 * pos, ym + pos, off - pos, sampleRate); pos = off; }
+        if (e.kind == 0) {                                    // PLAY start : (re)latche et recale l'audio
+            aPlaying_ = true; aStart_ = e.start; aEnd_ = e.end; aMode_ = e.mode; aRepeat_ = e.repeat;
+            aAddr_ = e.start; aPhase_ = 0.0; aHaveCur_ = false;
+        } else {                                              // STOP (effacement CPU du bit PLAY)
+            aPlaying_ = false;
+        }
+    }
+    if (pos < frames) mixSegment(st + 2 * pos, ym + pos, frames - pos, sampleRate);
+    events_.clear();
 }

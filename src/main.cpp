@@ -910,6 +910,10 @@ int main(int argc, char** argv) {
     // la trame). Dès lors, write8 enregistre les écritures et la synthèse les rejoue au bon
     // instant (digidrums/sync-buzzer). produceFrame (après runFrame) génère et empile la trame.
     machine.psg.setCycleClock([&machine] { return machine.frameRelCycle(); });
+    // Idem pour le son DMA STE : on horodate les transitions PLAY/STOP de la trame, pour
+    // les rejouer au cycle exact (bruitages one-shot courts, queues de samples — cf.
+    // DmaSound::mixStereo). Posé UNIQUEMENT côté frontend (jamais en headless → pas de fuite).
+    machine.dmasnd.setCycleClock([&machine] { return machine.frameRelCycle(); });
 
     GlScreen screen;
     screen.init();
