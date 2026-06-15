@@ -120,27 +120,28 @@ chantier **beam-sync** ci-dessous :
 Hatari ; déjà notés « FAIT » en §FDC, à NE PAS « corriger » vers Hatari.)*
 
 ### 2ᵉ passe (2026-06-15) — nouvelles trouvailles (4 correctifs mergés confirmés CORRECTS)
-**Bugs nets actionnables** (priorité) :
+**✅ CORRIGÉS** (validés glue-selftest 19/0 + boots ST/STE/MegaSTE pixel-identiques) :
 ```
-• [BUG] Bus — leak ioAccessWidth_ : write16/write32 branche blitter `return` sans restaurer
-  ioAccessWidth_=saved (Bus.cpp:504-521) → après le 1er blit mot (VDI EmuTOS Mega/STE), les
-  bus-errors d'accès OCTET ($FF9200/lightpen/FDC $FF8604) sont désarmées en permanence.
-  Fix trivial : restaurer ioAccessWidth_ avant le return (ou poser la largeur dans read8/write8).
-• [MOYENNE] Blitter — GPIP3 (GPU_DONE) jamais ré-armé haut : posé à finishTransfer (Blitter.cpp:194),
-  jamais remis haut → blit-done « toujours vrai » dès le 2e blit (faux positif au polling/IRQ).
-  Fix : ligne haute au (re)démarrage dans start() (cf. blitter.c:895/916). Lié à M1.
+• [BUG] Bus — leak ioAccessWidth_ : write16/write32 branche blitter restaurent désormais
+  ioAccessWidth_ avant le return (Bus.cpp) → bus-errors d'accès OCTET ($FF9200/lightpen/FDC)
+  ré-armées après un blit.
+• [MOYENNE] Blitter — GPIP3 (GPU_DONE) ré-armé haut au (re)démarrage de chaque blit (start(),
+  setBlitterLine(false)) ; finishTransfer le rabaisse → front correct à chaque fin de blit.
+• [MOYENNE] MIDI M-MIDI — rdrf_ MIDI distinct de !rx_.empty() : master reset efface RDRF sans
+  purger la file (MidiAcia.cpp/.hpp).
 ```
-**Moyennes (fidélité)** :
+**⏸️ DIFFÉRÉS — validation impossible sans oracle/écoute (à reprendre quand l'oracle est bâti)** :
 ```
 • Son S3 — gain LMC ½-ampli : table DAC pleine + outScale_=0.5 SANS le ×2 d'Hatari → YM STE
-  ~6 dB trop bas relativement quand le LMC est à plein volume (DmaSound.cpp:274-283).
-• FDC — changement lecteur/face « pull » (refreshDriveSide au prochain accès) au lieu de « push »
-  (immédiat à l'écriture PSG, FDC_SetDriveSide). Flip de face en plein transfert non suivi.
-• MFP — pas de MFP_UpdateTimers avant lecture IPR/ISR (bit pending ≤1 instr. en retard au polling).
-• MIDI M-MIDI — RDRF fusionné à !rx_.empty() : RDRF reste asserté après master reset si file non
-  vide (manque un rdrf_ MIDI séparé, comme l'ACIA clavier).
+  ~6 dB trop bas (DmaSound.cpp:274-283). AUDIO non vérifiable headless (risque déséquilibre/clip).
+• FDC — changement lecteur/face « pull » au lieu de « push » (refreshDriveSide à l'écriture PSG,
+  FDC_SetDriveSide). Ré-ancre l'index du modèle rotationnel → risque de régresser des chargements
+  disque sans oracle byte-exact.
+• MFP — pas de MFP_UpdateTimers avant lecture IPR/ISR (bit pending ≤1 instr. en retard) — fix
+  architectural (réentrance du dispatch d'événements depuis une lecture registre).
 ```
-Détail + basses (vidéo, FDC, son, blitter BL-R/BL-MST, bus) → `docs/HATARI_DIVERGENCES.md` §2ᵉ passe.
+Détail + basses cycle-exactes/niche (vidéo, FDC, son, blitter BL-R/BL-MST, bus N2-N5) →
+`docs/HATARI_DIVERGENCES.md` §2ᵉ passe.
 
 ---
 

@@ -111,6 +111,11 @@ void Blitter::start() {
         haveFxsr_ = false;
         nfsrInt_  = false;
         midBlit_  = true;
+        // Ré-arme la ligne GPU_DONE (GPIP3) à l'état HAUT « pas fini » au démarrage de
+        // CHAQUE blit (cf. Hatari Blitter_Start blitter.c:895) ; finishTransfer la
+        // rabaissera à l'achèvement. Sans ça, GPIP3 resterait « fini » dès le 1ᵉʳ blit
+        // → un programme qui scrute la fin de blit verrait un faux positif au 2ᵉ blit.
+        if (bus_.mfp) bus_.mfp->setBlitterLine(false);
     }
 
     // Cycles d'arbitration de bus (port Blitter_BusArbitration) : prendre le bus
