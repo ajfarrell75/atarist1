@@ -1434,7 +1434,11 @@ void Shifter::write8(uint32_t addr, uint8_t v) {
                 else                                  { newLineWidth_ = v; }
             }
             return;
-        case 0xFF8260: syncCpuBus(); recordSyncWrite(true, v); mode = static_cast<Mode>(v & 0x3); return;  // résolution (+ bordures + wait state bus)
+        case 0xFF8260: syncCpuBus(); recordSyncWrite(true, v); mode = static_cast<Mode>(v & 0x3);
+            // V2 res-switch : une écriture hi-res ($8260 bit1) peut raccourcir la ligne
+            // courante (la Machine vérifie qu'elle est précoce). Cf. setHblShorten.
+            if ((v & 0x3) == 2 && hblShorten_) hblShorten_();
+            return;  // résolution (+ bordures + wait state bus)
         // Scroll fin horizontal STE — port Video_HorScroll_Write : $FF8264 sans
         // prefetch, $FF8265 avec. Applicable IMMÉDIATEMENT si l'affichage de la ligne
         // courante n'a pas commencé (cycle ≤ HDE_On, ou faisceau hors zone affichée) ;

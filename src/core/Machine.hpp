@@ -172,6 +172,13 @@ private:
     int renderLine_  = 0;     // prochaine scanline à décoder
     int tbLine_      = 0;     // prochaine ligne pour le tic Timer B
     int hblLine_     = 0;     // prochaine ligne pour le HBL niveau 2
+    // V2 res-switch (opt-in NEOST_V2) : longueur de ligne VARIABLE. Une impulsion hi-res
+    // PRÉCOCE (cyc ≤ 56) raccourcit la ligne à 224 cyc (port Hatari HBL_Pos/nCyclesPerLine,
+    // video.c:2249) : le HBL est reprogrammé tôt et les lignes SUIVANTES sont décalées de
+    // (cpl-224) = lineCarry_. Le HW dérive ainsi la phase du gestionnaire fullscreen.
+    int64_t lineCarry_ = 0;   // décalage cumulé (cyc) dû aux lignes raccourcies cette trame
+    int     v2ShortLine_ = -1; // dernière ligne déjà raccourcie (évite double-comptage)
+    bool    v2_ = false;      // NEOST_V2 actif ?
     // (Le RTC avance en paresseux à la lecture, cf. Rtc::catchUp — plus de compteur ici.)
 
     // Géométrie de la trame COURANTE (50/60/71 Hz), verrouillée par scheduleFrameEvents
