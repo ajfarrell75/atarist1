@@ -364,22 +364,35 @@ Workflow d'analyse : `subagents/workflows/wf_61686c94-b41`.
 
 ## YM2149 PSG
 
-- Données port B Centronics + front strobe (bit5) non émulés en sortie *(faible valeur)* —
+- ~~Données port B Centronics + front strobe (bit5) en sortie~~ → **FAIT** (cf. `CHANGELOG.md`) :
   ```
-  réf. `psg.c:PSG_Set_DataRegister`
+  R15 (port B) + détection du FRONT DESCENDANT du strobe (R14 bit5) → `printerSink_` optionnel
+  reçoit l'octet (handshake parallèle, port `psg.c:PSG_Set_DataRegister`).
+  ```
+- ~~Read-latch `regReadData_` / `$FF8800`~~ → **FAIT** (cf. `CHANGELOG.md`) : `$FF8800` relit le
+  ```
+  latch (valeur masquée au choix, NON masquée après écriture `$FF8802`) ; `$FF8801/03` → 0xFF ;
+  `$FF8802` relisible (déviation diagnostic NeoST conservée).
   ```
 - Filtre passe-bas STF alternatif (`LowPassFilter`) + table 16³ interpolée
   ```
-  (`interpolate_volumetable`) en option _(faible valeur)_.
+  (`interpolate_volumetable`) en option _(faible valeur ; NeoST a déjà le LowPassFilter C10 et
+  la table DAC à modèle de circuit — la table MESURÉE est une alternative inaudible)_.
   ```
-- Read-latch `regReadData_`, `$FF8801/03` → 0xFF *(faible valeur, risque word-read)*.
 
 ## Son DMA STE + Microwire/LMC1992
 
+- ~~Sortie stéréo + panoramique LMC1992 + DMA horodaté intra-trame~~ → **FAIT** (cf. `CHANGELOG.md`) :
+  ```
+  chaîne audio en 2 canaux entrelacés (image L/R préservée, gains gauche/droite), et transitions
+  PLAY/STOP horodatées rejouées par segments (modèle push du YM) → one-shot court plus avalé,
+  queue de sample plus écrêtée.
+  ```
 - FIFO 8 octets du DMA son remplie sur HBL (`DmaSnd_FIFO_Refill/PullByte`,
   ```
-  dmaSnd.c:343-410) _(refinement résiduel : timing ±8 octets des débuts/fins de
-  trame et drain post-PLAY ; le gros de la Phase C est fait)_.
+  dmaSnd.c:343-410) _(refinement résiduel SOUS-PERCEPTUEL : timing ±8 octets des débuts/fins de
+  trame ; la timeline horodatée ci-dessus capte déjà les modifs de données intra-trame à la
+  granularité trame)_.
   ```
 
 ## CPU : IRQ, Moira, MegaSTE
