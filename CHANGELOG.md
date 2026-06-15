@@ -935,6 +935,10 @@ taguées (0.1.x). Le restant est dans [`TODO.md`](TODO.md).
   canal A en loopback, le relit et le renvoie sur l'AUX → sortie série `<B>`).
   _Non porté (faible valeur ici) : timers du BRG (Zero Count), baudrate temporisé,
   série hôte réelle._
+- **SCC No-Vector → vecteur spurious 24** (`Cpu68k::readIrqUserVector`) : sur IACK niveau 5 avec
+  WR9 NV armé (`Scc::processIack()` = -1), le wrapper renvoie désormais le vecteur **spurious 24**
+  ($60) — comme la branche MFP et `iack_cycle` d'Hatari (`vector<0 → 24`) — au lieu de
+  l'auto-vecteur 29 ($74) erroné. Boots ST/STE/MegaSTE inchangés.
 - **PSG `$FF8802` relisible** (read-modify-write `bclr/bset` du port A).
 - **SCU MegaSTE — gate d'interruptions complet** (`$FF8E01-$FF8E0F`, port `scu_vme.c`,
   `Scu.hpp`) : sur MegaSTE, **toutes** les IRQ sont gatées par `SysIntMask`/`VmeIntMask`

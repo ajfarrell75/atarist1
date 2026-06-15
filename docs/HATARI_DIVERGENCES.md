@@ -386,3 +386,45 @@ VmeIntMask, niveaux 4/2/1, IRQ niveau 5 vectorisée, décodage adresses impaires
 **Bilan 3ᵉ passe** : 1 HAUTE (SCU reset) + 2 ÉLEVÉES FPU (NaN/SNaN) + ~8 moyennes — tous **bornés et
 corrigeables sans oracle** (logique pure, pas de cycle-exactness). C'est la passe la plus productive
 en correctifs actionnables, justifiant le ciblage des sous-systèmes vierges plutôt qu'un re-balayage.
+
+---
+
+## 🧷 4ᵉ passe — couches d'intégration (2026-06-15, workflow 2 agents)
+
+Couvre les **dernières couches jamais auditées** : le **wrapper CPU/Moira** (`Cpu68k`, câblage
+exceptions/IPL/bus-error/IACK/reset) et les **E/S** (joypads/paddles `StePads`, `JoystickInput`,
+Centronics). Verdict : **très fidèles**. **2 divergences réelles** (1 corrigée, 1 différée) + des
+points cycle-exacts déjà cadrés.
+
+> ⚠️ **Oracle Hatari non bâtissable ici** : SDL2 absent du conteneur → les divergences
+> **cycle-exactes** (phase CPU↔faisceau, échantillonnage IPL au cycle, latence d'exception, jitter
+> E-Clock à l'IACK) restent **bloquées dans cet environnement** ; elles nécessitent une session avec
+> SDL2 pour construire `extern/hatari/build`. Déjà cadrées dans `TODO.md §beam-sync`.
+
+### Trouvailles
+- **CPU — SCC No-Vector → mauvais vecteur** ✅ **corrigé** *(moyenne)* : sur IACK niveau 5 avec WR9
+  NV armé (`Scc::processIack()` = -1), NeoST renvoyait l'auto-vecteur **29** (`24+level`, $74) au
+  lieu du vecteur **spurious 24** ($60) d'Hatari (`iack_cycle` : `vector<0 → 24`). La branche MFP
+  était déjà conforme. **Fix** : `Cpu68k.cpp` renvoie 24 sur `v<0` pour le SCC. (Validé : build,
+  glue 19/0, boots ST/STE/MegaSTE pixel-identiques.)
+- **Centronics — GPIP0 (BUSY) non pulsé sur impression réelle** ⏸️ *différé (moyenne)* : le
+  `printerSink_` du PSG n'est jamais câblé et `mfp.setBusyLine(true)` n'est asserté que sous la
+  fixture de bouclage (`loopback()`), alors que Hatari asserte GPIP0 bas **inconditionnellement** sur
+  le strobe (`psg.c:388-390`). NeoST n'a pas de sortie imprimante (choix produit) ; l'impression
+  « passe » silencieusement mais le handshake BUSY n'est pas reproduit. *Fix : asserter
+  `setBusyLine` sur chaque transfert imprimante réel — décision produit (sortie imprimante ?).*
+- **PSG port A/B en entrée (joysticks parallèles) absent** *(très basse)* : Hatari recompose R14
+  bit5 / R15 depuis les joysticks « parallel port » à la lecture (`psg.c:289-312`) — périphérique de
+  niche, non émulé par NeoST.
+
+### Confirmé FIDÈLE 1:1
+**CPU** : trame bus-error/address-error groupe 0, double-bus-fault→HALT (2ᵉ faute + SSP impair),
+vectorisation IACK MFP niveau 6, auto-vecteurs VBL/HBL + clear pending, reset SSP/PC via overlay ROM,
+gating IPL (priorité MFP>VBL>HBL ; SCU sur MegaSTE), STOP, wait-states PSG/MFP/ACIA/bus + E-Clock,
+MegaSTE 16 MHz (créneau bus + cache). **E/S** : StePads (multiplexage $FF9202, boutons/directions
+pads A/B, DIP MegaSTE 0xBF, paddles REALSTICK, lightpen, bus-errors octet/mot $FF9200-23),
+JoystickInput (mapping, ports), suivi du front de strobe Centronics.
+
+**Bilan 4ᵉ passe** : couche d'intégration **solide** ; SCC NV corrigé ; Centronics GPIP0 = seule
+divergence restante (différée, décision produit). Le terrain LOGIQUE est désormais **épuisé** — il ne
+reste que le **cycle-exact**, qui exige l'oracle (SDL2 absent ici).
