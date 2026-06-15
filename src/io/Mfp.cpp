@@ -116,7 +116,18 @@ void Mfp::write8(uint32_t addr, uint8_t v) {
         case 0x11: isrb &= v; updateIrq(sched_ ? sched_->liveNow() : 0); break;
         case 0x13: imra = v; updateIrq(sched_ ? sched_->liveNow() : 0); break;
         case 0x15: imrb = v; updateIrq(sched_ ? sched_->liveNow() : 0); break;
-        case 0x17: vr   = v; updateIrq(sched_ ? sched_->liveNow() : 0); break;
+        case 0x17: {
+            // VR : vecteur d'interruption + bit3 = mode EOI (1 = software, 0 =
+            // automatique). Le passage software→automatique (1→0) VIDE les bits
+            // in-service ISRA/ISRB (cf. Hatari MFP_VectorReg_WriteByte) — sinon un
+            // in-service resté posé bloque les IRQ de priorité inférieure pour
+            // toujours.
+            const uint8_t oldVr = vr;
+            vr = v;
+            if ((oldVr & 0x08) && !(v & 0x08)) { isra = 0; isrb = 0; }
+            updateIrq(sched_ ? sched_->liveNow() : 0);
+            break;
+        }
         // TxCR : changement de mode (port des MFP_TimerXCtrl_WriteByte) — une valeur
         // INCHANGÉE ne redate pas le timer ; un arrêt fige le compteur courant ; un
         // démarrage part du compteur (continuation), pas de la recharge.
