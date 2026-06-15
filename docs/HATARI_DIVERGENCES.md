@@ -329,9 +329,11 @@ divergences ne casse le boot. Trouvailles actionnables ci-dessous (terrain neuf 
 > **FPU SNaN→SNAN** (flag softfloat `flag_signaling` distinct → `EXC_SNAN`) · **FPU masques
 > FPCR/FPSR** (`&0xFFF0` / `&0x0FFFFFF8`) · **FPU FSGLMUL** (entrées tronquées 24 bits) ·
 > **ACSI INQUIRY `buf[4]`** (valeur fixe 31) · **GEMDOS `.`/`..` en sous-répertoire** (paramètre
-> `subdir`). ⏸️ **DIFFÉRÉS** (complexes / plateforme / non vérifiables headless) : ACSI délai IRQ
-> post-transfert · GEMDOS `only_invalid` · GEMDOS recomposition Unicode macOS · FPU FSCALE ∞/NaN,
-> arrondi de précision FMOVE/FABS/FNEG, FMOVECR INEX2+arrondi, packed decimal bit-exact, octet AEXC.
+> `subdir`) · **FPU FSCALE ∞/NaN** (NaN→propagation, ∞→OPERR+NaN, plus d'UB) · **FPU octet AEXC**
+> (UNFL accumulé seulement si INEXACT ; INEX sur INEX2 OU OVFL). ⏸️ **DIFFÉRÉS** (table de données /
+> plateforme / plomberie / non vérifiables headless) : ACSI délai IRQ post-transfert · GEMDOS
+> `only_invalid` · GEMDOS recomposition Unicode macOS · FPU arrondi de précision FMOVE/FABS/FNEG
+> (plomberie softfloat) · FPU FMOVECR INEX2+arrondi (table rndoff) · FPU packed decimal bit-exact.
 
 - **SCU — jamais réinitialisé au reset** *(HAUTE)* : il n'existe **aucun `Scu::reset()`**, et ni
   `Machine::reset()` ni `hardReset()` ne réinitialisent le SCU → `SysIntMask`/`VmeIntMask`/états
@@ -356,8 +358,9 @@ divergences ne casse le boot. Trouvailles actionnables ci-dessous (terrain neuf 
   (`GemdosHd.cpp:517-547` vs `gemdos.c:1374-1396`)
 - **GEMDOS — recomposition Unicode NFD→NFC macOS non portée** *(MOYENNE, macOS)* :
   `Str_DecomposedToPrecomposedUtf8` absent → fichiers accentués introuvables sur macOS (nul sur Linux).
-- **FPU — divers** *(MOYENNE)* : FSGLMUL ne tronque pas les entrées à 24 bits ; FSCALE par ∞/NaN =
-  UB + résultat faux (pas d'OPERR) ; FMOVE/FABS/FNEG n'arrondissent pas selon la précision FPCR ;
+- **FPU — divers** *(MOYENNE)* : ✅ FSGLMUL tronque désormais ses entrées à 24 bits ; ✅ FSCALE par
+  ∞/NaN gère NaN→propagation / ∞→OPERR (plus d'UB) ; ✅ octet AEXC corrigé (UNFL conditionné par
+  INEXACT, INEX sur OVFL). ⏸️ Reste : FMOVE/FABS/FNEG n'arrondissent pas selon la précision FPCR ;
   FMOVECR n'arme pas INEX2 ni l'ajustement d'arrondi RZ/RM/RP ; packed decimal via libc hôte
   (drapeaux INEX1/OPERR du format P absents) ; octet AEXC accumulé (UNFL non conditionné par INEX2).
 - **FPU — masques FPCR/FPSR non appliqués** *(BASSE)* : bits réservés (FPCR 3-0, FPSR 0-2/28-31)
