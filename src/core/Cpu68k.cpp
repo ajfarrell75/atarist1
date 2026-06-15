@@ -192,7 +192,8 @@ public:
             const int v = g_bus->scc->processIack();
             if (g_tracer) g_tracer->onInterrupt(level, v);
             neostUpdateIpl();
-            return (v >= 0) ? moira::u16(v) : moira::u16(24 + level);  // NV → auto-vecteur
+            return (v >= 0) ? moira::u16(v) : moira::u16(24);  // NV armé → vecteur spurious 24 ($60),
+                                                               // comme le MFP et Hatari (iack_cycle : vector<0 → 24)
         }
         if (g_tracer) g_tracer->onInterrupt(level, 24 + level);   // VBL/HBL auto-vectorisés
         if (level == 4) g_vblPending = false; else if (level == 2) g_hblPending = false;
