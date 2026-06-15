@@ -119,6 +119,29 @@ chantier **beam-sync** ci-dessous :
 *(D1/D2 — ré-interprétation WRITE/READ TRACK STX — sont des choix où NeoST fait MIEUX que
 Hatari ; déjà notés « FAIT » en §FDC, à NE PAS « corriger » vers Hatari.)*
 
+### 2ᵉ passe (2026-06-15) — nouvelles trouvailles (4 correctifs mergés confirmés CORRECTS)
+**Bugs nets actionnables** (priorité) :
+```
+• [BUG] Bus — leak ioAccessWidth_ : write16/write32 branche blitter `return` sans restaurer
+  ioAccessWidth_=saved (Bus.cpp:504-521) → après le 1er blit mot (VDI EmuTOS Mega/STE), les
+  bus-errors d'accès OCTET ($FF9200/lightpen/FDC $FF8604) sont désarmées en permanence.
+  Fix trivial : restaurer ioAccessWidth_ avant le return (ou poser la largeur dans read8/write8).
+• [MOYENNE] Blitter — GPIP3 (GPU_DONE) jamais ré-armé haut : posé à finishTransfer (Blitter.cpp:194),
+  jamais remis haut → blit-done « toujours vrai » dès le 2e blit (faux positif au polling/IRQ).
+  Fix : ligne haute au (re)démarrage dans start() (cf. blitter.c:895/916). Lié à M1.
+```
+**Moyennes (fidélité)** :
+```
+• Son S3 — gain LMC ½-ampli : table DAC pleine + outScale_=0.5 SANS le ×2 d'Hatari → YM STE
+  ~6 dB trop bas relativement quand le LMC est à plein volume (DmaSound.cpp:274-283).
+• FDC — changement lecteur/face « pull » (refreshDriveSide au prochain accès) au lieu de « push »
+  (immédiat à l'écriture PSG, FDC_SetDriveSide). Flip de face en plein transfert non suivi.
+• MFP — pas de MFP_UpdateTimers avant lecture IPR/ISR (bit pending ≤1 instr. en retard au polling).
+• MIDI M-MIDI — RDRF fusionné à !rx_.empty() : RDRF reste asserté après master reset si file non
+  vide (manque un rdrf_ MIDI séparé, comme l'ACIA clavier).
+```
+Détail + basses (vidéo, FDC, son, blitter BL-R/BL-MST, bus) → `docs/HATARI_DIVERGENCES.md` §2ᵉ passe.
+
 ---
 
 ## 🎯 Précision cycle
