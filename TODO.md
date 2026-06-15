@@ -256,6 +256,26 @@ La SEULE différence mesurée : le X (cycle dans la ligne) où le CPU échantill
 ↳ DIRECTION CONFIRMÉE (oracle 2026-06-15) : périodes de boucle = Hatari → l'offset ~28 cyc +
   jitter vient de la PHASE D'ENTRÉE trame/boucle (prise d'IRQ VBL/Timer-B + entrée exception),
   PAS du timing d'instruction ni du bus. Attaquer la latence IRQ/exception cycle-exacte d'abord.
+✗ « ~28 cyc systématique » — N'EXISTE PAS (workflow oracle 5 agents, 2026-06-16). C'était une
+  mésattribution du NUMÉRO d'exception VBL (28 = 24+niv 4), pas un cycle. VBL @ cycle 64 des DEUX
+  côtés, PCs interrompus IDENTIQUES. La divergence est UNIQUEMENT le JITTER de phase.
+✗ HblJitterArray/VblJitterArray (jitter statique 0/4/8) — MORT dans ce Hatari (déclaré jamais
+  défini ni référencé, includes/video.h:162-169 ; commentaire périmé video.c:200). NE PAS porter.
+✓ Vrai jitter auto-vecteur = synchro E-CLOCK (M68000_WaitEClock, m68000.c:810) : 0..8 cyc selon
+  la phase bus à l'IACK, sur HBL (niv2)/VBL (niv4) SEULEMENT (pas MFP/SCC). Moira (68000 générique)
+  ne l'a pas. PORTÉ (NeostMoira::willInterrupt, opt-in NEOST_ECLOCK_ON, commit 08a10f4) mais
+  DÉFAUT OFF : non validable en jeu headless (écrans cassés inatteignables), risque double-comptage.
+⚠ LEÇON STRUCTURELLE (chipWait8 + E-clock) : les hacks de datation vidéo EMPIRIQUES de NeoST
+  (syncCpuBus par-registre, kSyncWriteOffsetCyc=+16, vcWait=2) AGRÈGENT déjà le timing CPU↔faisceau
+  (étalons pixel-exact OK). Ajouter un mécanisme fidèle isolé (align bus, E-clock) DOUBLE-COMPTE.
+  La vraie cycle-exactitude exige une REFONTE COORDONNÉE : retirer les hacks ET ajouter les
+  mécanismes fidèles ENSEMBLE, puis recalibrer à l'oracle. Le résidu dominant = micro-écarts de
+  timing d'instruction Moira↔WinUAE (boucles ±2 cyc) papier-mâchés par les hacks par cas.
+✗ overscan_lr rendu À PLAT sous NeoST (pas de bandes per-ligne comme l'oracle) = BUG RENDU SÉPARÉ
+  (les tricks bordure L/D per-ligne via gestionnaire HBL ne sont pas rendus live) → bloque la
+  validation HBL-raster (et donc E-clock). À corriger pour débloquer un étalon HBL fonctionnel.
+  Diag dispo : NEOST_VBL_TRACE (dépassement service VBL = pending_cyc Hatari ; NeoST ~7.8 vs 4.3),
+  tools/beamsync_diff.sh (diff cycle NeoST↔oracle IRQ/VBL/compteur).
 ```
 
 **FAIT (committé) :**
