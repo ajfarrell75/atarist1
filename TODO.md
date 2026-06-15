@@ -156,16 +156,49 @@ Intentionnels / NeoST plus correct (NE PAS corriger) : RTC temps émulé (déter
 RTC Mega-only (RP5C15 physiquement Mega), SCU encodage bit IRQ1, transcendantes FPU host.
 
 ### 4ᵉ passe (2026-06-15) — couches d'intégration (CPU/Moira, E/S) — dernier terrain LOGIQUE
-**✅ CORRIGÉ** (build + glue 19/0 + boots ST/STE/MegaSTE identiques) : CPU — SCC No-Vector renvoyait
-l'auto-vecteur 29 ($74) au lieu du vecteur spurious 24 ($60) sur IACK niveau 5 (`Cpu68k.cpp`).
-**⏸️ Reste à faire** : Centronics — GPIP0 (BUSY) non pulsé sur impression réelle (asserté seulement
-sous `loopback()`) → décision produit (sortie imprimante ?). [moyenne, niche]
+**✅ CORRIGÉS** (build + glue 19/0 + boots ST/STE/MegaSTE identiques) :
+• CPU — SCC No-Vector renvoyait l'auto-vecteur 29 ($74) au lieu du vecteur spurious 24 ($60) sur
+  IACK niveau 5 (`Cpu68k.cpp`).
+• Centronics — **support imprimante ajouté** : capture des octets dans un fichier (`Machine::
+  setPrinterFile`, headless `--printer FILE`) + BUSY (GPIP0) sur strobe, port de `psg.c:388-390`.
+  Validé : mini-ROM imprimant « NeoST\n » → fichier capturé identique. (GUI : à câbler via la même API.)
 Reste **fidèle** : intégration CPU (trame bus-error, double-fault→HALT, IACK MFP, reset, gating
 IPL/SCU, wait-states) et E/S (StePads, paddles, JoystickInput). Cf. `docs/HATARI_DIVERGENCES.md` §4ᵉ passe.
 
 > 🚧 **Terrain LOGIQUE épuisé** (4 passes : toutes les puces + périphériques + intégration). Les
 > divergences restantes sont **cycle-exactes** (beam-sync ci-dessous, S2/D3/M1, latence exception/IPL)
 > → bloquées tant que l'oracle Hatari n'est pas bâti (**SDL2 absent du conteneur**).
+
+### 🔮 Travaux à reprendre UNE FOIS L'ORACLE HATARI DISPONIBLE (session avec SDL2)
+
+> **Pré-requis : bâtir l'oracle headless.** `extern/hatari/` est déjà cloné (commit `c9906f1`).
+> Installer SDL2 (`libsdl2-dev`/`sdl2`), puis :
+> ```sh
+> cmake -S extern/hatari -B extern/hatari/build -DCMAKE_BUILD_TYPE=Release -DENABLE_SDL2=1
+> cmake --build extern/hatari/build -j        # → extern/hatari/build/src/hatari
+> ```
+> Comparaison cycle-exacte (cf. `docs/HATARI_AUTOMATION.md`) : `hatari --trace video_addr,video_sync`
+> + `--cmd-fifo`/`hatari-event keypress 57` (atteindre les menus in-game) face aux traces NeoST
+> `NEOST_VC_TRACE=1` / `NEOST_SYNC_TRACE` (même format) ; non-régression `tools/run_etalons.py --max 0`.
+
+**Items qui exigent l'oracle pour être traités/validés (par priorité d'impact) :**
+```
+1. [IMPACT JOUEUR] BEAM-SYNC — phase CPU↔faisceau cycle-exacte (§Précision cycle ci-dessous).
+   Casse 4 jeux : Lethal Xcess, Enchanted Land, Cuddly Demos, Super Hang-On. C'EST le chantier.
+   Implique : dater TOUT accès MMIO vidéo en FIN d'accès bus + align 4-cyc systématique ;
+   latence d'entrée d'exception (+4 vs +0 Moira) ; échantillonnage IPL au cycle ; jitter E-Clock IACK.
+2. [VIDÉO] V1 branche STE de la Glue · V2 tricks par changement de résolution (overscan med-res,
+   scroll hardware) · V3 géométrie mid-trame (50↔60 Hz, RestartVideoCounter). Validation pixel oracle.
+3. [SON] S2 FIFO 8 octets DMA + avance HBL (réalignement mono→stéréo) · S3 gain LMC ½-ampli
+   (~6 dB) — validables par dump WAV oracle (YM_250_DEBUG) + comparaison.
+4. [FDC] D3 stall FIFO 32 cyc · drive/side « push » — validables par trace FDC byte-exacte.
+5. [MFP] M1 GPIP on-chip via machine de fronts AER/DDR · UpdateTimers avant lecture IPR — vérif latence.
+6. [FPU] arrondi de précision FMOVE/FABS/FNEG · FMOVECR INEX2+rndoff — table extraite de fpp.c,
+   validable par ROM de test étendue.
+```
+**Sans oracle (faisables hors session SDL2) :** FPU packed decimal bit-exact (algorithme
+softfloat_decimal) ; GEMDOS only_invalid (port `Str_Filename_Invalid_Char`) ; GEMDOS Unicode macOS
+(sur une cible macOS) — tous documentés `docs/HATARI_DIVERGENCES.md`.
 
 ---
 
@@ -506,10 +539,9 @@ détection de partitions) — port de `hdc.c` (`io/Acsi`, `--acsi`/`--hd`, cf. C
   reset, TX→RX bouclage — port fonctionnel de `scc.c` (`io/Scc`, cf. CHANGELOG).
   _Reste (faible valeur) : timers du BRG (Zero Count), baudrate temporisé, série hôte._
 - **SCSI / NCR5380** (MegaSTE/TT) *(gros contrôleur)* — réf. `ncr5380.c`
-- **Imprimante/Centronics** : port B YM, strobe PSG port A bit5, busy MFP I0 — réf.
-  ```
-  `printer.c`
-  ```
+- ~~**Imprimante/Centronics** : port B YM, strobe PSG port A bit5, busy MFP I0~~ → **FAIT**
+  (port de `printer.c`/`psg.c:388-390`) : capture des octets imprimés dans un fichier
+  (`Machine::setPrinterFile`, headless `--printer FILE`) + BUSY GPIP0 sur strobe. Cf. CHANGELOG.
 
 ## Périphériques & profils machine
 

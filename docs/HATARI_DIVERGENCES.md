@@ -396,8 +396,8 @@ en correctifs actionnables, justifiant le ciblage des sous-systèmes vierges plu
 
 Couvre les **dernières couches jamais auditées** : le **wrapper CPU/Moira** (`Cpu68k`, câblage
 exceptions/IPL/bus-error/IACK/reset) et les **E/S** (joypads/paddles `StePads`, `JoystickInput`,
-Centronics). Verdict : **très fidèles**. **2 divergences réelles** (1 corrigée, 1 différée) + des
-points cycle-exacts déjà cadrés.
+Centronics). Verdict : **très fidèles**. **2 divergences réelles — toutes deux corrigées** (SCC
+No-Vector ; support imprimante Centronics) + des points cycle-exacts déjà cadrés.
 
 > ⚠️ **Oracle Hatari non bâtissable ici** : SDL2 absent du conteneur → les divergences
 > **cycle-exactes** (phase CPU↔faisceau, échantillonnage IPL au cycle, latence d'exception, jitter
@@ -410,12 +410,12 @@ points cycle-exacts déjà cadrés.
   lieu du vecteur **spurious 24** ($60) d'Hatari (`iack_cycle` : `vector<0 → 24`). La branche MFP
   était déjà conforme. **Fix** : `Cpu68k.cpp` renvoie 24 sur `v<0` pour le SCC. (Validé : build,
   glue 19/0, boots ST/STE/MegaSTE pixel-identiques.)
-- **Centronics — GPIP0 (BUSY) non pulsé sur impression réelle** ⏸️ *différé (moyenne)* : le
-  `printerSink_` du PSG n'est jamais câblé et `mfp.setBusyLine(true)` n'est asserté que sous la
-  fixture de bouclage (`loopback()`), alors que Hatari asserte GPIP0 bas **inconditionnellement** sur
-  le strobe (`psg.c:388-390`). NeoST n'a pas de sortie imprimante (choix produit) ; l'impression
-  « passe » silencieusement mais le handshake BUSY n'est pas reproduit. *Fix : asserter
-  `setBusyLine` sur chaque transfert imprimante réel — décision produit (sortie imprimante ?).*
+- **Centronics — support imprimante** ✅ **corrigé** *(moyenne)* : le `printerSink_` du PSG est
+  désormais câblé (`Machine`) → sur chaque front de strobe, l'octet du port B est **capturé dans un
+  fichier hôte** (`Machine::setPrinterFile`, option headless `--printer FILE`) et la ligne BUSY
+  (GPIP0) est assertée bas, port fidèle de `psg.c:388-390` (`Printer_TransferByteTo` +
+  `MFP_GPIP_Set_Line_Input LINE0 LOW`). Sans fichier imprimante : no-op (défaut inchangé). Validé :
+  mini-ROM imprimant « NeoST\n » via le protocole Centronics → fichier capturé identique.
 - **PSG port A/B en entrée (joysticks parallèles) absent** *(très basse)* : Hatari recompose R14
   bit5 / R15 depuis les joysticks « parallel port » à la lecture (`psg.c:289-312`) — périphérique de
   niche, non émulé par NeoST.
@@ -428,6 +428,6 @@ MegaSTE 16 MHz (créneau bus + cache). **E/S** : StePads (multiplexage $FF9202, 
 pads A/B, DIP MegaSTE 0xBF, paddles REALSTICK, lightpen, bus-errors octet/mot $FF9200-23),
 JoystickInput (mapping, ports), suivi du front de strobe Centronics.
 
-**Bilan 4ᵉ passe** : couche d'intégration **solide** ; SCC NV corrigé ; Centronics GPIP0 = seule
-divergence restante (différée, décision produit). Le terrain LOGIQUE est désormais **épuisé** — il ne
-reste que le **cycle-exact**, qui exige l'oracle (SDL2 absent ici).
+**Bilan 4ᵉ passe** : couche d'intégration **solide** ; SCC NV **corrigé** ; support imprimante
+Centronics **ajouté** (capture `--printer` + BUSY). Le terrain LOGIQUE est désormais **épuisé** — il
+ne reste que le **cycle-exact**, qui exige l'oracle (SDL2 absent ici).

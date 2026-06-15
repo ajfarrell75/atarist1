@@ -794,6 +794,11 @@ taguées (0.1.x). Le restant est dans [`TODO.md`](TODO.md).
   le cœur émet des événements `FdcSound` (moteur/pas/seek/index) via un sink ; frontends
   GUI (`DriveSound`, miniaudio) et WASM (Web Audio). WAV embarqués dans `roms/drivesound/`.
 - **Son PSG en WASM** : export `neost_audio_render` tiré par un `ScriptProcessorNode`.
+- **Imprimante Centronics** (port de `psg.c:388-390` + `printer.c`) : sur chaque FRONT de strobe
+  (PSG port A R14 bit5), l'octet du port parallèle (port B R15) est **capturé dans un fichier hôte**
+  (`Machine::setPrinterFile`, option headless `--printer FILE`) et la ligne **BUSY (GPIP0)** est
+  assertée bas comme le vrai handshake. No-op tant qu'aucun fichier n'est ouvert (défaut inchangé).
+  Validé : mini-ROM imprimant « NeoST\n » via le protocole Centronics → fichier capturé identique.
 
 ## Bus error & cartouches de diagnostic
 - **Miroir matériel du YM2149** : tout `$FF8800-$FF88FF` (et plus seulement `$FF8800-03`) est routé

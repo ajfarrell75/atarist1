@@ -45,6 +45,7 @@ void usage() {
         "  --cart FILE       monte une cartouche ($FA0000) : Test Kit diagnostic, etc.\n"
         "  --gemdos DIR      disque dur GEMDOS : mappe DIR sur C: (redirection des appels\n"
         "                    GEMDOS vers l'hôte, façon Hatari ; exclusif avec --cart)\n"
+        "  --printer FILE    imprimante Centronics : capture les octets imprimés dans FILE\n"
         "  --acsi IMG        image disque dur ACSI (cible 0) : le TOS lit la table de\n"
         "                    partitions et monte C:/D:… (alias --hd ; port de hdc.c)\n"
         "  --glue-selftest   auto-test de la machine Glue (bordures) puis quitte\n"
@@ -134,6 +135,7 @@ int main(int argc, char** argv) {
     bool        fastFdc    = false;   // FDC rapide (--fastfdc) : délais commande/transfert ÷10
     std::string romPath    = "roms/etos192us.img";
     std::string cartPath;
+    std::string printerPath;                     // --printer FILE : capture Centronics (port parallèle)
     std::string gemdosDir;                       // --gemdos DIR : disque dur GEMDOS (dossier hôte)
     std::string acsiImg;                         // --acsi IMG : image disque dur ACSI (cible 0)
     bool        regs       = false;
@@ -194,6 +196,7 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(a, "--fastfdc"))    fastFdc   = true;
         else if (!std::strcmp(a, "--cart"))       cartPath  = next(a);
         else if (!std::strcmp(a, "--gemdos"))     gemdosDir = next(a);
+        else if (!std::strcmp(a, "--printer"))    printerPath = next(a);
         else if (!std::strcmp(a, "--acsi") || !std::strcmp(a, "--hd")) acsiImg = next(a);
         else if (!std::strcmp(a, "--walk-mouse")) walkMouse = true;
         else if (!std::strcmp(a, "--keys"))       keys      = next(a);
@@ -255,6 +258,13 @@ int main(int argc, char** argv) {
         machine.gemdos.setDirectory(gemdosDir);
     } else if (!cartPath.empty()) {
         machine.loadCart(cartPath);   // cartouche $FA0000 (optionnelle)
+    }
+    // Imprimante Centronics (--printer FILE) : capture les octets imprimés dans FILE.
+    if (!printerPath.empty()) {
+        if (machine.setPrinterFile(printerPath))
+            std::printf("[headless] imprimante Centronics → %s\n", printerPath.c_str());
+        else
+            std::fprintf(stderr, "[headless] impossible d'ouvrir %s pour l'imprimante\n", printerPath.c_str());
     }
     // Disque dur ACSI (--acsi/--hd) : le TOS détecte le périphérique, lit la table de
     // partitions et monte les partitions FAT (C:, D:…). Indépendant du GEMDOS HD.

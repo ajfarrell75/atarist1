@@ -10,6 +10,7 @@
 // =============================================================================
 #pragma once
 #include <cstddef>
+#include <cstdio>
 #include <string>
 
 #include "core/Bus.hpp"
@@ -68,6 +69,15 @@ public:
     void ejectCart() { bus.ejectCart(); }
     bool loadDisk(const std::string& path)  { return fdc.loadImage(path, 0); }   // lecteur A
     bool loadDiskB(const std::string& path) { return fdc.loadImage(path, 1); }   // lecteur B (optionnel)
+    // Imprimante Centronics : capture les octets du port parallèle (PSG port B, émis sur
+    // FRONT de strobe) dans un fichier hôte (ajout binaire). Chemin vide = désactive.
+    // Active aussi le handshake BUSY (GPIP0) à la Hatari (cf. ctor). Renvoie false si l'ouverture échoue.
+    bool setPrinterFile(const std::string& path) {
+        if (printerFile_) { std::fclose(printerFile_); printerFile_ = nullptr; }
+        if (path.empty()) return true;
+        printerFile_ = std::fopen(path.c_str(), "ab");
+        return printerFile_ != nullptr;
+    }
     // À chaud : LMC1992 préservé. Mega STE : $FF8E21 → 0 (8 MHz, cache invalidé,
     // port de Hatari MegaSTE_CPU_Cache_Reset) + FPU au repos.
     void reset() {
@@ -180,4 +190,6 @@ private:
     static constexpr int DE_END_CYCLE   = 376;   // fin Display-Enable → rendu ligne
     // (Timer B : position dérivée du Display-Enable, cf. timerBPos / Shifter::timerBLinePos.)
     static constexpr int HBL_CYCLE      = 508;   // 512 - 4 (Hbl_Int_Pos_Low_50)
+
+    std::FILE* printerFile_ = nullptr;   // imprimante Centronics : fichier de capture (nul = désactivée)
 };
