@@ -248,3 +248,65 @@ par le présent document :
 - **WRITE TRACK `.ST`** : NeoST écrit les secteurs d'une géométrie standard (Hatari renvoie
   LOST_DATA, TODO).
 - **SCC `WR14` bit4** : bouclage local conforme à la datasheet Zilog (absent d'Hatari).
+
+---
+
+## 🔁 2ᵉ passe d'audit approfondi (2026-06-15, workflow 7 agents)
+
+Objectif : creuser **plus profond** que la 1ʳᵉ passe (lecture ligne-à-ligne des fonctions clés)
+et **vérifier les 4 correctifs mergés**. Verdict global : fidélité **confirmée**, **aucune nouvelle
+divergence HAUTE**, les 4 correctifs sont CORRECTS. La passe remonte surtout des cas-limites
+**basses**, quelques **moyennes** nouvelles, et **2 bugs nets actionnables**.
+
+### Vérification des correctifs mergés
+- ✅ **B1** (Blitter 65536) — CORRECT : X (bouclage 16 bits) et Y (`int 0→65536`) = 65536 exact, readback 16 bits fidèle, pas de débordement.
+- ✅ **BL2** (rejet accès octet) — CORRECT en **écriture** (liste `$3A-$3D` exacte vs `Blitter_CheckAccess_Byte`) ; **incomplet en lecture** → voir BL-R.
+- ✅ **S1** (filtre LPF STF) — CORRECT (`applyLpfStf250` = `LowPassFilter`, activation `!STE` = `Config_IsMachineST`). Réserve : condition `nAudioFrequency≥40000` d'Hatari ignorée (sans impact à 48 kHz).
+- ✅ **BU1** (miroir PSG) — CORRECT : décodage `addr&3`, plage close à `$FF88FF` (pas de chevauchement `$FF8900`), wait-states inclus.
+- ✅ **MIDI** (no-purge + RDR persistant) — CORRECT, mais effet de bord **M-MIDI** (ci-dessous).
+
+### 🔴 Nouveaux — BUGS NETS actionnables
+- **BUS-LEAK** *(basse-moyenne, bug réel)* — `Bus::write16`/`write32` branche blitter font `return`
+  **sans restaurer `ioAccessWidth_ = saved`** (`Bus.cpp:504-521`). Après le 1ᵉʳ blit mot (donc dès
+  le 1ᵉʳ blit VDI d'EmuTOS sur Mega ST/STE/MegaSTE), `ioAccessWidth_` reste ≥2 en permanence →
+  les bus-errors d'accès **octet** de `$FF9200` (joypad), du lightpen `$FF9220-23` et du FDC
+  `$FF8604-07` (`==1` requis) sont **désarmées définitivement**. *Fix : restaurer `ioAccessWidth_`
+  avant le `return`, ou poser la largeur dans read8/write8.*
+- **BL-GPIP3** *(moyenne, bug réel)* — la ligne GPU_DONE (GPIP3) du blitter est posée à
+  `finishTransfer` (`Blitter.cpp:194`) mais **jamais ré-armée haute** ; Hatari la met haute au
+  démarrage (`blitter.c:895`) et basse à l'achèvement (`:916`). → après le 1ᵉʳ blit, GPIP3 lit
+  « fini » en permanence ; les blits suivants ne génèrent **plus de front** → un programme qui
+  *scrute* GPIP3 / son IRQ pour la fin de blit voit un faux positif dès le 2ᵉ blit. *Fix : ligne
+  haute au (re)démarrage dans `start()`.* (Lié à M1.)
+
+### 🟠 Nouveaux — MOYENNES (fidélité)
+- **MFP** — pas de dispatch des timers échus (`MFP_UpdateTimers`) avant lecture des registres
+  d'IRQ → un code qui *poll* IPR/ISR voit un bit pending ≤ 1 instruction en retard.
+- **SON S3** — gain LMC ½-amplitude : table DAC pleine + `outScale_=0.5` **sans le ×2** que Hatari
+  met dans `left/right_gain` → le YM STE ressort **~6 dB trop bas** relativement quand le LMC est à
+  plein volume ; ratio YM:DMA aussi décalé.
+- **FDC** — changement lecteur/face « **pull** » (`refreshDriveSide` au prochain accès registre)
+  au lieu de « push » (immédiat à l'écriture PSG, `FDC_SetDriveSide`) → index ré-ancré tard ; un
+  flip de face en plein transfert utilise l'ancienne face. Boot `.ST`/TOS non affectés.
+- **MIDI M-MIDI** — l'ACIA MIDI fusionne RDRF avec `!rx_.empty()` (pas de `rdrf_` séparé). Comme le
+  correctif préserve `rx_` au master reset, le SR montre **RDRF=1 juste après reset** si un octet
+  restait (Hatari efface RDRF, garde l'octet dans RDR). *Fix complet : `rdrf_` MIDI distinct.*
+
+### 🟡 Nouveaux — BASSES (cas-limites/cosmétiques)
+- **Vidéo** : filtre « écriture redondante » absent (freq/res rejouées même inchangées) ; `$FF8260`
+  bits 2-7 non forcés à 1 sur ST ; alias shifter `$FF8261` non géré ; attribution ligne à longueur
+  FIXE (`fc/cpl`) vs accumulée ; chemin `PrevSize` partiel ; quirks démos `$FF8205/07/09` (E605/Tekila).
+- **FDC** : `dmaResetFifo` ne remet pas `bufPos_`/`dmaBytesToTransfer_` ; recalcul densité superflu
+  à chaque lecture statut ; borne parseur STX (chemin secteurs complet) ; pas d'`indexCheckUpdate`
+  avant la commande.
+- **Son** : compteur bruit testé `>=` dans la garde 125 kHz (vs 250) ; pas de HPF sous-sonique sur
+  le canal DMA ; `mode_` non masqué `&0x8f` (relecture) ; masque adresse DMA `$3fffff` non appliqué.
+- **Blitter** : **BL-R** read8 ne rejette pas l'accès octet aux registres mot (rend la valeur vive
+  vs IoMem rance) ; **BL-MST** `$FF8A3E/3F` dé-fauté à tort sur Mega ST (void seulement sur STE).
+- **Bus** : wait-state 4 cyc des registres FDC/DMA non facturé ; `$FF860E/0F` densité routé sur STE
+  simple ; `$FF8A3E/3F`→0x00 au lieu de 0xFF ; trou MMU STF bank0=128K/bank1=2048K non émulé.
+
+### Conclusion
+La 1ʳᵉ passe avait capté l'essentiel ; les 4 correctifs sont validés. Priorités issues de la 2ᵉ
+passe : **BUS-LEAK** (bug clair, fix trivial) et **BL-GPIP3** (bug fonctionnel pour le polling de
+fin de blit), puis S3 (gain LMC) et les moyennes de fidélité. Le reste est cas-limite.
