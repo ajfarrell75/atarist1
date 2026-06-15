@@ -866,20 +866,36 @@ void Shifter::replayGlue() {
     int curRes  = (frameMode_ == Mode::Medium) ? 1 : (frameMode_ == Mode::High ? 2 : 0);
     int curFreq50 = (frameSync_ & 0x02) ? 1 : 0;
 
+    // V2 res-switch (opt-in NEOST_V2) : attribution à LONGUEUR DE LIGNE VARIABLE —
+    // une ligne où tombe une impulsion hi-res PRÉCOCE (≤56) ne fait que 224 cyc
+    // (port HBL_Pos/nCyclesPerLine), COHÉRENT avec le raccourcissement live
+    // (Machine setHblShorten) : sans ça l'état glue ne refléterait pas les lignes
+    // raccourcies. Hors V2 : attribution fixe `frameCycle/cpl` historique (inchangée).
+    static const bool v2 = std::getenv("NEOST_V2") != nullptr;
     std::size_t wi = 0;
     const std::size_t nw = syncWrites_.size();
+    int64_t lineCyc = 0;                                  // cycle-trame du début de la ligne (V2)
     for (int line = 0; line < lpf; ++line) {
         int freqHz = (curRes == 2) ? 71 : (curFreq50 ? 50 : 60);
         startHBL(line, curRes, freqHz);
+        int len = cpl;
+        if (v2) {                                        // ligne raccourcie ?
+            for (std::size_t k = wi; k < nw && syncWrites_[k].frameCycle < lineCyc + 57; ++k)
+                if (syncWrites_[k].isRes && (syncWrites_[k].val & 3) == 2) { len = 224; break; }
+        }
+        const int64_t lineEnd = lineCyc + len;
         // Applique les écritures de CETTE ligne (cycle croissant).
-        while (wi < nw && (syncWrites_[wi].frameCycle / cpl) == line) {
+        while (wi < nw && (v2 ? (syncWrites_[wi].frameCycle < lineEnd)
+                              : ((syncWrites_[wi].frameCycle / cpl) == line))) {
             const SyncWrite& w = syncWrites_[wi++];
-            const int lc = w.frameCycle % cpl;
+            const int lc = v2 ? static_cast<int>(w.frameCycle - lineCyc)
+                              : static_cast<int>(w.frameCycle % cpl);
             if (w.isRes) curRes    = w.val & 0x03;
             else         curFreq50 = (w.val & 0x02) ? 1 : 0;
             freqHz = (curRes == 2) ? 71 : (curFreq50 ? 50 : 60);
             updateGlueState(line, lc, w.isRes, freqHz);
         }
+        lineCyc += len;
     }
 
     // Détection : une bordure est-elle retirée ? (haut/bas déplacés, ou une ligne
