@@ -129,10 +129,37 @@ C'est le « full WinUAE timing convergence » au niveau INSTRUCTION. (Garder NEO
 que la phase IRQ n'est pas faite : seul, il décale la phase de trame des hacks empiriques sans les
 remplacer — cf. §6.)
 
-## 6. CHANTIER RESTANT — phase d'ENTRÉE D'IRQ (= les JEUX)
+## 6. ✅ FONDATION CORRIGÉE — dispatch BLOC (Enchanted Land DÉBLOQUÉ)
 
-La convergence instruction est NÉCESSAIRE mais PAS SUFFISANTE : **EL reste deadlock** (RAM_SLOT
-inchangé). Deux sous-problèmes d'ENTRÉE D'IRQ, distincts du timing d'instruction :
+**Le deadlock EL N'ÉTAIT PAS la convergence ni PT — c'était le MODÈLE DE DISPATCH sync-driven.**
+A/B décisif (réponse au « reconsidérer la fondation ») : repasser au **dispatch BLOC** (CPU borné à
+l'événement suivant + dispatch à la frontière via `runTo`, modèle pré-sync-driven) **tout en gardant
+PT=true + RAM_SLOT** → **EL rend le JEU** (51 % non-noir, 42 couleurs, stable ; était 0 %/noir dès la
+trame 1200). Le sync-driven (dispatch mid-instruction `do_cycles` WinUAE) deadlockait la boucle
+beam-sync `$EE78` d'EL SANS corriger le jitter (déjà falsifié) = **net-négatif, RÉFUTÉ**. La
+convergence cycle d'instruction est **indépendante du dispatch** (PT=true suffit). **FAIT (défaut, commit
+ff3ab25)** : bloc par défaut, sync-driven en opt-in `NEOST_SYNC_DISPATCH`. Validé : EL jeu rendu,
+étalons 19/0 + TOUS OK, différentiel 14/14 (RAM_SLOT), LX inchangé, `NEOST_SYNC_DISPATCH=1` reproduit
+le deadlock (A/B intact).
+
+> ⚠️ Le fix EL = le DISPATCH BLOC, PAS RAM_SLOT (EL marche identiquement avec/sans RAM_SLOT). RAM_SLOT
+> reste la convergence d'INSTRUCTION (fidélité WinUAE), sans impact jeu prouvé → garder opt-in tant
+> qu'un cas ne le tranche pas (il décale les réf-étalons SELF de 56 px en bordure, zone active intacte).
+
+## 7. CHANTIER RESTANT (raffinements, plus de deadlock)
+
+Avec la fondation bloc+PT, EL marche. Reste, par valeur décroissante :
+1. **LX jitter de titre** (~1.5 %, subtil ; LX rend déjà) + **Cuddly menu robot** / **SHO course**
+   (inatteignables headless → navigation requise pour mesurer).
+2. **E-clock @ IACK** (poll-beat période-3 vs Hatari période-5) — RAFFINEMENT de phase, pas un
+   blocage ; n'a PAS amélioré le screenshot ni les jeux → faible priorité (le dispatch bloc a réglé
+   l'essentiel). Si repris : éditer `execInterrupt<C68000>` (cf. ci-dessous), valider au poll-beat.
+3. **RAM_SLOT default-on ?** — faithfulness pure ; exige de re-baseliner les réf-étalons SELF à
+   l'oracle (zone active déjà 0 px). À trancher si un jeu le requiert.
+4. Retirer les hacks redondants (`NEOST_VC_WAIT`, `kSyncWriteOffsetCyc`) + recalibrer — seulement si
+   RAM_SLOT passe default-on.
+
+### (archive) Sous-problèmes d'entrée d'IRQ — désormais RAFFINEMENTS, plus des blocages
 
 1. **E-clock @ IACK ne compose pas encore avec RAM_SLOT** : poll-beat reste période-3 `{0,4,8}` vs
    Hatari période-5 `{0,4,8,12,16}` (= E-clock mod-10 × créneau mod-4 = mod-20). En NeoST, RAM_SLOT
