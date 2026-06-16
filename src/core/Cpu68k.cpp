@@ -11,6 +11,7 @@
 #include "core/Cpu68k.hpp"
 #include "core/Blitter.hpp"
 #include "core/Bus.hpp"
+#include "core/Scheduler.hpp"
 #include "core/Tracer.hpp"
 #include "io/Mfp.hpp"
 #include "io/GemdosHd.hpp"
@@ -22,6 +23,7 @@
 
 namespace {
     Bus*    g_bus = nullptr;        // bus actif vu par les callbacks CPU
+    Scheduler* g_sched = nullptr;   // ordonnanceur piloté par sync() (cf. NeostMoira::sync)
     bool    g_vblPending = false;   // VBL (niveau 4) en attente d'acquittement
     bool    g_hblPending = false;   // HBL (niveau 2) en attente d'acquittement
     Tracer* g_tracer = nullptr;     // traceur optionnel (nullptr = aucun surcoût)
@@ -32,6 +34,12 @@ namespace {
     // halte le CPU. On reproduit ce halt au lieu de récurser → l'hôte ne segfault
     // plus et le mode headless peut vider sa trace/série.
     bool    g_inBusError = false;
+    // Pendant cpu.reset() (lecture SSP/PC) le cœur consomme ~40 cyc via sync(). On NE
+    // dispatche PAS l'ordonnanceur alors : sinon sched.now() serait traîné à 40 et la 1ʳᵉ
+    // trame s'ancrerait là (frameStart_=40) au lieu de 0 → grille faisceau décalée de 40 cyc
+    // → calibrations raster cassées (Enchanted Land noir). L'ancien modèle n'avançait
+    // l'ordonnanceur qu'aux frontières de bloc, jamais pendant le reset.
+    bool    g_inReset = false;
     // Préemption du timeslice : posé par endTimeslice() (depuis un callback de
     // l'ordonnanceur, en plein milieu d'une instruction), testé après chaque
     // instruction dans la boucle run() pour rendre la main à l'horloge.
@@ -179,6 +187,21 @@ public:
     // de SAUTER l'attente au lieu de la simuler cycle par cycle (cf. run()).
     bool isStopped() const { return (flags & moira::State::STOPPED) != 0; }
 
+    // ---- Ordonnanceur PILOTÉ PAR L'HORLOGE (modèle `do_cycles` WinUAE/Hatari) ----
+    // Hook cycle de Moira. Moira l'appelle à chaque pas : en PRECISE_TIMING, AVANT
+    // chaque accès mémoire (sous-instruction) ; sinon, en fin d'instruction (cf.
+    // MoiraMacros SYNC/CYCLES). On avance l'horloge du cœur de `n`, PUIS on dispatche
+    // les événements échus de l'ordonnanceur — EN COURS d'instruction. L'IPL est donc
+    // posé au CYCLE EXACT de l'événement (Timer-B/VBL/HBL) et vu par le POLL_IPL de
+    // l'instruction COURANTE, au lieu d'être posé ~1 instruction plus tard à la
+    // frontière de bloc (cause racine du jitter beam-sync). syncTo est O(1) tant que
+    // rien n'est dû (cache nextDue_) — sync() est appelé très souvent. Pas de
+    // réentrance : les callbacks de l'ordonnanceur n'exécutent pas le CPU.
+    void sync(int n) override {
+        setClock(getClock() + n);             // défaut Moira (avance l'horloge du cœur)
+        if (g_sched && !g_inReset) g_sched->syncTo(busOfClock(static_cast<int64_t>(getClock())));
+    }
+
     // Committe l'IPL : broche + registre échantillonné (reg.ipl). setIPL ne pose que
     // la broche, que Moira n'échantillonne qu'au point de poll de l'instruction
     // SUIVANTE (pipeline IPL fidèle au 68000) — correct pour un changement en plein
@@ -306,9 +329,21 @@ void Cpu68k::setTracer(Tracer* t) {
     if (t) t->setCpu(this);    // le Tracer lit les registres via ce CPU
 }
 
+void Cpu68k::setScheduler(Scheduler* s) {
+    g_sched = s;               // piloté depuis NeostMoira::sync (cf. en-tête hpp)
+}
+
+// Horloge BUS absolue live du cœur (cf. hpp). busOfClock intègre la bascule 8/16 MHz
+// du Mega STE. Valide hors run comme en plein milieu d'une instruction.
+int64_t Cpu68k::busClockNow() const {
+    return busOfClock(static_cast<int64_t>(g_moira->getClock()));
+}
+
 void Cpu68k::reset() {
     g_bus->bootOverlay = true;
+    g_inReset = true;                    // sync() n'avance pas l'ordonnanceur pendant le reset
     g_moira->reset();                    // lit SSP/PC via read16OnReset (overlay ROM)
+    g_inReset = false;
     g_bus->bootOverlay = false;
 }
 
@@ -344,20 +379,25 @@ int Cpu68k::run(int cycles) {
                     g_moira->setIRD(0x4E71);         // → exécuté comme NOP
             }
         }
-        g_moira->execute();                          // une instruction
+        g_moira->execute();                          // une instruction (sync() dispatche les events échus)
         if (g_tracer) g_tracer->onInstruction(g_moira->getPC0());
-        // Préemption : une écriture matérielle pendant cette instruction a pu
-        // armer un événement plus proche que la cible → on rend la main pour
-        // que la boucle d'horloge le serve (cf. Scheduler::setEndSlice).
+        // Préemption (dormante dans le modèle piloté par sync : beginRun n'est plus
+        // appelé) : conservée par sûreté si un chemin arme encore endSlice.
         if (g_endSlice) { g_endSlice = false; break; }
-        // Si le CPU est en STOP après cette instruction, aucune IRQ pendante ne
-        // l'a réveillé (execute() les teste) : rien ne se passera avant le
-        // prochain événement (= `target`, fixé par l'ordonnanceur). On SAUTE
-        // l'attente au lieu de la simuler cycle par cycle (sinon ~25× plus lent
-        // et l'émulation rame en temps réel sur les STOP d'EmuTOS/TOS).
-        if (g_moira->isStopped() && busOfClock(g_moira->getClock()) < targetBus) {
-            g_moira->setClock(cpuClockForBus(targetBus));
-            break;
+        // STOP : aucune instruction ne tournera tant qu'un événement ne change pas
+        // l'IPL. Au lieu de simuler l'attente cycle par cycle (≈25× plus lent), on
+        // saute au PROCHAIN événement armé (borné par la cible du bloc) et on le
+        // DISPATCHE via syncTo : il peut lever l'IPL → l'execute() suivant sortira du
+        // STOP au bon cycle. Sans événement avant la cible, on saute droit à la cible.
+        // (≠ ancien modèle : on saute à l'EVENT, pas à la cible, sinon on zapperait
+        // tous les events de la trame — la cible du bloc est maintenant la fin de trame.)
+        if (g_moira->isStopped()) {
+            const int64_t busNow = busOfClock(g_moira->getClock());
+            if (busNow >= targetBus) break;
+            const int64_t nd = g_sched ? g_sched->peekNextDue() : -1;
+            const int64_t jumpTo = (nd > busNow && nd < targetBus) ? nd : targetBus;
+            g_moira->setClock(cpuClockForBus(jumpTo));
+            if (g_sched) g_sched->syncTo(jumpTo);    // dispatche l'event au saut (peut lever l'IPL)
         }
     }
     return static_cast<int>(busOfClock(g_moira->getClock()) - quantumStartBus_);

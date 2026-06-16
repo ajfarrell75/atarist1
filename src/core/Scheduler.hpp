@@ -89,23 +89,47 @@ public:
         now_ = 0;
         for (auto& d : due_) d = kInactive;
         runTarget_ = kInactive;
+        nextDue_   = kInactive;
     }
 
     // Programme (ou reprogramme) l'événement `s` au cycle absolu `atCycle`.
     void schedule(Source s, int64_t atCycle) {
         due_[s] = atCycle;
+        // Cache O(1) du plus proche événement dû (cf. nextDue_/syncTo) : un nouvel
+        // événement plus tôt avance le cache ; sinon il reste valide (recalculé au
+        // dispatch ou au cancel de l'échéance minimale).
+        if (nextDue_ == kInactive || atCycle < nextDue_) nextDue_ = atCycle;
         // Si on est en plein bloc CPU (runTarget_ armé) et que cet événement tombe
         // AVANT la cible du bloc, on préempte : le CPU rend la main à la prochaine
         // frontière d'instruction et la boucle d'horloge ré-évaluera nextDue().
+        // (Dormant dans le modèle piloté par sync() : beginRun n'est plus appelé.)
         if (runTarget_ != kInactive && atCycle < runTarget_ && endSlice_) {
             runTarget_ = atCycle;   // nouvelle cible effective (évite des coupes redondantes)
             ++preemptions;
             endSlice_();
         }
     }
-    void cancel(Source s) { due_[s] = kInactive; }
+    void cancel(Source s) {
+        const bool wasMin = (due_[s] != kInactive && due_[s] == nextDue_);
+        due_[s] = kInactive;
+        if (wasMin) nextDue_ = scanNextDue();   // l'échéance minimale disparaît → recalcul
+    }
 
     int64_t now() const { return now_; }
+
+    // Échéance du plus proche événement dû, en O(1) (cache). -1 si aucun. C'est le
+    // pendant de PendingInterruptCount d'Hatari : Cpu68k::sync() le compare à
+    // l'horloge live à CHAQUE pas pour ne dispatcher que si nécessaire.
+    int64_t peekNextDue() const { return nextDue_; }
+
+    // Chemin piloté par Cpu68k::sync() (modèle `do_cycles` WinUAE) : avance l'horloge
+    // dispatchée à `cycle` (cycle bus absolu, EN COURS d'instruction) et déclenche les
+    // échus. O(1) si rien n'est dû — sync() est appelé à chaque instruction/accès.
+    // Les callbacks posent l'IPL au cycle exact → vu par le POLL_IPL de Moira.
+    void syncTo(int64_t cycle) {
+        if (nextDue_ != kInactive && cycle >= nextDue_) runTo(cycle);
+        else now_ = cycle;
+    }
 
     // Cycles CPU restants avant l'échéance de la source `s`, mesurés depuis
     // l'horloge LIVE (sous-instruction). Renvoie -1 si la source n'est pas armée.
@@ -128,12 +152,8 @@ public:
     }
 
     // Cycle du prochain événement dû (>= now), ou -1 si aucun n'est armé.
-    int64_t nextDue() const {
-        int64_t best = -1;
-        for (int s = 0; s < SRC_COUNT; ++s)
-            if (due_[s] != kInactive && (best < 0 || due_[s] < best)) best = due_[s];
-        return best;
-    }
+    // (Scan complet ; pour le chemin chaud sync() utiliser peekNextDue() — O(1).)
+    int64_t nextDue() const { return scanNextDue(); }
 
     // Avance l'horloge jusqu'à `cycle` puis déclenche, DANS L'ORDRE DES SOURCES,
     // tout événement échu (due <= cycle). Chaque callback peut se replanifier
@@ -143,7 +163,7 @@ public:
         for (int s = 0; s < SRC_COUNT; ++s) {
             if (due_[s] != kInactive && due_[s] <= now_) {
                 // Métrique cycle-accuracy : retard d'un timer MFP daté (now - échéance).
-                // Sans préemption il peut atteindre ~1 ligne ; avec, il reste ~1 instr.
+                // Piloté par sync(), il reste ~1 accès (sous-instruction en PRECISE_TIMING).
                 if (isMfpTimer(s)) {
                     const int64_t late = now_ - due_[s];
                     if (late > timerMaxLate) timerMaxLate = late;
@@ -154,6 +174,7 @@ public:
             }
         }
         firingDue_ = kInactive;
+        nextDue_ = scanNextDue();                    // les callbacks ont pu (re)planifier
     }
 
     // Échéance de l'événement en cours de dispatch (valide PENDANT son callback),
@@ -171,10 +192,20 @@ private:
     static bool isMfpTimer(int s) {              // sources dont le retard dépend de la préemption
         return s == TIMER_A || s == TIMER_B_DELAY || s == TIMER_C || s == TIMER_D;
     }
+    // Scan complet du plus proche événement dû (-1 si aucun). Sert à RAFRAÎCHIR le
+    // cache nextDue_ aux rares points où l'échéance minimale peut disparaître (après
+    // dispatch — les callbacks replanifient — et au cancel de l'échéance minimale).
+    int64_t scanNextDue() const {
+        int64_t best = -1;
+        for (int s = 0; s < SRC_COUNT; ++s)
+            if (due_[s] != kInactive && (best < 0 || due_[s] < best)) best = due_[s];
+        return best;
+    }
     static constexpr int64_t kInactive = -1;
     std::array<int64_t, SRC_COUNT>  due_{};      // (rempli à kInactive au ctor)
     std::array<Callback, SRC_COUNT> cb_{};
     int64_t now_ = 0;
+    int64_t nextDue_ = kInactive;                // cache O(1) du plus proche dû (cf. syncTo)
     int64_t firingDue_ = kInactive;              // échéance de l'événement en cours de dispatch
     int64_t runTarget_ = kInactive;              // cible du bloc CPU courant (-1 = hors run)
     std::function<int64_t()> liveClock_{};       // horloge sous-quantum (cf. liveNow)

@@ -13,6 +13,7 @@
 
 class Bus;
 class Tracer;
+class Scheduler;
 
 // NeoST n'a plus qu'UN SEUL cœur 68000 : Moira (cœur de vAmiga, MIT, cycle-exact,
 // timing inter-instructions). L'ancien cœur Musashi — rapide mais NON cycle-exact —
@@ -41,6 +42,19 @@ public:
     // Branche (ou détache avec nullptr) le traceur : journalise chaque
     // instruction et chaque interruption prise. Utilisé surtout en headless.
     void setTracer(Tracer* t);
+
+    // Branche l'ordonnanceur que le cœur pilote DEPUIS son hook cycle (sync) : à
+    // chaque pas, sync() avance l'horloge puis dispatche les événements échus, de
+    // sorte que l'IPL soit posé au cycle exact (modèle `do_cycles` WinUAE/Hatari),
+    // EN COURS d'instruction, et vu par le POLL_IPL de Moira (cf. Cpu68k.cpp).
+    void setScheduler(Scheduler* s);
+
+    // Horloge BUS (8 MHz) ABSOLUE live du cœur, valide à tout instant (même au
+    // milieu d'une instruction en PRECISE_TIMING). C'est l'horloge maîtresse :
+    // l'ordonnanceur, le faisceau vidéo et le RTC en dérivent. Remplace l'ancien
+    // sched.now() + cyclesRunInQuantum() (le delta intra-quantum est désormais
+    // intégré au cœur, dispatché par sync()).
+    int64_t busClockNow() const;
 
     // Reset matériel : Moira lit SSP ($0) et PC ($4) via le bus (overlay ROM de
     // boot, cf. Bus::bootOverlay), puis on referme l'overlay.
