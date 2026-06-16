@@ -342,10 +342,49 @@ unique cyclée.
 ```
 
 **DIRECTION DU FIX — ⛔ ANCIENNE (alignement bus) FALSIFIÉE le 2026-06-16, cf. §PISTES ÉLIMINÉES.**
-Moira matche déjà le timing d'instruction (périodes de boucle 32=32, boot 0 divergence). Le
-résidu de jitter N'est PAS l'alignement bus ni l'E-clock (testés, neutres).
+Moira matche déjà le timing d'instruction (périodes de boucle 32=32, boot 0 divergence).
 
-**✅ SOLUTION IDENTIFIÉE (2026-06-16) — ORDONNANCEUR PILOTÉ PAR `Moira::sync()` (modèle `do_cycles` WinUAE)**
+**🟢 PERCÉE (2026-06-16, /effort) — L'E-CLOCK CORRIGE LA STRUCTURE DE PHASE CPU↔FAISCEAU, VALIDÉ
+À L'ORACLE. Premier levier convergence NON falsifié. (⚠ la note « E-clock neutre » était PÉRIMÉE :
+testée in-game seulement, non calibrée — FAUX sur la structure de phase.)**
+```
+NOUVEL ORACLE DE PHASE (headless, la pièce qui manquait pour mesurer la convergence) :
+• Test = tools/make_poll_test.py : handler HBL lit $FF8209 → palette[0] CHAQUE ligne → chaque
+  scanline = couleur f(compteur à son HBL). Déterministe, à timing fixe (pas auto-calibrant).
+• NeoST `NEOST_VC_TRACE` (valeur+X/ligne) vs Hatari `--trace io_read` + screenshot oracle.
+• MÉTRIQUE = PÉRIODE du beat des bits bas (position fine du read) par ligne. Robuste au jitter.
+
+MESURE DÉCISIVE :
+• La PENTE (≈160 octets/ligne) MATCHE Hatari → le débit d'instructions Moira est bon (confirme).
+• NeoST E-clock OFF = beat PÉRIODE-3 {0,2,4} ; Hatari = PÉRIODE-5 {0,2,4,6} ; NeoST E-clock ON
+  = PÉRIODE-5. ⇒ la divergence N'EST PAS un offset constant (d'où l'échec de TOUS les sweeps
+  d'offset, §PISTES) mais un BEAT structurel = la latence d'ENTRÉE d'exception auto-vecteur.
+• L'E-clock (M68000_WaitEClock, jitter d'entrée HBL/VBL {0,8,6,4,2} = PÉRIODE-5) EST le mécanisme :
+  `willInterrupt` (Cpu68k.cpp:227), opt-in `NEOST_ECLOCK_ON` + `NEOST_ECLOCK_PHASE` (déjà implémenté
+  commit 08a10f4, JAMAIS validé jusqu'ici). Diff plein-cadre du test vs Hatari : OFF 56 % → ON
+  phase 8 = 34 % (÷1.6).
+• ✅ ÉTALON-SAFE : run_etalons (glue/overscan_top/spec512/scroll_8264-65/etos_ste_boot) =
+  BYTE-IDENTIQUE (0 px) avec `NEOST_ECLOCK_ON=1 NEOST_ECLOCK_PHASE=8`. Le « double-comptage »
+  redouté (mémoire) NE se manifeste PAS → E-clock ON est SÛR. Candidat default-ON.
+
+RÉSIDU (prochaine couche, NON falsifié) : après E-clock, NeoST bits bas {2,4,6} vs Hatari
+{0,2,4,6} = un OFFSET de position fine (~−2..−4 cyc) = la datation lecture (kVideoCounterReadOffsetCyc
+=+4, Shifter.cpp:67). Le « −8 » fidèle (video.c:1391) était FALSIFIÉ SANS E-clock (cassait EL loader) ;
+AVEC la structure corrigée par l'E-clock, la datation fidèle est à RE-TESTER = la « refonte coordonnée »
+(E-clock + datation fidèle ENSEMBLE, recalibrée oracle). ⟵ PROCHAINE EXPÉRIENCE.
+
+EL EN JEU : E-clock NEUTRE sur la base ($8203=80 CONSTANT ON==OFF à frame 13000 ; E-clock ajoute du
+jitter de cyc d'écriture sans changer la valeur). ⚠ La recette `--frames 13000 --joy-at 3100 0x80` est
+PÉRIMÉE pour le build courant (NOIR ON et OFF) → à RE-DÉRIVER avant tout test du scramble in-game.
+
+RECOMMANDATION : garder E-clock ON comme FONDATION du chantier (faithful + sûr). PROCHAIN PAS = refonte
+coordonnée datation+E-clock, puis re-dériver la recette EL in-game et valider.
+```
+
+**🟡 IMPLÉMENTÉ (2026-06-16) MAIS HYPOTHÈSE FALSIFIÉE — l'ordonnanceur piloté par `Moira::sync()`
+NE corrige PAS le jitter (mais reste la FONDATION sub-instruction nécessaire au sync-driven/PT).**
+
+**SOLUTION (implémentée, conservée) — ORDONNANCEUR PILOTÉ PAR `Moira::sync()` (modèle `do_cycles` WinUAE)**
 ```
 RACINE du jitter = NeoST exécute le CPU en BLOCS (Cpu68k::run lance N instructions PUIS
 Scheduler::runTo dispatche les événements À LA FRONTIÈRE DE BLOC). La broche IPL est donc
@@ -380,6 +419,78 @@ SI LE JITTER PERSISTE (second ordre, Moira-interne, fignolage faible retour) :
 2. Cycle d'accès bus intra-instruction : la lecture $FF8209 tombe ±2 cyc différemment (preuve =
    hack vcWait=2, Shifter.cpp:1173) → aligner les tables de timing d'accès de Moira sur WinUAE
    par mode d'adressage. NB : on ne « corrige » plus Moira, on le fait MIMER WinUAE.
+```
+
+**📊 RÉSULTAT (2026-06-16, implémenté + mesuré A/B baseline vs nouveau) — HYPOTHÈSE FALSIFIÉE :**
+```
+FAIT (conservé, choix utilisateur « garder + pivot V2 ») :
+• Scheduler : cache O(1) nextDue_ + syncTo() (Scheduler.hpp).
+• NeostMoira::sync() (Cpu68k.cpp) pilote le Scheduler depuis le hook cycle (do_cycles).
+• Machine::runFrame : CPU tourne jusqu'à fin de trame, events dispatchés via sync() (plus de
+  préemption/quantum). MOIRA_PRECISE_TIMING=true (sync AVANT chaque accès → lectures vidéo
+  sous-instruction). Offset lecture compteur recalé -2 → +4 (Shifter.cpp, datation PT=true).
+• 2 bugs introduits & corrigés : (a) ancre 1ʳᵉ trame sur sched.now() (pas busClockNow → décalage
+  40 cyc) ; (b) sync() ne dispatche pas pendant cpu.reset() (g_inReset, sinon sched.now()→40).
+
+MESURES (étalons run_etalons.py = 6/6 verts dans les DEUX) :
+                       baseline (blocs)   nouveau (sync+PT=true)
+  LX titre jitter      ~1.5 %             ~1.8 %   (INCHANGÉ)
+  EL EN JEU            scramble ~95 %     scramble ~95 %   (INCHANGÉ)
+  EL intro noir 600-1200  5/13            13/18   (RÉGRESSION : intro clignote plus)
+
+PREUVE QUE CE N'EST PAS L'IRQ/HORLOGE : diff trace instruction-par-instruction EL boot
+baseline vs nouveau = IDENTIQUE sauf boucles de polling matériel bénignes (handshake ACIA
+$FC0E3C, FDC $FC1DDE) → la boucle d'horloge sync-driven n'est PAS le levier. EL EN JEU reste
+scramble : NI le sync-driven NI le V2 partiel (NEOST_V2=1 → EL en jeu devient NOIR stable, pas
+le jeu) ne le corrigent. ⇒ le résidu = CONVERGENCE beam-sync / micro-timing Moira↔WinUAE +
+conflit offset global-vs-per-accès (cf. [[beamsync-busalign-falsified]] §7 : base $8203 jitter,
+calibration fullscreen non-convergente), PAS la boucle d'horloge. La sensibilité de lecture
+vidéo d'EL est CHAOTIQUE (sweep offset non-monotone) → pas d'offset robuste = symptôme de
+convergence, pas de simple datation. V2 (res-switch) reste pertinent pour D'AUTRES cas (Cuddly
+bordure basse, démos overscan hi-res), pas pour EL en jeu.
+
+⚠ PERSISTANCE : MOIRA_PRECISE_TIMING=true est édité dans le sous-module extern/moira
+(MoiraConfig.h) → NON capté par un commit superprojet (pointeur seul). À pérenniser via -D
+CMake guardé #ifndef, ou commit submodule, avant tout `git submodule update`.
+
+PROCHAINE ÉTAPE = la CONVERGENCE beam-sync (§7 : base $8203 jitter, calibration fullscreen non
+convergente, résidu micro-timing Moira↔WinUAE). C'est le SEUL levier restant pour EL/LX en jeu ET
+pour la PIXEL-exactitude de V2 (cf. limite de validation ci-dessous). Le sync-driven + V2 sont la
+fondation propre ; V2 est désormais FAIT + validé oracle (bloc suivant).
+```
+
+**📊 V2 res-switch — VALIDÉ À L'ORACLE (2026-06-16) — opt-in NEOST_V2, CONSERVÉ opt-in :**
+```
+• FIDÉLITÉ SOURCE (audit vs Hatari) : line-shortening sur impulsion hi-res PRÉCOCE (≤56) + longueur
+  de ligne variable = port fidèle de video.c:2246/2268/2288 (3 branches → HBL_Pos=220,
+  nCyclesPerLine=224) + Video_AddInterruptHBL (2849). NeoST = setHblShorten (Machine.cpp:95, HBL
+  reprogrammé à 220 + lineCarry_ += cpl-224) + replayGlue varlen (Shifter.cpp:885) + updateGlueState
+  (3 branches DE/bordure 689-715). Reset par trame OK (227-228). Gaps mineurs restants : ajustement
+  VBL si la DERNIÈRE ligne raccourcit (video.c:2862, rare) + garde RestartVideoCounter (N/A NeoST).
+• NON-INTRUSIF : run_etalons (glue_selftest/overscan_top/spec512/scroll_8264-65/etos_ste_boot)
+  PIXEL-EXACT avec NEOST_V2=1 — aucun étalon n'émet d'impulsion précoce, donc V2 ne s'y déclenche pas.
+• ORACLE (MÊME binaire des 2 côtés, recette = la pièce manquante « valider V2 headless ») :
+    python3 tools/make_overscan_lr.py /tmp/sw62.st 62 4     # PAD1=62 cale l'impulsion hi-res ~cyc 52 (≤56)
+    bash tools/hatari_oracle.sh roms/etos192us.img /tmp/sw62.st 400 390 /tmp/hat.png st
+    NEOST_V2=1 build/neost-headless roms/etos192us.img --disk /tmp/sw62.st --machine st --mem 512k \
+        --frames 400 --screenshot /tmp/v2.ppm
+    python3 tools/compare_screenshot.py /tmp/v2.ppm /tmp/hat.png --crop full   # crop full RÉPARÉ ce jour
+  RÉSULTAT frame 390 : NeoST-V2 = overscan rayé STRUCTURELLEMENT IDENTIQUE à Hatari (région claire G
+  + rayures hi-res D + bordures H/B noires + encoches bord G) ; NeoST-V2-OFF = NOIR total. Diff plein
+  cadre vs Hatari : V2-OFF 44.9 % → V2-ON 27.3 % (V2 ≈ ÷1.7 l'écart). Résidu 27 % = jitter de phase
+  (feedback impulsion↔HBL fait varier la position des rayures trame à trame), PAS un bug logique V2.
+• ⚠ LIMITE DE VALIDATION (PROUVÉE empiriquement) : le line-shortening ≤56 N'EST PAS déclenchable de
+  façon PIXEL-STABLE en headless. La latence d'exception HBL du 68000 (~56 cyc) place DÉJÀ l'impulsion
+  à ≥cyc 92 depuis un handler HBL ; déclencher ≤56 exige un calage NOP au cycle près (wrap dans la
+  fenêtre précoce de la ligne suivante) → sensible à la phase CPU↔faisceau = le résidu convergence (§7).
+  ⇒ pas de pixel-exactitude V2 sans la convergence. La validation STRUCTURELLE (ci-dessus) est le
+  niveau de rigueur atteignable headless aujourd'hui.
+• RECOMMANDATION : GARDER opt-in. V2 est fidèle + non-intrusif + utile (noir→Hatari sur overscan réel),
+  MAIS (a) il ne fait PAS le jeu EL (cause = convergence §7) et le change scramble→noir ; (b) en phase
+  jittery, V2 peut se déclencher quand le HW ne le voudrait pas (faux positif ≤56) → risque de
+  régression sur d'autres titres. Default-ON exige la convergence résolue (impulsions au BON cycle).
+• Cuddly : V2 ne s'engage PAS sur les frames atteignables (sonde 1500 = 0 impulsion ≤56) — la bordure
+  basse est dans le menu robot inatteignable headless. Oracle Cuddly SANS VALEUR tant que non navigable.
 ```
 
 **VÉRIFICATION (les 3 cibles + garde-fous) :**
