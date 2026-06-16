@@ -341,16 +341,62 @@ unique cyclée.
   position-faisceau du CPU au poll dérive (moyenne ~28 + jitter).
 ```
 
-**DIRECTION DU FIX (à valider incrémentalement) :**
+**DIRECTION DU FIX — ⛔ ANCIENNE (alignement bus) FALSIFIÉE le 2026-06-16, cf. §PISTES ÉLIMINÉES.**
+Moira matche déjà le timing d'instruction (périodes de boucle 32=32, boot 0 divergence). Le
+résidu de jitter N'est PAS l'alignement bus ni l'E-clock (testés, neutres).
+
+**✅ SOLUTION IDENTIFIÉE (2026-06-16) — ORDONNANCEUR PILOTÉ PAR `Moira::sync()` (modèle `do_cycles` WinUAE)**
 ```
-Rapprocher NeoST du modèle horloge-unique : dater TOUT accès MMIO vidéo à la FIN d'accès
-bus (= +2 depuis le point Moira) AVEC alignement 4-cyc systématique (port complet de
-wait_cpu_cycle_read/write, pas seulement quelques registres) ; rendre la latence d'IRQ
-(prise d'exception) cycle-exacte vs Hatari ; vérifier que l'ancre théorique (FIX1) + ces
-wait-states donnent une phase CPU↔faisceau stable. Le but n'est PAS un offset constant
-(éliminé) mais que le CPU avance relativement au faisceau exactement comme sur l'horloge
-unique de Hatari. ⚠ RISQUE ÉLEVÉ étalons pixel-exact (overscan_top, spec512) → 1 changement
-à la fois, run_etalons.py --max 0 à CHAQUE pas.
+RACINE du jitter = NeoST exécute le CPU en BLOCS (Cpu68k::run lance N instructions PUIS
+Scheduler::runTo dispatche les événements À LA FRONTIÈRE DE BLOC). La broche IPL est donc
+posée ~1 instruction APRÈS le cycle réel de l'événement → l'IRQ (Timer-B/VBL) est reconnue à
+la mauvaise instruction → la boucle de calibration fullscreen reprend à une phase-faisceau
+jittery. Mesuré sur EL en jeu : « préemptions=427, timer retard max=156 cyc » ; la base vidéo
+($8203) saute ±0x800 trame à trame (joueur immobile) → scramble (cf. [[beamsync-busalign-falsified]] §5-7).
+
+FIX = piloter le Scheduler DEPUIS le hook cycle de Moira (comme WinUAE pilote le chipset via
+do_cycles), pour que les événements tombent au CYCLE EXACT en cours d'instruction et que la
+broche IPL soit à jour quand le POLL_IPL de Moira l'échantillonne :
+• Moira FOURNIT DÉJÀ le hook : `virtual void sync(int cycles)` (extern/moira/Moira/Moira.h:286),
+  appelé via la macro SYNC(x) (MoiraMacros.h:19) aux bons sous-points microcode de CHAQUE
+  instruction. Config MOIRA_VIRTUAL_API=true → overridable. AUCUN changement du cœur Moira requis.
+• Override `NeostMoira::sync(int n)` (src/core/Cpu68k.cpp, classe NeostMoira ~l.63) : avancer le
+  Scheduler de n cycles et DISPATCHER les événements échus EN COURS d'instruction (donc appeler
+  setIPL au cycle exact). Le POLL_IPL (MoiraMacros.h:64) / checkForIrq (Moira.cpp:417) verra alors
+  l'IRQ au bon cycle.
+• Refondre Machine::runFrame (src/core/Machine.cpp:286) : le dispatch d'événements migre du
+  runTo post-bloc vers le chemin piloté par sync(). Scheduler::runTo/schedule restent, mais
+  appelés incrémentalement depuis sync.
+• ⚠ PERF (raison du modèle en blocs à l'origine) : sync() est appelé souvent. Ne PAS re-scanner
+  tout le Scheduler à chaque appel — garder un `nextDue_` caché et ne dispatcher que si
+  `clock_courant >= nextDue_` (comparaison O(1)). Hatari fait pareil (PendingInterruptCount).
+• Supprime la quantification frontière-de-bloc = le jitter DOMINANT. Devrait faire converger la
+  calibration EL/LX → base stable → plus de scramble/saut.
+
+SI LE JITTER PERSISTE (second ordre, Moira-interne, fignolage faible retour) :
+1. Fenêtre d'échantillonnage IPL : aligner les points POLL_IPL de Moira sur la règle WinUAE
+   cpuipldelay2/4 (« le changement IPL doit arriver ≥4 cyc avant la fin d'instruction sinon
+   reporté d'une instruction », extern/hatari/src/cpu/newcpu.c:4982 ipl_fetch_next).
+2. Cycle d'accès bus intra-instruction : la lecture $FF8209 tombe ±2 cyc différemment (preuve =
+   hack vcWait=2, Shifter.cpp:1173) → aligner les tables de timing d'accès de Moira sur WinUAE
+   par mode d'adressage. NB : on ne « corrige » plus Moira, on le fait MIMER WinUAE.
+```
+
+**VÉRIFICATION (les 3 cibles + garde-fous) :**
+```
+• Lethal Xcess  : roms/tos162us.img --disk disks/stx/Lethal_Xcess_Disk_1.STX --machine st --mem 1m
+  --fastfdc → la calibration $14ef6 doit CONVERGER (atteint $30142, titre net, pas de saut en jeu).
+• Enchanted Land: roms/tos102fr.img --disk "disks/st/Enchanted Land (1990)(Thalion).st" --machine st
+  --fastfdc --frames 13000 --joy-at 3100 0x80 → niveau rocheux ; la BASE ($8203, NEOST_BASE_TRACE)
+  doit cesser de jitter (joueur immobile) → screenshots 13000/13001/13002 quasi-identiques (≠ scramble).
+• Cuddly       : disks/etalons/cuddly_demos.msa → taux d'ouverture bordure basse (NEOST_GLUE_STAT
+  end=310 vs 263) → ~100 % (baseline 11-15 %). ⚠ menu robot inatteignable headless (--keys/--joy
+  testés KO) ; valider au moins la stabilité trame-à-trame du titre + la convergence LX/EL.
+• GARDE-FOUS À CHAQUE PAS : tools/run_etalons.py --max 0 (glue_selftest 19/19, spec512/overscan_top/
+  scroll_8264/8265 = 0 px, etos_ste_boot ≤64) ; histogramme IRQ inchangé (EmuTOS/TOS 1.02, --irq) ;
+  distribution NEOST_VBL_TRACE (dépassement service VBL) doit se rapprocher du pending_cyc d'Hatari
+  (NeoST mean ~7.8 → cible ~4.3 ; range 0..32). Oracle : /opt/homebrew/bin/hatari 2.6.1
+  --trace cpu_exception,video_vbl,video_addr,cpu_video_cycles ; tools/beamsync_diff.sh ; tools/hatari_oracle.sh.
 ```
 
 **OUTILS & MÉTRIQUES de validation :**
