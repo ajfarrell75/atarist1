@@ -77,6 +77,19 @@ DATATION (instants des accès), pas par comptage d'instruction.
 - 🔗 **Chicken-and-egg établi** : le jitter E-clock dépend de la phase d'horloge absolue, qui dépend
   de TOUT le timing d'instruction. ⇒ **converger le timing INSTRUCTION d'abord** (différentiel → 0),
   PUIS la phase d'IRQ tombe juste. L'E-clock ne se calibre PAS isolément.
+- 🏁 **JALON (banc différentiel multi-instructions, `tools/make_cycle_bench.py`)** : **NEOST_RAM_SLOT
+  converge 14/14 boucles d'instructions à WinUAE** (vs 2/14 sans). Le Δ+2 sur quasi toutes les
+  instructions (off) = exactement le créneau bus manquant ; WinUAE arrondit chaque période à un
+  multiple de 4, RAM_SLOT le réplique. ⇒ **convergence cycle au niveau INSTRUCTION = ATTEINTE**
+  (move/ALU/clr/tst/shift/cmp/addi…). Workflow en cours pour vérifier modes d'adressage/mul-div/
+  branches/bits/MMIO et trouver les résidus.
+- ⚠️ **RAM_SLOT NÉCESSAIRE mais PAS SUFFISANT pour les JEUX** : EL reste deadlock (noir dès frame
+  1200, INCHANGÉ ON/OFF). Sa cause = la phase CPU↔faisceau au niveau IRQ/dispatch (EL atteint sa
+  boucle beam-sync `$EE78` ~50 lignes trop tard = bordure basse, compteur figé à 0x2c → spin), un
+  **artefact du sync-driven** (PT=true re-phase l'entrée de trame), SÉPARÉ du timing d'instruction.
+  ⇒ après le timing instruction, le chantier restant = **phase d'entrée d'IRQ/dispatch** (E-clock @
+  IACK qui ne compose pas encore avec RAM_SLOT — beat poll reste période-3 vs Hatari période-5 — ET
+  la datation de dispatch sync-driven qui décale EL). C'est là que se gagnent les jeux.
 
 ---
 
