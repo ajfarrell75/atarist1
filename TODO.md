@@ -367,11 +367,19 @@ MESURE DÉCISIVE :
   BYTE-IDENTIQUE (0 px) avec `NEOST_ECLOCK_ON=1 NEOST_ECLOCK_PHASE=8`. Le « double-comptage »
   redouté (mémoire) NE se manifeste PAS → E-clock ON est SÛR. Candidat default-ON.
 
-RÉSIDU (prochaine couche, NON falsifié) : après E-clock, NeoST bits bas {2,4,6} vs Hatari
-{0,2,4,6} = un OFFSET de position fine (~−2..−4 cyc) = la datation lecture (kVideoCounterReadOffsetCyc
-=+4, Shifter.cpp:67). Le « −8 » fidèle (video.c:1391) était FALSIFIÉ SANS E-clock (cassait EL loader) ;
-AVEC la structure corrigée par l'E-clock, la datation fidèle est à RE-TESTER = la « refonte coordonnée »
-(E-clock + datation fidèle ENSEMBLE, recalibrée oracle). ⟵ PROCHAINE EXPÉRIENCE.
+REFONTE COORDONNÉE (re-test datation fidèle AVEC E-clock ON, 2026-06-16) — RÉSULTAT :
+• Le « −8 » fidèle est RÉFUTÉ une 2ᵉ fois, MAINTENANT avec E-clock ON : sweep NEOST_VC_OFF sur le
+  poll-oracle → offset effectif +4 (actuel) = MEILLEUR (34 % diff) ; −4 (le « −8 ») = 60 % (PIRE,
+  bits bas saturés à 0). ⇒ le résidu N'EST PAS la datation lecture (déjà optimale à +4).
+• La FORMULE E-clock NeoST est FIDÈLE (identique à Hatari M68000_WaitEClock m68000.c:815 :
+  `10 - clock%10`, pattern [0 8 6 4 2]). Donc ni datation ni formule E-clock.
+• RÉSIDU re-pointé = motif multiset NeoST {2,4,6} vs Hatari {0,2,4,6} (période-5 mais multisets
+  ≠ → la PHASE ne peut PAS les aligner, sweepée 0-9). Cause = le POINT D'APPLICATION de l'E-clock
+  (NeoST willInterrupt AVANT empilement Cpu68k.cpp:227 vs Hatari pendant l'IACK iack_cycle) couplé
+  à la PHASE DE RECONNAISSANCE d'IRQ par-instruction Moira↔WinUAE. ⟵ COUCHE LA PLUS PROFONDE.
+  PROCHAINE EXPÉRIENCE (deep, payoff headline incertain car E-clock neutre sur la base EL) : aligner
+  le point de reconnaissance/d'application IPL de Moira sur WinUAE (POLL_IPL en frontière + règle
+  cpuipldelay ≥4 cyc ; appliquer le wait E-clock au cycle d'IACK, pas avant l'empilement).
 
 EL EN JEU : E-clock NEUTRE sur la base ($8203=80 CONSTANT ON==OFF à frame 13000 ; E-clock ajoute du
 jitter de cyc d'écriture sans changer la valeur). ⚠ La recette `--frames 13000 --joy-at 3100 0x80` est
