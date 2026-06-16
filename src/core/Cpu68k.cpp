@@ -62,6 +62,18 @@ namespace {
     // la refonte coordonnée (retrait des hacks + ajout des mécanismes fidèles ensemble).
     bool    g_eclockOn    = []{ const char* s = std::getenv("NEOST_ECLOCK_ON"); return s && std::atoi(s) != 0; }();
     int     g_eclockPhase = []{ const char* s = std::getenv("NEOST_ECLOCK_PHASE"); return s ? std::atoi(s) : 0; }();
+    // DEEP (opt-in NEOST_IPLDELAY) : règle cpuipldelay de WinUAE (ipl_fetch_next, newcpu.c:4982).
+    // Moira reconnaît l'IPL IMMÉDIATEMENT (POLL_IPL = reg.ipl = ipl) ; WinUAE DIFFÈRE la
+    // reconnaissance d'une instruction si le pin IPL a changé < 4 cyc avant le point
+    // d'échantillonnage de l'instruction. On le reproduit en RETARDANT la propagation du niveau
+    // DÉSIRÉ vers la broche Moira de 4 cyc (via sync()) : le POLL_IPL voit l'ancien niveau jusqu'à
+    // +4 cyc → reconnaissance reportée à la frontière suivante. Corrige le multiset du beat
+    // (poll-oracle {2,4,6}→{0,2,4,6} = Hatari) et vise le deadlock EL ($EE = attente IRQ mal datée).
+    bool    g_iplDelay    = []{ const char* s = std::getenv("NEOST_IPLDELAY"); return s && std::atoi(s) != 0; }();
+    int     g_iplDelayCyc = []{ const char* s = std::getenv("NEOST_IPLDELAY_CYC"); return s ? std::atoi(s) : 4; }();
+    int     g_desiredIpl  = 0;       // niveau IPL calculé (immédiat, broche « réelle »)
+    int     g_appliedIpl  = 0;       // niveau dernier PROPAGÉ à la broche Moira (reg.ipl via POLL_IPL)
+    int64_t g_iplChgClock = -1000;   // horloge (cœur) du dernier changement de g_desiredIpl
     inline int64_t busOfClock(int64_t c) {
         return g_cpuMul == 1 ? c + g_cpuBias : (c + g_cpuBias) >> 1;
     }
@@ -200,6 +212,14 @@ public:
     void sync(int n) override {
         setClock(getClock() + n);             // défaut Moira (avance l'horloge du cœur)
         if (g_sched && !g_inReset) g_sched->syncTo(busOfClock(static_cast<int64_t>(getClock())));
+        // DEEP cpuipldelay : propage le niveau IPL désiré vers la broche une fois le délai de
+        // reconnaissance (4 cyc) écoulé depuis son changement → POLL_IPL le voit alors, comme
+        // WinUAE ipl_fetch_next. Gated NEOST_IPLDELAY ; sinon setIPL est immédiat (cf. neostUpdateIpl).
+        if (g_iplDelay && g_desiredIpl != g_appliedIpl
+            && getClock() - g_iplChgClock >= static_cast<int64_t>(g_iplDelayCyc) * g_cpuMul) {
+            setIPL(static_cast<moira::u8>(g_desiredIpl));
+            g_appliedIpl = g_desiredIpl;
+        }
     }
 
     // Committe l'IPL : broche + registre échantillonné (reg.ipl). setIPL ne pose que
@@ -286,8 +306,16 @@ void neostUpdateIpl(bool commit) {
         lvl = mfp6 ? 6 : g_vblPending ? 4 : g_hblPending ? 2 : 0;
     }
     if (g_moira) {
-        if (commit) g_moira->commitIpl(static_cast<moira::u8>(lvl));
-        else        g_moira->setIPL(static_cast<moira::u8>(lvl));
+        if (commit) { g_moira->commitIpl(static_cast<moira::u8>(lvl)); g_desiredIpl = g_appliedIpl = lvl; }
+        else if (g_iplDelay) {
+            // cpuipldelay : enregistre le niveau désiré + l'horloge de changement ; ne propage à la
+            // broche (POLL_IPL) que si le délai de 4 cyc est écoulé, sinon sync() le fera plus tard.
+            if (lvl != g_desiredIpl) { g_desiredIpl = lvl; g_iplChgClock = g_moira->getClock(); }
+            if (g_moira->getClock() - g_iplChgClock >= static_cast<int64_t>(g_iplDelayCyc) * g_cpuMul) {
+                g_moira->setIPL(static_cast<moira::u8>(lvl)); g_appliedIpl = lvl;
+            }
+        }
+        else { g_moira->setIPL(static_cast<moira::u8>(lvl)); g_appliedIpl = lvl; }
     }
 }
 }
