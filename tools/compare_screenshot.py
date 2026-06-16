@@ -128,7 +128,7 @@ def compare(a_path: Path, b_path: Path, crop: str = "active") -> tuple[int, int]
         if (aw, ah) != (bw, bh):
             raise ValueError(f"tailles différentes : {aw}x{ah} vs {bw}x{bh}")
         cw, ch = aw, ah
-        ax = ay = bx = by = 0
+        x = y = ax = ay = bx = by = 0
     else:
         x, y, cw, ch = _region(crop)
         if aw < x + cw or ah < y + ch:
