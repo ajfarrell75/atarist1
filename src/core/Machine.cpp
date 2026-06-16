@@ -13,7 +13,15 @@
 #include "core/Machine.hpp"
 #include <cstdio>
 #include <cstdint>
+#include <cstdlib>
 #include <fstream>
+
+// Modèle de dispatch BLOC = DÉFAUT (le sync-driven mid-instruction est RÉFUTÉ : il
+// deadlockait Enchanted Land sans corriger le jitter). CPU borné à l'événement suivant
+// + dispatch à la frontière via runTo, en GARDANT PT=true + RAM_SLOT (la convergence
+// cycle d'instruction est indépendante du dispatch). VALIDÉ : EL remarche (jeu rendu),
+// étalons 19/0, différentiel 14/14. Le sync-driven reste accessible en OPT-IN pour A/B.
+static const bool g_blockDispatch = std::getenv("NEOST_SYNC_DISPATCH") == nullptr;
 
 // Port de Hatari TOS_CheckSysConfig (sous-ensemble utile à NeoST) : abaisse la
 // machine si le TOS chargé ne la supporte pas. Seul le cas « TOS <= 1.04 → ST »
@@ -74,12 +82,12 @@ Machine::Machine(std::size_t ramBytes, CpuCore cpuCore, MachineType machine)
     shifter.setLiveFrameClock([this] { return sched.liveNow() - frameStart_; });
     // Horloge RTC : cycle CPU ABSOLU exact, même au milieu d'une lecture MMIO.
     // L'horloge maîtresse est désormais le cœur (busClockNow), conduit par sync().
-    rtc.setClock([this] { return cpu.busClockNow(); });
+    rtc.setClock([this] { return g_blockDispatch ? (sched.now() + cpu.cyclesRunInQuantum()) : cpu.busClockNow(); });
     // Horloge « live » de l'ordonnanceur = cycle bus absolu live du cœur. Les puces
     // qui datent un événement en plein milieu d'une instruction (MFP timers, compteur
     // vidéo…) s'en servent pour le caler sur l'instant RÉEL de l'accès. C'est l'horloge
     // que sync() avance et sur laquelle il dispatche (cf. NeostMoira::sync).
-    sched.setLiveClock([this] { return cpu.busClockNow(); });
+    sched.setLiveClock([this] { return g_blockDispatch ? (sched.now() + cpu.cyclesRunInQuantum()) : cpu.busClockNow(); });
     // L'ordonnanceur est piloté DEPUIS le hook cycle du cœur (sync) : à chaque pas,
     // sync() avance l'horloge puis dispatche les échus → IPL posé au cycle exact.
     cpu.setScheduler(&sched);
@@ -350,9 +358,23 @@ void Machine::runFrame() {
     // Plus de quantum borné à l'événement ni de préemption : le bloc = la trame
     // entière. cpu.run() termine son instruction et peut dépasser frameEnd de
     // quelques cycles (carry, comme Hatari) ; la boucle reboucle si nécessaire.
-    while (cpu.busClockNow() < frameEnd) {
-        const int64_t want = frameEnd - cpu.busClockNow();
-        cpu.run(static_cast<int>(want > 0 ? want : 1));
+    if (g_blockDispatch) {
+        // Modèle BLOC (pré-sync-driven) : run borné au prochain événement, dispatch à la
+        // frontière via runTo. sync() N'avance que l'horloge (pas de dispatch mid-instruction).
+        while (sched.now() < frameEnd) {
+            int64_t next = sched.nextDue();
+            if (next < 0 || next > frameEnd) next = frameEnd;
+            const int64_t want = next - sched.now();
+            sched.beginRun(next);
+            const int ran = cpu.run(static_cast<int>(want > 0 ? want : 1));
+            sched.endRun();
+            sched.runTo(sched.now() + ran);
+        }
+    } else {
+        while (cpu.busClockNow() < frameEnd) {
+            const int64_t want = frameEnd - cpu.busClockNow();
+            cpu.run(static_cast<int>(want > 0 ? want : 1));
+        }
     }
     // Filet : si le CPU n'a PAS conduit l'horloge jusqu'au bout (CPU halté → run()
     // avance l'horloge par setClock sans passer par sync()), on dispatche quand même

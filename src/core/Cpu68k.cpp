@@ -99,6 +99,13 @@ namespace {
     // décale la phase de la grille (calibration oracle si offset constant Moira↔WinUAE).
     bool    g_ramSlot     = []{ const char* s = std::getenv("NEOST_RAM_SLOT"); return s && std::atoi(s) != 0; }();
     int     g_ramSlotPhase= []{ const char* s = std::getenv("NEOST_RAM_SLOT_PHASE"); return s ? std::atoi(s) : 0; }();
+    // Modèle de dispatch BLOC (DÉFAUT depuis la réfutation du sync-driven) : sync() n'avance QUE
+    // l'horloge ; le dispatch des events se fait par runTo à la frontière d'événement (cf.
+    // Machine::runFrame). PT=true (datation sous-instruction) et RAM_SLOT sont CONSERVÉS — la
+    // convergence cycle d'instruction est indépendante du modèle de dispatch. Le sync-driven
+    // (dispatch mid-instruction, do_cycles WinUAE) DEADLOCKAIT Enchanted Land (boucle beam-sync
+    // jamais servie) SANS corriger le jitter (falsifié) → repassé en OPT-IN NEOST_SYNC_DISPATCH.
+    bool    g_blockDispatch = []{ return std::getenv("NEOST_SYNC_DISPATCH") == nullptr; }();
     int     g_desiredIpl  = 0;       // niveau IPL calculé (immédiat, broche « réelle »)
     int     g_appliedIpl  = 0;       // niveau dernier PROPAGÉ à la broche Moira (reg.ipl via POLL_IPL)
     int64_t g_iplChgClock = -1000;   // horloge (cœur) du dernier changement de g_desiredIpl
@@ -251,7 +258,7 @@ public:
     // réentrance : les callbacks de l'ordonnanceur n'exécutent pas le CPU.
     void sync(int n) override {
         setClock(getClock() + n);             // défaut Moira (avance l'horloge du cœur)
-        if (g_sched && !g_inReset) g_sched->syncTo(busOfClock(static_cast<int64_t>(getClock())));
+        if (!g_blockDispatch && g_sched && !g_inReset) g_sched->syncTo(busOfClock(static_cast<int64_t>(getClock())));
         // DEEP cpuipldelay : propage le niveau IPL désiré vers la broche une fois le délai de
         // reconnaissance (4 cyc) écoulé depuis son changement → POLL_IPL le voit alors, comme
         // WinUAE ipl_fetch_next. Gated NEOST_IPLDELAY ; sinon setIPL est immédiat (cf. neostUpdateIpl).
