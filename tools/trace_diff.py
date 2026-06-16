@@ -26,10 +26,16 @@ import sys
 
 # --- Repérage d'une ligne d'instruction selon le format ----------------------
 #   NeoST  : "FC0030: bra     $fc004e [ D0=.. .. SR=2704]"   (adresse + ':')
+#   NeoST  : "cyc=12345 FC0030: bra ..."                     (NEOST_TRACE_CYC=1)
 #   Hatari : "00fc0030 46fc 2700      move.w #$2700,sr"      (cpu_disasm, octets)
+#   Hatari : "cpu video_cyc=12 0@0 12345 : 00fc0030 46fc ..."(cpu_video_cycles)
 #   Hatari : "$00fc0030 : 601c  bra.s $fc004e"               (ancien format ':')
-RE_NEOST  = re.compile(r'^([0-9A-Fa-f]{5,8}):\s+(.*)$')          # adresse + ':'
-RE_HATARI = re.compile(r'^([0-9A-Fa-f]{6,8})\s+([0-9A-Fa-f]{2,4}\s.*)$')  # adresse + octets
+# Le préfixe « cyc=N » (NeoST) / « cpu video_cyc=… GCLK : » (Hatari) est OPTIONNEL :
+# capté pour le harnais de timing différentiel (--periods), sinon ignoré.
+RE_NEOST  = re.compile(r'^(?:cyc=(\d+)\s+)?([0-9A-Fa-f]{5,8}):\s+(.*)$')   # [cyc] adr ':'
+RE_HATARI = re.compile(
+    r'^(?:cpu video_cyc=\s*\d+\s+\d+@\s*\d+\s+(\d+)\s*:\s*)?'              # [video_cyc … GCLK :]
+    r'([0-9A-Fa-f]{6,8})\s+([0-9A-Fa-f]{2,4}\s.*)$')                       # adresse + octets
 
 # Registres, tolérant aux deux notations ("D0=12345678" ou "D0 12345678").
 RE_REG = re.compile(r'\b([DA][0-7])\s*[= ]\s*([0-9A-Fa-f]{1,8})\b')
@@ -37,13 +43,16 @@ RE_SR  = re.compile(r'\bSR\s*[= ]\s*([0-9A-Fa-f]{1,4})\b')
 
 
 class Insn:
-    """Une instruction : PC, texte brut (1re ligne) et registres éventuels."""
-    __slots__ = ('pc', 'text', 'regs')
+    """Une instruction : PC, texte brut (1re ligne), registres et cycle éventuels.
+    `cyc` = horloge ABSOLUE (NeoST busClockNow / Hatari CyclesGlobalClockCounter)
+    si la trace la porte, sinon None."""
+    __slots__ = ('pc', 'text', 'regs', 'cyc')
 
-    def __init__(self, pc, text):
+    def __init__(self, pc, text, cyc=None):
         self.pc = pc
         self.text = text
         self.regs = {}
+        self.cyc = cyc
 
     def parse_regs(self, blob):
         for name, val in RE_REG.findall(blob):
@@ -83,9 +92,10 @@ def parse(path, fmt=None):
         m = rx.match(ln)
         if m:
             flush()
-            cur = Insn(int(m.group(1), 16), ln.rstrip())
+            cyc = int(m.group(1)) if m.group(1) is not None else None
+            cur = Insn(int(m.group(2), 16), ln.rstrip(), cyc)
             insns.append(cur)
-            blob = [m.group(2)]
+            blob = [m.group(3)]             # texte = désasm (groupe 3, cycle = 1, PC = 2)
         elif cur is not None:
             blob.append(ln)                 # continuation (regs, flags, IRQ…)
     flush()
@@ -98,6 +108,58 @@ def trim_to_pc(insns, pc):
         if ins.pc == pc:
             return insns[i:]
     return []
+
+
+def cycle_periods(insns, pc):
+    """Deltas de l'horloge absolue entre passages CONSÉCUTIFS au même PC.
+    = cycles par itération d'une boucle dont `pc` est un point fixe (p.ex. la
+    boucle de poll, ou le handler HBL revu une fois par scanline). Nécessite une
+    trace avec colonne cycle (NEOST_TRACE_CYC=1 / Hatari cpu_video_cycles)."""
+    last, deltas = None, []
+    for ins in insns:
+        if ins.pc == pc and ins.cyc is not None:
+            if last is not None:
+                deltas.append(ins.cyc - last)
+            last = ins.cyc
+    return deltas
+
+
+def histo(deltas, top=4):
+    import collections
+    return collections.Counter(deltas).most_common(top)
+
+
+def report_periods(a, b, pcs, col):
+    """Harnais de timing DIFFÉRENTIEL : compare, pour chaque PC-repère, la période
+    (cycles/itération) côté Moira(NeoST) vs WinUAE(Hatari). La période DOMINANTE
+    (mode) est robuste aux IRQ ponctuelles qui détournent la boucle."""
+    if not any(ins.cyc is not None for ins in a[:5000]):
+        sys.exit("[trace_diff] trace NeoST sans colonne cycle : relancer avec "
+                 "NEOST_TRACE_CYC=1 ./build/neost-headless … --trace …")
+    if not any(ins.cyc is not None for ins in b[:5000]):
+        sys.exit("[trace_diff] trace Hatari sans colonne cycle : ajouter "
+                 "cpu_video_cycles au --trace (ex. --trace cpu_disasm,cpu_video_cycles).")
+    print(f"\n{'PC':>8} | {'Moira (NeoST) cyc/itér':>26} | "
+          f"{'WinUAE (Hatari) cyc/itér':>26} | verdict")
+    print('-' * 88)
+    rc = 0
+    for pc_hex in pcs:
+        pc = int(pc_hex, 16)
+        na, hb = histo(cycle_periods(a, pc)), histo(cycle_periods(b, pc))
+        nmode = na[0][0] if na else None
+        hmode = hb[0][0] if hb else None
+        nstr = ' '.join(f"{d}×{n}" for d, n in na[:3]) or '—'
+        hstr = ' '.join(f"{d}×{n}" for d, n in hb[:3]) or '—'
+        if nmode is None or hmode is None:
+            verdict, c = 'ABSENT', '1;33'
+        elif nmode == hmode:
+            verdict, c = f'OK ({nmode})', '1;32'
+        else:
+            verdict, c = f'DIFF {nmode} vs {hmode} (Δ{hmode - nmode:+d})', '1;31'
+            rc = 1
+        print(f"{pc:>8X} | {nstr:>26} | {hstr:>26} | "
+              + color(verdict, c, col))
+    return rc
 
 
 def color(s, c, on):
@@ -127,6 +189,10 @@ def main():
                     help="aligne les deux traces sur la 1re occurrence de ce PC")
     ap.add_argument('--regs', action='store_true',
                     help="compare aussi D0-D7/A0-A7/SR (si présents des deux côtés)")
+    ap.add_argument('--periods', nargs='+', metavar='PC',
+                    help="HARNAIS TIMING : pour chaque PC-repère (hex), compare la "
+                         "période (cycles/itér) Moira vs WinUAE. Exige les colonnes "
+                         "cycle (NEOST_TRACE_CYC=1 ; Hatari cpu_video_cycles).")
     ap.add_argument('-C', '--context', type=int, default=6,
                     help="lignes de contexte autour de la divergence (défaut 6)")
     ap.add_argument('--no-color', action='store_true', help="désactive la couleur")
@@ -139,6 +205,9 @@ def main():
     b, fb = parse(args.hatari, args.hatari_format)
     print(f"[trace_diff] NeoST  : {len(a):>7} insn ({fa})  ←  {args.neost}")
     print(f"[trace_diff] Hatari : {len(b):>7} insn ({fb})  ←  {args.hatari}")
+
+    if args.periods:                        # mode harnais de timing différentiel
+        return report_periods(a, b, args.periods, col)
 
     if args.align_pc:
         pc = int(args.align_pc, 16)

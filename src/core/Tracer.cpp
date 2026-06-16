@@ -5,6 +5,7 @@
 // =============================================================================
 #include "core/Tracer.hpp"
 #include "core/Cpu68k.hpp"
+#include <cstdlib>                      // std::getenv (cycle column opt-in)
 
 bool Tracer::open(const std::string& path) {
     close();
@@ -32,6 +33,16 @@ void Tracer::onInstruction(uint32_t pc) {
         std::fprintf(f_, "%08X: <cpu absent>\n", pc);
         return;
     }
+    // Horloge BUS absolue (analogue de CyclesGlobalClockCounter d'Hatari), opt-in
+    // NEOST_TRACE_CYC=1 pour le harnais de timing différentiel. Émise en TÊTE de
+    // ligne pour ne pas perturber les diffs PC↔PC existants quand absente (étalons
+    // byte-identiques). Lue ici APRÈS execute() → horloge de FIN d'instruction ;
+    // pour les périodes de boucle (deltas au MÊME PC) l'offset constant s'annule.
+    static const bool traceCyc = [] {
+        const char* s = std::getenv("NEOST_TRACE_CYC"); return s && *s && *s != '0';
+    }();
+    if (traceCyc) std::fprintf(f_, "cyc=%lld ",
+                               static_cast<long long>(cpu_->busClockNow()));
     char dis[256];
     cpu_->disassemble(dis, pc);        // désassemblage Moira (syntaxe Musashi), sans effet de bord
     if (logRegs_) {

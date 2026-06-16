@@ -62,6 +62,22 @@ namespace {
     // la refonte coordonnée (retrait des hacks + ajout des mécanismes fidèles ensemble).
     bool    g_eclockOn    = []{ const char* s = std::getenv("NEOST_ECLOCK_ON"); return s && std::atoi(s) != 0; }();
     int     g_eclockPhase = []{ const char* s = std::getenv("NEOST_ECLOCK_PHASE"); return s ? std::atoi(s) : 0; }();
+    // DEEP convergence WinUAE (opt-in NEOST_IACK) : timing d'IACK FIDÈLE. Hatari applique
+    // l'attente E-clock + un bloc « occupé » au CYCLE D'IACK (iack_cycle, newcpu.c:2958-3019),
+    // PAS avant l'empilement de trame. Moira appelle readIrqUserVector EXACTEMENT à l'IACK
+    // (MoiraExceptions_cpp.h:538, après SYNC(6)+write PClo+SYNC(4)) → on y déplace l'E-clock
+    // (phase correcte, inclut la latence d'amorce) ET on ajoute le bloc occupé absent de Moira :
+    // CPU_IACK_CYCLES_VIDEO_CE(10)+idle(4)=14 (auto-vecteur HBL/VBL), CPU_IACK_CYCLES_MFP_CE=12
+    // (MFP niv6, sans E-clock). Magnitude calibrable à l'oracle (la comptabilité SYNC d'entrée
+    // d'exception de Moira diffère un peu de WinUAE). Avec NEOST_IACK, willInterrupt ne fait plus
+    // rien (E-clock relocalisé). Corrige le résidu de PHASE d'entrée d'IRQ (HBL period, poll-beat).
+    bool    g_iackOn      = []{ const char* s = std::getenv("NEOST_IACK"); return s && std::atoi(s) != 0; }();
+    int     g_iackVideo   = []{ const char* s = std::getenv("NEOST_IACK_VIDEO"); return s ? std::atoi(s) : 14; }();
+    int     g_iackMfp     = []{ const char* s = std::getenv("NEOST_IACK_MFP");   return s ? std::atoi(s) : 12; }();
+    // Lead-in willInterrupt → IACK réel : SYNC(6)+write PClo(4)+SYNC(4)=14 cyc (MoiraExceptions
+    // _cpp.h:533-537). On l'ajoute à la phase E-clock pour la calculer comme au cycle d'IACK,
+    // bien que le setClock soit fait depuis willInterrupt (seul point fiable hors mid-accès).
+    int     g_iackLead    = []{ const char* s = std::getenv("NEOST_IACK_LEAD"); return s ? std::atoi(s) : 14; }();
     // DEEP (opt-in NEOST_IPLDELAY) : règle cpuipldelay de WinUAE (ipl_fetch_next, newcpu.c:4982).
     // Moira reconnaît l'IPL IMMÉDIATEMENT (POLL_IPL = reg.ipl = ipl) ; WinUAE DIFFÈRE la
     // reconnaissance d'une instruction si le pin IPL a changé < 4 cyc avant le point
@@ -71,6 +87,18 @@ namespace {
     // (poll-oracle {2,4,6}→{0,2,4,6} = Hatari) et vise le deadlock EL ($EE = attente IRQ mal datée).
     bool    g_iplDelay    = []{ const char* s = std::getenv("NEOST_IPLDELAY"); return s && std::atoi(s) != 0; }();
     int     g_iplDelayCyc = []{ const char* s = std::getenv("NEOST_IPLDELAY_CYC"); return s ? std::atoi(s) : 4; }();
+    // DEEP convergence WinUAE (opt-in NEOST_RAM_SLOT) : alignement créneau bus 4 cyc à
+    // 8 MHz pour la RAM ST (CHIP16 < $400000), port FIDÈLE de wait_cpu_cycle_read/write
+    // (custom.c:148-153). Avant un accès RAM, si l'horloge bus n'est pas sur la grille
+    // de 4, attendre (4 - slot) cycles. ⚠ CONTRAIREMENT au chipWait16 (16 MHz), AUCUN +4
+    // additionnel : à 8 MHz Moira facture DÉJÀ les 4 cyc de l'accès. L'ancienne tentative
+    // « chipWait8 » (mémoire beamsync-busalign-falsified) ajoutait ce +4 parasite (miroir
+    // erroné du 16 MHz) → sur-comptait (overscan_top 32→36). Align-only NE sur-compte pas
+    // (boucle 4-phasée → +0 ; boucle non-phasée comme `bra.s self` → +2 = WinUAE). ROM/
+    // cartouche/IO sont FAST (pas d'alignement, mesuré sur STF). NEOST_RAM_SLOT_PHASE
+    // décale la phase de la grille (calibration oracle si offset constant Moira↔WinUAE).
+    bool    g_ramSlot     = []{ const char* s = std::getenv("NEOST_RAM_SLOT"); return s && std::atoi(s) != 0; }();
+    int     g_ramSlotPhase= []{ const char* s = std::getenv("NEOST_RAM_SLOT_PHASE"); return s ? std::atoi(s) : 0; }();
     int     g_desiredIpl  = 0;       // niveau IPL calculé (immédiat, broche « réelle »)
     int     g_appliedIpl  = 0;       // niveau dernier PROPAGÉ à la broche Moira (reg.ipl via POLL_IPL)
     int64_t g_iplChgClock = -1000;   // horloge (cœur) du dernier changement de g_desiredIpl
@@ -185,10 +213,22 @@ public:
     void latchDb(moira::u16 v) const { g_bus->cpuDb = v; }
     void latchDb8(moira::u8 v) const { g_bus->cpuDb = moira::u16((moira::u16(v) << 8) | v); }
 
-    moira::u8  read8 (moira::u32 a) const override { if (g_bus->blitterWinEnd >= 0) noteBlitterPreStart(); if (g_bus->busFaultN(a, 1, false) && faultOrHalt(a, false)) return 0; const moira::u8 v = (g_cpuMul == 2) ? moira::u8(readMste16Mhz(a, 1)) : g_bus->read8(a); latchDb8(v); return v; }
-    moira::u16 read16(moira::u32 a) const override { if (g_bus->blitterWinEnd >= 0) noteBlitterPreStart(); if (g_bus->busFaultN(a, 2, false) && faultOrHalt(a, false)) return 0; const moira::u16 v = (g_cpuMul == 2) ? readMste16Mhz(a, 2) : g_bus->read16(a); latchDb(v); return v; }
-    void write8 (moira::u32 a, moira::u8  v) const override { if (g_bus->blitterWinEnd >= 0) noteBlitterPreStart(); if (g_bus->busFaultN(a, 1, true)) { if (faultOrHalt(a, true)) return; } latchDb8(v); if (g_cpuMul == 2) { writeMste16Mhz(a, 1, v); return; } g_bus->write8(a, v); }
-    void write16(moira::u32 a, moira::u16 v) const override { if (g_bus->blitterWinEnd >= 0) noteBlitterPreStart(); if (g_bus->busFaultN(a, 2, true)) { if (faultOrHalt(a, true)) return; } latchDb(v); if (g_cpuMul == 2) { writeMste16Mhz(a, 2, v); return; } g_bus->write16(a, v); }
+    // Alignement créneau bus 4 cyc (8 MHz) sur la RAM ST avant un accès — cf. g_ramSlot.
+    // slot = horloge bus & 3 ; si non nul, attendre (4 - slot) cycles. Port fidèle de
+    // wait_cpu_cycle_read (custom.c) : la GLUE partage la RAM en créneaux de 4 cyc bus,
+    // le CPU attend son tour. Pas de +4 (l'accès lui-même est déjà facturé par Moira).
+    void chipWait8(moira::u32 a) const {
+        if (!g_ramSlot || (a & 0x00FFFFFFu) >= 0x400000u) return;
+        auto* self = const_cast<NeostMoira*>(this);
+        const moira::i64 c = self->getClock();
+        const int slot = int((c + g_cpuBias + g_ramSlotPhase) & 3);
+        if (slot) self->setClock(c + (4 - slot));
+    }
+
+    moira::u8  read8 (moira::u32 a) const override { if (g_bus->blitterWinEnd >= 0) noteBlitterPreStart(); if (g_bus->busFaultN(a, 1, false) && faultOrHalt(a, false)) return 0; moira::u8 v; if (g_cpuMul == 2) v = moira::u8(readMste16Mhz(a, 1)); else { chipWait8(a); v = g_bus->read8(a); } latchDb8(v); return v; }
+    moira::u16 read16(moira::u32 a) const override { if (g_bus->blitterWinEnd >= 0) noteBlitterPreStart(); if (g_bus->busFaultN(a, 2, false) && faultOrHalt(a, false)) return 0; moira::u16 v; if (g_cpuMul == 2) v = readMste16Mhz(a, 2); else { chipWait8(a); v = g_bus->read16(a); } latchDb(v); return v; }
+    void write8 (moira::u32 a, moira::u8  v) const override { if (g_bus->blitterWinEnd >= 0) noteBlitterPreStart(); if (g_bus->busFaultN(a, 1, true)) { if (faultOrHalt(a, true)) return; } latchDb8(v); if (g_cpuMul == 2) { writeMste16Mhz(a, 1, v); return; } chipWait8(a); g_bus->write8(a, v); }
+    void write16(moira::u32 a, moira::u16 v) const override { if (g_bus->blitterWinEnd >= 0) noteBlitterPreStart(); if (g_bus->busFaultN(a, 2, true)) { if (faultOrHalt(a, true)) return; } latchDb(v); if (g_cpuMul == 2) { writeMste16Mhz(a, 2, v); return; } chipWait8(a); g_bus->write16(a, v); }
     // Lecture du vecteur de reset (SSP/PC) via l'overlay ROM : jamais de bus error.
     moira::u16 read16OnReset(moira::u32 a) const override { const moira::u16 v = g_bus->read16(a); latchDb(v); return v; }
     // Lecture pour le désassembleur : pas d'effet de bord MMIO ni de bus error
@@ -245,6 +285,19 @@ public:
     // l'empilement de trame (MoiraExceptions_cpp.h:508) → latence d'entrée PURE,
     // le timing des instructions reste intact.
     void willInterrupt(moira::u8 level) override {
+        if (g_iackOn) {                                          // IACK fidèle WinUAE (E-clock @ IACK + bloc occupé)
+            // setClock fiable ICI (≠ readIrqUserVector qui est mid-accès → écrasé par les SYNC du read<>).
+            if (level == 2 || level == 4) {                      // auto-vecteur HBL/VBL : E-clock + bloc vidéo
+                const int64_t busClk = busOfClock(getClock() + g_iackLead) + g_eclockPhase;
+                int wait = 10 - static_cast<int>(((busClk % 10) + 10) % 10);
+                if (wait == 10) wait = 0;
+                const int add = wait + g_iackVideo;
+                if (add) setClock(getClock() + static_cast<int64_t>(add) * g_cpuMul);
+            } else if (level == 6) {                             // MFP vectorisé : bloc MFP, pas d'E-clock
+                if (g_iackMfp) setClock(getClock() + static_cast<int64_t>(g_iackMfp) * g_cpuMul);
+            }
+            return;
+        }
         if (!g_eclockOn || (level != 2 && level != 4)) return;    // opt-in ; auto-vecteurs HBL/VBL seulement
         const int64_t busClk = busOfClock(static_cast<int64_t>(getClock())) + g_eclockPhase;
         int wait = 10 - static_cast<int>(busClk % 10);           // cycles BUS jusqu'au prochain front E
