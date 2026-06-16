@@ -110,15 +110,47 @@ bascule proprement OFF=DIFF(10) / RAM_SLOT=OK(12).
 
 ---
 
-## 5. Prochaine étape — convergence INSTRUCTION systématique (le vrai « full »)
+## 5. ✅ CONVERGENCE INSTRUCTION — COMPLÈTE (validée par workflow 6 classes)
 
-Piloter le **différentiel** vers 0 sur un large jeu de motifs (comme `bra` 10→12), pas le
-poll-screenshot. Pour chaque `DIFF`, corriger la DATATION dans `NeostMoira` (datation d'accès,
-créneaux, prefetch). Candidats : sweep des classes d'instructions (MOVE/ALU/Bcc/JMP/JSR/accès
-RAM vs MMIO), boucles réelles LX `$14ef6` / EL `$ee78`. Une fois le timing instruction = WinUAE
-(différentiel vert partout), **réactiver l'E-clock @ IACK** (la phase absolue matchera enfin) puis
-**retirer les hacks** (`NEOST_VC_WAIT=2`, `kSyncWriteOffsetCyc=+16`, `syncCpuBus`) et **recalibrer
-à l'oracle** (zone active + EL/LX/Cuddly/SHO). Bon candidat **workflow** (fan-out par classe d'instr).
+Le différentiel a été piloté vers 0 sur **tout le jeu d'instructions courant** (workflow 6 agents,
+banc `tools/make_cycle_bench.py` par classe). Verdict **avec NEOST_RAM_SLOT=1** :
+- ✅ **5/6 classes 100 % OK** : modes d'adressage (toutes variantes src/dest), ALU & comparaison,
+  branches & flot (Bcc/BRA/BSR/JMP/JSR/RTS/DBcc), décalages/rotations/bits, unaires & divers (y
+  compris **écritures MMIO shifter `$8240/$8260/$820A`** — le `syncCpuBus` empirique de NeoST datait
+  DÉJÀ comme WinUAE `M68000_SyncCpuBus`). MUL/MOVEM/move.l : OK.
+- ✅ **DIV** (seule divergence résiduelle, Δ+4) : CORRIGÉE. Cause root-causée : Moira faisait
+  `writeD; prefetch; SYNC(idle)` vs WinUAE `idle; store; prefetch` → le prefetch du DIV était aligné
+  à la phase PRÉ-idle au lieu de POST-idle (DIFF ssi idle%4==2). **Fix** : reorder dans
+  `execDivsMoira`/`execDivuMoira` (MoiraExec_cpp.h, fork Moira committé e4da365). Neutre sans
+  RAM_SLOT (étalons inchangés), converge avec.
+
+⇒ **La datation cycle d'instruction de NeoST = WinUAE, cycle pour cycle, sur tout le jeu courant.**
+C'est le « full WinUAE timing convergence » au niveau INSTRUCTION. (Garder NEOST_RAM_SLOT opt-in tant
+que la phase IRQ n'est pas faite : seul, il décale la phase de trame des hacks empiriques sans les
+remplacer — cf. §6.)
+
+## 6. CHANTIER RESTANT — phase d'ENTRÉE D'IRQ (= les JEUX)
+
+La convergence instruction est NÉCESSAIRE mais PAS SUFFISANTE : **EL reste deadlock** (RAM_SLOT
+inchangé). Deux sous-problèmes d'ENTRÉE D'IRQ, distincts du timing d'instruction :
+
+1. **E-clock @ IACK ne compose pas encore avec RAM_SLOT** : poll-beat reste période-3 `{0,4,8}` vs
+   Hatari période-5 `{0,4,8,12,16}` (= E-clock mod-10 × créneau mod-4 = mod-20). En NeoST, RAM_SLOT
+   ABSORBE l'E-clock (appliqué dans willInterrupt, trop tôt). Le fix faisable maintenant (fork Moira
+   committable) = éditer `execInterrupt<C68000>` (MoiraExceptions_cpp.h:533-543) pour insérer le wait
+   E-clock + bloc occupé `CPU_IACK_CYCLES_VIDEO_CE(10)+idle(4)` AU point d'IACK (entre write PClo et
+   read vecteur), comme Hatari `iack_cycle` → les accès suivants (SR/PChi/vecteur/prefetch) s'alignent
+   à la phase POST-E-clock → mod-20 émerge. (Même leçon que le fix DIV : l'ORDRE idle↔prefetch fait la
+   phase du créneau.) ⚠ Le setClock depuis readIrqUserVector est PERDU (mid-accès) → passer par un
+   hook dédié dans execInterrupt, pas readIrqUserVector.
+2. **Datation dispatch sync-driven** : EL atteint sa boucle beam-sync `$EE78` (`move.b $8209,d1 / bne`)
+   **~50 lignes trop tard** (bordure basse, compteur figé 0x2c → spin infini ; render/glue NORMAL).
+   ~50 lignes ≠ un ±2 cyc : c'est la PHASE D'ENTRÉE de trame d'EL décalée par le sync-driven (PT=true ;
+   à PT=false EL marche). À root-causer : par quel IRQ (VBL/Timer-B) EL entre `$EE76`, et pourquoi son
+   dispatch est ~50 lignes tard sous sync-driven. C'EST le blocage des jeux.
+
+Puis **retirer les hacks** (`NEOST_VC_WAIT=2`, `kSyncWriteOffsetCyc=+16`) devenus redondants et
+**recalibrer à l'oracle** (zone active + EL/LX/Cuddly/SHO + poll-beat).
 
 Cf. [[beamsync-busalign-falsified]], [[eclock-convergence-validated]] (CORRIGÉE ici),
 [[sync-driven-scheduler-falsified]], [[v2-resswitch-validated]].
