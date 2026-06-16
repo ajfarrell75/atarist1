@@ -72,15 +72,19 @@ Machine::Machine(std::size_t ramBytes, CpuCore cpuCore, MachineType machine)
     // Horloge LIVE dans la trame (delta intra-quantum CPU inclus) : date au cycle
     // près chaque écriture palette pour le re-rendu spec512 (cf. Shifter::finishFrame).
     shifter.setLiveFrameClock([this] { return sched.liveNow() - frameStart_; });
-    // Horloge RTC : cycle CPU ABSOLU exact, même au milieu d'une lecture MMIO (on
-    // ajoute le delta intra-quantum, car sched.now() ne bouge qu'aux frontières).
-    rtc.setClock([this] { return sched.now() + cpu.cyclesRunInQuantum(); });
-    // Horloge « live » de l'ordonnanceur = même cycle absolu exact. Les puces qui
-    // datent un événement en plein bloc CPU (MFP timers…) s'en servent pour le caler
-    // sur l'instant RÉEL de l'accès et non sur le début du quantum (cf. Scheduler).
-    sched.setLiveClock([this] { return sched.now() + cpu.cyclesRunInQuantum(); });
-    // Préemption : l'ordonnanceur peut couper le bloc CPU quand un événement plus
-    // proche est armé (latence IRQ ~1 instruction, cf. Scheduler::schedule).
+    // Horloge RTC : cycle CPU ABSOLU exact, même au milieu d'une lecture MMIO.
+    // L'horloge maîtresse est désormais le cœur (busClockNow), conduit par sync().
+    rtc.setClock([this] { return cpu.busClockNow(); });
+    // Horloge « live » de l'ordonnanceur = cycle bus absolu live du cœur. Les puces
+    // qui datent un événement en plein milieu d'une instruction (MFP timers, compteur
+    // vidéo…) s'en servent pour le caler sur l'instant RÉEL de l'accès. C'est l'horloge
+    // que sync() avance et sur laquelle il dispatche (cf. NeostMoira::sync).
+    sched.setLiveClock([this] { return cpu.busClockNow(); });
+    // L'ordonnanceur est piloté DEPUIS le hook cycle du cœur (sync) : à chaque pas,
+    // sync() avance l'horloge puis dispatche les échus → IPL posé au cycle exact.
+    cpu.setScheduler(&sched);
+    // Préemption conservée mais DORMANTE (beginRun n'est plus appelé) : le dispatch
+    // se fait au fil de sync(), plus besoin de couper le bloc CPU.
     sched.setEndSlice([this] { cpu.endTimeslice(); });
     // V2 res-switch (opt-in NEOST_V2) : la Glue signale une impulsion hi-res PRÉCOCE
     // (cyc ≤ 56) sur la ligne courante → on raccourcit la ligne (HBL reprogrammé à la
@@ -327,6 +331,11 @@ void Machine::runFrame() {
     // (sched.now()) ; la grille d'events (scheduleFrameEvents) ET la datation
     // beamClock_/liveFrameClock_ dérivent toutes de frameStart_ → co-ancrées au théorique,
     // comme Hatari. Supprime le jitter de phase qui faisait sauter l'image (cf. workflow).
+    // 1ʳᵉ trame : ancre sur sched.now() (= 0 après reset), comme l'ancien modèle, et NON
+    // sur busClockNow() — le cœur a déjà avancé de ~40 cyc (lecture SSP/PC du reset) quand
+    // la 1ʳᵉ trame démarre. Ancrer sur busClockNow décalerait la grille faisceau de ces 40
+    // cyc → déphasage CPU↔faisceau qui casse les calibrations raster (Enchanted Land noir).
+    // L'offset reset est ainsi absorbé dans la 1ʳᵉ trame, comme avant.
     if (frameStartInit_) frameStart_ += static_cast<int64_t>(lpf_) * cpl_;
     else { frameStart_ = sched.now(); frameStartInit_ = true; }
     // Le RTC avance désormais en PARESSEUX à la lecture (cf. Rtc::catchUp), piloté
@@ -334,23 +343,22 @@ void Machine::runFrame() {
     scheduleFrameEvents();
 
     const int64_t frameEnd = frameStart_ + static_cast<int64_t>(lpf_) * cpl_;
-    while (sched.now() < frameEnd) {
-        int64_t next = sched.nextDue();
-        if (next < 0 || next > frameEnd) next = frameEnd;
-
-        // Exécute le CPU jusqu'au prochain événement. cpu.run() termine son
-        // instruction en cours et peut DÉPASSER la cible : on AVANCE l'horloge du
-        // nombre RÉELLEMENT consommé (carry du dépassement, comme Hatari) → pas de
-        // dérive ; l'événement échu est déclenché « en retard » de quelques cycles.
-        // `beginRun(next)` arme la préemption : si une écriture CPU pendant le bloc
-        // arme un événement AVANT `next` (timer court…), le bloc est coupé à la
-        // prochaine frontière d'instruction et on ré-évalue (latence IRQ ~1 instr).
-        const int64_t want = next - sched.now();
-        sched.beginRun(next);
-        const int ran = cpu.run(static_cast<int>(want > 0 ? want : 1));
-        sched.endRun();
-        sched.runTo(sched.now() + ran);                  // déclenche les handlers échus
+    // ORDONNANCEUR PILOTÉ PAR L'HORLOGE (modèle `do_cycles` WinUAE/Hatari) : le CPU
+    // tourne jusqu'à la fin de trame, et c'est NeostMoira::sync() qui dispatche les
+    // événements (HBL, Timer-B, VBL, RENDER, timers MFP) AU FIL de l'exécution, au
+    // cycle exact — l'IPL est posé pendant l'instruction et vu par son POLL_IPL.
+    // Plus de quantum borné à l'événement ni de préemption : le bloc = la trame
+    // entière. cpu.run() termine son instruction et peut dépasser frameEnd de
+    // quelques cycles (carry, comme Hatari) ; la boucle reboucle si nécessaire.
+    while (cpu.busClockNow() < frameEnd) {
+        const int64_t want = frameEnd - cpu.busClockNow();
+        cpu.run(static_cast<int>(want > 0 ? want : 1));
     }
+    // Filet : si le CPU n'a PAS conduit l'horloge jusqu'au bout (CPU halté → run()
+    // avance l'horloge par setClock sans passer par sync()), on dispatche quand même
+    // les événements vidéo restants pour décoder la trame (écran figé, comme l'ancien
+    // modèle). Sans effet en marche normale (sync() a déjà porté now_ ≥ frameEnd).
+    if (sched.now() < frameEnd) sched.syncTo(frameEnd);
 
     // Lignes restantes : en haute-rés mono (400 lignes), le cadre PAL 313 lignes
     // ne fournit pas un créneau par ligne → on finit le décodage ici. En couleur

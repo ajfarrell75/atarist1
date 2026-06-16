@@ -58,7 +58,14 @@ static constexpr int kSpec512Threshold = 512;
 // (poll $FF8209 0→≠0 ; -8 « façon Hatari Video_CalculateAddress » la casse —
 // écran noir après LOADING). L'écart lecture↔écriture résiduel vit côté
 // écritures (kSyncWriteOffsetCyc).
-static constexpr int kVideoCounterReadOffsetCyc = -2;
+// Datation des LECTURES du compteur vidéo $FF8205/07/09. Calibré pour le mode
+// MOIRA_PRECISE_TIMING (actif) où Moira date l'accès mémoire au SOUS-CYCLE réel
+// (≈ +6 cyc vs le début d'instruction du mode bloc historique). +4 recale la lecture
+// pour EL (poll $FF8209, sinon « écran noir après LOADING ») ET garde verts les étalons
+// pixel-exacts spec512/overscan/scroll. (Le mode bloc, MOIRA_PRECISE_TIMING=false,
+// demandait -2 ; cf. historique.) NEOST_VC_OFF ajuste pour le diagnostic.
+static const int kVideoCounterReadOffsetCyc =
+    4 + [] { const char* s = std::getenv("NEOST_VC_OFF"); return s ? std::atoi(s) : 0; }();
 
 // =============================================================================
 //  Machine GLUE — retrait de bordures (port fidèle de Hatari video.c :
