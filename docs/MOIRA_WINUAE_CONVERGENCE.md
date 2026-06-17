@@ -17,6 +17,9 @@ Cuddly, Super Hang-On). Décision utilisateur (2026-06-16) : **garder le sync-dr
   CORRIGE la conclusion « RAM_SLOT/E-clock = pas d'impact jeu » (testés en isolation, jamais ensemble).
   `NEOST_RAM_SLOT=0`/`NEOST_IACK=0` désactivent (A/B). Coût : `overscan_top` re-baseliné (les 56 px
   diffèrent UNIQUEMENT en bordure haute overscan ; zone active byte-identique Hatari, ON et OFF).
+  **Validation jeux (A/B) : Super Hang-On titre byte-identique ; Enchanted Land logo propre (diff =
+  phase anim) ; Lethal Xcess titre PROPRE on vs CORROMPU off → les flags RÉPARENT l'overscan LX.
+  Aucun double-comptage avec les hacks empiriques observé.** [[ramslot-iack-enable-overscan]]
 - ✅ **Convergence INSTRUCTION = COMPLÈTE** : `NEOST_RAM_SLOT` (align créneau bus) + fix DIV (fork Moira) →
   datation cycle de NeoST = WinUAE sur tout le jeu courant, validé au différentiel (§1, §5).
 - ✅ **Deadlock Enchanted Land = RÉSOLU** : dispatch BLOC par défaut (le sync-driven mid-instruction était
