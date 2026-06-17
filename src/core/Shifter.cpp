@@ -1041,6 +1041,7 @@ void Shifter::renderGlueFrame() {
     // DIAG (gated NEOST_RENDER_TRACE=<numéro de trame>) : état per-ligne au rendu glue.
     static int s_renderFrame = -1; ++s_renderFrame;
     static const int traceFrame = []{ const char* s = std::getenv("NEOST_RENDER_TRACE"); return s ? std::atoi(s) : -1; }();
+    static const bool renderAll = std::getenv("NEOST_RENDER_ALL") != nullptr;   // toutes les lignes (≠ 12)
     const bool rtr = (traceFrame >= 0 && s_renderFrame >= traceFrame);
     if (rtr) std::fprintf(stderr, "[render f%d] base=%06x start=%d end=%d vover=%d\n",
                           s_renderFrame, vcFrameBase_ & 0xFFFFFF, glueStartHBL_, glueEndHBL_, glueVOverscan_);
@@ -1053,7 +1054,7 @@ void Shifter::renderGlueFrame() {
         if (displayed) { const GlueLine& L = glueLines_[sl]; ds = L.displayStartCycle; de = L.displayEndCycle; bm = L.borderMask; shift = L.displayPixelShift; }
         const bool lineHasDE = displayed && !(bm & glue::NO_DE) && de > ds;
         const int  nPix = lineHasDE ? (de - ds) : 0;
-        if (rtr && displayed && sl < baseStart + 12)
+        if (rtr && displayed && (renderAll || sl < baseStart + 12))
             std::fprintf(stderr, "  sl%d ds=%d de=%d bm=%03x nPix=%d addr=%06x\n", sl, ds, de, bm, nPix, addr & 0xFFFFFF);
         // decodeWindowIndices décode des GROUPES de 16 px : la plage valide de idx est
         // [0, nDec) avec nDec arrondi au groupe supérieur → marge pour le DisplayPixelShift.
