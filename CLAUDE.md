@@ -8,12 +8,24 @@ macOS Silicon / CachyOS Linux. **Commentaires en français.**
 
 ## Où trouver quoi
 
+**Racine — orientation & état :**
+
 | Doc                            | Contenu                                                        |
 |--------------------------------|---------------------------------------------------------------|
 | [`DEV.md`](DEV.md)             | **Détails techniques** : architecture, horloge, bus, débogage headless, mapping Hatari, pièges matériels. |
-| [`CHANGELOG.md`](CHANGELOG.md) | **Ce qui est fait** (implémenté + validé).                    |
-| [`TODO.md`](TODO.md)           | **Ce qui reste** (fidélité Hatari, MegaSTE, précision cycle). |
+| [`CHANGELOG.md`](CHANGELOG.md) | **Ce qui est fait** (implémenté + validé), par sous-système.  |
+| [`TODO.md`](TODO.md)           | **Ce qui reste** (catalogue jeux + roadmap par sous-système + pointeurs). |
 | [`README.md`](README.md)       | Présentation + install/usage utilisateur.                     |
+
+**`docs/` — références spécialisées :**
+
+| Doc                                          | Contenu                                                |
+|----------------------------------------------|--------------------------------------------------------|
+| [`CYCLE_ACCURACY.md`](docs/CYCLE_ACCURACY.md)           | **Précision cycle** : modèle Hatari, acquis (phases 0-6), inventaire priorisé du restant. |
+| [`MOIRA_WINUAE_CONVERGENCE.md`](docs/MOIRA_WINUAE_CONVERGENCE.md) | **Beam-sync** (front actif) : convergence Moira↔WinUAE, mesures, pistes éliminées. |
+| [`HATARI_DIVERGENCES.md`](docs/HATARI_DIVERGENCES.md)   | **Inventaire maître** des écarts NeoST↔Hatari (4 passes d'audit, sévérité + `fichier:ligne`). |
+| [`HATARI_AUTOMATION.md`](docs/HATARI_AUTOMATION.md)     | Exécuter Hatari en **oracle headless** (boot → PNG, traces, `--cmd-fifo`). |
+| [`TEST_SOFTWARE.md`](docs/TEST_SOFTWARE.md)             | Catalogue des **logiciels étalons** (jeux/démos limites) par sous-système. |
 
 Architecture en deux mots : **le `Bus` *est* le plan mémoire** (route read8/write8 vers les
 puces) et **le cœur `neost_core` ne dépend pas du GUI**. Détails → `DEV.md`.

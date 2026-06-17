@@ -6,6 +6,11 @@ vidéo de NeoST. C'est la cause racine commune des bugs beam-sync (Lethal Xcess,
 Cuddly, Super Hang-On). Décision utilisateur (2026-06-16) : **garder le sync-driven (PT=true)** +
 **full convergence** (pas un graft chirurgical).
 
+> 🧭 **Cadre.** Ce doc est le **front actif** de la précision cycle. Le cadre général (modèle
+> Hatari, phases acquises, inventaire priorisé du restant) est dans
+> [`CYCLE_ACCURACY.md`](CYCLE_ACCURACY.md) ; les écarts logiques bornés dans
+> [`HATARI_DIVERGENCES.md`](HATARI_DIVERGENCES.md).
+>
 > ⚠️ Ce doc CORRIGE plusieurs notes mémoire optimistes/contradictoires. Lire d'abord §3 « Vérités
 > mesurées » avant de rouvrir une piste.
 
@@ -31,6 +36,9 @@ Cuddly, Super Hang-On). Décision utilisateur (2026-06-16) : **garder le sync-dr
 - **Outils** : harnais différentiel de cycles (`NEOST_TRACE_CYC` + `tools/trace_diff.py --periods`),
   bancs `make_cycle_bench.py` / `make_respulse_test.py` (oracle Hatari `--trace video_res`), diag
   `NEOST_RENDER_ALL` ; comparaison rendu via profil par-ligne PIL (bbox/per-row).
+  `tools/beamsync_diff.sh <tos> <disk|-> <vbls> [machine]` = diff cycle-exact de la **phase
+  CPU↔faisceau** (cycle/ligne où chaque IRQ/exception est prise + cycle où le CPU échantillonne
+  `$FF8205/07/09`) NeoST vs oracle Hatari.
 
 ---
 
