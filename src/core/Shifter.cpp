@@ -1190,20 +1190,20 @@ uint8_t Shifter::read8(uint32_t addr) {
     // relecture doit déjà la refléter (port Video_ScreenCounter_ReadByte qui ajoute
     // VideoCounterDelayedOffset & ~1 à l'adresse calculée).
     if (addr == 0xFF8205 || addr == 0xFF8207 || addr == 0xFF8209) {
-        // Wait-state de la lecture du compteur vidéo $FF8205/07/09. ORDRE CRUCIAL : la
-        // VALEUR est échantillonnée au cycle d'ACCÈS (avant le wait, façon Hatari
-        // Cycles_GetCounterOnReadAccess), PUIS le CPU est retardé du wait-state → corrige
-        // le TIMING des boucles qui pollent $FF8209 SANS fausser la valeur lue (étalons
-        // spec512/overscan `--max 0` inchangés). Coût mesuré à l'oracle = +2 cyc bus FIXE
-        // (≠ l'align-4 variable des registres couleur/résolution `syncCpuBus`, qui ici
-        // jitterait) : boucle d'auto-synchro de Lethal Xcess `$14ef6 (move.b $8209,d0/beq)`
-        // = 24 cyc/itér chez Hatari vs 22 sans le wait ; sync-scroll d'Enchanted Land
-        // `$ee78` = 20 vs 18. Sans ce +2 : LX ne converge jamais sa calibration fullscreen
-        // (avance compteur ≠ 0xbe=190 attendu) → spin → écran noir ; EL sync-scroll cassé.
-        // Avec : LX démarre (atteint sa boucle de jeu $30142), EL atteint son jeu. Override
-        // de calibration : NEOST_VC_WAIT. Cf. mémoire lethal-xcess-black-screen-rootcause.
+        // Wait-state de la lecture du compteur vidéo $FF8205/07/09. La VALEUR est
+        // échantillonnée au cycle d'ACCÈS (avant tout wait, façon Hatari
+        // Cycles_GetCounterOnReadAccess), PUIS le CPU pourrait être retardé.
+        // ⚠ DÉFAUT = 0 (2026-06-18). Mesuré à l'oracle Hatari sur EL EN JEU (poll fullscreen
+        // $ee78 lecture simple + $3700 double lecture) AVEC `NEOST_RAM_SLOT` défaut-ON :
+        //   $ee78 = 20 cyc/itér (NeoST VC_WAIT=0) = 20 (Hatari) ; VC_WAIT=2 → 24 (+4 FAUX).
+        //   $3700 = 36 (NeoST VC_WAIT=0) = 36 (Hatari) ; VC_WAIT=2 → 40 (+4 FAUX).
+        // RAM_SLOT (alignement créneau bus) fournit DÉJÀ le +2 que ce wait ajoutait jadis
+        // → VC_WAIT=2 DOUBLE-COMPTE (+4) et fait DÉRIVER le poll → SCRAMBLE EL en jeu.
+        // VC_WAIT=0 : EL en jeu propre (garbage→paysage net), étalons BYTE-IDENTIQUES
+        // (spec512/overscan_top/scroll/glue 19-0). L'ancien commentaire « +2 requis sinon
+        // LX/EL noir » datait d'AVANT RAM_SLOT défaut-ON → périmé. Override : NEOST_VC_WAIT.
         const uint32_t vc = videoCounter() + (vcDelayedOffset_ & ~1);
-        static const int vcWait = [] { const char* s = std::getenv("NEOST_VC_WAIT"); return s ? std::atoi(s) : 2; }();
+        static const int vcWait = [] { const char* s = std::getenv("NEOST_VC_WAIT"); return s ? std::atoi(s) : 0; }();
         if (vcWait && bus_.cpu) bus_.cpu->addBusWaitCycles(vcWait);
         // DEBUG (oracle Hatari `--trace video_addr`) : trace chaque lecture du compteur
         // vidéo avec assez d'état pour diff'er au cycle. Gated NEOST_VC_TRACE.

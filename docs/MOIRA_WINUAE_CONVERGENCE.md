@@ -193,9 +193,29 @@ mid-instruction `do_cycles` WinUAE) deadlockait la boucle beam-sync `$EE78` d'EL
 ## 7. CHANTIER RESTANT (plus de deadlock, mais EL scramble en jeu)
 
 Avec la fondation bloc+PT, plus de deadlock ; EL boote/intro propre. Reste, par valeur décroissante :
-1. **[HAUTE] EL corruption EN JEU (scroll) — caractérisée en profondeur, NON RÉSOLUE.** Recette in-game :
-   `--joy-at 3100 0x80 --frames 13000` (logo Thalion ~3000 → fire tenu → chargement noir ~9000 → niveau
-   rocheux ~13000). Synthèse des passes du 2026-06-17 (plusieurs hypothèses falsifiées en chemin) :
+1. **[HAUTE] EL corruption EN JEU (scroll) — ✅ LARGEMENT RÉSOLUE (2026-06-18, oracle EL réel).**
+   > 🎯 **FIX = `NEOST_VC_WAIT` défaut 2→0** (`Shifter.cpp` lecture `$FF8205/07/09`). Diff datation à
+   > l'oracle EL en jeu (poll fullscreen) : le wait-state +2 par-lecture **double-comptait** le +2 que
+   > `NEOST_RAM_SLOT` (défaut-ON) fournit déjà → les boucles de poll dérivaient de **+4 cyc/itér** :
+   > `$ee78` (sync-scroll) 24 vs Hatari **20** ; `$3700` (double lecture) 40 vs **36**. Avec VC_WAIT=0 :
+   > **les deux = Hatari exactement**, étalons **byte-identiques** (spec512/overscan_top/scroll/glue 19-0),
+   > et **EL en jeu passe de garbage scramblé à paysage rocheux NET**. L'ancien commentaire « +2 requis »
+   > datait d'avant RAM_SLOT défaut-ON. **Reste un résidu** de corruption (bande droite). ⚠ Testé
+   > (2026-06-18) : ce n'est **PAS** la datation des écritures `kSyncWriteOffsetCyc=+16` — la réduire
+   > (`NEOST_SYNC_OFF<0`) **CASSE la progression d'EL** (reste à l'intro : l'offset alimente la glue live
+   > que les reads `$FF8209` consultent → load-bearing, **pas** redondant comme VC_WAIT). Résidu = chantier
+   > **V2 res-switch / géométrie par-ligne** (cf. §7 reste), distinct de la datation lecture/écriture.
+   > 🎯 **RECETTE IN-GAME FIABLE (2026-06-18, remplace l'ancienne périmée) :**
+   > ```sh
+   > ./build/neost-headless roms/tos102fr.img --disk "disks/st/Enchanted Land (1990)(Thalion).st" \
+   >     --machine st --mem 512k --keys-at 3500 " " --frames 4200 --shot-every 1 /tmp/el_
+   > ```
+   > **CLÉ : PAS de `--fastfdc`** — il casse le loader EL (→ écran noir, ce qui faisait croire l'ancienne
+   > recette `--joy-at 3100 0x80` « périmée »). **SPACE démarre EL** (clavier, = joystick 0 px diff) et
+   > l'intro propre est à ~3000, le **JEU SCRAMBLÉ à ~4000** (terrain rocheux + crédits). Corruption
+   > objectivée : **32-52 % des pixels changent trame-à-trame** (joueur immobile). Intro byte-propre = Hatari.
+
+   Synthèse des passes (plusieurs hypothèses falsifiées en chemin) :
 
    **Ce qui est FIDÈLE (ne pas y toucher).** `updateGlueState` (Shifter.cpp:677-846) est un PORT FIDÈLE
    de `Video_Update_Glue_State` (video.c:2244-2438) — constantes identiques, branches right-border
@@ -208,9 +228,13 @@ Avec la fondation bloc+PT, plus de deadlock ; EL boote/intro propre. Reste, par 
    **Banc de repro + validation (la pièce qui débloque, `tools/make_respulse_test.py`).** Handler HBL
    faisant `res=02`/`res=00` en fin de ligne par ligne (mécanisme fullscreen d'EL) ; **boote dans NeoST
    ET Hatari SANS input** → contourne le blocage oracle. RÉSULTAT : screenshot NeoST≠Hatari **40-49 %**.
-   > ⛔ L'oracle EL EN JEU direct est BLOQUÉ headless : Hatari `--cmd-fifo keydown` prend un SCANCODE ST,
-   > et `--joy0 keys` mappe des touches SDL absentes en vidéo dummy → impossible d'injecter le FEU
-   > joystick → EL reste au logo dans Hatari. D'où le banc synthétique.
+   > ✅ **ORACLE EL EN JEU DÉBLOQUÉ (2026-06-18, contredit le « BLOQUÉ » précédent).** EL démarre à la
+   > **touche SPACE** (pas seulement au feu joystick) → injectable dans Hatari via `--cmd-fifo` +
+   > `hatari-event keypress 57`. ⚠ `--cmd-fifo` désactive le fast-forward → run TEMPS RÉEL (~72 s pour
+   > atteindre l'intro vbl ~3600, puis SPACE) ; `--avirecord --avi-vcodec png` capture la scène. Hatari
+   > rend alors le **niveau PROPRE** (paysage rocheux + crédits) = la référence du scramble NeoST. Le banc
+   > synthétique `make_respulse_test.py` reste utile (rapide, sans input) mais est un **proxy imparfait**
+   > (Hatari n'y retire les bordures que par intermittence). L'oracle EL réel est désormais la cible.
 
    **CAUSE RACINE RÉELLE (root-causée 2026-06-17, banc + oracle `video_res`) — c'est la PHASE
    CPU↔FAISCEAU, PAS la largeur d'affichage.** L'ancienne conclusion « divergence DOMINANTE = largeur
