@@ -156,22 +156,27 @@ mid-instruction `do_cycles` WinUAE) deadlockait la boucle beam-sync `$EE78` d'EL
 ## 7. CHANTIER RESTANT (plus de deadlock, mais EL scramble en jeu)
 
 Avec la fondation bloc+PT, plus de deadlock ; EL boote/intro propre. Reste, par valeur décroissante :
-1. **[HAUTE] EL scramble EN JEU — DIAGNOSTIC PRÉCIS (2026-06-17, bloc+PT)**. PAS la convergence,
-   PAS V2-hi-res, PAS (surtout) la base. **EL ouvre les bordures G/D via des impulsions FREQ
-   (50/60 Hz) per-ligne** : `freq=00`(60Hz)@cyc 276 puis `freq=02`(50Hz)@cyc 284 (8 cyc d'écart, pc
-   `010ada`/`010adc`), **cyc qui DÉCROÎT de 4 par ligne** (276→272→268…) = motif DÉTERMINISTE et
-   consistant (pas du jitter). **La Glue de NeoST ne déclenche AUCUN bordermask** (`NEOST_RENDER_TRACE`
-   = `bm=000 nPix=320` = bordures FERMÉES) → stride de ligne 160 o au lieu du fullscreen → désalignement
-   cumulatif vers le bas = SCRAMBLE. Les branches de détection (`updateGlueState` Shifter.cpp:688-721)
-   ne testent la Freq qu'aux cycles de BORD de ligne (HDE_On/HDE_Off/Line_Set_Pal) ; l'impulsion 60 Hz
-   **MID-ligne (cyc 276)** ne matche aucune → rien. ⚠ **Métrique** : screenshot frame-à-frame diff
-   45 % (saute) car (a) bordures non ouvertes + (b) base qui jitte en second ordre. **Manque pour finir**
-   = l'ORACLE Hatari d'EL EN JEU (savoir ce que la freq@276 doit produire). Held-fire-from-frame-0 ÉCHOUE
-   (EL reste au logo Thalion ; il faut injecter le feu ~frame 3100, dur en fast-forward). Pistes oracle :
-   `--joy0 keys` + `--cmd-fifo` avec keydown Right-Ctrl (1073742052) TEMPORISÉ vers frame 3100, ou un
-   `.st` synthétique reproduisant freq@276-décroissant per-ligne à diffirer NeoST↔Hatari. Comparer
-   ensuite `updateGlueState` (Shifter.cpp:682+) à `Video_Update_Glue_State` (video.c:2244-2438) sur une
-   impulsion 60 Hz mid-ligne décroissante.
+1. **[HAUTE] EL corruption EN JEU (scroll) — ⚠️ DIAGNOSTIC RÉVISÉ (2026-06-17, comparaison Glue
+   rigoureuse).** Mon hypothèse « branche Glue manquante / bordures fermées » est **RÉFUTÉE**. Faits
+   établis par lecture ligne-à-ligne des 2 sources + glue-selftest 19/19 + exécution du jeu :
+   - **`updateGlueState` (Shifter.cpp:677-846) est un PORT FIDÈLE de `Video_Update_Glue_State`
+     (video.c:2244-2438).** Constantes de cycle identiques (HDE_On_Hi=4, HDE_Off_Low_50=376,
+     DE_end_right=462, Line_Set_Pal=54…). La branche right-border de la freq=60 (video.c:2782-2800) EST
+     présente (Shifter.cpp:780-786). **AUCUNE branche manquante.**
+   - **Les bordures G/D d'EL S'OUVRENT bien** (terrain vert rendu BORD À BORD, au-delà de 320 px).
+     Mon `bm=000 nPix=320` était un FAUX (NEOST_RENDER_TRACE ne trace QUE les 12 1ʳᵉˢ lignes affichées =
+     le CIEL en haut, bordures fermées là ; le terrain plus bas ouvre). EL écrit la freq=60 réelle à
+     **cyc 376/460** (bord de ligne) — pas 276. Le cluster cyc 276 = la sonde de **calibration du loader**
+     (freq=02 50 Hz), qui ne doit PAS ouvrir de bordure (correct).
+   - **EL rend correctement les écrans statiques** (logo, crédits) ; la corruption (bande centrale
+     bruitée) apparaît en **SCROLL ACTIF**. C'est l'**accumulation de stride inter-lignes** en cas de
+     scroll : `endVideoLine` (Shifter.cpp:383-409) avance DÉJÀ `vcLineBase_` du stride réel via
+     `glueLineBytes` (+26/+44 selon bordermask), donc le cas simple EST modélisé — le résidu est un bug
+     SUBTIL de ce chemin pendant le scroll (datation des écritures base/compteur per-ligne, ordre
+     catch-up, ou stride sur une ligne précise), PAS la Glue. **À reprendre** : tracer `vcLineBase_`/
+     `glueLineBytes` par ligne sur une trame scroll vs l'oracle, dans le chemin d'ADRESSE vidéo
+     (`Video_CalculateAddress`), pas le state-machine Glue. ⚠ NE PAS ajouter de branche Glue (ce serait
+     faux : la sonde 276 doit rester sans bordure). Cf. [[enchanted-land-glue-live]] (résidu « frange »).
 2. **LX jitter de titre** (~1.5 %, subtil ; LX rend déjà) ; **Cuddly menu robot** / **SHO course**
    (inatteignables headless → navigation requise).
 3. **E-clock @ IACK** (poll-beat période-3 vs Hatari période-5) — RAFFINEMENT de phase ; n'a PAS
