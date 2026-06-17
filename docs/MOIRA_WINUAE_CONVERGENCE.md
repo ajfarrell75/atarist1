@@ -194,13 +194,26 @@ Avec la fondation bloc+PT, plus de deadlock ; EL boote/intro propre. Reste, par 
      trame** (512 cyc partout, `frameMode_`/`geometry()`) → 0 ligne raccourcie. Le delta de longueur
      (224 vs 512 → ±80 o/ligne sur 17 lignes) décale les adresses → corruption. `NEOST_V2` (raccourci
      sur impulsion hi-res PRÉCOCE ≤56) NE couvre PAS l'impulsion FIN-DE-ligne → 42 % (n'aide pas).
-   - **LE FIX = chantier V3** : raccourcissement de ligne PAR LIGNE sur impulsion res (couplage
-     Shifter↔Scheduler pour reprogrammer le HBL à 224, modèle d'adresse/longueur par ligne au lieu de
-     la grille trame figée). ⚠ ARCHITECTURAL et RISQUÉ (le HBL ancre top/bottom + Timer-B ; cf.
-     [[beamsync-busalign-falsified]] §6, `setHblShorten`/V2 existant à étendre du cas précoce au cas
-     fin-de-ligne). **Validation = le banc synthétique** (`make_respulse_test.py` → screenshot vs
-     `hatari_oracle.sh`, viser 0 %, + distribution longueur 224/512 = Hatari) PUIS EL en jeu. ⚠ NE PAS
-     ajouter de branche Glue (la Glue est fidèle). Cf. [[enchanted-land-glue-live]], [[v2-resswitch-validated]].
+   - **LE FIX = chantier V3 (MULTI-COUCHES, plus profond que prévu — tentative 2026-06-17).** Analyse
+     Glue rigoureuse (agent, video.c ligne-à-ligne) → le raccourcissement à **224 est un CAS-LIMITE de
+     DÉRIVE** (« spill ») : l'impulsion hi-res fin-de-ligne, quand elle DÉPASSE la position HBL (cpl-4),
+     est attribuée au DÉBUT (≤56 cyc) de la ligne suivante → Region A video.c:2268-2298 → 224 ; sinon
+     elle reste sur la ligne courante → Region B (RIGHT_OFF, **longueur 512**, video.c:2683-2800), que
+     **NeoST PORTE DÉJÀ** (Shifter.cpp:745-803). Hatari attribue selon l'ACK temps-réel du HBL ; NeoST
+     REJOUE en post-trame (pas d'ACK temps-réel) → ne « spille » jamais → 0 ligne 224. ⚠ **MAIS** :
+     (a) le raccourci 224 ne touche que **17/311 lignes** (cas-limite dérive) — ne peut PAS expliquer
+     les **43 %** de diff du banc ; (b) tenté `len=224` sur les lignes BLANK/NO_COUNT (port correct du
+     spill) = **INERTE** sur le screenshot, car le rendu passe par le chemin d'ADRESSE
+     (`glueLineBytes`/`endVideoLine` ; une ligne NO_DE lit 0 o quelle que soit sa longueur), pas par le
+     `len` de replayGlue. **⇒ La divergence DOMINANTE du banc = la LARGEUR D'AFFICHAGE / rendu de la
+     RÉGION BORDURE** : NeoST OUVRE les bordures PLUS LARGE que Hatari (affiche le dégradé là où Hatari
+     met la couleur bordure) sur les lignes RIGHT_OFF. C'est une couche SÉPARÉE du raccourcissement.
+   - **ÉTAT (honnête)** : le banc `make_respulse_test.py` reproduit + valide (boote 2 cœurs sans input),
+     le mécanisme est cartographié (spill 224 vs RIGHT_OFF 512), mais le FIX reste NON RÉSOLU — c'est un
+     chantier glue/vidéo **multi-couches** (largeur d'affichage RIGHT_OFF + longueur de ligne + chemin
+     d'adresse glueLineBytes, tous cohérents) et le modèle post-trame de NeoST (replayGlue) vs temps-réel
+     de Hatari complique le spill. Effort architectural ciblé requis, PAS un patch. NE PAS ajouter de
+     branche Glue. Cf. [[enchanted-land-glue-live]], [[v2-resswitch-validated]], [[video-geometry-50-60-71]].
 2. **LX jitter de titre** (~1.5 %, subtil ; LX rend déjà) ; **Cuddly menu robot** / **SHO course**
    (inatteignables headless → navigation requise).
 3. **E-clock @ IACK** (poll-beat période-3 vs Hatari période-5) — RAFFINEMENT de phase ; n'a PAS
