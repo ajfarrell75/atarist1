@@ -185,12 +185,22 @@ Avec la fondation bloc+PT, plus de deadlock ; EL boote/intro propre. Reste, par 
      d'injecter le FEU joystick d'EL** → EL reste au logo Thalion dans Hatari (vérifié : log « keydown
      1073742052 isn't a valid key scancode » + reste 43 couleurs = logo). ⇒ pas de comparaison d'adresses
      EL-en-jeu directe.
-   - **PROCHAIN PAS (sans oracle EL)** : `.st` SYNTHÉTIQUE reproduisant la séquence res-pulse fin-de-ligne
-     (boote dans NeoST ET Hatari SANS input → comparer les adresses per-ligne via `--trace video_addr`
-     Hatari vs `NEOST_RENDER_ALL`) ; OU comparer directement la gestion `NO_COUNT`/blank de
-     `updateGlueState` à `Video_Update_Glue_State` sur une impulsion res hi-res en fin de ligne (lignes
-     2683+ video.c). ⚠ NE PAS ajouter de branche Glue (la sonde 276 = calibration loader, sans bordure).
-     Cf. [[enchanted-land-glue-live]] (résidu « frange »).
+   - ✅ **CAUSE RACINE TROUVÉE (2026-06-17, banc synthétique `tools/make_respulse_test.py`)** : c'est la
+     **GÉOMÉTRIE PAR LIGNE (V3)**, pas la Glue, pas le stride seul. Le banc (HBL handler faisant
+     res=02/res=00 en fin de ligne par ligne, boote dans NeoST ET Hatari SANS input) reproduit la
+     divergence : **screenshot NeoST≠Hatari 40-49 %**. Mesure décisive — distribution de LONGUEUR DE
+     LIGNE (deltas de cycle-HBL Hatari) = **{512: 294, 224: 17}** : Hatari **RACCOURCIT 17 lignes en
+     hi-res (224 cyc)** quand l'impulsion res aligne, tandis que **NeoST VERROUILLE la géométrie par
+     trame** (512 cyc partout, `frameMode_`/`geometry()`) → 0 ligne raccourcie. Le delta de longueur
+     (224 vs 512 → ±80 o/ligne sur 17 lignes) décale les adresses → corruption. `NEOST_V2` (raccourci
+     sur impulsion hi-res PRÉCOCE ≤56) NE couvre PAS l'impulsion FIN-DE-ligne → 42 % (n'aide pas).
+   - **LE FIX = chantier V3** : raccourcissement de ligne PAR LIGNE sur impulsion res (couplage
+     Shifter↔Scheduler pour reprogrammer le HBL à 224, modèle d'adresse/longueur par ligne au lieu de
+     la grille trame figée). ⚠ ARCHITECTURAL et RISQUÉ (le HBL ancre top/bottom + Timer-B ; cf.
+     [[beamsync-busalign-falsified]] §6, `setHblShorten`/V2 existant à étendre du cas précoce au cas
+     fin-de-ligne). **Validation = le banc synthétique** (`make_respulse_test.py` → screenshot vs
+     `hatari_oracle.sh`, viser 0 %, + distribution longueur 224/512 = Hatari) PUIS EL en jeu. ⚠ NE PAS
+     ajouter de branche Glue (la Glue est fidèle). Cf. [[enchanted-land-glue-live]], [[v2-resswitch-validated]].
 2. **LX jitter de titre** (~1.5 %, subtil ; LX rend déjà) ; **Cuddly menu robot** / **SHO course**
    (inatteignables headless → navigation requise).
 3. **E-clock @ IACK** (poll-beat période-3 vs Hatari période-5) — RAFFINEMENT de phase ; n'a PAS
