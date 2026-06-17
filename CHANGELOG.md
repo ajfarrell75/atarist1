@@ -69,6 +69,20 @@ taguées (0.1.x). Le restant est dans [`TODO.md`](TODO.md).
   désormais le coût réel des accès périphériques), ce qui a demandé de **re-calibrer** la disquette
   de démo overscan gauche/droite `make_overscan_lr.py` (PAD1 20→12, rendu L+D plein PLUS propre
   qu'avant).
+- **Dispatch d'événements BLOC (réfute le sync-driven) — Enchanted Land DÉ-DEADLOCKÉ.** Le modèle
+  « sync-driven » (dispatch des events HBL/VBL/Timer-B EN COURS d'instruction depuis `Moira::sync()`,
+  do_cycles WinUAE) deadlockait EL (boucle beam-sync `$EE78` jamais servie → écran noir dès la trame
+  ~1200) SANS corriger le jitter (falsifié). Retour au **dispatch BLOC** (CPU borné à l'événement
+  suivant + dispatch à la frontière via `runTo`, pré-sync-driven) **par DÉFAUT**, en gardant
+  PT=true → intro/écrans statiques d'EL propres. Sync-driven en opt-in `NEOST_SYNC_DISPATCH` (reproduit
+  le deadlock, A/B). Validé : étalons 19/0, LX inchangé. Reste la corruption EL EN JEU (scroll), chantier
+  vidéo V3 (cf. [`docs/MOIRA_WINUAE_CONVERGENCE.md`](docs/MOIRA_WINUAE_CONVERGENCE.md)).
+- **Convergence cycle Moira↔WinUAE — niveau INSTRUCTION (opt-in, recherche).** Harnais différentiel
+  (`NEOST_TRACE_CYC` colonne cycle absolue dans le `Tracer` + `tools/trace_diff.py --periods`) :
+  compare les cycles/boucle des deux cœurs. `NEOST_RAM_SLOT` (align créneau bus 4 cyc sur la RAM CHIP16,
+  port `wait_cpu_cycle`) + reorder DIV (`SYNC(idle)` avant prefetch, fork Moira) → **14/14 boucles
+  d'instructions = WinUAE** au différentiel (bancs `tools/make_cycle_bench.py`). GATED, défaut OFF
+  (build byte-identique). Détail/limites → doc maître.
 
 ## Types de machine & mémoire
 - **Zone RAM « void » : on relit le dernier mot du bus de données** (port Hatari
