@@ -216,6 +216,20 @@ softfloat_decimal) ; GEMDOS Unicode macOS (sur une cible macOS) — documentés
 
 ### 🏗️ CHANTIER MAJEUR — horloge CPU↔vidéo UNIQUE (façon Hatari) [beam-sync]
 
+> 📌 **AUTORITÉ COURANTE = [`docs/MOIRA_WINUAE_CONVERGENCE.md`](docs/MOIRA_WINUAE_CONVERGENCE.md)**
+> (session 2026-06-16/17). Cette section ci-dessous est l'ANCIEN dossier (2026-06-14), conservé pour
+> l'historique des pistes éliminées, mais ses CONCLUSIONS sont SUPERSÉDÉES. État à jour :
+> - ✅ **Convergence INSTRUCTION** Moira↔WinUAE = COMPLÈTE (`NEOST_RAM_SLOT` align créneau bus + fix DIV
+>   fork Moira ; harnais différentiel `NEOST_TRACE_CYC` + `trace_diff.py --periods`). Gated/sûr.
+> - ✅ **Deadlock Enchanted Land = RÉSOLU** : dispatch BLOC par défaut (le sync-driven mid-instruction
+>   était net-négatif → opt-in `NEOST_SYNC_DISPATCH`). Intro/écrans statiques propres.
+> - ◑ **Corruption EL EN JEU (scroll)** = caractérisée, NON résolue : chantier vidéo **V3 multi-couches**
+>   (largeur d'affichage RIGHT_OFF + longueur de ligne + chemin d'adresse). Banc de repro+validation
+>   `tools/make_respulse_test.py`. ⚠ La Glue est FIDÈLE (pas de branche manquante) — ne pas y toucher.
+> - ❌ Pistes superSÉDÉES ci-dessous : « le beam-sync EL/Cuddly est V2 » (faux — V2 ne couvre pas le
+>   fin-de-ligne), « micro-timing CPU↔WinUAE » comme cause du scramble (la convergence instr est faite,
+>   EL en jeu = V3 vidéo, pas le CPU). Lire le doc maître AVANT de rouvrir.
+
 > Dossier de reprise (recherches 2026-06-14, workflow oracle 8 agents + impl + diff Hatari).
 > C'est LA cause racine commune de plusieurs bugs ; cadrée et instrumentée, reste à
 > implémenter le fond. NE PAS re-creuser les pistes éliminées ci-dessous.

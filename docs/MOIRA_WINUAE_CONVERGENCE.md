@@ -6,8 +6,19 @@ vidéo de NeoST. C'est la cause racine commune des bugs beam-sync (Lethal Xcess,
 Cuddly, Super Hang-On). Décision utilisateur (2026-06-16) : **garder le sync-driven (PT=true)** +
 **full convergence** (pas un graft chirurgical).
 
-> ⚠️ Ce doc CORRIGE plusieurs notes mémoire optimistes/contradictoires. Lire d'abord §« Vérités
+> ⚠️ Ce doc CORRIGE plusieurs notes mémoire optimistes/contradictoires. Lire d'abord §3 « Vérités
 > mesurées » avant de rouvrir une piste.
+
+**État actuel (résumé).** Tout est sur `main`, **gated/défaut OFF, build vert** (`run_etalons` 19/0 + TOUS OK).
+- ✅ **Convergence INSTRUCTION = COMPLÈTE** : `NEOST_RAM_SLOT` (align créneau bus) + fix DIV (fork Moira) →
+  datation cycle de NeoST = WinUAE sur tout le jeu courant, validé au différentiel (§1, §5).
+- ✅ **Deadlock Enchanted Land = RÉSOLU** : dispatch BLOC par défaut (le sync-driven mid-instruction était
+  net-négatif) ; intro/écrans statiques propres (§6).
+- ◑ **Corruption EL EN JEU (scroll) = caractérisée, NON RÉSOLUE** : chantier vidéo V3 multi-couches
+  (largeur d'affichage RIGHT_OFF + longueur de ligne + chemin d'adresse) ; banc de repro `tools/
+  make_respulse_test.py` (§7).
+- **Outils** : harnais différentiel de cycles (`NEOST_TRACE_CYC` + `tools/trace_diff.py --periods`),
+  bancs `make_cycle_bench.py` / `make_respulse_test.py`, diag `NEOST_RENDER_ALL`.
 
 ---
 
@@ -77,19 +88,16 @@ DATATION (instants des accès), pas par comptage d'instruction.
 - 🔗 **Chicken-and-egg établi** : le jitter E-clock dépend de la phase d'horloge absolue, qui dépend
   de TOUT le timing d'instruction. ⇒ **converger le timing INSTRUCTION d'abord** (différentiel → 0),
   PUIS la phase d'IRQ tombe juste. L'E-clock ne se calibre PAS isolément.
-- 🏁 **JALON (banc différentiel multi-instructions, `tools/make_cycle_bench.py`)** : **NEOST_RAM_SLOT
-  converge 14/14 boucles d'instructions à WinUAE** (vs 2/14 sans). Le Δ+2 sur quasi toutes les
-  instructions (off) = exactement le créneau bus manquant ; WinUAE arrondit chaque période à un
-  multiple de 4, RAM_SLOT le réplique. ⇒ **convergence cycle au niveau INSTRUCTION = ATTEINTE**
-  (move/ALU/clr/tst/shift/cmp/addi…). Workflow en cours pour vérifier modes d'adressage/mul-div/
-  branches/bits/MMIO et trouver les résidus.
-- ⚠️ **RAM_SLOT NÉCESSAIRE mais PAS SUFFISANT pour les JEUX** : EL reste deadlock (noir dès frame
-  1200, INCHANGÉ ON/OFF). Sa cause = la phase CPU↔faisceau au niveau IRQ/dispatch (EL atteint sa
-  boucle beam-sync `$EE78` ~50 lignes trop tard = bordure basse, compteur figé à 0x2c → spin), un
-  **artefact du sync-driven** (PT=true re-phase l'entrée de trame), SÉPARÉ du timing d'instruction.
-  ⇒ après le timing instruction, le chantier restant = **phase d'entrée d'IRQ/dispatch** (E-clock @
-  IACK qui ne compose pas encore avec RAM_SLOT — beat poll reste période-3 vs Hatari période-5 — ET
-  la datation de dispatch sync-driven qui décale EL). C'est là que se gagnent les jeux.
+- 🏁 **JALON — convergence INSTRUCTION complète** (banc `tools/make_cycle_bench.py` + workflow 6
+  classes, cf. §5) : **NEOST_RAM_SLOT converge 14/14 boucles** (vs 2/14 sans) ; le Δ+2 sur quasi
+  toutes (off) = le créneau bus manquant (WinUAE arrondit chaque période à un multiple de 4). Seul
+  DIV résiduait (Δ+4) → corrigé (fork Moira). ⇒ **convergence cycle d'instruction = ATTEINTE**.
+- ⚠️ **RAM_SLOT NÉCESSAIRE mais PAS SUFFISANT pour les JEUX, et le dé-deadlock vient d'AILLEURS.**
+  EL deadlockait (noir dès frame 1200) — cause = le **modèle de DISPATCH sync-driven**, PAS le timing
+  d'instruction → **RÉSOLU** en repassant au dispatch BLOC tout en gardant PT+RAM_SLOT (§6). Reste,
+  après le dé-deadlock, la **corruption EL EN JEU (scroll)** = chantier vidéo **V3 multi-couches**
+  (§7), distincte du timing CPU. (L'ancienne hypothèse « E-clock @ IACK / phase d'IRQ » pour les jeux
+  est rétrogradée en RAFFINEMENT : elle n'a bougé ni le poll-screenshot ni les jeux — §7.)
 
 ---
 
@@ -156,64 +164,49 @@ mid-instruction `do_cycles` WinUAE) deadlockait la boucle beam-sync `$EE78` d'EL
 ## 7. CHANTIER RESTANT (plus de deadlock, mais EL scramble en jeu)
 
 Avec la fondation bloc+PT, plus de deadlock ; EL boote/intro propre. Reste, par valeur décroissante :
-1. **[HAUTE] EL corruption EN JEU (scroll) — ⚠️ DIAGNOSTIC RÉVISÉ (2026-06-17, comparaison Glue
-   rigoureuse).** Mon hypothèse « branche Glue manquante / bordures fermées » est **RÉFUTÉE**. Faits
-   établis par lecture ligne-à-ligne des 2 sources + glue-selftest 19/19 + exécution du jeu :
-   - **`updateGlueState` (Shifter.cpp:677-846) est un PORT FIDÈLE de `Video_Update_Glue_State`
-     (video.c:2244-2438).** Constantes de cycle identiques (HDE_On_Hi=4, HDE_Off_Low_50=376,
-     DE_end_right=462, Line_Set_Pal=54…). La branche right-border de la freq=60 (video.c:2782-2800) EST
-     présente (Shifter.cpp:780-786). **AUCUNE branche manquante.**
-   - **Les bordures G/D d'EL S'OUVRENT bien** (terrain vert rendu BORD À BORD, au-delà de 320 px).
-     Mon `bm=000 nPix=320` était un FAUX (NEOST_RENDER_TRACE ne trace QUE les 12 1ʳᵉˢ lignes affichées =
-     le CIEL en haut, bordures fermées là ; le terrain plus bas ouvre). EL écrit la freq=60 réelle à
-     **cyc 376/460** (bord de ligne) — pas 276. Le cluster cyc 276 = la sonde de **calibration du loader**
-     (freq=02 50 Hz), qui ne doit PAS ouvrir de bordure (correct).
-   - **EL rend correctement les écrans statiques** (logo, crédits) ; la corruption apparaît en
-     **SCROLL ACTIF**. `endVideoLine` (Shifter.cpp:383-409) avance DÉJÀ `vcLineBase_` du stride réel via
-     `glueLineBytes` (+26/+44 selon bordermask), donc le cas simple EST modélisé.
-   - **ANOMALIE LOCALISÉE (NEOST_RENDER_ALL, 2026-06-17)** : la corruption vient du **HAUT de l'écran
-     (lignes 36-42, overscan)**, pas du corps. EL y fait des **impulsions res (hi-res) en FIN de ligne**
-     (`res=02@cyc~440` puis `res=00@~444`, pc 010b12/010a8e, par ligne) = retrait bordure droite + gauche
-     ligne suivante. NeoST en déduit : lignes 36-37 `LEFT_OFF` (+26 chacune), **lignes 40-41 `NO_COUNT`
-     (0x2000) = compteur GELÉ** (blank). Net sur 34→43 = **−268 o** (vs nominal 1440) → **décale TOUT
-     l'affichage en dessous** (lignes 43-255 ont un stride +160 lisse mais une base décalée de −268). La
-     question ouverte : ce −268 (surtout les 2 lignes NO_COUNT) est-il FIDÈLE à Hatari, ou NeoST
-     mé-interprète-t-il la séquence res-pulse d'EL ? Le state-machine Glue est fidèle BRANCHE par branche
-     (agent), mais la SÉQUENCE complète res-pulse→NO_COUNT n'est pas vérifiée à l'oracle.
-   - ⛔ **ORACLE EL EN JEU = BLOQUÉ headless** : Hatari `--cmd-fifo keydown` prend un SCANCODE ST (pas le
-     joystick) ; le mapping `--joy0 keys` lit des touches SDL (absentes en vidéo dummy) → **impossible
-     d'injecter le FEU joystick d'EL** → EL reste au logo Thalion dans Hatari (vérifié : log « keydown
-     1073742052 isn't a valid key scancode » + reste 43 couleurs = logo). ⇒ pas de comparaison d'adresses
-     EL-en-jeu directe.
-   - ✅ **CAUSE RACINE TROUVÉE (2026-06-17, banc synthétique `tools/make_respulse_test.py`)** : c'est la
-     **GÉOMÉTRIE PAR LIGNE (V3)**, pas la Glue, pas le stride seul. Le banc (HBL handler faisant
-     res=02/res=00 en fin de ligne par ligne, boote dans NeoST ET Hatari SANS input) reproduit la
-     divergence : **screenshot NeoST≠Hatari 40-49 %**. Mesure décisive — distribution de LONGUEUR DE
-     LIGNE (deltas de cycle-HBL Hatari) = **{512: 294, 224: 17}** : Hatari **RACCOURCIT 17 lignes en
-     hi-res (224 cyc)** quand l'impulsion res aligne, tandis que **NeoST VERROUILLE la géométrie par
-     trame** (512 cyc partout, `frameMode_`/`geometry()`) → 0 ligne raccourcie. Le delta de longueur
-     (224 vs 512 → ±80 o/ligne sur 17 lignes) décale les adresses → corruption. `NEOST_V2` (raccourci
-     sur impulsion hi-res PRÉCOCE ≤56) NE couvre PAS l'impulsion FIN-DE-ligne → 42 % (n'aide pas).
-   - **LE FIX = chantier V3 (MULTI-COUCHES, plus profond que prévu — tentative 2026-06-17).** Analyse
-     Glue rigoureuse (agent, video.c ligne-à-ligne) → le raccourcissement à **224 est un CAS-LIMITE de
-     DÉRIVE** (« spill ») : l'impulsion hi-res fin-de-ligne, quand elle DÉPASSE la position HBL (cpl-4),
-     est attribuée au DÉBUT (≤56 cyc) de la ligne suivante → Region A video.c:2268-2298 → 224 ; sinon
-     elle reste sur la ligne courante → Region B (RIGHT_OFF, **longueur 512**, video.c:2683-2800), que
-     **NeoST PORTE DÉJÀ** (Shifter.cpp:745-803). Hatari attribue selon l'ACK temps-réel du HBL ; NeoST
-     REJOUE en post-trame (pas d'ACK temps-réel) → ne « spille » jamais → 0 ligne 224. ⚠ **MAIS** :
-     (a) le raccourci 224 ne touche que **17/311 lignes** (cas-limite dérive) — ne peut PAS expliquer
-     les **43 %** de diff du banc ; (b) tenté `len=224` sur les lignes BLANK/NO_COUNT (port correct du
-     spill) = **INERTE** sur le screenshot, car le rendu passe par le chemin d'ADRESSE
-     (`glueLineBytes`/`endVideoLine` ; une ligne NO_DE lit 0 o quelle que soit sa longueur), pas par le
-     `len` de replayGlue. **⇒ La divergence DOMINANTE du banc = la LARGEUR D'AFFICHAGE / rendu de la
-     RÉGION BORDURE** : NeoST OUVRE les bordures PLUS LARGE que Hatari (affiche le dégradé là où Hatari
-     met la couleur bordure) sur les lignes RIGHT_OFF. C'est une couche SÉPARÉE du raccourcissement.
-   - **ÉTAT (honnête)** : le banc `make_respulse_test.py` reproduit + valide (boote 2 cœurs sans input),
-     le mécanisme est cartographié (spill 224 vs RIGHT_OFF 512), mais le FIX reste NON RÉSOLU — c'est un
-     chantier glue/vidéo **multi-couches** (largeur d'affichage RIGHT_OFF + longueur de ligne + chemin
-     d'adresse glueLineBytes, tous cohérents) et le modèle post-trame de NeoST (replayGlue) vs temps-réel
-     de Hatari complique le spill. Effort architectural ciblé requis, PAS un patch. NE PAS ajouter de
-     branche Glue. Cf. [[enchanted-land-glue-live]], [[v2-resswitch-validated]], [[video-geometry-50-60-71]].
+1. **[HAUTE] EL corruption EN JEU (scroll) — caractérisée en profondeur, NON RÉSOLUE.** Recette in-game :
+   `--joy-at 3100 0x80 --frames 13000` (logo Thalion ~3000 → fire tenu → chargement noir ~9000 → niveau
+   rocheux ~13000). Synthèse des passes du 2026-06-17 (plusieurs hypothèses falsifiées en chemin) :
+
+   **Ce qui est FIDÈLE (ne pas y toucher).** `updateGlueState` (Shifter.cpp:677-846) est un PORT FIDÈLE
+   de `Video_Update_Glue_State` (video.c:2244-2438) — constantes identiques, branches right-border
+   freq=60 (video.c:2782-2800) et res hi-res fin-de-ligne (2683-2800) présentes ; glue-selftest 19/19.
+   **AUCUNE branche Glue manquante** (hypothèse réfutée). **Les bordures G/D d'EL S'OUVRENT** (terrain
+   rendu bord-à-bord) et les **écrans statiques (logo, crédits) sont PROPRES** ; la corruption est
+   spécifique au **SCROLL ACTIF**. `endVideoLine` (Shifter.cpp:383-409) avance déjà `vcLineBase_` du
+   stride réel via `glueLineBytes`.
+
+   **Banc de repro + validation (la pièce qui débloque, `tools/make_respulse_test.py`).** Handler HBL
+   faisant `res=02`/`res=00` en fin de ligne par ligne (mécanisme fullscreen d'EL) ; **boote dans NeoST
+   ET Hatari SANS input** → contourne le blocage oracle. RÉSULTAT : screenshot NeoST≠Hatari **40-49 %**.
+   > ⛔ L'oracle EL EN JEU direct est BLOQUÉ headless : Hatari `--cmd-fifo keydown` prend un SCANCODE ST,
+   > et `--joy0 keys` mappe des touches SDL absentes en vidéo dummy → impossible d'injecter le FEU
+   > joystick → EL reste au logo dans Hatari. D'où le banc synthétique.
+
+   **Mécanisme cartographié (analyse Glue rigoureuse, agent + banc).** Deux effets de la MÊME impulsion
+   res fin-de-ligne, selon le cycle où la GLUE l'échantillonne :
+   - **RIGHT_OFF (longueur 512)** = le cas NORMAL fullscreen (Region B video.c:2683-2800) — **DÉJÀ
+     porté** (Shifter.cpp:745-803). DE_end étendu (462/512), `NO_COUNT`/blank sur la ligne suivante.
+   - **Raccourci à 224 cyc** = CAS-LIMITE de DÉRIVE (« spill ») : quand l'impulsion dépasse la position
+     HBL (cpl-4), elle est attribuée au DÉBUT (≤56) de la ligne suivante → Region A (video.c:2268-2298).
+     Hatari raccourcit ainsi **~17/311 lignes** (`{512:294, 224:17}` au banc) ; **NeoST verrouille la
+     géométrie par TRAME** (512 partout, `frameMode_`) et rejoue en POST-trame (pas d'ACK HBL temps-réel)
+     → 0 ligne raccourcie.
+
+   **Pourquoi le FIX est multi-couches (NON RÉSOLU).** (a) Le raccourci 224 ne touche que 17/311 lignes
+   → ne peut PAS expliquer les 43 % de diff. (b) Tenté `len=224` sur les lignes `NO_COUNT` (port correct
+   du spill) = **INERTE** sur le screenshot : le rendu passe par le chemin d'ADRESSE (`glueLineBytes`/
+   `endVideoLine` ; une ligne `NO_DE` lit 0 o quelle que soit sa longueur), PAS par le `len` de
+   replayGlue (changement reverté, build vert). **⇒ La divergence DOMINANTE = la LARGEUR D'AFFICHAGE /
+   rendu de la RÉGION BORDURE** : sur les lignes RIGHT_OFF, NeoST ouvre PLUS LARGE que Hatari (affiche le
+   dégradé là où Hatari met la couleur bordure). C'est une couche SÉPARÉE du raccourcissement. Le modèle
+   post-trame de NeoST (replayGlue) vs temps-réel de Hatari complique en plus le spill.
+
+   **PROCHAIN PAS** : chantier glue/vidéo ciblé sur la **largeur d'affichage RIGHT_OFF** (pourquoi NeoST
+   ouvre plus large), réconcilié avec la longueur de ligne (spill 224) et le chemin d'adresse
+   (glueLineBytes), validé au banc `make_respulse_test.py` (viser 0 % + distribution `{512,224}` = Hatari)
+   PUIS EL en jeu. ⚠ NE PAS ajouter de branche Glue (fidèle). Cf. [[enchanted-land-glue-live]],
+   [[v2-resswitch-validated]], [[video-geometry-50-60-71]].
 2. **LX jitter de titre** (~1.5 %, subtil ; LX rend déjà) ; **Cuddly menu robot** / **SHO course**
    (inatteignables headless → navigation requise).
 3. **E-clock @ IACK** (poll-beat période-3 vs Hatari période-5) — RAFFINEMENT de phase ; n'a PAS
@@ -232,14 +225,13 @@ Avec la fondation bloc+PT, plus de deadlock ; EL boote/intro propre. Reste, par 
    à la phase POST-E-clock → mod-20 émerge. (Même leçon que le fix DIV : l'ORDRE idle↔prefetch fait la
    phase du créneau.) ⚠ Le setClock depuis readIrqUserVector est PERDU (mid-accès) → passer par un
    hook dédié dans execInterrupt, pas readIrqUserVector.
-2. **Datation dispatch sync-driven** : EL atteint sa boucle beam-sync `$EE78` (`move.b $8209,d1 / bne`)
-   **~50 lignes trop tard** (bordure basse, compteur figé 0x2c → spin infini ; render/glue NORMAL).
-   ~50 lignes ≠ un ±2 cyc : c'est la PHASE D'ENTRÉE de trame d'EL décalée par le sync-driven (PT=true ;
-   à PT=false EL marche). À root-causer : par quel IRQ (VBL/Timer-B) EL entre `$EE76`, et pourquoi son
-   dispatch est ~50 lignes tard sous sync-driven. C'EST le blocage des jeux.
+2. **Datation dispatch sync-driven (✅ RÉSOLU par le dispatch bloc, §6)** : le sync-driven faisait
+   atteindre à EL sa boucle beam-sync `$EE78` ~50 lignes trop tard (spin infini → deadlock noir).
+   C'était le modèle de dispatch mid-instruction, pas le timing CPU → réglé en repassant au dispatch
+   bloc (§6). Gardé ici comme repère : le deadlock EL ≠ la corruption en jeu (V3, item 1).
 
-Puis **retirer les hacks** (`NEOST_VC_WAIT=2`, `kSyncWriteOffsetCyc=+16`) devenus redondants et
-**recalibrer à l'oracle** (zone active + EL/LX/Cuddly/SHO + poll-beat).
+Une fois le V3 fait : **retirer les hacks** (`NEOST_VC_WAIT=2`, `kSyncWriteOffsetCyc=+16`) devenus
+redondants et **recalibrer à l'oracle** (zone active + EL/LX/Cuddly/SHO + poll-beat).
 
 Cf. [[beamsync-busalign-falsified]], [[eclock-convergence-validated]] (CORRIGÉE ici),
 [[sync-driven-scheduler-falsified]], [[v2-resswitch-validated]].
