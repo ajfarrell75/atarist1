@@ -156,13 +156,22 @@ mid-instruction `do_cycles` WinUAE) deadlockait la boucle beam-sync `$EE78` d'EL
 ## 7. CHANTIER RESTANT (plus de deadlock, mais EL scramble en jeu)
 
 Avec la fondation bloc+PT, plus de deadlock ; EL boote/intro propre. Reste, par valeur décroissante :
-1. **[HAUTE] EL scramble EN JEU** (fullscreen rocheux, recette `--joy-at 3100 0x80` f13000) — résidu
-   d'origine = tricks fullscreen hi-res per-ligne (bordures G/D ouvertes) mal rendus. Recoupe le
-   chantier **V2 res-switch** (`Video_WriteToGlueRes`, `setHblShorten` opt-in `NEOST_V2`) ET le résidu
-   de phase beam-sync. ~10 hypothèses falsifiées en mémoire ([[beamsync-busalign-falsified]] §5-7) :
-   E-clock neutre, vc_wait/vc_off sans effet, V2 partiel change scramble→noir. **Le vrai diag est
-   maintenant possible** (EL atteignable, dispatch propre, convergence instr faite) → reprendre avec
-   `NEOST_RENDER_TRACE`/`NEOST_BASE_TRACE` sur la trame qui scramble, en bloc+PT.
+1. **[HAUTE] EL scramble EN JEU — DIAGNOSTIC PRÉCIS (2026-06-17, bloc+PT)**. PAS la convergence,
+   PAS V2-hi-res, PAS (surtout) la base. **EL ouvre les bordures G/D via des impulsions FREQ
+   (50/60 Hz) per-ligne** : `freq=00`(60Hz)@cyc 276 puis `freq=02`(50Hz)@cyc 284 (8 cyc d'écart, pc
+   `010ada`/`010adc`), **cyc qui DÉCROÎT de 4 par ligne** (276→272→268…) = motif DÉTERMINISTE et
+   consistant (pas du jitter). **La Glue de NeoST ne déclenche AUCUN bordermask** (`NEOST_RENDER_TRACE`
+   = `bm=000 nPix=320` = bordures FERMÉES) → stride de ligne 160 o au lieu du fullscreen → désalignement
+   cumulatif vers le bas = SCRAMBLE. Les branches de détection (`updateGlueState` Shifter.cpp:688-721)
+   ne testent la Freq qu'aux cycles de BORD de ligne (HDE_On/HDE_Off/Line_Set_Pal) ; l'impulsion 60 Hz
+   **MID-ligne (cyc 276)** ne matche aucune → rien. ⚠ **Métrique** : screenshot frame-à-frame diff
+   45 % (saute) car (a) bordures non ouvertes + (b) base qui jitte en second ordre. **Manque pour finir**
+   = l'ORACLE Hatari d'EL EN JEU (savoir ce que la freq@276 doit produire). Held-fire-from-frame-0 ÉCHOUE
+   (EL reste au logo Thalion ; il faut injecter le feu ~frame 3100, dur en fast-forward). Pistes oracle :
+   `--joy0 keys` + `--cmd-fifo` avec keydown Right-Ctrl (1073742052) TEMPORISÉ vers frame 3100, ou un
+   `.st` synthétique reproduisant freq@276-décroissant per-ligne à diffirer NeoST↔Hatari. Comparer
+   ensuite `updateGlueState` (Shifter.cpp:682+) à `Video_Update_Glue_State` (video.c:2244-2438) sur une
+   impulsion 60 Hz mid-ligne décroissante.
 2. **LX jitter de titre** (~1.5 %, subtil ; LX rend déjà) ; **Cuddly menu robot** / **SHO course**
    (inatteignables headless → navigation requise).
 3. **E-clock @ IACK** (poll-beat période-3 vs Hatari période-5) — RAFFINEMENT de phase ; n'a PAS
