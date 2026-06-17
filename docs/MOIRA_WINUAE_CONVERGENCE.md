@@ -203,8 +203,23 @@ Avec la fondation bloc+PT, plus de deadlock ; EL boote/intro propre. Reste, par 
    > datait d'avant RAM_SLOT défaut-ON. **Reste un résidu** de corruption (bande droite). ⚠ Testé
    > (2026-06-18) : ce n'est **PAS** la datation des écritures `kSyncWriteOffsetCyc=+16` — la réduire
    > (`NEOST_SYNC_OFF<0`) **CASSE la progression d'EL** (reste à l'intro : l'offset alimente la glue live
-   > que les reads `$FF8209` consultent → load-bearing, **pas** redondant comme VC_WAIT). Résidu = chantier
-   > **V2 res-switch / géométrie par-ligne** (cf. §7 reste), distinct de la datation lecture/écriture.
+   > que les reads `$FF8209` consultent → load-bearing, **pas** redondant comme VC_WAIT).
+   >
+   > **RÉSIDU = 2 symptômes confirmés (utilisateur + mesure, 2026-06-18), même racine = géométrie/datation
+   > PAR-LIGNE** (cf. cartographie §«Porter Video_AddInterruptHBL» en mémoire de session) :
+   > 1. **Ligne du haut qui clignote** : le trick d'ouverture de bordure HAUTE (res/freq lignes ~35-40)
+   >    s'arme/se désarme trame-à-trame (variance rangées actives 29-35 oscille 91→52→0→0→26) = le
+   >    *set-then-revert au seuil* `RemoveTopBorder_Pos` (la paire res/freq ne « tient » qu'à l'alignement
+   >    exact, cf. tâches #5-#10).
+   > 2. **Scroll qui saute** : sync-scroll horizontal (ST sans hscroll matériel) erratique — avec joystick
+   >    droite, décalage h = -5/+4/-16/-6 px au lieu d'un défilement régulier → « tout saute à des
+   >    positions anormales » (perso non centré).
+   >
+   > **FIX = refonte géométrie par-ligne** (HBL reprogrammé live `Video_AddInterruptHBL` video.c:4840 +
+   > longueur de ligne variable `nCyclesPerLine_new`/`HBL_Pos` video.c:2849, cartographie figée en
+   > session). **DÉSORMAIS validable** contre l'oracle EL in-game (débloqué SPACE/cmd-fifo) : clignotement
+   > (var rangées top stable) + scroll (décalage h régulier). Risqué (HBL ancre Timer-B + bordures) → à
+   > faire OPT-IN puis basculer si convergent. C'est le grand chantier restant après le fix VC_WAIT.
    > 🎯 **RECETTE IN-GAME FIABLE (2026-06-18, remplace l'ancienne périmée) :**
    > ```sh
    > ./build/neost-headless roms/tos102fr.img --disk "disks/st/Enchanted Land (1990)(Thalion).st" \
