@@ -71,7 +71,9 @@ namespace {
     // (MFP niv6, sans E-clock). Magnitude calibrable à l'oracle (la comptabilité SYNC d'entrée
     // d'exception de Moira diffère un peu de WinUAE). Avec NEOST_IACK, willInterrupt ne fait plus
     // rien (E-clock relocalisé). Corrige le résidu de PHASE d'entrée d'IRQ (HBL period, poll-beat).
-    bool    g_iackOn      = []{ const char* s = std::getenv("NEOST_IACK"); return s && std::atoi(s) != 0; }();
+    // DÉFAUT ON (2026-06-17) : RAM_SLOT+IACK ENSEMBLE déclenchent l'overscan beam-sync (dérive
+    // du faisceau +78/ligne = Hatari, cf. [[ramslot-iack-enable-overscan]]). NEOST_IACK=0 désactive.
+    bool    g_iackOn      = []{ const char* s = std::getenv("NEOST_IACK"); return s ? std::atoi(s) != 0 : true; }();
     int     g_iackVideo   = []{ const char* s = std::getenv("NEOST_IACK_VIDEO"); return s ? std::atoi(s) : 14; }();
     int     g_iackMfp     = []{ const char* s = std::getenv("NEOST_IACK_MFP");   return s ? std::atoi(s) : 12; }();
     // Lead-in willInterrupt → IACK réel : SYNC(6)+write PClo(4)+SYNC(4)=14 cyc (MoiraExceptions
@@ -97,7 +99,9 @@ namespace {
     // (boucle 4-phasée → +0 ; boucle non-phasée comme `bra.s self` → +2 = WinUAE). ROM/
     // cartouche/IO sont FAST (pas d'alignement, mesuré sur STF). NEOST_RAM_SLOT_PHASE
     // décale la phase de la grille (calibration oracle si offset constant Moira↔WinUAE).
-    bool    g_ramSlot     = []{ const char* s = std::getenv("NEOST_RAM_SLOT"); return s && std::atoi(s) != 0; }();
+    // DÉFAUT ON (2026-06-17) : convergence cycle d'instruction (créneau bus RAM) + base de la
+    // dérive faisceau beam-sync (cf. [[ramslot-iack-enable-overscan]]). NEOST_RAM_SLOT=0 désactive.
+    bool    g_ramSlot     = []{ const char* s = std::getenv("NEOST_RAM_SLOT"); return s ? std::atoi(s) != 0 : true; }();
     int     g_ramSlotPhase= []{ const char* s = std::getenv("NEOST_RAM_SLOT_PHASE"); return s ? std::atoi(s) : 0; }();
     // Modèle de dispatch BLOC (DÉFAUT depuis la réfutation du sync-driven) : sync() n'avance QUE
     // l'horloge ; le dispatch des events se fait par runTo à la frontière d'événement (cf.
