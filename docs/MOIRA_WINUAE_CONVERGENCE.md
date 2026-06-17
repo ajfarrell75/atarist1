@@ -168,15 +168,29 @@ Avec la fondation bloc+PT, plus de deadlock ; EL boote/intro propre. Reste, par 
      le CIEL en haut, bordures fermées là ; le terrain plus bas ouvre). EL écrit la freq=60 réelle à
      **cyc 376/460** (bord de ligne) — pas 276. Le cluster cyc 276 = la sonde de **calibration du loader**
      (freq=02 50 Hz), qui ne doit PAS ouvrir de bordure (correct).
-   - **EL rend correctement les écrans statiques** (logo, crédits) ; la corruption (bande centrale
-     bruitée) apparaît en **SCROLL ACTIF**. C'est l'**accumulation de stride inter-lignes** en cas de
-     scroll : `endVideoLine` (Shifter.cpp:383-409) avance DÉJÀ `vcLineBase_` du stride réel via
-     `glueLineBytes` (+26/+44 selon bordermask), donc le cas simple EST modélisé — le résidu est un bug
-     SUBTIL de ce chemin pendant le scroll (datation des écritures base/compteur per-ligne, ordre
-     catch-up, ou stride sur une ligne précise), PAS la Glue. **À reprendre** : tracer `vcLineBase_`/
-     `glueLineBytes` par ligne sur une trame scroll vs l'oracle, dans le chemin d'ADRESSE vidéo
-     (`Video_CalculateAddress`), pas le state-machine Glue. ⚠ NE PAS ajouter de branche Glue (ce serait
-     faux : la sonde 276 doit rester sans bordure). Cf. [[enchanted-land-glue-live]] (résidu « frange »).
+   - **EL rend correctement les écrans statiques** (logo, crédits) ; la corruption apparaît en
+     **SCROLL ACTIF**. `endVideoLine` (Shifter.cpp:383-409) avance DÉJÀ `vcLineBase_` du stride réel via
+     `glueLineBytes` (+26/+44 selon bordermask), donc le cas simple EST modélisé.
+   - **ANOMALIE LOCALISÉE (NEOST_RENDER_ALL, 2026-06-17)** : la corruption vient du **HAUT de l'écran
+     (lignes 36-42, overscan)**, pas du corps. EL y fait des **impulsions res (hi-res) en FIN de ligne**
+     (`res=02@cyc~440` puis `res=00@~444`, pc 010b12/010a8e, par ligne) = retrait bordure droite + gauche
+     ligne suivante. NeoST en déduit : lignes 36-37 `LEFT_OFF` (+26 chacune), **lignes 40-41 `NO_COUNT`
+     (0x2000) = compteur GELÉ** (blank). Net sur 34→43 = **−268 o** (vs nominal 1440) → **décale TOUT
+     l'affichage en dessous** (lignes 43-255 ont un stride +160 lisse mais une base décalée de −268). La
+     question ouverte : ce −268 (surtout les 2 lignes NO_COUNT) est-il FIDÈLE à Hatari, ou NeoST
+     mé-interprète-t-il la séquence res-pulse d'EL ? Le state-machine Glue est fidèle BRANCHE par branche
+     (agent), mais la SÉQUENCE complète res-pulse→NO_COUNT n'est pas vérifiée à l'oracle.
+   - ⛔ **ORACLE EL EN JEU = BLOQUÉ headless** : Hatari `--cmd-fifo keydown` prend un SCANCODE ST (pas le
+     joystick) ; le mapping `--joy0 keys` lit des touches SDL (absentes en vidéo dummy) → **impossible
+     d'injecter le FEU joystick d'EL** → EL reste au logo Thalion dans Hatari (vérifié : log « keydown
+     1073742052 isn't a valid key scancode » + reste 43 couleurs = logo). ⇒ pas de comparaison d'adresses
+     EL-en-jeu directe.
+   - **PROCHAIN PAS (sans oracle EL)** : `.st` SYNTHÉTIQUE reproduisant la séquence res-pulse fin-de-ligne
+     (boote dans NeoST ET Hatari SANS input → comparer les adresses per-ligne via `--trace video_addr`
+     Hatari vs `NEOST_RENDER_ALL`) ; OU comparer directement la gestion `NO_COUNT`/blank de
+     `updateGlueState` à `Video_Update_Glue_State` sur une impulsion res hi-res en fin de ligne (lignes
+     2683+ video.c). ⚠ NE PAS ajouter de branche Glue (la sonde 276 = calibration loader, sans bordure).
+     Cf. [[enchanted-land-glue-live]] (résidu « frange »).
 2. **LX jitter de titre** (~1.5 %, subtil ; LX rend déjà) ; **Cuddly menu robot** / **SHO course**
    (inatteignables headless → navigation requise).
 3. **E-clock @ IACK** (poll-beat période-3 vs Hatari période-5) — RAFFINEMENT de phase ; n'a PAS
