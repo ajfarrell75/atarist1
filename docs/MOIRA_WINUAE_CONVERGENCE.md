@@ -9,16 +9,25 @@ Cuddly, Super Hang-On). Décision utilisateur (2026-06-16) : **garder le sync-dr
 > ⚠️ Ce doc CORRIGE plusieurs notes mémoire optimistes/contradictoires. Lire d'abord §3 « Vérités
 > mesurées » avant de rouvrir une piste.
 
-**État actuel (résumé).** Tout est sur `main`, **gated/défaut OFF, build vert** (`run_etalons` 19/0 + TOUS OK).
+**État actuel (résumé).** Tout est sur `main`, **build vert** (`run_etalons` 19/0 + TOUS OK).
+- 🎯 **PERCÉE (2026-06-17) — `NEOST_RAM_SLOT`+`NEOST_IACK` désormais DÉFAUT ON.** Les DEUX flags
+  ENSEMBLE font FONCTIONNER le mécanisme d'overscan beam-sync : sans eux le handler HBL d'EL est
+  ~88 cyc trop rapide → l'impulsion res se VERROUILLE (trick=0, zéro overscan) ; avec eux la dérive
+  du faisceau = **+78/ligne = Hatari** → l'impulsion balaye, les tricks se déclenchent (§3, §7).
+  CORRIGE la conclusion « RAM_SLOT/E-clock = pas d'impact jeu » (testés en isolation, jamais ensemble).
+  `NEOST_RAM_SLOT=0`/`NEOST_IACK=0` désactivent (A/B). Coût : `overscan_top` re-baseliné (les 56 px
+  diffèrent UNIQUEMENT en bordure haute overscan ; zone active byte-identique Hatari, ON et OFF).
 - ✅ **Convergence INSTRUCTION = COMPLÈTE** : `NEOST_RAM_SLOT` (align créneau bus) + fix DIV (fork Moira) →
   datation cycle de NeoST = WinUAE sur tout le jeu courant, validé au différentiel (§1, §5).
 - ✅ **Deadlock Enchanted Land = RÉSOLU** : dispatch BLOC par défaut (le sync-driven mid-instruction était
   net-négatif) ; intro/écrans statiques propres (§6).
-- ◑ **Corruption EL EN JEU (scroll) = caractérisée, NON RÉSOLUE** : chantier vidéo V3 multi-couches
-  (largeur d'affichage RIGHT_OFF + longueur de ligne + chemin d'adresse) ; banc de repro `tools/
-  make_respulse_test.py` (§7).
+- ◑ **Overscan VERTICAL (haut/bas) EN JEU = NON RÉSOLU** : la dérive MOYENNE correspond mais la PHASE
+  ABSOLUE par-ligne diffère (impulsion NeoST culmine cyc ~476-492 vs Hatari 500-508 → pas de
+  « straddle » res=00 sur la ligne suivante → le retrait haut ne TIENT pas). Fermeture = tracking
+  cycle-exact du handler PAR LIGNE (alternance 76/80 de Hatari), pas un offset constant (§7).
 - **Outils** : harnais différentiel de cycles (`NEOST_TRACE_CYC` + `tools/trace_diff.py --periods`),
-  bancs `make_cycle_bench.py` / `make_respulse_test.py`, diag `NEOST_RENDER_ALL`.
+  bancs `make_cycle_bench.py` / `make_respulse_test.py` (oracle Hatari `--trace video_res`), diag
+  `NEOST_RENDER_ALL` ; comparaison rendu via profil par-ligne PIL (bbox/per-row).
 
 ---
 
@@ -98,23 +107,32 @@ DATATION (instants des accès), pas par comptage d'instruction.
   après le dé-deadlock, la **corruption EL EN JEU (scroll)** = chantier vidéo **V3 multi-couches**
   (§7), distincte du timing CPU. (L'ancienne hypothèse « E-clock @ IACK / phase d'IRQ » pour les jeux
   est rétrogradée en RAFFINEMENT : elle n'a bougé ni le poll-screenshot ni les jeux — §7.)
+- 🎯 **CORRECTION (2026-06-17) — RAM_SLOT+IACK ENSEMBLE ONT un impact JEU décisif.** La ligne
+  ci-dessus (« E-clock @ IACK n'a pas bougé les jeux ») valait pour l'IACK SEUL. Mesure au banc
+  `make_respulse_test.py` (oracle `video_res`) : c'est exactement le **chicken-and-egg résolu dans le
+  bon sens** — RAM_SLOT (timing instruction) PUIS IACK (phase IRQ) APPLIQUÉS ENSEMBLE font tomber la
+  dérive du faisceau sur Hatari (+78/ligne) et DÉCLENCHENT l'overscan beam-sync (trick 0→1). Séparément :
+  RAM_SLOT seul = dérive +64 (insuffisant), IACK seul = verrouillé (inutile). ⇒ **les deux DÉFAUT ON**.
+  Reste l'overscan VERTICAL (phase absolue par-ligne, alternance 76/80) — §7. [[ramslot-iack-enable-overscan]]
 
 ---
 
-## 4. Implémenté cette session (tout GATED, défaut OFF = build inchangé/vert)
+## 4. Implémenté (RAM_SLOT+IACK DÉFAUT ON depuis 2026-06-17 ; toggle via `=0`)
 
 `src/core/Cpu68k.cpp` (sous-classe `NeostMoira`) :
 - `NEOST_RAM_SLOT` (+`_PHASE`) → `chipWait8()` align-only sur RAM <$400000 dans read8/16/write8/16.
+  **DÉFAUT ON** (`NEOST_RAM_SLOT=0` désactive).
 - `NEOST_IACK` (+`_VIDEO`/`_MFP`/`_LEAD`) → E-clock @ IACK (via `willInterrupt`+lead-in 14) + bloc
-  occupé. (Le bloc constant est ABSORBÉ par l'ordonnanceur beam-anchoré pour le beam-sync en boucle
-  d'attente ; il compte pour le code de jeu non-spinnant.)
-- `NEOST_IPLDELAY` (préexistant) → retard pin 4 cyc (approx `ipl_fetch_next`).
+  occupé. **DÉFAUT ON** (`NEOST_IACK=0` désactive). (Le bloc constant est ABSORBÉ par l'ordonnanceur
+  beam-anchoré pour le beam-sync en boucle d'attente ; il compte pour le code de jeu non-spinnant.)
+- `NEOST_IPLDELAY` (préexistant) → retard pin 4 cyc (approx `ipl_fetch_next`). Reste défaut OFF.
 
 `src/core/Tracer.cpp` : `NEOST_TRACE_CYC=1` → colonne `cyc=` (harnais). `tools/trace_diff.py` :
 mode `--periods`.
 
-**SÛRETÉ vérifiée** : flags OFF → `run_etalons` 19/0 + TOUS OK, EL inchangé. Le différentiel
-bascule proprement OFF=DIFF(10) / RAM_SLOT=OK(12).
+**SÛRETÉ vérifiée (défaut ON)** : `run_etalons` 19/0 + TOUS OK (zone active byte-identique Hatari ;
+`overscan_top` re-baseliné — 56 px en bordure haute overscan SEULEMENT, zone active 0 px). A/B intact :
+`NEOST_RAM_SLOT=0 NEOST_IACK=0` reproduit l'ancien comportement (banc respulse : trick=1→0).
 
 ---
 
@@ -183,29 +201,30 @@ Avec la fondation bloc+PT, plus de deadlock ; EL boote/intro propre. Reste, par 
    > et `--joy0 keys` mappe des touches SDL absentes en vidéo dummy → impossible d'injecter le FEU
    > joystick → EL reste au logo dans Hatari. D'où le banc synthétique.
 
-   **Mécanisme cartographié (analyse Glue rigoureuse, agent + banc).** Deux effets de la MÊME impulsion
-   res fin-de-ligne, selon le cycle où la GLUE l'échantillonne :
-   - **RIGHT_OFF (longueur 512)** = le cas NORMAL fullscreen (Region B video.c:2683-2800) — **DÉJÀ
-     porté** (Shifter.cpp:745-803). DE_end étendu (462/512), `NO_COUNT`/blank sur la ligne suivante.
-   - **Raccourci à 224 cyc** = CAS-LIMITE de DÉRIVE (« spill ») : quand l'impulsion dépasse la position
-     HBL (cpl-4), elle est attribuée au DÉBUT (≤56) de la ligne suivante → Region A (video.c:2268-2298).
-     Hatari raccourcit ainsi **~17/311 lignes** (`{512:294, 224:17}` au banc) ; **NeoST verrouille la
-     géométrie par TRAME** (512 partout, `frameMode_`) et rejoue en POST-trame (pas d'ACK HBL temps-réel)
-     → 0 ligne raccourcie.
+   **CAUSE RACINE RÉELLE (root-causée 2026-06-17, banc + oracle `video_res`) — c'est la PHASE
+   CPU↔FAISCEAU, PAS la largeur d'affichage.** L'ancienne conclusion « divergence DOMINANTE = largeur
+   d'affichage RIGHT_OFF / NeoST ouvre plus large » était FAUSSE (artefact de bbox : le profil par-ligne
+   PIL montre une largeur ~normale des DEUX côtés). Mesure réelle au banc N=38 :
+   - **Sans flags : l'impulsion res se VERROUILLE à cyc ~480 sur CHAQUE ligne** (handler ~88 cyc trop
+     rapide) → ne balaye JAMAIS les fenêtres de retrait → `trick=0`, ZÉRO overscan (jamais, à tout N).
+   - **`NEOST_RAM_SLOT`+`NEOST_IACK` ENSEMBLE** (accès RAM de la boucle dbra + bloc E-clock@IACK) →
+     dérive **+78/ligne = Hatari** → l'impulsion balaye → tricks détectés, overscan rendu. ⇒ **DÉFAUT ON**.
+     (RAM_SLOT seul = +64 ; IACK seul = verrouillé ; il faut les DEUX.) Cf. [[ramslot-iack-enable-overscan]].
 
-   **Pourquoi le FIX est multi-couches (NON RÉSOLU).** (a) Le raccourci 224 ne touche que 17/311 lignes
-   → ne peut PAS expliquer les 43 % de diff. (b) Tenté `len=224` sur les lignes `NO_COUNT` (port correct
-   du spill) = **INERTE** sur le screenshot : le rendu passe par le chemin d'ADRESSE (`glueLineBytes`/
-   `endVideoLine` ; une ligne `NO_DE` lit 0 o quelle que soit sa longueur), PAS par le `len` de
-   replayGlue (changement reverté, build vert). **⇒ La divergence DOMINANTE = la LARGEUR D'AFFICHAGE /
-   rendu de la RÉGION BORDURE** : sur les lignes RIGHT_OFF, NeoST ouvre PLUS LARGE que Hatari (affiche le
-   dégradé là où Hatari met la couleur bordure). C'est une couche SÉPARÉE du raccourcissement. Le modèle
-   post-trame de NeoST (replayGlue) vs temps-réel de Hatari complique en plus le spill.
+   **Résidu NON résolu = overscan VERTICAL (haut/bas).** Banc : Hatari rend les lignes 2..273
+   (haut+bas retirés), NeoST 29..228 (`start=63 end=263` inchangé). La dérive MOYENNE correspond (+78)
+   mais la PHASE ABSOLUE par-ligne diffère : pour que le retrait HAUT TIENNE, la paire `res=02`/`res=00`
+   doit STRADDLE une frontière de ligne (sinon le `res=00` 50 Hz RÉAJOUTE la bordure haute sur la même
+   ligne précoce). Hatari culmine cyc **500-508** → `res=00` déborde sur la ligne suivante (straddle) ;
+   NeoST culmine **476-492** et garde la paire sur la même ligne (ordonnancement HBL grille-fixe
+   `N*cpl+508` → positions QUANTIFIÉES qui ratent [496,508]). La dérive de Hatari **ALTERNE 76/80**
+   (écritures res alignées sur la grille bus 4 cyc) ; NeoST est steady +78 (écritures IO `$8260` = FAST).
 
-   **PROCHAIN PAS** : chantier glue/vidéo ciblé sur la **largeur d'affichage RIGHT_OFF** (pourquoi NeoST
-   ouvre plus large), réconcilié avec la longueur de ligne (spill 224) et le chemin d'adresse
-   (glueLineBytes), validé au banc `make_respulse_test.py` (viser 0 % + distribution `{512,224}` = Hatari)
-   PUIS EL en jeu. ⚠ NE PAS ajouter de branche Glue (fidèle). Cf. [[enchanted-land-glue-live]],
+   **PROCHAIN PAS** : tracking CYCLE-EXACT du handler PAR LIGNE (reproduire l'alternance 76/80 de Hatari →
+   straddle atteint → retrait haut/bas TIENT). PAS un offset constant (`RAM_SLOT_PHASE`/`IACK_LEAD` swept :
+   ne bougent que le bas 228→259, jamais le haut ; un offset constant casse la généralité = hack
+   test-spécifique). C'est de la convergence boot/HBL fine. ⚠ NE PAS ajouter de branche Glue (fidèle :
+   `updateGlueState` = port FIDÈLE, glue-selftest 19/19). Cf. [[enchanted-land-glue-live]],
    [[v2-resswitch-validated]], [[video-geometry-50-60-71]].
 2. **LX jitter de titre** (~1.5 %, subtil ; LX rend déjà) ; **Cuddly menu robot** / **SHO course**
    (inatteignables headless → navigation requise).

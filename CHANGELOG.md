@@ -77,12 +77,16 @@ taguées (0.1.x). Le restant est dans [`TODO.md`](TODO.md).
   PT=true → intro/écrans statiques d'EL propres. Sync-driven en opt-in `NEOST_SYNC_DISPATCH` (reproduit
   le deadlock, A/B). Validé : étalons 19/0, LX inchangé. Reste la corruption EL EN JEU (scroll), chantier
   vidéo V3 (cf. [`docs/MOIRA_WINUAE_CONVERGENCE.md`](docs/MOIRA_WINUAE_CONVERGENCE.md)).
-- **Convergence cycle Moira↔WinUAE — niveau INSTRUCTION (opt-in, recherche).** Harnais différentiel
+- **Convergence cycle Moira↔WinUAE — beam-sync (DÉFAUT ON depuis 2026-06-17).** Harnais différentiel
   (`NEOST_TRACE_CYC` colonne cycle absolue dans le `Tracer` + `tools/trace_diff.py --periods`) :
   compare les cycles/boucle des deux cœurs. `NEOST_RAM_SLOT` (align créneau bus 4 cyc sur la RAM CHIP16,
   port `wait_cpu_cycle`) + reorder DIV (`SYNC(idle)` avant prefetch, fork Moira) → **14/14 boucles
-  d'instructions = WinUAE** au différentiel (bancs `tools/make_cycle_bench.py`). GATED, défaut OFF
-  (build byte-identique). Détail/limites → doc maître.
+  d'instructions = WinUAE** au différentiel (bancs `tools/make_cycle_bench.py`). **PERCÉE** : `NEOST_RAM_SLOT`
+  + `NEOST_IACK` (E-clock @ IACK) ENSEMBLE font tomber la dérive du faisceau sur Hatari (+78/ligne) et
+  DÉCLENCHENT l'overscan beam-sync d'Enchanted Land (banc `tools/make_respulse_test.py` vs oracle
+  `--trace video_res`) — séparément, aucun des deux ne suffit. **Désormais défaut ON** (`=0` pour
+  désactiver) ; zone active byte-identique Hatari, `overscan_top` re-baseliné (56 px en bordure overscan
+  seule). Reste l'overscan VERTICAL (phase absolue par-ligne). Détail/limites → doc maître.
 
 ## Types de machine & mémoire
 - **Zone RAM « void » : on relit le dernier mot du bus de données** (port Hatari
