@@ -156,6 +156,10 @@ Le déploiement GitHub Pages est automatisé par `.github/workflows/deploy-web.y
 | [`TODO.md`](TODO.md)           | Feuille de route — ce qui reste à faire (fidélité Hatari, MegaSTE, précision cycle). |
 | [`CLAUDE.md`](CLAUDE.md)       | Hub d'orientation (méthode de travail, sources de vérité).    |
 
+> Références techniques pointues dans [`docs/`](docs/) — précision cycle
+> ([`CYCLE_ACCURACY.md`](docs/CYCLE_ACCURACY.md)), beam-sync, divergences Hatari, oracle headless,
+> logiciels étalons. Carte complète dans [`CLAUDE.md`](CLAUDE.md).
+
 ## État
 
 EmuTOS (FR/US) et TOS 1.02 bootent (green desktop, disquette, souris, son). Les trois

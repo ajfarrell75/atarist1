@@ -1,393 +1,214 @@
-# Cycle-accuracy NeoST — plan calqué sur Hatari
+# Précision cycle — modèle, acquis, restant (oracle : Hatari)
 
-> (c) 2026 VERHILLE Arnaud — feuille de route technique.
+> (c) 2026 VERHILLE Arnaud — **référence durable** de la précision cycle de NeoST.
 >
-> **Source de vérité : Hatari** (`extern/hatari`, non committé — cf. `.gitignore`).
-> Fichiers de référence cités tout au long : `src/cycInt.c` / `src/includes/cycInt.h`
-> (ordonnanceur), `src/cycles.c` / `cycles.h` (compteurs), `src/video.c` (raster),
-> `src/mfp.c` (timers 68901), `src/fdc.c` (disque), plus le cœur CPU UAE.
+> - **Le modèle visé** = Hatari : `extern/hatari/src` (source de vérité, lu pas compilé) — surtout
+>   `cycInt.c`/`cycInt.h` (ordonnanceur), `cycles.c` (compteurs), `video.c` (raster), `mfp.c`
+>   (timers), `fdc.c` (disque).
+> - **Le cœur 68000** = Moira (cycle-exact, `MOIRA_PRECISE_TIMING=true`). Seul cœur ; cf.
+>   [`DEV.md`](../DEV.md). *(L'ancien Musashi a été retiré — toute mention « 2 cœurs » dans
+>   d'anciennes notes est périmée.)*
+> - **Le front actif** (convergence Moira↔WinUAE, beam-sync) vit dans son propre dossier :
+>   [`MOIRA_WINUAE_CONVERGENCE.md`](MOIRA_WINUAE_CONVERGENCE.md). Ce document-ci pose le cadre et
+>   l'inventaire ; ce doc-là tient le journal de la dernière passe.
 
-## 1. Pourquoi (le symptôme Arkanoid)
+## 1. Pourquoi — le timing au cycle change le comportement
 
-Arkanoid (1987, Imagine) est **auto-bootable** via le dossier `AUTO\ARKANOID.PRG`
-de sa disquette (et **non** via le boot sector, dont le checksum vaut `$F9B9` ≠
-`$1234`). NeoST le charge correctement et affiche l'écran-titre, puis **se fige**
-sur :
+Le ST n'a ni scrolling matériel, ni copper : tout effet vidéo passe par la réécriture des
+registres Shifter/Glue (`$820A`, `$8260`, palette, base) **à un cycle précis** du 68000 pendant
+le balayage. Symétriquement, beaucoup de jeux **pollent** un registre (compteur vidéo `$FF8209`,
+flag effacé par une IRQ) et décident en fonction. Si la **phase CPU↔faisceau** dérive ne
+serait-ce que de quelques cycles, l'écriture tombe à la mauvaise ligne (image qui saute) ou la
+boucle de poll ne sort jamais (gel).
 
-```
-031736: tst.b $26e7.l
-03173C: bne   $31736          ; boucle tant que ($26E7) != 0
-```
+Cas d'école historique : **Arkanoid** boucle sur `tst.b $26E7 / bne` (`$31736`), où `$26E7` doit
+être remis à 0 par une IRQ à un instant précis. Le gel `$31736` exigeait un FDC au timing réel
+(spin-up + débit MFM) — **résolu** par le modèle FDC rotationnel (cf. `CHANGELOG.md`,
+`[[arkanoid-freeze-investigation]]`). Arkanoid atteint désormais son écran-titre mais ne franchit
+pas la partie (cause distincte, suivie au catalogue de `TODO.md`).
 
-Analyse par les traces (`neost-headless --trace` + Hatari `--trace cpu_disasm`) :
+## 2. Le modèle d'Hatari (l'architecture cible)
 
-- Le jeu installe son handler VBL en `$70` (`034CB2: move.l #$34c9a,$70.l`), qui
-  s'exécute bien 117 fois (vectorisation auto-vecteur niveau 4 correcte) ; il
-  chaîne vers le VBL TOS sans toucher `$26E7`.
-- `$26E7` doit donc être remis à 0 par une **autre interruption**, à un **instant
-  précis** relatif à la boucle d'attente.
-- NeoST lève ses IRQ à la granularité **ligne/trame** (cf. §2) → l'interruption
-  qui efface `$26E7` ne tombe pas au bon cycle → la boucle ne sort jamais.
+### 2.1 Une horloge globale, des compteurs par instruction (`cycles.c`)
 
-C'est un cas d'école : **sans timing au cycle près, un flag effacé par IRQ au
-mauvais moment fige le jeu.** Beaucoup de jeux/démos sont dans ce cas.
+Un compteur de cycles **global** (`CyclesGlobalClockCounter`) partagé CPU + vidéo, avancé au
+cycle. Chaque instruction CPU rapporte son **coût exact** ; `Cycles_GetInternalCycleOn{Read,
+Write}Access` date un accès à la **fin du cycle bus** (`currcycle*2 + 4`), après alignement.
 
-> **MAJ 2026 (après Phase 6) — diagnostic de la « vrille ».** Avec la RAM par défaut
-> (512 Ko), Arkanoid part en vrille (PC → `$26000000`, wrap 24 bits → `$0`) **avant**
-> d'atteindre `$26E7`. Cause tracée pas à pas :
-> 1. Le **sizing mémoire de TOS 1.02 sur-détecte 2 Mo** (`phystop` = `$200000` même
->    en `--mem 512k` ; test `FC0106`/`FC0672`, seuil `$200000`, config `$FF8001=$08`).
-> 2. `Pexec` charge donc Arkanoid **haut** (~`$1F8000`).
-> 3. La boucle de clear TOS `FC4BB6` (`movem.l D1-D7/A3,-(A2)`) écrit à `$180114` qui,
->    en config $08 (banque 0 déclarée 2 Mo, 512 Ko réel), **alias → phys `$114`** =
->    vecteur Timer C, mis à `$0`.
-> 4. Le **Timer C suivant** lit le vecteur `$0` → saut `$0` → exécution de garbage.
->
-> **Avec `--mem 2m`, plus de vrille** : Arkanoid charge, **affiche son écran-titre**,
-> puis se fige sur `$31736/$26E7` (le symptôme historique ci-dessus), sur les deux
-> cœurs — le quantum sous la ligne ne le débloque pas. Le **vrai bug NeoST** est la
-> **sur-détection mémoire** : `Bus::mmuTranslate` alias la zone sur-déclarée de la
-> banque 0 (`mmuSz=2M`, `ramSz=512K`) au lieu de la rendre « absente » (Arkanoid 1987
-> tournait sur un 512 Ko réel). **Fix à faire avec Hatari `stMemory.c` comme oracle.**
+### 2.2 Ordonnanceur d'événements datés (`cycInt.c`)
 
-## 2. État actuel de NeoST — le modèle « par blocs »
+Le cœur du modèle. Une **table d'interruptions futures**, une par source matérielle
+(`INTERRUPT_VIDEO_VBL/HBL/ENDLINE`, `MFP_TIMERA..D`, `ACIA_IKBD`, `FDC`, `BLITTER`,
+`DMASOUND_MICROWIRE`, `HDC_ACSI`…). On ne garde dans `PendingInterruptCount` que le nombre de
+cycles jusqu'au **prochain** événement ; la boucle CPU le décrémente du coût de chaque
+instruction ; à `≤ 0`, le handler dû s'exécute puis se **re-planifie** (absolu = période fixe
+sans dérive ; relatif = depuis l'instant courant). Le **retard** (une instruction longue dépasse
+l'échéance) est reporté au handler → **pas de dérive cumulée**.
 
-`Machine::runFrame()` (cf. `src/core/Machine.cpp`) :
+### 2.3 Unité interne CPU↔MFP (anti-arrondi)
 
-```cpp
-for (int line = 0; line < LINES_PER_FRAME; ++line) {   // 313 lignes PAL
-    cpu.run(CYCLES_PER_LINE);                           // 512 cycles EN BLOC
-    if (line < VISIBLE_LINES) { mfp.hblank(); cpu.raiseHbl(); }   // HBL par ligne
-    if (line == 78|156|234|312) { mfp.raise(SRC_TIMERC); cpu.updateIpl(); }
-    if (line == VISIBLE_LINES) cpu.raiseVbl();          // VBL niveau 4
-}
-shifter.renderFrame();                                  // 1 décodage / trame
-```
+Pour synchroniser CPU (8021248 Hz) et MFP 68901 (2457600 Hz) **sans flottant** :
+`1 cycle CPU → 9600 unités`, `1 cycle MFP → 31333 unités` (ratio exact `31333/9600`,
+`CYCINT_SHIFT`). Idée d'Arnaud Carre (sc68). Indispensable pour des périodes de timers exactes
+sur des milliers de trames.
 
-Limites structurelles :
+### 2.4 Vidéo au cycle (`video.c`)
 
-- Une IRQ **ne peut pas tomber au milieu** d'une ligne (granularité 512 cycles).
-- **Timer C** approximé par 4 tics à des lignes fixes ; **Timer A, B (delay), D**
-  absents ; **Timer B sur Display-Enable** impossible au cycle.
-- **FDC = DMA instantané** : pas de spin-up, index pulse, BUSY, DRQ/INTRQ datés.
-- **Vidéo** = un seul décodage par trame : pas de bordures, ni Spec512, ni rasters.
-- `cpu.run(512)` exécute « au moins » 512 cycles puis s'arrête à la fin d'une
-  instruction : le **dépassement** (lateness) n'est ni mesuré ni reporté → dérive.
+`video.c` planifie **par scanline** des événements à des cycles précis : début/fin de
+Display-Enable (pour Timer B event-count et les bordures), `VIDEO_ENDLINE`, `VIDEO_HBL`,
+`VIDEO_VBL`, avec gestion 50/60 Hz, écrans courts/longs, et suppression de bordures
+(`BORDERMASK_*`). L'origine de trame est `VBL_ClockCounter = GlobalClock − PendingCyclesOver −
+VblVideoCycleOffset` (offset 64 STF / 68 STE).
 
-Suffisant pour booter EmuTOS/TOS et le bureau ; **insuffisant** dès qu'un logiciel
-dépend du cycle (jeux protégés, démos, et le `$26E7` d'Arkanoid).
+### 2.5 MFP (`mfp.c`) et FDC (`fdc.c`)
 
-## 3. Le modèle d'Hatari (à porter)
+- **MFP** : timers A-D = événements datés, modes **delay** (prescaler 4/10/16/50/64/100/200),
+  **event-count** (piloté par le Display-Enable vidéo ou un front GPIP), **pulse-width** ;
+  latence d'IRQ (4 cyc) et IACK au cycle.
+- **FDC** : disque **temporel** — moteur on/off + spin-up, index pulse (3,71 ms/rotation),
+  step-rate, BUSY, DRQ/INTRQ via événements `INTERRUPT_FDC`, transfert par blocs dans le temps.
 
-### 3.1 Compteurs de cycles (`cycles.c` / `cycles.h`)
+## 3. Ce qui est ACQUIS (phases 0-6 + extensions)
 
-Un compteur de cycles **global** ; chaque instruction CPU rapporte son **coût
-exact**. Hatari maintient `Cycles_GetCounter(CYCLES_COUNTER_CPU)` et convertit
-selon l'horloge machine (8/16 MHz).
+Le squelette cycle-exact est en place. Tout ce qui suit est **fait et validé** (détails et
+validations dans `CHANGELOG.md`) :
 
-### 3.2 Ordonnanceur d'événements datés (`cycInt.c` / `cycInt.h`)
+| Brique | Essence | Réf. NeoST |
+|--------|---------|------------|
+| **Cycles par instruction** | `Cpu68k::run` rend le coût réel ; Moira est cycle-exact | `Cpu68k.cpp` |
+| **Scheduler daté** | une échéance « prochaine » par source, handlers qui se replanifient | `Scheduler.hpp` |
+| **Horloge continue + carry** | `runFrame` n'efface plus l'horloge par trame ; le dépassement est reporté | `Machine.cpp` |
+| **Vidéo scanline** | `beginFrame` verrouille la résolution, `renderLine(y)` décode avec l'état courant | `Shifter.cpp` |
+| **Événements vidéo au cycle** | rendu fin-DE, Timer B event-count à 400, HBL à 508 | `Machine.cpp` |
+| **Géométries 50/60/71 Hz** | cycles/ligne (512/508/224), lignes/trame, DE start/end dérivés, verrouillés à `beginFrame` | `Shifter::Geometry` |
+| **Timers MFP datés** | A/C/D mode délai + B event-count sur DE ; conversion entière MFP→CPU | `Mfp.cpp` |
+| **Chaîne IRQ MFP fine** | délai 4 cyc daté (`MFP_IRQ`), chronologie multi-IRQ (`pendingTime_`), IACK ré-évalué | `Mfp.cpp`, `Cpu68k.cpp` |
+| **FDC temporel** | BUSY posé, durée calculée, INTRQ différé ; modèle rotationnel complet (spin-up, débit MFM) | `Fdc.cpp` |
+| **Registres STE différés** | compteur vidéo matérialisé (`vcLineBase_`) ; `$8205/07/09`, HSCROLL, LINEWIDTH appliqués en fin de ligne | `Shifter.cpp` |
+| **Quantum sous la ligne** | `liveNow()` = cycle absolu exact à l'écriture (sous-instruction Moira) + préemption | `Scheduler`, `Cpu68k` |
+| **Bordures H/B/G/D** | machine Glue STF (`updateGlueState` ≙ `Video_Update_Glue_State`), self-test 19/19 | `Shifter.cpp`, `Glue.hpp` |
+| **Spec512** | palette intra-ligne pixel-identique à l'oracle (latch + alignement bus shifter) | `Shifter.cpp` |
+| **Wait states bus** | shifter/PSG/MFP/ACIA + E-Clock | `Bus.cpp`, `Cpu68k.cpp` |
+| **Microwire/LMC1992 datés** | filtres son STE horodatés | `DmaSound.cpp` |
 
-C'est le cœur. Une **table d'interruptions futures** (`InterruptHandler`), une par
-source matérielle (`cycInt.h`) :
+> **Convergence Moira↔WinUAE au niveau instruction = atteinte** (`NEOST_RAM_SLOT` align créneau
+> bus + fix DIV). C'est l'objet du doc [`MOIRA_WINUAE_CONVERGENCE.md`](MOIRA_WINUAE_CONVERGENCE.md),
+> qui tient le détail et le front beam-sync.
 
-```
-INTERRUPT_VIDEO_VBL / VIDEO_HBL / VIDEO_ENDLINE
-INTERRUPT_MFP_MAIN_TIMERA..D
-INTERRUPT_ACIA_IKBD, INTERRUPT_FDC, INTERRUPT_BLITTER,
-INTERRUPT_DMASOUND_MICROWIRE, INTERRUPT_HDC_ACSI, ...
-```
+## 4. Ce qui RESTE — inventaire priorisé
 
-Principe (commentaire d'en-tête de `cycInt.c`) :
+Établi en diffant `extern/hatari/src` contre `src/` sous-système par sous-système. Trié par
+priorité d'impact. Les divergences logiques bornées (V1, S2, D3, M1…) sont cataloguées avec
+sévérité + `fichier:ligne` des deux côtés dans
+[`HATARI_DIVERGENCES.md`](HATARI_DIVERGENCES.md) ; ici, l'angle « précision cycle ».
 
-- On garde, dans `PendingInterruptCount`, le nombre de cycles jusqu'au **prochain**
-  événement seulement (pas besoin de décrémenter chaque entrée).
-- La boucle d'exécution **décrémente** `PendingInterruptCount` du coût de chaque
-  instruction ; à `≤ 0`, le handler dû est appelé (`CycInt_AcknowledgeInterrupt`)
-  puis se **re-planifie** :
-  - **Absolute** (`CycInt_AddAbsoluteInterrupt`) : période fixe depuis l'événement
-    précédent — ex. HBL toutes les 512 cycles, sans dérive.
-  - **Relative** (`CycInt_AddRelativeInterrupt`) : à partir de l'instant courant.
-- **Retard** : si une instruction de 20 cycles dépasse de 16 un événement dû dans
-  4, le handler reçoit/gère ces 16 cycles de retard (fonctions *adjust*) → **pas
-  de dérive cumulée**.
+| Priorité | Chantier | Effort | Étalon type |
+|----------|----------|--------|-------------|
+| **P1** | Beam-sync : phase CPU↔faisceau **par-ligne** (overscan vertical EL) | élevé | Enchanted Land en jeu |
+| **P1** | Tricks par changement de résolution mid-ligne (V2 hi/med/lo, overscan med-res) | moyen+ | Cuddly, No Cooper |
+| **P1** | Géométrie mid-trame (V3 : 50↔60 Hz en cours de trame, `RestartVideoCounter`) | élevé | overscan plein écran, ULM Dark Side |
+| **P1** | Rendu live du retrait BAS + lignes EMPTY/BLANK/NO_DE | moyen | scroller bordure basse Cuddly |
+| **P2** | Blitter non-hog (arbitrage bus 64/64) | élevé | démos CPU+blitter simultanés |
+| **P2** | Son DMA STE : compteur d'adresse live + FIFO 8 octets | moyen | STE_Test, sync zik/raster |
+| **P2** | Restes vidéo : `VIDEO_ENDLINE`, VBL au cycle exact, phase Timer C | moyen | démos fullscreen |
+| **P3** | Wakeup states WS1-4, jitter HBL/VBL, branche STE de la Glue | élevé | démos « extrêmes » (Closure…) |
+| **P3** | Unité interne ×256, fréquences exactes centralisées | faible | dérive long terme |
 
-### 3.3 L'unité « interne » CPU↔MFP (anti-arrondi)
+### P1 — Beam-sync (le chantier ouvert)
 
-Pour synchroniser le CPU (8021248 Hz) et le MFP 68901 (2457600 Hz) **sans
-flottant**, Hatari convertit tout en unité interne :
+C'est le front actif. **Convergence instruction faite** ; reste la **phase d'entrée d'IRQ** et la
+**géométrie par-ligne**. Détail, mesures, bancs et pistes éliminées :
+[`MOIRA_WINUAE_CONVERGENCE.md`](MOIRA_WINUAE_CONVERGENCE.md). En bref :
 
-```
-1 cycle CPU  → 9600  unités internes
-1 cycle MFP  → 31333 unités internes      (ratio exact 31333/9600)
-```
+- **Overscan vertical EL en jeu** : la dérive *moyenne* du faisceau correspond à Hatari (+78/ligne
+  avec `NEOST_RAM_SLOT`+`NEOST_IACK`, défaut ON), mais la **phase absolue par-ligne** diffère
+  (NeoST culmine cyc 476-492 vs Hatari 500-508) → le retrait haut ne « tient » pas. Fermeture =
+  tracking cycle-exact du handler **par ligne** (alternance 76/80 de Hatari), pas un offset
+  constant.
+- **V2 res-switch** (line-shortening hi-res précoce ≤56 cyc) : porté fidèle, opt-in `NEOST_V2`,
+  validé structurellement à l'oracle. Limite prouvée : non déclenchable pixel-stable headless
+  (latence HBL ~56 cyc) → couplé à la convergence.
 
-(cf. `INT_CONVERT_TO_INTERNAL` / `INT_CONVERT_FROM_INTERNAL`, `CYCINT_SHIFT`).
-Idée d'Arnaud Carre (Saint/sc68). Indispensable pour des périodes de timers MFP
-exactes sur des milliers de trames.
+### P1 — Registres vidéo STE : 2 restes
 
-### 3.4 Vidéo au cycle (`video.c`)
+- **`bSteBorderFlag` / mode 336 px** (`video.c:530`) : combo `$FF8265>0` puis `$FF8264=0`
+  → 16 px de plus à gauche (prefetch sans scroll). Absent. *Effort moyen.* Étalon : Obsession,
+  Pacemaker.
+- **`RestartVideoCounter` ligne 310/260** : ⚠ **tenté puis retiré** — pollé « compteur revenu à
+  la base », les softs posent leur bascule 50/60 Hz à la frontière de trame là où `beginFrame`
+  verrouille la géométrie → toute la trame bascule en 263 lignes. À reprendre **après** la
+  géométrie par-ligne (dépendance structurelle, = V3). Étalon : ULM Dark Side of the Spoon.
 
-`video.c` planifie, **par scanline**, des événements à des positions en cycles
-précises : début/fin de **Display-Enable** (pour Timer B event-count et les
-bordures), `VIDEO_ENDLINE`, `VIDEO_HBL`, `VIDEO_VBL`, avec gestion 50/60 Hz,
-écrans courts/longs et suppression de bordures (`BORDERMASK_*`).
+### P2 — Blitter non-hog (`blitter.c:251,395`)
 
-### 3.5 MFP 68901 (`mfp.c`)
+Mode non-hog : le blitter prend 64 accès bus, rend la main 64 cycles au CPU, etc. (chaque mot
+compte ; bug matériel « +1 accès CPU compté blitter » reproductible). NeoST = HOG pur (transfert
+instantané hors temps CPU). Indispensable aux démos qui calculent **pendant** un blit.
+*C'est le plus gros morceau structurant restant.* Suit : datation IRQ blitter + bit BUSY.
 
-Les 4 timers (A–D) sont des **événements datés** : modes **delay** (prescaler
-4/10/16/50/64/100/200), **event-count** (piloté par le Display-Enable vidéo ou un
-front GPIP), **pulse-width** ; rebouclage via la période ; latence d'IRQ et IACK
-**au cycle**. C'est ici que se règle le `$26E7` d'Arkanoid.
+### P2 — Son DMA STE (`dmaSnd.c:737`)
 
-### 3.6 FDC/DMA (`fdc.c`)
+`$FF8909/0B/0D` doit refléter la position **au cycle** de la lecture (`Sound_Update`,
+`DmaSnd_GetFrameCount`) ; NeoST n'avance le compteur qu'au rythme de la synthèse. Plus le FIFO
+8 octets + avance HBL (réalignement mono→stéréo, S2). Étalon : STE_Test.
 
-Disque **temporel** : moteur on/off + spin-up, **index pulse** (3.71 ms/rotation),
-step rate, **BUSY**, **DRQ/INTRQ** via événements `INTERRUPT_FDC`, transfert par
-blocs dans le temps. Nécessaire aux protections et au timing fin.
+### P2 — Restes vidéo « plan »
 
-## 4. Plan incrémental pour NeoST
+`VIDEO_ENDLINE` distinct du HBL ; VBL au cycle exact (vraie fin de trame + offset 64/68) ; phase
+exacte du tic Timer C (au cycle de programmation) ; lecture compteur à cheval sur deux lignes
+(`Video_CalculateAddress`).
 
-Chaque phase est **validable** et garde le repo fonctionnel. On porte l'**idée**
-d'Hatari, pas son code (licences/architecture différentes) : NeoST garde son
-`Bus`-plan-mémoire et son cœur Musashi.
+### P3 — Précision « démos extrêmes »
 
-### Phase 0 — Cycles par instruction (fondation) — ✅ FAIT
+- **Wakeup states WS1-4** (`video.c:626`) : 4 jeux de timings ±1 cyc (NeoST = WS3 figé, choix
+  acté pour le mode cycle-exact). Structure : table de timings au lieu de constantes `glue::`.
+- **Jitter HBL/VBL** : ⚠ `HblJitterArray/VblJitterArray` sont **morts** dans le Hatari courant
+  (déclarés, jamais définis/référencés) — NE PAS porter. Le vrai jitter d'autovecteur = synchro
+  **E-Clock** (`M68000_WaitEClock`), porté (`NEOST_IACK`).
+- **Branche STE de la Glue** (V1) : `Preload_Start_*`, `LEFT_OFF_2_STE` non gérés → overscan de
+  démos STE (E605, DHS) mal placé.
+- **Overscan med-res** + **NO_SYNC/SYNC_HIGH** (lignes vides par manipulation du sync hi-res).
 
-- `Cpu68k::run(int cycles)` retourne déjà `m68k_execute(cycles)`, soit le nombre
-  de cycles **réellement** consommés (le 68000 finit toujours son instruction).
-  La fondation « coût réel par paquet » est donc acquise ; il restera (Phase 5) à
-  *carry* le dépassement entre paquets plutôt que de le jeter.
-- Référence : cœur UAE d'Hatari + `cycles.c`.
+### P3 — Horloges & divers
 
-### Phase 1 — `Scheduler` événementiel (refactor iso-comportement) — ✅ FAIT
+- **Unité interne ×256** (`CYCINT_SHIFT=8`) : NeoST tronque la conversion 31333/9600 à l'entier
+  par échéance ; l'unité interne supprime la dérive résiduelle long terme (négligeable
+  aujourd'hui car replanification ancrée).
+- **Fréquences exactes centralisées** (`clocks_timings.c` : CPU 8021248 Hz PAL, VBL ≈ 50,05 Hz) :
+  seul impact réel = synchro audio long terme.
+- **Offsets de datation Moira vs Hatari** : les constantes empiriques (`kVideoCounterReadOffset
+  Cyc`, `kSpec512AlignCyc`) compensent la convention de datation de Moira (vs Hatari). Validées
+  pixel-identiques ; chaque nouveau mécanisme daté choisira son offset par la même méthode
+  (sweep vs oracle).
 
-- Nouveau composant `neost_core` : `src/core/Scheduler.hpp` (header-only)
-  - une échéance en cycles par source (`enum Source { HBL, TIMER_C, VBL, … }`),
-    `schedule(src, atCycle)`, `cancel`, `nextDue()`, `runTo(cycle)` qui déclenche
-    les handlers échus **dans l'ordre des sources** (priorité à cycle égal) ;
-  - chaque handler se **replanifie** lui-même (idée `cycInt` : une seule échéance
-    « prochaine » par source).
-- `Machine::runFrame()` réécrit en boucle pilotée par événements (cf. `Machine.cpp`):
-  ```cpp
-  while (sched.now() < frameEnd) {
-      int64_t next = min(sched.nextDue(), sched.now() + CYCLES_PER_LINE);  // quantum = 1 ligne
-      cpu.run(next - sched.now());      // exécute le CPU jusqu'à l'événement
-      sched.runTo(next);                // déclenche HBL / Timer C / VBL (+ replanif.)
-  }
-  ```
-- **Quantum CPU = la ligne (512 cycles)** : comme toutes les échéances sont sur la
-  grille de 512, chaque pas exécute exactement une ligne → **chunking et trace
-  identiques** au modèle « par blocs » précédent.
-- **Validation faite** : `diff` des traces (Arkanoid 3 058 584 instructions, et
-  EmuTOS avec registres) **strictement identiques** avant/après le refactor →
-  zéro régression. Le *carry* du dépassement et la subdivision du quantum
-  viendront aux phases suivantes (c'est là que le timing changera réellement).
+## 5. Ce qu'on ne fera PAS (décisions actées)
 
-### Phase 2 — Vidéo sur l'ordonnanceur (`video.c`) — ✅ FAIT (rendu scanline)
+- **Contention DMA vidéo générale sur la RAM** (le shifter vole des cycles au CPU pendant le DE) :
+  modèle **MAME** (`stmmu.cpp::bus_contention`), **pas Hatari** → l'ajouter ferait diverger NeoST
+  de l'oracle qui valide nos étalons au pixel.
+- **Vol de cycles DMA son / FDC sur le bus** : Hatari ne le modélise pas non plus.
+- **Pulse-width MFP (modes 9-15)** : Hatari l'approxime déjà en mode délai → même approximation.
 
-- `Shifter::beginFrame()` (verrouille la résolution de la trame) + `renderLine(y)`
-  (décode UNE scanline avec l'état **courant** des registres palette/base vidéo).
-- `Machine` planifie un événement `RENDER` par ligne : la scanline est décodée à
-  la fin de sa ligne, donc un changement de palette/base via un handler HBL/VBL
-  s'applique **ligne à ligne** (rasters, scroll vertical par base). En mono
-  (400 lignes > 313 du cadre PAL), les lignes restantes sont finies après la
-  boucle.
-- Le rendu est purement « sortie » (lit la RAM, n'altère ni CPU ni IRQ) →
-  **trace CPU inchangée** ; **validation** : trace Arkanoid identique +
-  screenshots **pixel-identiques** (Arkanoid couleur, bureau EmuTOS, mono).
-- **Reste dans la Phase 2** (ces points CHANGENT la trace, à valider via Hatari) :
-  positionner **HBL et Display-Enable au cycle exact** dans la ligne (et non en
-  fin de ligne), `VIDEO_ENDLINE`, bascule 50/60 Hz, et rendu **sous-ligne** pour
-  Spec512 / changements multiples par scanline.
-- Débloque ensuite : Timer B sur DE au cycle, base des **bordures**.
+## 6. Méthode de validation
 
-### Phase 2b — Cycles vidéo exacts + carry du dépassement — ✅ FAIT
-
-- **Boucle avec carry** (`Machine::runFrame`) : plus de quantum « ligne » ; on
-  exécute le CPU jusqu'au prochain événement et on avance l'horloge du nombre de
-  cycles **réellement** consommés par `m68k_execute` (le dépassement est reporté,
-  comme Hatari) → l'événement échu se déclenche « en retard » de quelques cycles,
-  sans dérive. (C'est aussi la Phase 5 « carry ».)
-- **Événements vidéo au cycle exact dans la ligne** (constantes STF PAL 50 Hz,
-  `Hatari video.h`) : rendu de la scanline à la fin du Display-Enable (**cycle
-  376**), **Timer B** event-count à **400** (`376+24`), **HBL** niveau 2 à **508**
-  (`512-4`). Le rendu d'une ligne précède donc les handlers Timer B/HBL de la même
-  ligne (qui modifient les registres pour la ligne suivante) → rasters corrects.
-- **Validation** : screenshots **pixel-identiques** (bureau EmuTOS, Arkanoid
-  couleur, mono) malgré le changement de timing ; boot OK. `tools/trace_diff.py`
-  corrigé pour le vrai format Hatari `cpu_disasm` (`adresse octets disasm`) et
-  validé contre une trace Hatari réelle.
-- **Géométries 50/60/71 Hz — ✅ FAIT** (`Shifter::Geometry`, port `video.h`) : cycles/ligne
-  (512/508/224), lignes/trame (313/263/501), lignes affichées (200/400) et DE start/end
-  dérivés de la résolution + `$FF820A`, **verrouillés à `beginFrame`**. `Machine` n'a plus de
-  313×512 figé (frameEnd, VBL, HBL, Timer B, durée VBL IKBD, mono à 400 lignes en suivent).
-  50 Hz byte-identique ; 60 Hz/mono rendu identique + Timer C remis à l'échelle de la trame.
-- **Reste** : `VIDEO_ENDLINE`, bascule 50/60 Hz **en cours de trame** (bordures — la géométrie
-  est aujourd'hui verrouillée par trame), rendu **sous-ligne** (Spec512), positionnement
-  cycle-exact du VBL (vraie fin de trame + offset 64/68) et du Timer C.
-
-### Phase 3 — Timers MFP datés (`mfp.c`) — ✅ FAIT (mode délai A/C/D)
-
-- **Horloge continue** : `runFrame` ne remet plus l'horloge à 0 par trame ; les
-  événements vidéo sont armés à `frameStart_ + offset`. Les timers MFP traversent
-  donc les trames.
-- **MFP ↔ Scheduler** : `Mfp::setScheduler` ; sur écriture de TACR/TCDCR/TxDR, le
-  MFP calcule la **période en cycles CPU** (`prescaler × données × 31333/9600`,
-  conversion entière exacte MFP→CPU comme `cycInt.c`) et (re)date l'échéance du
-  timer. À l'échéance : IRQ levée + replanification (mode délai).
-- **Timer C réel** (remplace le faux « 4 tics/trame » de `Machine`) + **Timer D**
-  (jusque-là totalement absent) + Timer A. Timer B reste event-count sur DE.
-- **Validation fonctionnelle** : boot **pixel-identique** (bureau EmuTOS, Arkanoid),
-  et la trace `--irq` montre désormais les vecteurs Timer C (`$45`) **et** Timer D
-  (`$44`) qui se déclenchent réellement.
-- **Note** : le diff instruction-par-instruction avec Hatari diverge sur les
-  boucles de poll (ex. sync vidéo `FC0E3C` qui poll le compteur Timer B) car
-  **Musashi et l'UAE d'Hatari n'ont pas exactement les mêmes coûts cycles** ; les
-  deux sortent correctement la boucle. La validation pertinente est donc
-  fonctionnelle (rythme des timers, boot, rendu), pas l'égalité de trace.
-- **Reste** : Timer B mode délai, pulse-width, latence IACK au cycle, et la
-  position exacte du tic Timer C (phase au cycle de programmation).
-
-> **Arkanoid** : rappel — ce dump cale au même endroit (`$26E7`) **dans Hatari
-> aussi** ; ce n'est pas un problème de timers. Cf. `TODO.md`.
-
-### Phase 4 — FDC/DMA temporel (`fdc.c`) — ✅ FAIT (BUSY + INTRQ différé)
-
-- `Fdc::setScheduler` ; une commande WD1772 n'est plus instantanée : on POSE
-  **BUSY** (statut bit 0), on calcule une **durée** (`Fdc::commandDelayCycles` :
-  type I = step-rate × pas ; type II/III = ~temps de transfert par secteur), et
-  on date la fin sur `Scheduler::FDC`. À l'échéance (`onCommandComplete`), BUSY
-  tombe, le statut final s'applique et l'**INTRQ** est levée (GPIP5 pour le
-  polling TOS + canal 7 pour les jeux).
-- Le transfert DMA des données reste immédiat (données en RAM) ; seule la
-  **signalisation** (BUSY → INTRQ) est datée — suffisant pour que TOS/jeux qui
-  attendent la fin de commande voient un délai réaliste.
-- **Validation** : EmuTOS (sans disque) **pixel-identique** ; TOS 1.02 + diskA
-  boote ; **Arkanoid se charge et son titre est pixel-identique** (données FDC
-  correctes) ; smoke-test + montage WASM OK.
-- **Reste** : débit réel (~16 ms/secteur, ici accéléré ~1 ms), index pulse /
-  spin-up moteur, DRQ octet-par-octet, latence de rotation, write-protect/Mediach.
-
-### Phase 5 — Unité interne CPU/MFP (`cycInt.c`)
-
-- Adopter la conversion entière 9600/31333 (ou un rationnel 64 bits) pour zéro
-  dérive sur le long terme.
-
-### Phase 6 — Quantum « sous la ligne » : horloge live + préemption — ✅ FAIT
-
-Jusqu'ici, `runFrame` exécutait le CPU **jusqu'au prochain événement connu** puis
-ré-évaluait. Deux trous subsistaient, à l'origine de la « latence IRQ grossière » :
-
-1. **Datage au début du quantum.** Une puce (MFP) qui programmait un timer en plein
-   bloc le datait depuis `sched.now()` (= début du quantum), donc jusqu'à ~380
-   cycles trop tôt.
-2. **Pas de préemption.** Un timer court armé pendant un bloc n'était servi qu'à la
-   fin du bloc. Pire avec l'optimisation **STOP** de Moira : si le CPU faisait `STOP`
-   juste après avoir armé le timer, le saut STOP allait directement au prochain
-   événement *déjà connu* (souvent une période Timer C ≈ 40 000 cycles plus loin) →
-   le timer court fauté de **~47 000 cycles**.
-
-Port du modèle Hatari (`cycInt.c` : `CycInt_AddRelativeInterrupt` date depuis
-`Cycles_GetClockCounterImmediate`, et la boucle CPU re-teste `PendingInterruptCount`
-à chaque instruction) :
-
-- **`Scheduler::liveNow()`** = `now() + Cpu68k::cyclesRunInQuantum()` = cycle CPU
-  absolu EXACT au moment de l'écriture (sous Moira, précis à la **sous-instruction** ;
-  sous Musashi, à la frontière d'instruction car le coût cycle est débité en fin
-  d'opcode). `Mfp::scheduleTimer` l'utilise au lieu de `now()`.
-- **`Scheduler` préemptif** : `schedule(s, at)` appelle `endSlice_()` si `at` tombe
-  avant la cible du bloc en cours (`beginRun`/`endRun` autour de `cpu.run`).
-  `Cpu68k::endTimeslice()` → `m68k_end_timeslice()` (Musashi) ou drapeau testé après
-  chaque instruction (Moira). Le CPU finit son instruction, rend la main, la boucle
-  re-planifie et s'arrête **près** du timer.
-
-**Résultat mesuré** (batterie T0 de `STE_Test`, `--cpu moira`) : pire retard d'un
-timer MFP **47 513 → 134 cycles** (1 instruction). Boot **pixel-identique** (EmuTOS +
-TOS 1.02, 2 cœurs), **histogramme d'IRQ inchangé**, **Z/T0 = Pass**. Métrique exposée
-par le headless : `timer IRQ retard max = … | préemptions = …`.
-
-> **Cœur recommandé pour ce chantier : Moira** (cycle-exact, horloge live à la
-> sous-instruction, échantillonnage IPL au bon cycle). Musashi reste le défaut
-> compatibilité mais date à la frontière d'instruction seulement.
-
-> **Reste (raffinement sous-instruction)** : ajouter l'offset = nombre de cycles de
-> l'instruction d'écriture (chez Hatari le timer démarre à la FIN de l'opcode, pas à
-> son début ; cf. `CycInt_AddRelativeInterruptWithOffset`).
-
-## 5. Validation continue — l'oracle existe déjà
-
-`tools/trace_diff.py` (livré) aligne une trace NeoST et une trace Hatari et pointe
-la **première divergence (PC + registres)**. Méthode :
+Chaque chantier : **(1)** porter depuis `extern/hatari/src` → **(2)** re-tester les étalons
+(`tools/run_etalons.py`, glue-selftest 19/19, Spec512/overscan_top byte-identiques) → **(3)**
+diff à l'oracle Hatari.
 
 ```sh
-# Hatari (référence) — headless, déterministe
-SDL_VIDEODRIVER=dummy ./extern/hatari/build/src/hatari --configfile /dev/null \
-  --machine st --memsize 0 --monitor rgb --sound off --patch-tos off --fast-boot off \
-  --tos <TOS1.02> --disk-a <jeu.st> --trace cpu_disasm --trace-file hatari.txt \
-  --run-vbls N --benchmark
+# Hatari (référence) headless — cf. docs/HATARI_AUTOMATION.md
+SDL_VIDEODRIVER=dummy hatari --machine st --monitor rgb --sound off \
+  --tos <TOS> --disk-a <jeu.st> --trace cpu_disasm --trace-file hatari.txt --run-vbls N
 # NeoST
-./build/neost-headless --frames N --disk <jeu.st> --trace neost.txt --regs <TOS1.02>
-# Diff
+./build/neost-headless <TOS> --frames N --disk <jeu.st> --trace neost.txt --regs --irq
+# Diff : première divergence (PC + registres), ou périodes par PC-landmark
 python3 tools/trace_diff.py neost.txt hatari.txt --align-pc FC0030 --regs
+python3 tools/trace_diff.py neost.txt hatari.txt --periods 173C 1742   # convergence cycle
 ```
 
-> Note de parsing : Hatari `cpu_disasm` écrit `00fc0030 46fc 2700  move.w #$2700,sr`
-> (PC sur 8 hexa, sans `$` ni `:`). Le format Hatari de `trace_diff.py` doit
-> reconnaître `^([0-9A-Fa-f]{6,8})\s` en plus de la forme `$adr :`.
-
-**Indicateur de progrès** : à chaque phase, le **point de première divergence
-recule**. Bonus : en cycle-accurate, les points d'insertion d'IRQ coïncident avec
-Hatari → le diff index-par-index cesse d'être « bruité » par le décalage des
-interruptions (un bénéfice en soi).
-
-## 5bis. Second cœur CPU : Moira (cycle-exact) — sélectionnable
-
-Plutôt que de porter le cœur **UAE/WinUAE** (~60k lignes, GPLv2, très couplé à
-Hatari), NeoST intègre **Moira** (cœur 68000 de vAmiga, **MIT**, C++20,
-**cycle-exact** avec timing inter-instructions) en sous-module `extern/moira`.
-
-- Sélection **au démarrage** : `--cpu musashi|moira` (headless), `cpu=` dans
-  `neost.cfg` (GUI), `?cpu=` / sélecteur dans l'UI WASM. **Musashi reste le
-  défaut.**
-- Intégration (`Cpu68k`) : sous-classe `moira::Moira` routant `read8/16` et
-  `write8/16` vers le `Bus`, `irqMode = USER` + `readIrqUserVector` reproduisant
-  le vectoring ST (MFP vectorisé niveau 6, VBL/HBL auto-vectorisés). `run()`
-  exécute via `executeUntil`/`execute` et reporte `getClock()` à l'ordonnanceur.
-- **État** : Moira **boote EmuTOS pixel-identique** à Musashi, et **délivre
-  correctement les IRQ** — sur 100 trames : **538 IRQ niveau 6 (MFP) + 98 niveau
-  4 (VBL)**, contre 541+98 pour Musashi (quasi identique).
-- **Optimisation `stop`** : le 68000 en attente (`stop`) était simulé cycle par
-  cycle par Moira (~25× plus d'`execute()` par trame → en WASM temps-réel,
-  l'émulation ramait et EmuTOS restait coincé sur l'écran d'accueil). `Cpu68k::run`
-  détecte l'état STOP (`NeostMoira::isStopped`) et **saute** directement au prochain
-  événement daté (rien ne se passe avant lui) : ~6900 instr/2 trames au lieu de
-  158000, boot pixel-identique, IRQ inchangées, et **le bureau GEM s'affiche
-  désormais à pleine vitesse** (icônes disque A/B, corbeille, barre de menu).
-- **Reste (divergence fonctionnelle, PAS les IRQ) — diagnostic affiné** : sous
-  TOS 1.02 + Arkanoid, l'autoloader `STARTGEM.PRG` s'exécute correctement sous
-  Moira (il **hooke le vecteur LINE-F `$2C`** et dispatche les opcodes `$Fxxx` ;
-  le PC fauté empilé `A0=[A7+2]` est **identique** à Musashi). Le déclencheur
-  `$F2C8` finit même par matcher (sortie du dispatcher `$CD38` atteinte). MAIS le
-  `Pexec("A:ARKANOID.PRG")` qui suit **n'aboutit pas** : le FDC est sollicité
-  (~1500 accès `$FF860x`) mais `ARKANOID.PRG` (`$14000`) ne s'exécute jamais. La
-  divergence est donc dans le **chargement Pexec → FDC** sous le timing
-  cycle-exact de Moira (et non dans les IRQ ni le LINE-F). Prochaine étape : diff
-  de trace **NeoST ↔ Hatari (UAE, source de vérité)** sur la séquence Pexec/FDC
-  pour isoler l'écart (Musashi y sert seulement de proxy « qui marche »).
-
-## 6. Effort / risque
-
-| Phase | Effort | Risque | Gain |
-|------|--------|--------|------|
-| 0+1  | moyen  | faible (refactor iso-comportement, validé par trace) | fondation |
-| 2    | moyen  | moyen  | bordures, rasters, Timer B DE |
-| 3    | moyen+ | moyen  | **Arkanoid**, démos, timers complets |
-| 4    | moyen  | moyen  | protections, timing disque |
-| 5    | faible | faible | anti-dérive long terme |
-
-## 7. Premier pas recommandé
-
-**Phases 0+1** : `Scheduler` autonome + `runFrame` événementiel **iso-comportement**
-(mêmes IRQ aux mêmes instants), prouvé sans régression par `trace_diff`. Ensuite,
-resserrer Vidéo (2) puis MFP (3) en mesurant, à chaque étape, le recul de la
-divergence avec Hatari — jusqu'à voir Arkanoid franchir le `$26E7`.
+**Indicateur de progrès** : à chaque phase, le point de première divergence recule, et les
+points d'insertion d'IRQ coïncident avec Hatari (le diff cesse d'être « bruité » par le décalage
+des interruptions). Pour le harnais différentiel de cycles (Moira↔WinUAE) et les bancs dédiés
+(`make_cycle_bench.py`, `make_respulse_test.py`), voir
+[`MOIRA_WINUAE_CONVERGENCE.md`](MOIRA_WINUAE_CONVERGENCE.md). Catalogue des logiciels étalons par
+sous-système : [`TEST_SOFTWARE.md`](TEST_SOFTWARE.md).
