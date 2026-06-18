@@ -33,12 +33,21 @@ Cuddly, Super Hang-On). Décision utilisateur (2026-06-16) : **garder le sync-dr
   ABSOLUE par-ligne diffère (impulsion NeoST culmine cyc ~476-492 vs Hatari 500-508 → pas de
   « straddle » res=00 sur la ligne suivante → le retrait haut ne TIENT pas). Fermeture = tracking
   cycle-exact du handler PAR LIGNE (alternance 76/80 de Hatari), pas un offset constant (§7).
+- ⛔ **Clignotement bordure haute EL EN JEU — datation par-instruction RÉFUTÉE (2026-06-18, §7).** Mesuré :
+  (a) `liveFrameClock` au `write8` est DÉJÀ live → datation faithful Hatari-CE = `fcRaw+2` CONSTANT (pas
+  par-instruction) ; corrige le jeu (0/130) mais casse le loader (intro noire), write hard-borné **≥+14**.
+  (b) Le re-arm vit dans un **stabilisateur nop-slide auto-modifiant** (lit `$8209`) qui NE verrouille PAS
+  (jitter sd≈18 vs Hatari ±8) car le videoCounter read est daté **+10 vs Hatari** (source `Video_CalculateAddress`).
+  (c) Hacks write(+16)/read(+4) **jointement calibrés** + résidu phase **+24** (re-arm 468 vs Hatari 444).
+  ⇒ Fix = **refonte coordonnée** (write+2, read−6, alignement bus, phase), pas un levier unique. [[el-ingame-oracle-vcwait]]
 - **Outils** : harnais différentiel de cycles (`NEOST_TRACE_CYC` + `tools/trace_diff.py --periods`),
   bancs `make_cycle_bench.py` / `make_respulse_test.py` (oracle Hatari `--trace video_res`), diag
   `NEOST_RENDER_ALL` ; comparaison rendu via profil par-ligne PIL (bbox/per-row).
   `tools/beamsync_diff.sh <tos> <disk|-> <vbls> [machine]` = diff cycle-exact de la **phase
   CPU↔faisceau** (cycle/ligne où chaque IRQ/exception est prise + cycle où le CPU échantillonne
-  `$FF8205/07/09`) NeoST vs oracle Hatari.
+  `$FF8205/07/09`) NeoST vs oracle Hatari. Datation MMIO : `Cpu68k::cyclesIntoInstr()` (cycles écoulés
+  dans l'instr courante, ≈ position sous-cycle de l'accès) + `NEOST_WRITE_DIAG` (Shifter, trace fcRaw/into
+  de chaque écriture freq/res).
 
 ---
 
@@ -104,20 +113,32 @@ Si un edit Moira interne devient nécessaire → **vendoriser** (dé-submodulise
 > **convergence du timing INSTRUCTION cumulé**, pas la reconnaissance IPL ni le bloc IACK
 > (réduire `IACK_VIDEO` casse l'overscan = load-bearing). C'est le cœur restant. [[el-ingame-oracle-vcwait]]
 >
-> 🎯 **CORRECTION MAJEURE (2026-06-18, diff cycle-exact + oracle CE) — le `+20` N'EST PAS un timing
-> d'instruction : EL exécute du CODE DIFFÉRENT dans NeoST vs Hatari.** Outil ajouté : `NEOST_HTRACE`
-> (Cpu68k.cpp, gated, dump cycle-exact en jeu). Mesures : (a) **Moira ne mal-date AUCUNE instruction** —
-> `movem.l` 10-reg = **88** (store (An)) / **92** (store (d16,An) + load) = Hatari EXACTEMENT ; `dbra`/`bra`
-> PRIS = **12** = Hatari (le datasheet 68000 dit 10, mais WinUAE CE facture 12 : prefetch réaliste — donc
-> NOTRE 12 était déjà correct, cf. [[beamsync-busalign-falsified]]). (b) **MAIS le fullscreen d'EL tourne en
-> `move.b` vers `$820a`/`$8260` + padding `nop` à `$f6f6` chez Hatari**, et en **`movem.l` block-blast à
-> `$36dc`/`$37xx` chez NeoST** (`$f6f6` côté NeoST = DONNÉES, jamais exécuté ; NeoST n'écrit `$820a` QUE par
-> movem). Même binaire + même TOS (tos102fr) → **EL SÉLECTIONNE une routine fullscreen différente** selon une
-> détection au démarrage (timing/wakeup-state/mémoire) qui répond différemment dans NeoST. ⇒ AUCUN offset de
-> timing ne peut corriger (EL tourne une autre routine dont le beam-sync est calibré pour une autre condition).
-> **Le chantier n'est PLUS « converger le timing d'instruction » (déjà fait) mais « faire choisir à EL la
-> MÊME routine que sur la vraie machine »** : trouver le point de sélection (branche movem vs move.b) et la
-> détection qu'il teste, puis matcher Hatari. C'est une divergence de CONTRÔLE, pas de cycle.
+> 🎯 **ACQUIS (2026-06-18, diff cycle-exact + oracle CE).** Outil ajouté : `NEOST_HTRACE` (Cpu68k.cpp,
+> gated, dump cycle-exact en jeu). DEUX points SOLIDES + 1 piste :
+> **(a) Moira ne mal-date AUCUNE instruction** — `movem.l` 10-reg = **88** (store (An)) / **92** (store
+> (d16,An) + load) = Hatari EXACTEMENT ; `dbra`/`bra` PRIS = **12** = Hatari (datasheet dit 10, mais WinUAE
+> CE facture 12 : prefetch réaliste — NOTRE 12 était déjà correct, cf. [[beamsync-busalign-falsified]]).
+> **La piste « instruction mal-datée » est RÉFUTÉE.**
+> **(b) NeoST exécute le MÊME moteur fullscreen qu'Hatari** — prouvé par DUMP des octets en jeu : `$36ea` =
+> `4238 820a` (`clr.b $820a`, 60Hz-open) et `$36f6` = `11fc 0002 820a` (`move.b #2,$820a`, 50Hz-close),
+> IDENTIQUES à Hatari. ⚠ **Une étape intermédiaire concluait à tort « EL tourne du movem / code différent /
+> `$f6f6` » — FAUX** : `$f6f6` était un typo oracle pour `$36f6`, et le `movem` vu par HTRACE à `$36dc`
+> venait de l'**AUTO-MODIFICATION** du code (phase transitoire lue ; vrais octets = `nop`-ramp + `clr.b`).
+> Les `movem` d'EL écrivent la PALETTE ($8240/$8840), jamais `$820a`. **Pas de divergence de code/contrôle.**
+> **(c) RACINE CONFIRMÉE (capture Hatari pilotée directement) : NeoST utilise le MÊME mécanisme remove-top
+> qu'Hatari, CORRECT quand il marche, mais INSTABLE (rate ~15% des trames = le clignotement).** Hatari
+> retire la bordure haute d'EL à CHAQUE trame, STABLE : 1ʳᵉ ligne non-noire = 64/64/64 (3 screenshots),
+> `detect remove top` = 76 (≈1×/trame). [⚠ un oracle « remove-top=0 » était FAUX.] Capture 832×588 → ligne
+> 64 = ligne 32 en coords NeoST (×2) = les trames « ouvertes » de NeoST. Mécanisme du raté : EL pose 60Hz(L32,
+> arme glueStartHBL_=34)→50Hz(L33, annule→63)→60Hz(L33 cyc~464, ré-arme→34). Le ré-arme doit tomber L33
+> (frameCycle<512) ; datation GLUE NeoST = liveFrameClock+`kSyncWriteOffsetCyc(16)` ≈ **480** (vs Hatari
+> ~444) → marge à 512 = 32, et le JITTER trame-à-trame franchit 512 → ré-arme glisse L34 → trick perdu.
+> Hatari ~444 (marge 68) + jitter ±8 → jamais. **Tueur = jitter (×3) + moyenne tardive (480), PAS le
+> mécanisme.** Levier = datation de la lecture `$8209` du beam-sync poll (videoCounter) ; balayé : VC_OFF
+> best=+6→**2/40**, jamais 0 (chaotique). `+16` write-offset non réductible (loader EL casse). ⛔ **La piste
+> « datation d'accès bus PAR-INSTRUCTION » est RÉFUTÉE (2026-06-18, §7) : `liveFrameClock` est DÉJÀ live →
+> faithful Hatari-CE = `fcRaw+2` CONSTANT (pas par-instruction), corrige le jeu mais casse le loader (couplage
+> glue↔lecture). Le vrai tueur = le JITTER de phase d'entrée d'IRQ (sd≈18 vs ±8), pas la datation.**
 
 **En PRECISE_TIMING=true, les tables `CYCLES_*` de MoiraExec_cpp.h sont MORTES** (le timing vient
 des `SYNC()` dans les accès/prefetch). Éditer ces tables ne fait RIEN. La convergence se fait par
@@ -261,13 +282,44 @@ Avec la fondation bloc+PT, plus de deadlock ; EL boote/intro propre. Reste, par 
    > `IACK=0`→40/40 fails (le bloc E-clock@IACK est nécessaire mais insuffisant). `SYNC_OFF<0` casse le
    > LOADER (EL reste à l'intro, dominante bleue) → le `+16` est load-bearing → pas réductible globalement.
    >
-   > **VRAIE RACINE = datation d'accès bus FIXE (`+16`/`+4`) vs Hatari INSTRUCTION-DÉPENDANTE.** Hatari mode
-   > CE (`Cycles_GetInternalCycleOn{Read,Write}Access`, cycles.c) date à `currcycle+4` = position réelle de
-   > l'accès DANS l'instruction. Le `+16` NeoST convient à l'instruction du loader mais sur-corrige de +12
-   > celle du jeu ($36ee/$36f6) ; idem le `+4` lecture pour la boucle $3700. **FIX = porter la datation
-   > d'accès par-instruction de Moira (sous-cycle) → supprimer les offsets fixes**, + réduire le jitter
-   > d'entrée/handler (convergence). C'est le grand chantier restant (≠ géométrie par-ligne, écartée).
-   > [[el-ingame-oracle-vcwait]]
+   > ⛔ **DATATION PAR-INSTRUCTION = RÉFUTÉE PAR MESURE (2026-06-18, session datation).** L'hypothèse « le
+   > `+16` fixe sur-date différemment selon l'instruction → fix = datation sous-cycle par-instruction » est
+   > **FAUSSE**. Outils ajoutés : `Cpu68k::cyclesIntoInstr()` + `NEOST_WRITE_DIAG` (Shifter.cpp). Faits mesurés :
+   > 1. **`liveFrameClock` au `write8` est DÉJÀ LIVE** : `cyclesIntoInstr` (cycles écoulés DANS l'instr au
+   >    callback) = **into=2..16 selon l'instruction** (clr.b $820a into=14, move.b #imm into=10, move.b
+   >    dn,(an) into=2), PAS 0. Donc fcRaw capture DÉJÀ la position sous-instruction `P`. Le calcul faithful
+   >    Hatari-CE (`currcycle+4` = FIN d'accès) = **fcRaw + 2, CONSTANT pour TOUTES les instructions** (la
+   >    position variable est déjà dans fcRaw). ⚠ `clr.b (xxx).w` = **16 cyc** (pas 12 comme supposé) → into=14
+   >    → fcRaw+2 = instr_start+16 = fin = Hatari clr-family ; move.b #imm into=10 → fcRaw+2 = instr_start+12 =
+   >    length−4 = Hatari move-family. **Le +2 reproduit Hatari pour les deux familles — il n'y a PAS d'offset
+   >    par-instruction à porter.**
+   > 2. **Le faithful (+2) corrige le JEU mais casse le LOADER.** Re-arm clr.b L33 : fcRaw 432-508 (mesuré,
+   >    n=130) → +2 = max 510 **< 512** ⇒ **0/130 fail**. MAIS net+2 (= `SYNC_OFF=-14`) rend l'**intro NOIRE**
+   >    (capture vérifiée). Le `+16` est load-bearing via le couplage **écriture→glue VDE→lecture videoCounter
+   >    →sync loader** (PAS la datation). Borne MESURÉE : offset écriture **≥ +14** (intro noire à +12 ;
+   >    +14 → intro OK + jeu **36/40** ; +16 → 34/40 ; +10/+12 → intro cassée).
+   > 3. **Le re-arm vit dans un STABILISATEUR NOP-SLIDE AUTO-MODIFIANT, pas un handler HBL.** Dump runtime
+   >    (2 dumps même trame 0x36c0/0x36e0 DIFFÈRENT de 2 octets = auto-modif confirmée) : `move.w #$60,d2` →
+   >    boucle `move.b (a0),d0 / cmp.b #$40 / bgt / dbf d6` (poll `$8209` via a0, ≤8×) → `sub.w d0,d2 / lsl /
+   >    écriture dans un nop-slide` = stabilisateur ST classique qui LIT le faisceau et corrige sa propre
+   >    position. **Le jitter (sd≈18, spread 76, 432-508, série QUASI-ALÉATOIRE) = le stabilisateur NE
+   >    VERROUILLE PAS** (Hatari ±8) — il est NOURRI par un videoCounter inexact.
+   > 4. **DISCREPANCE READ source-groundée (+10) :** Hatari `Video_CalculateAddress` (video.c:1396) =
+   >    `Video_GetCyclesSinceVbl_OnReadAccess() − 8` = `[since_vbl + (currcycle+4)] − 8`. En repère Moira
+   >    (read8 tire à `access_start+2` après le `SYNC(2)` de tête) ⇒ Hatari date l'adresse à **`beamClock − 6`**.
+   >    NeoST `videoCounter()` = **`beamClock + 4`** (kVideoCounterReadOffsetCyc) → **+10 cyc trop tard**. Mais
+   >    le ramener vers le faithful (−6) EMPIRE le jeu (VC_OFF=−4 → 0/40) : le `+4` est jointement calibré avec
+   >    le `+16` write.
+   > 5. **Les hacks write/read sont JOINTEMENT CALIBRÉS, pas séparables.** Le write est hard-borné **≥+14
+   >    INDÉPENDAMMENT du read** (testé write+2 × read{−6,−2,+2} → intro NOIRE dans les 3 → le loader casse par
+   >    le write seul, le read ne le sauve pas). Read `VC_OFF` CHAOTIQUE (+2→38/40, +4→4/40, +6→0/40).
+   >    `RAM_SLOT_PHASE` sans effet (mean→475) ; `IPLFETCH` sd→107 PIRE ; `IACK=0` casse EL. `RAM_SLOT`
+   >    pèse **+37 sur la MOYENNE** (468 vs 431 sans) mais **+4 sur le jitter** (sd 18.5 vs 14.6).
+   > ⇒ **FIX EL = COORDINATED REFACTOR** : converger ENSEMBLE write dating (+2), read dating (−6), alignement
+   > bus RAM_SLOT (mesurer son écart vs WinUAE), ET le résidu de phase ~+24 (re-arm NeoST 468 vs Hatari 444).
+   > Chaque pièce SEULE casse (hacks co-calibrés + phase résiduelle) → c'est le chicken-and-egg, pas un levier
+   > unique. La datation d'écriture par-instruction (l'hypothèse de départ) est **réfutée**. (`+14` au lieu de
+   > `+16` = +2 trames marginal mais risque l'étalon `overscan_top` ; non shippé.) [[el-ingame-oracle-vcwait]]
    > 🎯 **RECETTE IN-GAME FIABLE (2026-06-18, remplace l'ancienne périmée) :**
    > ```sh
    > ./build/neost-headless roms/tos102fr.img --disk "disks/st/Enchanted Land (1990)(Thalion).st" \
@@ -328,8 +380,9 @@ Avec la fondation bloc+PT, plus de deadlock ; EL boote/intro propre. Reste, par 
    (inatteignables headless → navigation requise).
 3. **E-clock @ IACK** (poll-beat période-3 vs Hatari période-5) — RAFFINEMENT de phase ; n'a PAS
    amélioré le screenshot ni les jeux → faible priorité. Si repris : éditer `execInterrupt<C68000>`.
-4. **RAM_SLOT default-on ?** — faithfulness pure ; re-baseliner les réf-étalons SELF à l'oracle (zone
-   active déjà 0 px). Puis retirer les hacks redondants (`NEOST_VC_WAIT`, `kSyncWriteOffsetCyc`).
+4. **Refonte beam-sync coordonnée** (retirer les hacks de datation co-calibrés + converger à l'oracle) :
+   le plan ordonné, les cibles fidèles source-groundées et les impasses réfutées sont en **§8**. (RAM_SLOT est
+   déjà défaut-ON depuis 2026-06-17.)
 
 ### (archive) Sous-problèmes d'entrée d'IRQ — désormais RAFFINEMENTS, plus des blocages
 
@@ -348,7 +401,54 @@ Avec la fondation bloc+PT, plus de deadlock ; EL boote/intro propre. Reste, par 
    bloc (§6). Gardé ici comme repère : le deadlock EL ≠ la corruption en jeu (V3, item 1).
 
 Une fois le V3 fait : **retirer les hacks** (`NEOST_VC_WAIT=2`, `kSyncWriteOffsetCyc=+16`) devenus
-redondants et **recalibrer à l'oracle** (zone active + EL/LX/Cuddly/SHO + poll-beat).
+redondants et **recalibrer à l'oracle**. ⇒ **Plan d'attaque ordonné en §8** (cette session a prouvé que
+ces hacks sont co-calibrés autour d'un résidu de phase — la refonte doit être COORDONNÉE, pas pièce par pièce).
 
 Cf. [[beamsync-busalign-falsified]], [[eclock-convergence-validated]] (CORRIGÉE ici),
 [[sync-driven-scheduler-falsified]], [[v2-resswitch-validated]].
+
+---
+
+## 8. 🎯 PLAN D'ATTAQUE COORDONNÉ (refonte beam-sync) — pour la prochaine passe
+
+**Thèse unifiante (établie 2026-06-18).** Le clignotement EL, l'overscan vertical EL, et le jitter de titre
+LX sont le MÊME bug : la phase CPU↔faisceau de NeoST diffère de WinUAE d'un petit résidu (**~+24 cyc sur le
+re-arm EL : 468 vs Hatari 444**). Les « hacks » de datation (`kSyncWriteOffsetCyc=+16`, read offset `+4`,
+`NEOST_VC_WAIT`, le couple `RAM_SLOT`+`IACK`) sont des rustines **localement calibrées AUTOUR de ce résidu**.
+Preuve qu'ils sont co-calibrés et inséparables : bouger UNE pièce vers sa valeur fidèle casse autre chose
+(write+2 → loader noir ; read−6 → jeu pire ; RAM_SLOT=0 → overscan perdu). ⇒ **la convergence doit être
+COORDONNÉE** : tout fidéliser ENSEMBLE, puis retirer les rustines, puis recalibrer à l'oracle.
+
+**Cibles fidèles, source-groundées (À PORTER ENSEMBLE) :**
+| # | Quantité | NeoST actuel | Fidèle Hatari (source) | Écart |
+|---|---|---|---|---|
+| 1 | **Datation read videoCounter** | `beamClock + 4` (Shifter `kVideoCounterReadOffsetCyc`) | `beamClock − 6` = `Video_CalculateAddress` (video.c:1396) = `[sinceVbl + currcycle+4] − 8`, repère Moira read8 = `access_start+2` | **+10** |
+| 2 | **Datation write freq/res** | `+16` (Shifter `kSyncWriteOffsetCyc`) | `+2` = `fcRaw+2` (fcRaw LIVE capte déjà la pos sous-instr ; `Cycles_GetInternalCycleOnWriteAccess` CE = `currcycle+4`) | **+14** (⚠ borné ≥+14 par le loader tant que 1+3 pas faits) |
+| 3 | **Alignement bus RAM_SLOT** | `chipWait8` appelé APRÈS le `SYNC(2)` de tête (align au MILIEU de l'accès) ; +37 sur la moyenne du re-arm | `wait_cpu_cycle_read/write` (custom.c) align AVANT les 4 cyc d'accès | à quantifier (suspect : sur-compte le résidu +24) |
+| 4 | **Résidu de phase** | re-arm @ 468 | @ 444 | **+24** — à ATTRIBUER en premier (cf. étape 1) |
+
+**Ordre d'attaque (chaque étape débloque la suivante) :**
+1. **ATTRIBUER le +24 d'abord** (rien ne verrouille le stabilisateur tant que la moyenne est +24 trop tard).
+   Diff cycle-exact NeoST↔Hatari sur le chemin jusqu'au re-arm. Oracle : soit l'**oracle EL in-game**
+   (cmd-fifo + SPACE scancode 57, temps réel ~95 s, `--trace cpu_disasm,cpu_video_cycles,video_sync`), soit
+   l'**oracle de phase contrôlé `tools/make_poll_test.py`** (boot sans input, handler HBL lit `$8209`→palette ;
+   diffable au pixel, isole la datation read pure). Question : le +24 vient-il de RAM_SLOT (cible #3 : comparer
+   le coût d'alignement PAR ACCÈS vs `wait_cpu_cycle_*` en mode CE), du bloc IACK, ou d'un cumul ?
+2. **Porter la datation read fidèle (#1, `beamClock−6`)** — sensé SEULEMENT après #4 (le `+4` est calibré sur
+   le résidu). Valider sur `make_poll_test` (motif de barres = Hatari) + spec512 (flicker) + EL loader.
+3. **Porter la datation write fidèle (#2, `+2`)** + comprendre le couplage loader : le loader exige `+16`
+   parce que le `write→glue VDE→read $8209→sync loader` est décalé ; une fois #1+#4 fidèles, le loader
+   devrait tourner à `+2`. Test décisif : intro NON noire avec write+2.
+4. **Retirer les rustines** (`NEOST_VC_WAIT`, `kSyncWriteOffsetCyc`, l'offset read) et **recalibrer à
+   l'oracle** : garde-fou `run_etalons` byte-identique + EL (0/40, recette ci-dessus §7) + LX titre + Cuddly + SHO.
+
+**Métrique de feedback (le tableau de bord de la refonte) :**
+- Flicker EL : `NEOST_GLUE_STAT=1 … --keys-at 3500 " " --frames 4080 | grep -oE "start=[0-9]+ end=" | tail -40` → viser **40× start=34, 0× start=63** (baseline 34/6).
+- Jitter du re-arm : `NEOST_WRITE_DIAG=1 … | grep "val=00" | grep "pc=0036ee" | grep "line=33"` → cyc actuel
+  432-508 (sd≈18) ; cible Hatari ±8 (≈440-448). C'est le verrou : tant que sd>10, le stabilisateur rate ~10 %.
+
+**⛔ Impasses RÉFUTÉES — NE PAS refaire** (toutes mesurées) : datation write PAR-INSTRUCTION (fidèle = `+2`
+CONSTANT, pas par-instruction) ; tuning d'offset write OU read SEUL (chaotique/borné/casse loader-étalons) ;
+`RAM_SLOT_PHASE` (sans effet sur le +37) ; `NEOST_IPLFETCH` (jitter sd→107, PIRE) ; `IACK=0` (casse EL) ;
+géométrie par-ligne / `NEOST_V2` (pire) ; ajouter une branche Glue (`updateGlueState` = port fidèle, selftest
+19/19). [[el-ingame-oracle-vcwait]] [[beamsync-busalign-falsified]] [[v2-resswitch-validated]]

@@ -29,8 +29,8 @@ Rapports terrain. TOS 1.02fr sauf mention contraire. Chemins sous `disks/st/` (`
 |-----|----------|----------------|
 | **Arkanoid (1987)** (Imagine) | Atteint l'écran-titre mais ne franchit pas la partie (boucle `$31736`/`$26E7`). | Gel FDC `$31736` **résolu** (modèle rotationnel) ; reste une cause distincte (protection ? 2ᵉ chargement ? IRQ ?). 🎯 étalon FDC/protection. |
 | **Captain Blood (1988)** (ERE) | Arrive au jeu puis plante sur une erreur clavier et redémarre. | ACIA/IKBD ou timing. |
-| **Enchanted Land (1990)** (Thalion) | Boote, logo + pluie **propres**, jouable ; en jeu le scrolling **saute** (le héros saute d'un bord à l'autre). Son Thalion absent (bouton joystick). | **Beam-sync vertical par-ligne** → `docs/MOIRA_WINUAE_CONVERGENCE.md` §7. |
-| **Lethal Xcess** (`.STX`, TOS 1.62) | **Démarre**, titre **propre** (RAM_SLOT+IACK réparent l'overscan). Reste un jitter de titre subtil (~1,5 %). | Beam-sync (résidu) → `docs/MOIRA_WINUAE_CONVERGENCE.md`. |
+| **Enchanted Land (1990)** (Thalion) | Boote, logo + pluie **propres**, jouable ; en jeu **bordure haute qui clignote** (~6/40 trames) + scrolling qui saute. Son Thalion absent (bouton joystick). | **Refonte beam-sync coordonnée** (résidu de phase +24, hacks co-calibrés) → `docs/MOIRA_WINUAE_CONVERGENCE.md` **§8** (plan). ⛔ datation par-instruction réfutée (§7). |
+| **Lethal Xcess** (`.STX`, TOS 1.62) | **Démarre**, titre **propre** (RAM_SLOT+IACK réparent l'overscan). Reste un jitter de titre subtil (~1,5 %). | Même cause qu'EL (résidu de phase) → `docs/MOIRA_WINUAE_CONVERGENCE.md` **§8**. |
 | **The Cuddly Demos** (TCB) | 1ʳᵉ page OK ; menu robot : scrolling bugué qui saute + scroller de bordure **basse** non rendu. | Beam-sync par-ligne + rendu live retrait bas. ⚠ menu inatteignable headless. |
 | **Shadow Warriors** (2Hot2Handle) | Après SPACE : titre + musique OK ; le bouton joystick ne lance pas le jeu. (Castle Warrior, lui, fonctionne.) | À diff'er Hatari. |
 | **Rick Dangerous II (1989)** (Core) | SPACE, `n`, `n` : plante avec 4 bombes. | À diff'er Hatari. |
@@ -95,6 +95,15 @@ densité HD/ED STX (NeoST plus cohérent) ; RTC en temps émulé (déterminisme 
 - ◑ **Overscan vertical EN JEU** (EL) = **NON résolu** : la dérive moyenne correspond, mais la
   **phase absolue par-ligne** diffère → le retrait haut ne tient pas. Fermeture = tracking
   cycle-exact du handler par ligne (alternance 76/80 de Hatari), pas un offset constant.
+- ☐ **[GROS] Refonte beam-sync COORDONNÉE — clignotement EL / overscan vertical / jitter LX = MÊME bug.**
+  Plan d'attaque ordonné + cibles fidèles source-groundées + impasses réfutées → **`docs/MOIRA_WINUAE_CONVERGENCE.md` §8**.
+  En bref : NeoST a un résidu de phase CPU↔faisceau (**re-arm EL @468 vs Hatari @444 = +24**) ; les hacks de
+  datation (`kSyncWriteOffsetCyc=+16`, read offset `+4`, `NEOST_VC_WAIT`) sont **co-calibrés autour de ce résidu**
+  → bouger une pièce seule casse (write+2 → loader noir ; read−6 → jeu pire). ⇒ converger ENSEMBLE
+  (read `beamClock−6`, write `+2`, alignement bus RAM_SLOT, résidu) puis retirer les hacks. **Étape 1 = attribuer
+  le +24** (oracle in-game cmd-fifo+SPACE OU `tools/make_poll_test.py`). ⛔ datation write par-instruction RÉFUTÉE
+  (fidèle = `+2` constant) ; offsets seuls, `RAM_SLOT_PHASE`, `IPLFETCH`, `V2` = impasses mesurées. Diag :
+  `Cpu68k::cyclesIntoInstr()` + `NEOST_WRITE_DIAG` ; métrique flicker `NEOST_GLUE_STAT` (start=34 OK / 63 raté).
 - Acquis (cf. CYCLE_ACCURACY §3) : phases 0-6, latch palette Spec512, alignement bus shifter +
   wait states PSG/MFP/ACIA, machine Glue live, VDE_On live, Spec512 pixel-perfect, bordures H/B/G/D.
 

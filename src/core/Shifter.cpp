@@ -601,6 +601,25 @@ void Shifter::recordSyncWrite(bool isRes, uint8_t val) {
             isRes ? "res " : "freq", val, static_cast<long long>(fc / cpl),
             static_cast<long long>(fc % cpl), bus_.cpu ? bus_.cpu->pc() : 0);
     }
+    // DIAG (NEOST_WRITE_DIAG) : tranche le modèle de datation. fcRaw = liveFrameClock
+    // (avant offset) ; into = cycles BUS écoulés DANS l'instruction au write8 (≈ P+2 si
+    // liveFrameClock est LIVE, ≈0 s'il est épinglé au début d'instr). Permet de comparer
+    // au modèle Hatari CE (fin d'accès = fcRaw + 2).
+    // CONCLU (2026-06-18) : into=2..16 selon l'instr → liveFrameClock est LIVE, capte DÉJÀ
+    // la position sous-instr → la datation faithful Hatari-CE = fcRaw+2 CONSTANT (pas
+    // par-instruction). Cf. docs/MOIRA_WINUAE_CONVERGENCE.md §7 : datation par-instruction
+    // RÉFUTÉE. Le résidu EL = un stabilisateur nop-slide qui ne verrouille pas (videoCounter
+    // read daté +10 vs Hatari) + hacks write(+16 ≥+14 loader)/read(+4) co-calibrés → refonte
+    // coordonnée, pas la datation d'écriture seule.
+    if (std::getenv("NEOST_WRITE_DIAG") && bus_.cpu) {
+        const int cpl = geometry().cyclesPerLine;
+        const int64_t fcRaw = liveFrameClock_();
+        const int64_t into = bus_.cpu->cyclesIntoInstr();
+        std::fprintf(stderr, "[WDIAG] %s val=%02x line=%lld cyc=%lld into=%lld pc=%06x\n",
+            isRes ? "res " : "freq", val, static_cast<long long>(fcRaw / cpl),
+            static_cast<long long>(fcRaw % cpl), static_cast<long long>(into),
+            bus_.cpu->pc());
+    }
     syncWrites_.push_back({ static_cast<int32_t>(fc), val, isRes });
     updateLiveStartHBL(static_cast<int32_t>(fc), isRes, val);   // VDE_On live (retrait haut)
     // Machine Glue LIVE : consomme l'écriture immédiatement (fenêtre DE de la ligne
