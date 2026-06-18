@@ -74,7 +74,7 @@ python3 tools/trace_diff.py /tmp/neost.txt /tmp/hatari.txt --periods 173C 1742
 | # | Mécanisme | Moira | WinUAE/Hatari | État |
 |---|---|---|---|---|
 | **A** | **Alignement créneau bus 4 cyc sur la RAM (CHIP16)** : avant un accès RAM, WinUAE attend `(4 - clock&3)` cyc (`wait_cpu_cycle_read`, custom.c:148-153). Moira NE l'a PAS. ROM/cart/**IO** = FAST (pas d'alignement, mesuré STF, memory.c:1798). | absent | custom.c:148-153 ; memory.c:1548/1798 | ✅ **PORTÉ** (`NEOST_RAM_SLOT`) |
-| **B** | **Délai de reconnaissance IPL** : Moira reconnaît l'IPL immédiatement (POLL_IPL≡`reg.ipl=ipl`, MoiraMacros.h:64). WinUAE diffère d'1 instr si le pin a changé <4 (ou prend l'ancien si <2) cyc avant l'échantillon (`ipl_fetch_next`, newcpu.c:4982-4997). | MoiraMacros.h:64 ; Moira.cpp:419 | newcpu.c:4982-4997, 5672-5673 | ⏳ prototype `NEOST_IPLDELAY` |
+| **B** | **Délai de reconnaissance IPL** : Moira reconnaît l'IPL immédiatement (POLL_IPL≡`reg.ipl=ipl`, MoiraMacros.h:64). WinUAE diffère d'1 instr si le pin a changé <4 (ou prend l'ancien si <2) cyc avant l'échantillon (`ipl_fetch_next`, newcpu.c:4982-4997). | MoiraMacros.h:64 ; Moira.cpp:419 | newcpu.c:4982-4997, 5672-5673 | ✅ **PORTÉ FIDÈLE `NEOST_IPLFETCH`** (cf. note ↓) |
 | **C** | **E-clock + bloc occupé à l'IACK** : WinUAE applique l'attente E-clock (0..8, motif [0 8 6 4 2]) PUIS `CPU_IACK_CYCLES_VIDEO_CE(10)+idle(4)` au cycle d'IACK (`iack_cycle`, newcpu.c:2958-3019). Moira n'a ni l'un ni l'autre ; NeoST plaçait l'E-clock dans `willInterrupt` (≈14 cyc trop tôt). | MoiraExceptions_cpp.h:508/533-543 | newcpu.c:2958-3019 ; m68000.c:810 | ⏳ `NEOST_IACK` (E-clock @ IACK + bloc) |
 
 **Fait structurel clé (persistance du fork).** Le superprojet **COPIE** `extern/moira/Moira/*` dans
@@ -84,6 +84,40 @@ python3 tools/trace_diff.py /tmp/neost.txt /tmp/hatari.txt --periods 173C 1742
 `extern/moira` directement est CLOBBERÉ au `submodule update`. **Surface de fork = la sous-classe
 `NeostMoira` dans `Cpu68k.cpp`** (overrides `read*/write*/sync/willInterrupt/readIrqUserVector`).
 Si un edit Moira interne devient nécessaire → **vendoriser** (dé-submoduliser).
+
+> 🔧 **`NEOST_IPLFETCH` — port FIDÈLE de `ipl_fetch_next` (2026-06-18, mécanisme B).** Réalisé
+> DANS Moira (≠ l'ancien `NEOST_IPLDELAY` qui retardait la broche de l'extérieur, crude) :
+> `setIPL` historise la broche (≙ `update_ipl` : `iplPrev`/`iplChangeClock`/`...Prev`), et
+> `POLL_IPL`→`pollIpl()` applique la règle 3-cas (`Moira.cpp`) : pin stable ≥4 cyc → nouvelle
+> valeur ; changée 2-4 cyc avant → **ancienne** valeur ; <2 cyc → différée. Seuils posés par
+> `setIplDelay(4×mul, 2×mul)` (`Cpu68k.cpp` constructeur + `setMegaSteSpeed`). **DÉFAUT OFF**
+> (`iplDelay4=0` → `pollIpl` ≡ `reg.ipl=ipl`, **étalons 19/0 byte-identiques vérifiés**).
+> ⚠ **Edits dans le sous-module** (`Moira.h`/`Moira.cpp`/`MoiraMacros.h`) → à committer DANS
+> le sous-module ou vendoriser, sinon clobbérés au `submodule update`.
+>
+> 🔎 **Résultat EL (diagnostique) : `NEOST_IPLFETCH=1` EMPIRE le clignotement (6→20/40).** Le
+> délai IPL RETARDE la reconnaissance → handler/écriture EL encore plus TARD. Or EL est DÉJÀ
+> +20 cyc tard vs Hatari (écriture brute ~464 vs ~444). EL a besoin de l'écriture plus TÔT, pas
+> plus tard → **le délai IPL est fidèle mais hors-sujet pour EL** (il rendrait WinUAE plus tôt
+> sans-délai ; NeoST sans-délai est déjà trop tard). **Preuve que le +20 d'EL = latence de
+> BASE** (Moira exécute le handler HBL d'EL ~4,5 % plus lentement que WinUAE sur ~448 cyc), donc
+> **convergence du timing INSTRUCTION cumulé**, pas la reconnaissance IPL ni le bloc IACK
+> (réduire `IACK_VIDEO` casse l'overscan = load-bearing). C'est le cœur restant. [[el-ingame-oracle-vcwait]]
+>
+> 🎯 **CORRECTION MAJEURE (2026-06-18, diff cycle-exact + oracle CE) — le `+20` N'EST PAS un timing
+> d'instruction : EL exécute du CODE DIFFÉRENT dans NeoST vs Hatari.** Outil ajouté : `NEOST_HTRACE`
+> (Cpu68k.cpp, gated, dump cycle-exact en jeu). Mesures : (a) **Moira ne mal-date AUCUNE instruction** —
+> `movem.l` 10-reg = **88** (store (An)) / **92** (store (d16,An) + load) = Hatari EXACTEMENT ; `dbra`/`bra`
+> PRIS = **12** = Hatari (le datasheet 68000 dit 10, mais WinUAE CE facture 12 : prefetch réaliste — donc
+> NOTRE 12 était déjà correct, cf. [[beamsync-busalign-falsified]]). (b) **MAIS le fullscreen d'EL tourne en
+> `move.b` vers `$820a`/`$8260` + padding `nop` à `$f6f6` chez Hatari**, et en **`movem.l` block-blast à
+> `$36dc`/`$37xx` chez NeoST** (`$f6f6` côté NeoST = DONNÉES, jamais exécuté ; NeoST n'écrit `$820a` QUE par
+> movem). Même binaire + même TOS (tos102fr) → **EL SÉLECTIONNE une routine fullscreen différente** selon une
+> détection au démarrage (timing/wakeup-state/mémoire) qui répond différemment dans NeoST. ⇒ AUCUN offset de
+> timing ne peut corriger (EL tourne une autre routine dont le beam-sync est calibré pour une autre condition).
+> **Le chantier n'est PLUS « converger le timing d'instruction » (déjà fait) mais « faire choisir à EL la
+> MÊME routine que sur la vraie machine »** : trouver le point de sélection (branche movem vs move.b) et la
+> détection qu'il teste, puis matcher Hatari. C'est une divergence de CONTRÔLE, pas de cycle.
 
 **En PRECISE_TIMING=true, les tables `CYCLES_*` de MoiraExec_cpp.h sont MORTES** (le timing vient
 des `SYNC()` dans les accès/prefetch). Éditer ces tables ne fait RIEN. La convergence se fait par
@@ -205,21 +239,35 @@ Avec la fondation bloc+PT, plus de deadlock ; EL boote/intro propre. Reste, par 
    > (`NEOST_SYNC_OFF<0`) **CASSE la progression d'EL** (reste à l'intro : l'offset alimente la glue live
    > que les reads `$FF8209` consultent → load-bearing, **pas** redondant comme VC_WAIT).
    >
-   > **RÉSIDU = 2 symptômes confirmés (utilisateur + mesure, 2026-06-18), même racine = géométrie/datation
-   > PAR-LIGNE** (cf. cartographie §«Porter Video_AddInterruptHBL» en mémoire de session) :
-   > 1. **Ligne du haut qui clignote** : le trick d'ouverture de bordure HAUTE (res/freq lignes ~35-40)
-   >    s'arme/se désarme trame-à-trame (variance rangées actives 29-35 oscille 91→52→0→0→26) = le
-   >    *set-then-revert au seuil* `RemoveTopBorder_Pos` (la paire res/freq ne « tient » qu'à l'alignement
-   >    exact, cf. tâches #5-#10).
-   > 2. **Scroll qui saute** : sync-scroll horizontal (ST sans hscroll matériel) erratique — avec joystick
-   >    droite, décalage h = -5/+4/-16/-6 px au lieu d'un défilement régulier → « tout saute à des
-   >    positions anormales » (perso non centré).
+   > **RÉSIDU = 2 symptômes (utilisateur), ROOT-CAUSÉ 2026-06-18 contre l'oracle Hatari EL en jeu — ce
+   > N'EST PAS la géométrie par-ligne, c'est un JITTER de phase CPU↔faisceau du beam-sync d'EL :**
+   > 1. **Ligne du haut qui clignote** : le trick top-border (toggle `$FF820A` 60/50 Hz, PAS la res) rate
+   >    **~6/40 trames** (`glueStartHBL_` bascule 34↔63). MÉCANISME : EL pose 60 Hz(ligne 32)→50 Hz(L33,
+   >    *annule*)→60 Hz(L33 cyc~464, *ré-arme*). Le ré-arme DOIT tomber sur L33 (cyc < 512). Quand la phase
+   >    dérive tard, il glisse sur L34 cyc~8 → condition `line==Top_Pos-1` fausse → trick perdu.
+   > 2. **Scroll qui saute** : la boucle de sync-scroll d'EL (`pc=$3700`, poll `$FF8209` tous les ~36 cyc,
+   >    `addr`+18 o/poll) sort à des points variables → 32-52 % px changent/trame (joueur immobile).
    >
-   > **FIX = refonte géométrie par-ligne** (HBL reprogrammé live `Video_AddInterruptHBL` video.c:4840 +
-   > longueur de ligne variable `nCyclesPerLine_new`/`HBL_Pos` video.c:2849, cartographie figée en
-   > session). **DÉSORMAIS validable** contre l'oracle EL in-game (débloqué SPACE/cmd-fifo) : clignotement
-   > (var rangées top stable) + scroll (décalage h régulier). Risqué (HBL ancre Timer-B + bordures) → à
-   > faire OPT-IN puis basculer si convergent. C'est le grand chantier restant après le fix VC_WAIT.
+   > **ORACLE HATARI (cmd-fifo+SPACE, 601 trames de jeu) : top-border retiré 601/601 = 100 % STABLE.** Donc
+   > le flicker NeoST est un BUG NeoST. Cibles mesurées (trace `video_sync`) : l'écriture 60 Hz tombe cyc
+   > **~444 (440/444/448), jitter ±8** chez Hatari. NeoST : exécution brute cyc **~464 (+20), jitter ±26**
+   > (436-488, queue à ~504) ; PUIS `kSyncWriteOffsetCyc=+16` → la GLUE voit **480** (vs 444 Hatari, +36).
+   > Marge à la frontière (512) = 32 < jitter → franchit ~15 %. **Avec le jitter de Hatari (±8) même à 480 :
+   > 488 < 512 → stable.** Donc c'est le JITTER (×3) le tueur, pas la moyenne.
+   >
+   > **CE N'EST PAS** : la géométrie par-ligne (banc : dérive fixe-vs-variable EL = -8..-24 cyc seulement,
+   > négligeable ; `NEOST_V2` EMPIRE → 9 fails) ; ni un offset statique (balayés VC_OFF/LEAD/ECLOCK_PHASE/
+   > SYNC_OFF/IACK + 2D : **MIN = 2 fails, jamais 0**, comportement chaotique = instabilité de feedback).
+   > `IACK=0`→40/40 fails (le bloc E-clock@IACK est nécessaire mais insuffisant). `SYNC_OFF<0` casse le
+   > LOADER (EL reste à l'intro, dominante bleue) → le `+16` est load-bearing → pas réductible globalement.
+   >
+   > **VRAIE RACINE = datation d'accès bus FIXE (`+16`/`+4`) vs Hatari INSTRUCTION-DÉPENDANTE.** Hatari mode
+   > CE (`Cycles_GetInternalCycleOn{Read,Write}Access`, cycles.c) date à `currcycle+4` = position réelle de
+   > l'accès DANS l'instruction. Le `+16` NeoST convient à l'instruction du loader mais sur-corrige de +12
+   > celle du jeu ($36ee/$36f6) ; idem le `+4` lecture pour la boucle $3700. **FIX = porter la datation
+   > d'accès par-instruction de Moira (sous-cycle) → supprimer les offsets fixes**, + réduire le jitter
+   > d'entrée/handler (convergence). C'est le grand chantier restant (≠ géométrie par-ligne, écartée).
+   > [[el-ingame-oracle-vcwait]]
    > 🎯 **RECETTE IN-GAME FIABLE (2026-06-18, remplace l'ancienne périmée) :**
    > ```sh
    > ./build/neost-headless roms/tos102fr.img --disk "disks/st/Enchanted Land (1990)(Thalion).st" \

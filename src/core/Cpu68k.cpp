@@ -89,6 +89,23 @@ namespace {
     // (poll-oracle {2,4,6}→{0,2,4,6} = Hatari) et vise le deadlock EL ($EE = attente IRQ mal datée).
     bool    g_iplDelay    = []{ const char* s = std::getenv("NEOST_IPLDELAY"); return s && std::atoi(s) != 0; }();
     int     g_iplDelayCyc = []{ const char* s = std::getenv("NEOST_IPLDELAY_CYC"); return s ? std::atoi(s) : 4; }();
+    // DEEP (opt-in NEOST_IPLFETCH) : port FIDÈLE de WinUAE ipl_fetch_next (≠ g_iplDelay crude
+    // ci-dessus). La broche change immédiatement (setIPL = update_ipl) mais l'ÉCHANTILLON
+    // (POLL_IPL = pollIpl) garde l'ANCIENNE valeur si la broche a changé < 4 cyc avant
+    // (valeur précédente si 2-4 cyc, différée si <2). Implémenté DANS Moira (pollIpl) →
+    // s'applique au point d'échantillon exact de chaque instruction, pas en retardant la
+    // broche de l'extérieur. Magnitude (4/2) ajustable. Ne PAS combiner avec g_iplDelay.
+    bool    g_iplFetch    = []{ const char* s = std::getenv("NEOST_IPLFETCH"); return s && std::atoi(s) != 0; }();
+    int     g_iplFetch4   = []{ const char* s = std::getenv("NEOST_IPLFETCH4"); return s ? std::atoi(s) : 4; }();
+    int     g_iplFetch2   = []{ const char* s = std::getenv("NEOST_IPLFETCH2"); return s ? std::atoi(s) : 2; }();
+    // DIAG handler-trace (cf. site d'appel Cpu68k::run) : dump cycle-exact d'une itération
+    // du handler HBL d'EL en jeu, pour le diff Moira↔WinUAE.
+    bool     g_htraceOn = []{ const char* s = std::getenv("NEOST_HTRACE"); return s != nullptr; }();
+    uint32_t g_htPc     = []{ const char* s = std::getenv("NEOST_HTRACE_PC");   return s ? (uint32_t)std::strtoul(s, nullptr, 16) : 0x3862u; }();
+    int      g_htSkip   = []{ const char* s = std::getenv("NEOST_HTRACE_SKIP"); return s ? std::atoi(s) : 2000; }();
+    int      g_htN      = []{ const char* s = std::getenv("NEOST_HTRACE_N");    return s ? std::atoi(s) : 400; }();
+    bool     g_htArmed  = false;
+    int64_t  g_htPrev   = 0;
     // DEEP convergence WinUAE (opt-in NEOST_RAM_SLOT) : alignement créneau bus 4 cyc à
     // 8 MHz pour la RAM ST (CHIP16 < $400000), port FIDÈLE de wait_cpu_cycle_read/write
     // (custom.c:148-153). Avant un accès RAM, si l'horloge bus n'est pas sur la grille
@@ -136,6 +153,10 @@ public:
         irqMode = moira::IrqMode::USER;
         // Syntaxe Musashi : conserve le format de trace historique (comparaison MAME).
         setDasmSyntax(moira::Syntax::MUSASHI);
+        // Délai de reconnaissance IPL fidèle WinUAE (opt-in). Seuils en clock-units =
+        // cyc × g_cpuMul (1 au boot = 8 MHz ST). Réappliqué si la vitesse change.
+        if (g_iplFetch) setIplDelay(static_cast<int64_t>(g_iplFetch4) * g_cpuMul,
+                                    static_cast<int64_t>(g_iplFetch2) * g_cpuMul);
     }
 
     // Une adresse non décodée déclenche une bus error : on lève l'exception
@@ -471,8 +492,24 @@ int Cpu68k::run(int cycles) {
                     g_moira->setIRD(0x4E71);         // → exécuté comme NOP
             }
         }
+        // DIAG (gated NEOST_HTRACE) — trace cycle-exact d'UNE itération du handler en jeu
+        // pour le diff Moira↔WinUAE (traque du +20). Capture le PC + désasm AVANT execute
+        // (sinon getPC0() renvoie l'instruction SUIVANTE → désalignement off-by-one), et le
+        // coût en cycles APRÈS (delta d'horloge bus). S'arme au PC d'entrée (NEOST_HTRACE_PC)
+        // après NEOST_HTRACE_SKIP passages, dump NEOST_HTRACE_N instr sur stderr.
+        char htDis[200]; uint32_t htPc = 0; bool htEmit = false;
+        if (g_htraceOn) {
+            htPc = g_moira->getPC0() & 0xFFFFFFu;
+            if (!g_htArmed && htPc == g_htPc) { if (g_htSkip > 0) --g_htSkip; else { g_htArmed = true; g_htPrev = busClockNow(); } }
+            if (g_htArmed && g_htN > 0) { disassemble(htDis, htPc); htEmit = true; }
+        }
         g_moira->execute();                          // une instruction (sync() dispatche les events échus)
         if (g_tracer) g_tracer->onInstruction(g_moira->getPC0());
+        if (htEmit) {
+            const int64_t now = busClockNow();
+            std::fprintf(stderr, "HT %06X d=%-3lld %s\n", htPc, static_cast<long long>(now - g_htPrev), htDis);
+            g_htPrev = now; --g_htN;
+        }
         // Préemption (dormante dans le modèle piloté par sync : beginRun n'est plus
         // appelé) : conservée par sûreté si un chemin arme encore endSlice.
         if (g_endSlice) { g_endSlice = false; break; }
@@ -560,6 +597,9 @@ void Cpu68k::setMegaSteSpeed(bool sixteenMhz) {
     const int64_t b = busOfClock(c);
     g_cpuMul  = mul;
     g_cpuBias = (mul == 2) ? (2 * b - c) : (b - c);
+    // Réajuste les seuils du délai IPL (en clock-units) à la nouvelle vitesse CPU.
+    if (g_iplFetch) g_moira->setIplDelay(static_cast<int64_t>(g_iplFetch4) * g_cpuMul,
+                                         static_cast<int64_t>(g_iplFetch2) * g_cpuMul);
     std::fprintf(stderr, "[cpu] Mega STE : 68000 à %d MHz\n", sixteenMhz ? 16 : 8);
 }
 
