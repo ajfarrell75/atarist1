@@ -587,6 +587,12 @@ void Cpu68k::endTimeslice() {
     g_endSlice = true;   // testé après l'instruction courante (cf. run)
 }
 
+// Cycles BUS écoulés depuis le début de l'instruction courante (cf. en-tête).
+int64_t Cpu68k::cyclesIntoInstr() const {
+    if (instrStartClock_ < 0) return 0;
+    return busClockNow() - busOfClock(instrStartClock_);
+}
+
 // Bascule 8/16 MHz du Mega STE — cf. Cpu68k.hpp. Le rebasage de g_cpuBias garde
 // l'horloge bus CONTINUE au cycle courant (la bascule arrive en plein quantum,
 // pendant l'écriture $FF8E21) : busOfClock(c) garde la même valeur avant/après.

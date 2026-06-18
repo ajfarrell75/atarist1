@@ -115,6 +115,14 @@ public:
     // delta permet de reconstituer le cycle ABSOLU exact = sched.now() + ce delta.
     int64_t cyclesRunInQuantum() const;
 
+    // Cycles BUS écoulés depuis le DÉBUT de l'instruction COURANTE, à l'instant exact
+    // de l'appel (en plein accès mémoire en PRECISE_TIMING). = busClockNow() -
+    // busOf(instrStartClock_). Pour un accès mémoire, Moira a déjà facturé le SYNC(2)
+    // de tête de l'accès → cette valeur ≈ (cycles avant l'accès) + 2. Utilisé pour
+    // dater une écriture MMIO comme Hatari mode CE (Cycles_GetInternalCycleOnWriteAccess
+    // = currcycle + 4) : le cycle de FIN d'accès = busClockNow() + 2.
+    int64_t cyclesIntoInstr() const;
+
     // Coupe le bloc d'exécution en cours : le CPU termine son instruction courante
     // puis rend la main (run() retourne le nombre RÉEL de cycles consommés). Appelé
     // par l'ordonnanceur quand un événement est armé avant la cible du bloc, pour
