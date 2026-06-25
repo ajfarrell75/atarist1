@@ -39,8 +39,10 @@ cmake --build build -j                 # cibles : neost (GUI), neost-headless, n
 ./build/neost <rom> <disk.st>          # ROM + disquette explicites
 ```
 
-Sous-modules : `extern/moira` (cœur 68000), `extern/imgui`, `extern/miniaudio`. Aucune
-étape de génération : Moira se compile tel quel (C++20). Le cœur Musashi a été retiré.
+Sous-modules : `extern/imgui`, `extern/miniaudio`. `extern/moira` (cœur 68000) est
+**vendorisé** (copié dans le dépôt, plus un sous-module) car NeoST patche son code —
+cf. `extern/moira/NEOST_VENDOR.md`. Aucune étape de génération : Moira se compile
+tel quel (C++20). Le cœur Musashi a été retiré.
 
 ⚠ Ne PAS faire `rm -rf build` (casse le shell si l'utilisateur y est `cd`) ; `cmake -B build`
 reconfigure. Sous macOS, pas de `timeout`.

@@ -68,7 +68,8 @@ set_source_files_properties(
     PROPERTIES COMPILE_OPTIONS "${NEOST_STRICT_OPTS}")
 
 # --- Moira (cœur 68000 cycle-exact, MIT) — SEUL cœur CPU de NeoST ------------
-# git submodule add https://github.com/dirkwhoffmann/Moira extern/moira
+# Vendorisé (plus un sous-module) car NeoST patche Moira — cf. extern/moira/NEOST_VENDOR.md.
+# Upstream : https://github.com/dirkwhoffmann/Moira
 # L'ancien cœur Musashi (rapide mais NON cycle-exact) a été retiré : Moira est
 # désormais le seul cœur 68000, et il est REQUIS pour bâtir NeoST.
 # Moira nécessite C++20 (std::rotr/rotl, std::map::contains) → on compile ses
@@ -118,8 +119,9 @@ if(EXISTS "${MOIRA_SRC_DIR}/Moira.cpp")
         PROPERTIES COMPILE_OPTIONS "-std=c++20")
 else()
     message(FATAL_ERROR
-        "Moira introuvable (extern/moira) — c'est le SEUL cœur 68000 de NeoST et il est requis. "
-        "Initialisez le sous-module : git submodule update --init extern/moira")
+        "Moira introuvable (extern/moira/Moira) — c'est le SEUL cœur 68000 de NeoST et il est requis. "
+        "Moira est vendorisé (cf. extern/moira/NEOST_VENDOR.md) : restaurez-le depuis l'historique Git "
+        "(git checkout -- extern/moira) ou réclonez le dépôt NeoST.")
 endif()
 
 # =============================================================================
