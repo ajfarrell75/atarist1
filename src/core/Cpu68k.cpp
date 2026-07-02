@@ -694,27 +694,47 @@ void Cpu68k::updateIplNow() {
     neostUpdateIpl(/*commit=*/true);
 }
 
+// NEOST_RAISE_COMMIT : bit0 = HBL, bit1 = VBL — commit IMMÉDIAT de l'IPL au
+// dispatch de l'événement (≙ Hatari CE : CycInt traité à la frontière d'instruction
+// + intlev_load/ipl_fetch_now sans délai → exc−broche = 0, mesuré à l'oracle
+// instrumenté). DÉFAUT 1 = HBL seul : le commit VBL casse le loader d'Enchanted
+// Land (chargement infini — couplage VBL↔IKBD/FDC, même signature que le pré-arm
+// VBL, à investiguer) ; le commit HBL porte le flicker EL à 40/40 (top-trick
+// parfait, une première). Sans commit (bit à 0) : broche pollée → reconnaissance
+// UNE instruction plus tard (l'ancien modèle).
+namespace { int g_raiseCommit = []{ const char* s = std::getenv("NEOST_RAISE_COMMIT");
+                                    return s ? std::atoi(s) : 1; }(); }
 void Cpu68k::raiseVbl() {
     g_vblPending = true;
-    neostUpdateIpl();
+    // COMMIT IMMÉDIAT (2026-07-02, mesuré à l'oracle instrumenté [HPIN]/[HEXC] :
+    // chez Hatari CE, les événements vidéo sont traités À LA FRONTIÈRE d'instruction
+    // (CycInt_Process) et `intlev_load → ipl_fetch_now` pose regs.ipl[0] SANS délai →
+    // l'exception démarre AU MÊME CYCLE que le changement de broche, exc−pin = 0 sur
+    // 12709/12711 échantillons du banc poll-entry). L'ancien chemin broche-POLLée
+    // (neostUpdateIpl sans commit) faisait reconnaître UNE instruction plus tard.
+    // Le callback d'événement EST une frontière d'instruction (modèle bloc) → commit sûr.
+    neostUpdateIpl(/*commit=*/(g_raiseCommit & 2) != 0);
 }
 
 void Cpu68k::raiseHbl() {
     g_hblPending = true;
-    neostUpdateIpl();
+    neostUpdateIpl(/*commit=*/(g_raiseCommit & 1) != 0);   // même modèle que raiseVbl
 }
 
 // Pré-armement des broches IRQ vidéo — cf. .hpp. Appelées par Machine au moment
 // où l'événement est PLANIFIÉ (l'instant exact est connu d'avance) ; sync() les
 // applique au cycle bus près, en cours d'instruction (modèle bloc conservé).
-// NEOST_PIN_ARM : masque A/B — bit0 = HBL, bit1 = VBL. DÉFAUT 1 = HBL seule :
-// la broche VBL exacte casse le loader d'Enchanted Land (mesuré 2026-07-02 :
-// chargement infini, jamais l'intro — cause à investiguer, probablement un
-// couplage d'ordre VBL↔IKBD/FDC pendant le chargement). La broche HBL est LA
-// broche beam-sync critique (handlers par-ligne) ; la VBL garde le comportement
-// historique (levée au dispatch de bloc, retard 0..24 cyc).
+// NEOST_PIN_ARM : masque A/B — bit0 = HBL, bit1 = VBL. DÉFAUT 0 = DÉSACTIVÉ
+// (2026-07-02, 2ᵉ mesure à l'oracle instrumenté) : Hatari CE ne lève PAS la
+// broche mi-instruction pour les INT vidéo — CycInt est traité À LA FRONTIÈRE
+// d'instruction et `ipl_fetch_now` commit sans délai → exc−broche = 0. Le
+// modèle fidèle est donc « raise+COMMIT au dispatch » (cf. raiseHbl/raiseVbl),
+// PAS le pré-armement mi-instruction. Pire : pré-armement + callback = DOUBLE
+// prise (l'exception part dans le bloc, l'IACK efface le pending, puis le
+// callback du dispatch re-lève → 2ᵉ HBL, période libre ~427 cyc mesurée au banc
+// poll-entry). Gardé en opt-in pour expériences uniquement.
 namespace { int g_pinArmMask = []{ const char* s = std::getenv("NEOST_PIN_ARM");
-                                   return s ? std::atoi(s) : 1; }(); }
+                                   return s ? std::atoi(s) : 0; }(); }
 void Cpu68k::armHblPinAt(int64_t busCycle) { if (g_pinArmMask & 1) { g_hblPinDue = busCycle; recomputePinNextDue(); } }
 void Cpu68k::armVblPinAt(int64_t busCycle) { if (g_pinArmMask & 2) { g_vblPinDue = busCycle; recomputePinNextDue(); } }
 
