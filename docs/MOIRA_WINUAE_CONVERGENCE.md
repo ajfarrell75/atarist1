@@ -60,17 +60,35 @@ Cuddly, Super Hang-On). Décision utilisateur (2026-06-16) : **garder le sync-dr
     validait PAS la latence d'exception). Mesures 2026-07-02 :
     * **Structure de quantification IDENTIQUE** Hatari↔NeoST : entrées par période de 5 lignes
       {x, x+4, x+8}, ratio 2:2:1, deltas/ligne {508,512,520} mêmes proportions.
-    * **Latence d'exception NeoST = WinUAE − 12, EXACT** (Δ dernière-instr→handler : NeoST {56,60}
-      vs Hatari {68,72}, mêmes formes). −2 identifiés (WinUAE ajoute `x_do_cycles(2)` avant le
-      2ᵉ prefetch pour l'IPL, newcpu.c:3225) ; −10 restants À ATTRIBUER dans le chemin
-      d'exception (ordre exact E-wait/pads/idles vs Moira execInterrupt/jumpToVector).
-    * ⚠ **Les constantes ajoutées au bloc IACK sont ABSORBÉES** par la boucle main 12 cyc
-      (équilibre auto-verrouillé : `IACK_VIDEO` 18/22/26 → images BYTE-IDENTIQUES entre elles).
-      Le banc mesure l'INTERACTION reconnaissance-IPL × E-clock × alignement, pas la longueur.
-      Baseline NeoST 36/180 vs Hatari ; `IPLFETCH=1` seul : idem ; `IACK_VIDEO`+4..12 ou
-      IPLFETCH+IACK_VIDEO : 72/180 ; legacy `IACK_AT=0` : 72/180. Aucun combo → 180.
-      ⇒ fermer d'abord le −10 de latence (diff pas-à-pas du chemin d'exception), PUIS
-      re-balayer la reconnaissance (IPLFETCH).
+    * ✅ **« Latence d'exception −12 » = ARTEFACT DE TRACE, RÉSOLU (2026-07-02, 2ᵉ passe).** Le
+      Tracer NeoST logue l'instruction AVANT le check d'IRQ → quand l'exception préempte, la
+      dernière ligne tracée est un **FANTÔME** (loggée, jamais exécutée) : le Δ mesuré en
+      soustrayait 12 à tort. Instrumenté au vrai chemin (`NEOST_EXC_DIAG` → [EXC]/[JTV]/[PIN]) :
+      **latence d'exception NeoST = Hatari EXACTEMENT** ({56,60}, idle+PClo=12, iack=E+14,
+      SR/PChi=8-10, jumpToVector=20).
+    * 🎯 **VRAIE DIVERGENCE TROUVÉE ET CORRIGÉE : la BROCHE IPL montait au DISPATCH de bloc**
+      (frontière = fin de la dernière instruction du bloc, 0..24 cyc APRÈS l'instant vrai, avec
+      jitter = le dépassement) au lieu du cycle exact — Hatari la lève DANS do_cycles, en cours
+      d'instruction, et l'instruction qui ENJAMBE l'événement la voit à son échantillon IPL
+      (fin−4). **Fix : broches PRÉ-ARMÉES** (`Cpu68k::armHblPinAt/armVblPinAt` posées à la
+      PLANIFICATION, appliquées par le hook `sync()` au cycle bus près, mid-instruction — le
+      dispatch BLOC est conservé, seul la broche est exacte). `NEOST_PIN_ARM` (bit0 HBL, bit1
+      VBL) — **défaut 1 = HBL seule** : la broche VBL exacte casse le loader d'Enchanted Land
+      (chargement infini — couplage VBL↔IKBD/FDC à investiguer).
+    * ✅ **Position de l'INT HBL = cpl−4 = 508 CONFIRMÉE fidèle** (`Hbl_Int_Pos_Low_50 =
+      CYCLES_PER_LINE_50HZ − 4`, video.c:978 — le commentaire « HBL_VIDEO_CYCLE_OFFSET=0 » de
+      video.h est TROMPEUR). Le passage à 512 de la 1ʳᵉ passe ne gagnait que parce qu'il
+      compensait la broche en retard → **revenu à 508** (défaut `NEOST_HBL_OFF=-4`).
+    * ⚠ **PIÈGE DU BANC : la phase E-clock PRÉCESSE de −4 cyc PAR TRAME** (160256 ≡ 16 mod 20,
+      période 5 trames) → comparer une capture NeoST à **5 trames consécutives** de l'AVI Hatari
+      (le motif tourne). Et les constantes ajoutées au bloc IACK sont ABSORBÉES par la boucle
+      main 12 cyc (équilibre auto-verrouillé : `IACK_VIDEO` 18/22/26 → images byte-identiques).
+    * ◑ **RESTE (borné)** : match poll-entry 72-136/180 selon config (baseline 36) — le résidu =
+      la **micro-structure de reconnaissance** (positions du POLL_IPL par instruction dans Moira
+      vs l'échantillon fin−4 uniforme de WinUAE, sur ~20-40 % des phases de ligne) + le lock
+      moteur EL in-game toujours à **−16** (freq 360/368 vs Hatari 376/384 — invariant sous tous
+      les balayages → suspect côté MODÈLE VIDÉO des lignes à tricks, pas CPU). `IPLFETCH=1`
+      casse toujours le loader EL.
 - 🎯 **PERCÉE (2026-06-17) — `NEOST_RAM_SLOT`+`NEOST_IACK` désormais DÉFAUT ON.** Les DEUX flags
   ENSEMBLE font FONCTIONNER le mécanisme d'overscan beam-sync : sans eux le handler HBL d'EL est
   ~88 cyc trop rapide → l'impulsion res se VERROUILLE (trick=0, zéro overscan) ; avec eux la dérive

@@ -236,9 +236,14 @@ void Machine::installSchedulerCallbacks() {
 // Arme les événements VIDÉO de la trame courante, à des cycles ABSOLUS (horloge
 // continue) = frameStart_ + position dans la trame. Les Timers A/C/D persistent
 // d'une trame à l'autre (datés par le MFP) et ne sont PAS réarmés ici.
-namespace { // Décalage A/B de la position d'IRQ HBL dans la ligne (défaut 0 = Hatari).
+namespace { // Décalage de la position d'IRQ HBL dans la ligne, relatif à cpl.
+// Défaut −4 = FIDÈLE Hatari : Hbl_Int_Pos_Low_50 = CYCLES_PER_LINE_50HZ − 4 = 508
+// (video.c:978 — le commentaire « HBL_VIDEO_CYCLE_OFFSET=0 » de video.h est
+// TROMPEUR, la position réelle est cpl−4). L'A/B à 0 (=512) n'améliorait les
+// métriques QUE parce qu'il compensait la broche IPL levée en retard au dispatch
+// de bloc — corrigé depuis par le pré-armement (Cpu68k::armHblPinAt).
 int kHblOff() {
-    static const int v = [] { const char* s = std::getenv("NEOST_HBL_OFF"); return s ? std::atoi(s) : 0; }();
+    static const int v = [] { const char* s = std::getenv("NEOST_HBL_OFF"); return s ? std::atoi(s) : -4; }();
     return v;
 } }
 
@@ -273,6 +278,10 @@ void Machine::scheduleFrameEvents() {
     // L'ancien −4 était une calibration d'avant la refonte IACK (2026-07-02) ;
     // NEOST_HBL_OFF le rétablit pour A/B (valeur = décalage vs cpl, ex. -4).
     sched.schedule(Scheduler::HBL,     frameStart_ + (cpl_ + kHblOff()));   // HBL niveau 2 (frontière ligne 0)
+    // Broche IPL pré-armée au cycle EXACT (montée mid-instruction via sync(), cf.
+    // Cpu68k::armHblPinAt) — le dispatch de l'événement (frontière de bloc) arrive
+    // 0..24 cyc plus tard et ne fait que re-poser la broche (idempotent).
+    cpu.armHblPinAt(frameStart_ + (cpl_ + kHblOff()));
     // VBL niveau 4 — port fidèle de Hatari (Video_InterruptHandler_VBL) : l'IRQ VBL
     // est générée VBL_VIDEO_CYCLE_OFFSET cycles APRÈS la fin de la DERNIÈRE ligne de
     // la trame (313×512 + 64 en 50 Hz STF), donc au tout début du vblank = ~SOMMET de
@@ -282,6 +291,7 @@ void Machine::scheduleFrameEvents() {
     // la trame qui VA s'afficher, comme sur le vrai matériel. Offset STF=64, STE=68.
     const int vblOffset = machineIsSte(machineType_) ? 68 : 64;       // VBL_VIDEO_CYCLE_OFFSET
     sched.schedule(Scheduler::VBL, frameStart_ + vblOffset);
+    cpu.armVblPinAt(frameStart_ + vblOffset);          // broche niveau 4 au cycle exact (cf. armHblPinAt)
     // RESTART du compteur vidéo en FIN de trame (port Video_RestartVideoCounter,
     // ULM DSOTS) : ligne 310 (50 Hz, 313 lignes) / 260 (60 Hz, 263), cycle 56
     // (STF) / 60 (STE). La base $FF8201/03 est relue À CET INSTANT — après le
@@ -328,14 +338,24 @@ void Machine::onTimerB() {
 }
 
 void Machine::onHbl() {
+    // DIAG (NEOST_HBL_DIAG=1) : timestamp ABSOLU de l'événement HBL (= la frontière
+    // de ligne où la broche IRQ monte) — ancre le repère ligne dans les traces cyc=.
+    static const long hblDiagN = []{ const char* s = std::getenv("NEOST_HBL_DIAG");
+                                     return s ? std::atol(s) : 0L; }();
+    if (hblDiagN) { static long n=0; if (++n % hblDiagN == 0)
+        std::fprintf(stderr, "[HBLD] line=%d sched=%lld live=%lld\n",
+                     hblLine_, (long long)sched.now(), (long long)sched.liveNow()); }
     cpu.raiseHbl();                                // HBL niveau 2 (gaté par le SR)
     ++hblLine_;
     // HBL émis à CHAQUE scanline (hblLine_ = numéro de ligne absolu 0..lpf-1), comme
     // sur le vrai matériel — y compris dans les bordures haut/bas (ancre Video_EndHBL).
     // V2 : −lineCarry_ décale la ligne suivante du cumul des raccourcissements (=0 hors V2).
-    if (hblLine_ < lpf_)
-        sched.schedule(Scheduler::HBL,
-                       frameStart_ + static_cast<int64_t>(hblLine_) * cpl_ + (cpl_ + kHblOff()) - lineCarry_);
+    if (hblLine_ < lpf_) {
+        const int64_t next = frameStart_ + static_cast<int64_t>(hblLine_) * cpl_
+                           + (cpl_ + kHblOff()) - lineCarry_;
+        sched.schedule(Scheduler::HBL, next);
+        cpu.armHblPinAt(next);                 // broche au cycle exact (cf. armHblPinAt)
+    }
 }
 
 void Machine::onVbl() {

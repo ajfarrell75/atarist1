@@ -529,10 +529,16 @@ Moira::execInterrupt(u8 level)
     switch (C) {
 
         case Core::C68000:
+        {
+            // NEOST : diag cycle-exact de la séquence d'exception (NEOST_EXC_DIAG=1) —
+            // horloge à chaque étape, pour le diff pas-à-pas avec WinUAE Exception_ce000.
+            static const bool excDiag = std::getenv("NEOST_EXC_DIAG") != nullptr;
+            i64 t0 = excDiag ? getClock() : 0;
 
             SYNC(6);
             reg.sp -= 6;
             write<C, AddrSpace::DATA, Word>(reg.sp + 4, reg.pc & 0xFFFF);
+            i64 t1 = excDiag ? getClock() : 0;
 
             // NEOST : cycles d'IACK délégués (stock = 4/4). Permet le port fidèle
             // de Hatari `iack_cycle` : E-clock (avant) + bloc IACK/idle (après),
@@ -541,9 +547,17 @@ Moira::execInterrupt(u8 level)
             queue.ird = getIrqVector(level);
 
             SYNC(iackSyncAfter(level));
+            i64 t2 = excDiag ? getClock() : 0;
             write<C, AddrSpace::DATA, Word>(reg.sp + 0, status);
             write<C, AddrSpace::DATA, Word>(reg.sp + 2, reg.pc >> 16);
+            if (excDiag) {
+                i64 t3 = getClock();
+                fprintf(stderr, "[EXC] lvl=%d t0=%lld idle+PClo=%lld iack=%lld SR/PChi=%lld\n",
+                        level, (long long)t0, (long long)(t1-t0), (long long)(t2-t1),
+                        (long long)(t3-t2));
+            }
             break;
+        }
 
         case Core::C68010:
 

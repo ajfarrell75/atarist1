@@ -685,6 +685,12 @@ Moira::jumpToVector(int nr)
     SYNC(2);
     prefetch<C, POLL>();
 
+    // NEOST : diag cycle-exact (NEOST_EXC_DIAG=1) — horloge en FIN de jumpToVector,
+    // à corréler avec [EXC] (execInterrupt) et le timestamp Tracer du handler.
+    static const bool neostExcDiag = std::getenv("NEOST_EXC_DIAG") != nullptr;
+    if (neostExcDiag)
+        fprintf(stderr, "[JTV] nr=%d clk=%lld\n", nr, (long long)getClock());
+
     // Stop emulation if the exception should be catched
     if (debugger.catchpointMatches(nr)) didReachCatchpoint(u8(nr));
 

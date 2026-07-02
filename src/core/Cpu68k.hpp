@@ -153,6 +153,20 @@ public:
     // par ligne visible ; gatée par le masque du SR (utilisée par les jeux).
     void raiseHbl();
 
+    // PRÉ-ARMEMENT de la broche IPL pour les IRQ vidéo PLANIFIÉES (HBL niv 2,
+    // VBL niv 4) : la Machine connaît d'avance le cycle bus EXACT de l'événement
+    // (grille frameStart + k·cpl) — la broche est alors levée PAR LE HOOK sync()
+    // du cœur, EN COURS d'instruction, au cycle près (comme Hatari où CycInt tire
+    // dans do_cycles). Sans ça (modèle bloc), la broche ne montait qu'au dispatch
+    // de l'événement = frontière de bloc, 0..24 cyc APRÈS l'instant vrai (le
+    // dépassement de la dernière instruction) → l'instruction enjambant l'événement
+    // ne la voyait pas à son POLL_IPL → reconnaissance ~1 instruction trop tard,
+    // avec un jitter = dépassement de bloc (cause mesurée au banc poll-entry :
+    // entrées de handler NeoST ≈ Hatari +8..12). Le callback d'événement reste au
+    // bloc (dispatch BLOC conservé) et re-pose la broche (idempotent, filet).
+    void armHblPinAt(int64_t busCycle);
+    void armVblPinAt(int64_t busCycle);
+
     // Bus error déclenchée par un périphérique (ex. FDC $FF8604/06 en mode octet).
     // Renvoie true si le CPU est halté (double faute) — l'appelant fournit alors 0.
     bool triggerBusError(uint32_t addr, bool write);
