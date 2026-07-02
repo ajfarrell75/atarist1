@@ -110,6 +110,15 @@ constexpr int HSync_Off_Off_Low  = -10;        // HSync_Off_Offset_Low
 constexpr int RemoveTopBorder_Pos    = 502;
 constexpr int RemoveBottomBorder_Pos = 502;
 constexpr int LINE_END_FULL      = 512;
+// Canal HBL_Pos/nCyclesPerLine (video.c 977-979, VideoTimings STF) : chaque
+// « Freq_match » de phase 1 fixe la POSITION de l'IRQ HBL de la ligne courante et
+// sa LONGUEUR — une ligne où la freq matche en 71/60/50 fait 224/508/512 cycles.
+constexpr int Hbl_Pos_Hi     = 220;            // CYCLES_PER_LINE_71HZ − 4
+constexpr int Hbl_Pos_Low_60 = 504;            // CYCLES_PER_LINE_60HZ − 4
+constexpr int Hbl_Pos_Low_50 = 508;            // CYCLES_PER_LINE_50HZ − 4
+constexpr int CyclesLine_Hi  = 224;
+constexpr int CyclesLine_60  = 508;
+constexpr int CyclesLine_50  = 512;
 // Positions verticales (lignes) : VDE_On/Off par fréquence.
 constexpr int VDE_On_50 = 63, VDE_On_60 = 34, VDE_On_Hi = 34;
 constexpr int VDE_Off_50 = 263, VDE_Off_60 = 234, VDE_Off_Hi = 434;
@@ -224,6 +233,9 @@ void Shifter::beginFrame() {
     liveGlueWi_     = 0;
     liveGlueRes_    = (frameMode_ == Mode::Medium) ? 1 : (frameMode_ == Mode::High ? 2 : 0);
     liveGlueFreq50_ = (frameSync_ & 0x02) ? 1 : 0;
+    // LINELEN : échelle des débuts de ligne réels (remplie au fil des avances).
+    glueLineStart_.assign(glueLines_.size(), 0);
+    liveGlueLen_ = geometry().cyclesPerLine;
 }
 
 // Avance la machine Glue LIVE jusqu'à la ligne `targetLine` incluse : startHBL sur
@@ -235,13 +247,33 @@ void Shifter::liveGlueCatchUp(int targetLine) {
     const int maxLine = static_cast<int>(glueLines_.size()) - 2;
     if (targetLine > maxLine) targetLine = maxLine;
     const int cpl = geometry().cyclesPerLine;
+    // NEOST_LINELEN : attribution des écritures à la grille RÉELLE (échelle des
+    // débuts de ligne glueLineStart_, alimentée à chaque avance de ligne ;
+    // longueur courante déplacée par les « Freq_match » via glueCyclesLine_).
+    static const bool lineLen = std::getenv("NEOST_LINELEN") != nullptr;
     for (;;) {
         // Écriture en attente sur une ligne déjà initialisée → consommer AVANT
         // d'avancer (elle conditionne res/freq des lignes suivantes).
         if (liveGlueWi_ < syncWrites_.size()) {
             const SyncWrite& w = syncWrites_[liveGlueWi_];
-            int wl = w.frameCycle / cpl;
-            if (wl > maxLine) wl = maxLine;
+            int wl; int lc;
+            if (lineLen) {
+                // Ligne = position dans l'échelle réelle (recherche descendante
+                // depuis la ligne courante — les écritures arrivent quasi triées).
+                wl = liveGlueLine_ < 0 ? 0 : liveGlueLine_;
+                while (wl > 0 && w.frameCycle < glueLineStart_[wl]) --wl;
+                // L'écriture est-elle au-delà de la fin de la ligne courante ?
+                // (fin = start + longueur courante) → il faut d'abord avancer.
+                if (wl == liveGlueLine_ && liveGlueLine_ >= 0
+                    && w.frameCycle >= glueLineStart_[wl] + liveGlueLen_ && liveGlueLine_ < targetLine) {
+                    wl = liveGlueLine_ + 1;   // force l'avance ci-dessous
+                }
+                lc = static_cast<int>(w.frameCycle - glueLineStart_[wl]);
+            } else {
+                wl = static_cast<int>(w.frameCycle / cpl);
+                lc = static_cast<int>(w.frameCycle % cpl);
+            }
+            if (wl > maxLine) { wl = maxLine; if (!lineLen) lc = static_cast<int>(w.frameCycle % cpl); }
             if (wl <= liveGlueLine_) {
                 if (w.isRes) liveGlueRes_    = w.val & 0x03;
                 else         liveGlueFreq50_ = (w.val & 0x02) ? 1 : 0;
@@ -250,10 +282,15 @@ void Shifter::liveGlueCatchUp(int targetLine) {
                 // sa datation ligne/cycle et le masque résultant — à diff'er contre
                 // Hatari `video_border_h` (les « detect ... » de Video_Update_Glue_State).
                 static const bool glueDiag = std::getenv("NEOST_GLUE_DIAG") != nullptr;
-                updateGlueState(wl, w.frameCycle % cpl, w.isRes, freqHz);
+                updateGlueState(wl, lc, w.isRes, freqHz);
+                // Canal HBL_Pos/nCyclesPerLine → Machine (reprogramme l'IRQ HBL de la
+                // ligne et cumule le raccourcissement) — gated NEOST_LINELEN côté Machine.
+                if (glueHblPos_ > 0 && lineGeom_) lineGeom_(wl, glueHblPos_, glueCyclesLine_);
+                // La longueur de la ligne COURANTE suit le dernier « Freq_match ».
+                if (lineLen && wl == liveGlueLine_ && glueCyclesLine_ > 0) liveGlueLen_ = glueCyclesLine_;
                 if (glueDiag)
                     std::fprintf(stderr, "[GLUP] line=%d cyc=%d %s freq=%d -> mask=%03x de=%d..%d\n",
-                                 wl, int(w.frameCycle % cpl), w.isRes ? "res" : "sync", freqHz,
+                                 wl, lc, w.isRes ? "res" : "sync", freqHz,
                                  glueLines_[wl].borderMask, glueLines_[wl].displayStartCycle,
                                  glueLines_[wl].displayEndCycle);
                 ++liveGlueWi_;
@@ -261,7 +298,15 @@ void Shifter::liveGlueCatchUp(int targetLine) {
             }
         }
         if (liveGlueLine_ >= targetLine) break;
+        // Avance d'une ligne : mémorise le début RÉEL de la nouvelle ligne
+        // (start précédent + longueur réelle) et repart à la longueur nominale.
+        const int64_t prevStart = (liveGlueLine_ >= 0 && lineLen) ? glueLineStart_[liveGlueLine_] : 0;
         ++liveGlueLine_;
+        if (lineLen) {
+            if (static_cast<std::size_t>(liveGlueLine_) < glueLineStart_.size())
+                glueLineStart_[liveGlueLine_] = (liveGlueLine_ == 0) ? 0 : prevStart + liveGlueLen_;
+            liveGlueLen_ = cpl;
+        }
         const int freqHz = (liveGlueRes_ == 2) ? 71 : (liveGlueFreq50_ ? 50 : 60);
         startHBL(liveGlueLine_, liveGlueRes_, freqHz);
     }
@@ -757,10 +802,16 @@ void Shifter::updateGlueState(int line, int lineCycles, bool writeToRes, int fre
     uint32_t BorderMask = GL.borderMask;
     bool Freq_match_found = false;
     const int cpl = geometry().cyclesPerLine;
+    // Canal HBL_Pos/nCyclesPerLine (video.c 2231-2232 + application 2849-2877) :
+    // posé par les branches « Freq_match » de phase 1 ci-dessous, lu par l'appelant
+    // (liveGlueCatchUp → Machine, replayGlue → attribution) après chaque écriture.
+    glueHblPos_     = -1;
+    glueCyclesLine_ = -1;
 
     // ===== Phase 1 : valeur de Freq AVANT DE_start (STF, video.c 2244-2438) =====
     if (freqHz == 71 && lineCycles <= HDE_On_Hi) {
         Freq_match_found = true;
+        glueHblPos_ = Hbl_Pos_Hi; glueCyclesLine_ = CyclesLine_Hi;
         if (!(BorderMask & NO_DE)) {
             DE_start = HDE_On_Hi; DE_end = HDE_Off_Hi;
             BorderMask |= LEFT_OFF; GL.displayPixelShift = -4;
@@ -768,10 +819,12 @@ void Shifter::updateGlueState(int line, int lineCycles, bool writeToRes, int fre
         }
     } else if (freqHz == 71 && lineCycles <= HBlank_Off_Low_50) {
         Freq_match_found = true;
+        glueHblPos_ = Hbl_Pos_Hi; glueCyclesLine_ = CyclesLine_Hi;
         if (!(BorderMask & NO_DE)) { DE_end = HDE_Off_Hi; BorderMask |= (BLANK | NO_DE); }
         BorderMask &= ~LEFT_PLUS_2;
     } else if (freqHz == 71 && lineCycles <= HDE_On_Low_50) {
         Freq_match_found = true;
+        glueHblPos_ = Hbl_Pos_Hi; glueCyclesLine_ = CyclesLine_Hi;
         if (!(BorderMask & NO_DE)) { DE_end = HDE_Off_Hi; BorderMask |= NO_DE; }
         BorderMask &= ~LEFT_PLUS_2;
     } else if (freqHz != 71) {
@@ -790,6 +843,7 @@ void Shifter::updateGlueState(int line, int lineCycles, bool writeToRes, int fre
     // Ligne 50 Hz qui continue en 60 Hz (et réciproque) — video.c 2342-2421
     if (freqHz == 60 && lineCycles < Line_Set_Pal) {
         Freq_match_found = true;
+        glueHblPos_ = Hbl_Pos_Low_60; glueCyclesLine_ = CyclesLine_60;
         if (!(BorderMask & NO_DE)) {
             if (DE_start > 0) { DE_end = HDE_Off_Low_60; BorderMask |= RIGHT_MINUS_2; }
             if (lineCycles > HBlank_Off_Low_60 && lineCycles <= HBlank_Off_Low_50) BorderMask |= BLANK;
@@ -797,6 +851,7 @@ void Shifter::updateGlueState(int line, int lineCycles, bool writeToRes, int fre
         }
     } else if (freqHz == 50 && lineCycles <= HDE_On_Low_60) {
         Freq_match_found = true;
+        glueHblPos_ = Hbl_Pos_Low_50; glueCyclesLine_ = CyclesLine_50;
         if (!(BorderMask & NO_DE)) {
             DE_end = HDE_Off_Low_50;
             BorderMask &= ~RIGHT_MINUS_2;
@@ -804,6 +859,7 @@ void Shifter::updateGlueState(int line, int lineCycles, bool writeToRes, int fre
         }
     } else if (freqHz == 50 && lineCycles <= Line_Set_Pal) {
         Freq_match_found = true;
+        glueHblPos_ = Hbl_Pos_Low_50; glueCyclesLine_ = CyclesLine_50;
         if (!(BorderMask & NO_DE)) { DE_end = HDE_Off_Low_50; BorderMask &= ~RIGHT_MINUS_2; }
     }
 
@@ -952,28 +1008,38 @@ void Shifter::replayGlue() {
     // (Machine setHblShorten) : sans ça l'état glue ne refléterait pas les lignes
     // raccourcies. Hors V2 : attribution fixe `frameCycle/cpl` historique (inchangée).
     static const bool v2 = std::getenv("NEOST_V2") != nullptr;
+    // Longueurs de ligne PAR-LIGNE (NEOST_LINELEN) : l'attribution suit la grille
+    // RÉELLE — la longueur d'une ligne évolue au fil de ses PROPRES écritures
+    // (dernier nCyclesPerLine posé par un « Freq_match », défaut cpl), comme la
+    // chaîne StartCycle/nCyclesPerLine de Hatari. Remplace l'heuristique V2
+    // « impulsion hi ≤57 → 224 ».
+    static const bool lineLen = std::getenv("NEOST_LINELEN") != nullptr;
     std::size_t wi = 0;
     const std::size_t nw = syncWrites_.size();
-    int64_t lineCyc = 0;                                  // cycle-trame du début de la ligne (V2)
+    int64_t lineCyc = 0;                                  // cycle-trame du début de la ligne (V2/LINELEN)
     for (int line = 0; line < lpf; ++line) {
         int freqHz = (curRes == 2) ? 71 : (curFreq50 ? 50 : 60);
         startHBL(line, curRes, freqHz);
         int len = cpl;
-        if (v2) {                                        // ligne raccourcie ?
+        if (v2 && !lineLen) {                            // ligne raccourcie ? (heuristique V2)
             for (std::size_t k = wi; k < nw && syncWrites_[k].frameCycle < lineCyc + 57; ++k)
                 if (syncWrites_[k].isRes && (syncWrites_[k].val & 3) == 2) { len = 224; break; }
         }
-        const int64_t lineEnd = lineCyc + len;
-        // Applique les écritures de CETTE ligne (cycle croissant).
-        while (wi < nw && (v2 ? (syncWrites_[wi].frameCycle < lineEnd)
-                              : ((syncWrites_[wi].frameCycle / cpl) == line))) {
-            const SyncWrite& w = syncWrites_[wi++];
-            const int lc = v2 ? static_cast<int>(w.frameCycle - lineCyc)
-                              : static_cast<int>(w.frameCycle % cpl);
+        // Applique les écritures de CETTE ligne (cycle croissant). En mode LINELEN
+        // la borne de fin de ligne (lineCyc+len) est DYNAMIQUE : chaque écriture
+        // peut la déplacer via glueCyclesLine_.
+        while (wi < nw) {
+            const SyncWrite& w = syncWrites_[wi];
+            if (lineLen || v2) { if (w.frameCycle >= lineCyc + len) break; }
+            else               { if (w.frameCycle / cpl != line) break; }
+            ++wi;
+            const int lc = (lineLen || v2) ? static_cast<int>(w.frameCycle - lineCyc)
+                                           : static_cast<int>(w.frameCycle % cpl);
             if (w.isRes) curRes    = w.val & 0x03;
             else         curFreq50 = (w.val & 0x02) ? 1 : 0;
             freqHz = (curRes == 2) ? 71 : (curFreq50 ? 50 : 60);
             updateGlueState(line, lc, w.isRes, freqHz);
+            if (lineLen && glueCyclesLine_ > 0) len = glueCyclesLine_;
         }
         lineCyc += len;
     }

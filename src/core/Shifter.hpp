@@ -130,6 +130,13 @@ public:
     // V2 res-switch : signalé à CHAQUE écriture hi-res $FF8260=2 ; la Machine décide
     // si l'impulsion est PRÉCOCE et raccourcit la ligne (cf. Machine setHblShorten).
     void setHblShorten(std::function<void()> fn) { hblShorten_ = std::move(fn); }
+    // Canal HBL_Pos/nCyclesPerLine (port Video_Update_Glue_State → Video_AddInterruptHBL,
+    // video.c 2849-2877) : appelé par liveGlueCatchUp après CHAQUE écriture freq/res dont
+    // la branche « Freq_match » fixe la géométrie de la ligne courante — (ligne, position
+    // de l'IRQ HBL dans la ligne, longueur de la ligne en cycles : 224/508/512). La
+    // Machine reprogramme l'événement HBL de la ligne et cumule le raccourcissement
+    // (lineCarry_) pour décaler les lignes suivantes. Gated NEOST_LINELEN côté Machine.
+    void setLineGeom(std::function<void(int, int, int)> fn) { lineGeom_ = std::move(fn); }
 
     // --- État exposé au débogueur (lecture directe) -------------------------
     uint32_t videoBase = 0;                 // adresse RAM du framebuffer (registres haut/milieu/bas)
@@ -277,6 +284,14 @@ private:
     int  glueEndHBL_     = 263;                      // nEndHBL : dernière ligne+1 (peut monter → bottom retiré)
     uint32_t glueVOverscan_ = 0;                     // V_OVERSCAN_* (NO_TOP/NO_BOTTOM/NO_DE…)
     int  glueBlankLines_ = 0;                        // lignes blanches insérées (no-sync)
+    // Sortie du canal HBL_Pos/nCyclesPerLine de updateGlueState (−1 = pas de match
+    // freq sur cette écriture ; sinon position IRQ HBL et longueur de ligne).
+    int  glueHblPos_     = -1;
+    int  glueCyclesLine_ = -1;
+    // LINELEN : grille réelle du chemin live — début (cycle-trame) de chaque ligne
+    // atteinte, et longueur courante de la ligne en cours (déplacée par les matches).
+    std::vector<int64_t> glueLineStart_;
+    int  liveGlueLen_ = 512;
     int  nScreenRefreshRate_ = 50;                   // fréquence NOMINALE de l'écran (50/60), cf. replayGlue
 
     // Rejoue la machine Glue sur les syncWrites_ de la trame (ligne par ligne :
@@ -363,4 +378,5 @@ private:
     std::vector<uint32_t> frame_;           // curW_*curH_ pixels ARGB
     std::function<int64_t()> beamClock_;    // cycles dans la trame (cf. setBeamClock)
     std::function<void()>    hblShorten_;   // V2 : signal d'impulsion hi-res (cf. setHblShorten)
+    std::function<void(int, int, int)> lineGeom_;   // (ligne, hblPos, cyclesLine) — cf. setLineGeom
 };
