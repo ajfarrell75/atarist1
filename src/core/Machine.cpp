@@ -397,6 +397,13 @@ void Machine::runFrame() {
     // L'offset reset est ainsi absorbé dans la 1ʳᵉ trame, comme avant.
     if (frameStartInit_) frameStart_ += static_cast<int64_t>(lpf_) * cpl_;
     else { frameStart_ = sched.now(); frameStartInit_ = true; }
+    // DIAG (NEOST_FRAME_DIAG) : phase absolue de l'ancre de trame — sur le vrai
+    // matériel la vidéo et les créneaux bus dérivent de la MÊME horloge, donc
+    // frameStart mod 4 doit être INVARIANT. Toute bascule = bug de géométrie.
+    static const bool frameDiag = std::getenv("NEOST_FRAME_DIAG") != nullptr;
+    if (frameDiag)
+        std::fprintf(stderr, "[FRM] start=%lld mod4=%d lpf=%d cpl=%d\n",
+                     (long long)frameStart_, (int)(frameStart_ & 3), lpf_, cpl_);
     // Le RTC avance désormais en PARESSEUX à la lecture (cf. Rtc::catchUp), piloté
     // par l'horloge émulée — rien à cadencer ici.
     scheduleFrameEvents();

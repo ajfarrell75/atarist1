@@ -29,7 +29,7 @@ Rapports terrain. TOS 1.02fr sauf mention contraire. Chemins sous `disks/st/` (`
 |-----|----------|----------------|
 | **Arkanoid (1987)** (Imagine) | Atteint l'écran-titre mais ne franchit pas la partie (boucle `$31736`/`$26E7`). | Gel FDC `$31736` **résolu** (modèle rotationnel) ; reste une cause distincte (protection ? 2ᵉ chargement ? IRQ ?). 🎯 étalon FDC/protection. |
 | **Captain Blood (1988)** (ERE) | Arrive au jeu puis plante sur une erreur clavier et redémarre. | ACIA/IKBD ou timing. |
-| **Enchanted Land (1990)** (Thalion) | ✅✅ 3 passes 2026-07-02 : bordure haute stable, loader réparé, et le moteur fullscreen verrouille désormais **à 376/384 = Hatari byte-exact** (le −16 = bug du compteur $8209 sur lignes à tricks, corrigé — port fidèle Video_CalculateAddress). Trames verrouillées : churn ~20 % vs 17 % Hatari (scroll légitime). Reste : TAUX de lock 55-66 % vs 100 % → micro-sauts intermittents. Son Thalion absent (bouton joystick). | Dernier verrou = **reconnaissance IPL** (points d'échantillonnage par-instruction + broche MFP exacte — IPLFETCH complet implémenté mais gated, casse le loader via la broche MFP dispatch-late) → `docs/MOIRA_WINUAE_CONVERGENCE.md` (3ᵉ passe). |
+| **Enchanted Land (1990)** (Thalion) | ✅✅✅ **RÉSOLU (5ᵉ passe 2026-07-02) : moteur fullscreen verrouillé 100 %** (12402/12402 écritures freq à la position Hatari-exacte). Le dernier verrou n'était PAS la reconnaissance IPL mais un **double comptage du saut STOP** dans la comptabilité de quantum → `sched.now()`/datation vidéo en avance de δ∈{4..26} sur l'horloge CPU (quand δ≡2 mod 4, le calibrateur $8209 déverrouillait). Micro-sauts éliminés. Son Thalion absent (bouton joystick) — seul reste connu. | Fix = rebase `quantumStartBus_` au saut STOP (`Cpu68k::run`) → `docs/MOIRA_WINUAE_CONVERGENCE.md` (5ᵉ passe). Les 3 mystères (lock, commit-VBL↔loader, IPLFETCH↔loader) avaient cette même cause. |
 | **Lethal Xcess** (`.STX`, TOS 1.62) | ✅ **RÉSOLU (2026-07-02)** : titre propre ET **parfaitement stable** (0,00 % de churn trame-à-trame, était ~1,5 %) après la refonte beam-sync coordonnée. | — |
 | **The Cuddly Demos** (TCB) | 1ʳᵉ page OK ; menu robot : scrolling bugué qui saute + scroller de bordure **basse** non rendu. | Beam-sync par-ligne + rendu live retrait bas. ⚠ menu inatteignable headless. |
 | **Shadow Warriors** (2Hot2Handle) | Après SPACE : titre + musique OK ; le bouton joystick ne lance pas le jeu. (Castle Warrior, lui, fonctionne.) | À diff'er Hatari. |
@@ -100,10 +100,16 @@ densité HD/ED STX (NeoST plus cohérent) ; RTC en temps émulé (déterminisme 
   Bordure haute EL **stable**, LX titre **0,00 % churn**, poll-bench 180/180, étalons TOUS OK
   (`overscan_top` re-baseliné, l'ancienne réf était fausse de 24 px vs Hatari).
   → Détails + état : `docs/MOIRA_WINUAE_CONVERGENCE.md` (bloc 2026-07-02).
-- ◑ **Reste (pièce vidéo, plus CPU)** : le moteur fullscreen d'EL en jeu verrouille à 72 % avec
-  ses impulsions freq à −16 vs l'oracle (ratent la fenêtre bordure-droite) → micro-sauts de
-  scroll. Piste : entrée du handler HBL in-game (+4 constant sur sites res). Oracle in-game
-  opérationnel (cmd-fifo, recette dans le doc).
+- ✅ **Lock moteur EL = 100 % (5ᵉ passe 2026-07-02)** : le dernier verrou était le **double
+  comptage du saut STOP** dans la comptabilité de quantum (datation vidéo en avance de δ 4..26
+  cyc sur l'horloge CPU) — rebase `quantumStartBus_` au saut (`Cpu68k::run`). Résout AUSSI les
+  mystères « commit VBL casse le loader » (→ `NEOST_RAISE_COMMIT` défaut 3 = HBL+VBL, modèle
+  fidèle complet) et « IPLFETCH casse le loader ». + broche MFP exacte portée (`NEOST_MFP_EXACT`,
+  anti-datation Timer B event-count + prise à la frontière, fidèle Hatari, non nécessaire au lock).
+  → `docs/MOIRA_WINUAE_CONVERGENCE.md` (5ᵉ passe).
+- ◑ **Reste beam-sync** : re-fermer les bancs poll contre un oracle Hatari FRAIS (les anciens
+  AVI ne sont plus alignables) ; re-mesurer le flicker bordure haute EL (fenêtre d'origine
+  inconnue — l'étalon `overscan_top` byte-exact couvre la mécanique).
 - Acquis (cf. CYCLE_ACCURACY §3) : phases 0-6, latch palette Spec512, alignement bus shifter +
   wait states PSG/MFP/ACIA, machine Glue live, VDE_On live, Spec512 pixel-perfect, bordures H/B/G/D.
 
