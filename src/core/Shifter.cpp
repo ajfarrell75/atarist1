@@ -246,7 +246,16 @@ void Shifter::liveGlueCatchUp(int targetLine) {
                 if (w.isRes) liveGlueRes_    = w.val & 0x03;
                 else         liveGlueFreq50_ = (w.val & 0x02) ? 1 : 0;
                 const int freqHz = (liveGlueRes_ == 2) ? 71 : (liveGlueFreq50_ ? 50 : 60);
+                // DIAG (NEOST_GLUE_DIAG) : chaque écriture appliquée à la Glue, avec
+                // sa datation ligne/cycle et le masque résultant — à diff'er contre
+                // Hatari `video_border_h` (les « detect ... » de Video_Update_Glue_State).
+                static const bool glueDiag = std::getenv("NEOST_GLUE_DIAG") != nullptr;
                 updateGlueState(wl, w.frameCycle % cpl, w.isRes, freqHz);
+                if (glueDiag)
+                    std::fprintf(stderr, "[GLUP] line=%d cyc=%d %s freq=%d -> mask=%03x de=%d..%d\n",
+                                 wl, int(w.frameCycle % cpl), w.isRes ? "res" : "sync", freqHz,
+                                 glueLines_[wl].borderMask, glueLines_[wl].displayStartCycle,
+                                 glueLines_[wl].displayEndCycle);
                 ++liveGlueWi_;
                 continue;
             }
@@ -391,6 +400,12 @@ int Shifter::glueLineBytes(int scanline) const {
     else if (bm & glue::RIGHT_MINUS_2) bytes -= 2;
     else if (bm & glue::RIGHT_OFF)     bytes += 44;      // BORDERBYTES_RIGHT
     if (bm & glue::RIGHT_OFF_FULL)     bytes += 22;      // BORDERBYTES_RIGHT_FULL
+    // DIAG (NEOST_GLUE_DIAG) : décision Glue par ligne à tricks — à diff'er contre
+    // la trace Hatari `video_res,video_sync` (detect remove/extend border).
+    static const bool glueDiag = std::getenv("NEOST_GLUE_DIAG") != nullptr;
+    if (glueDiag && bytes != 160)
+        std::fprintf(stderr, "[GLUE] line=%d mask=%03x de=%d..%d bytes=%d\n",
+                     scanline, L.borderMask, L.displayStartCycle, L.displayEndCycle, bytes);
     return bytes;
 }
 
