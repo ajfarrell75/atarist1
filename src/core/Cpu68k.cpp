@@ -135,6 +135,17 @@ namespace {
     int     g_desiredIpl  = 0;       // niveau IPL calculé (immédiat, broche « réelle »)
     int     g_appliedIpl  = 0;       // niveau dernier PROPAGÉ à la broche Moira (reg.ipl via POLL_IPL)
     int64_t g_iplChgClock = -1000;   // horloge (cœur) du dernier changement de g_desiredIpl
+    // Pré-armement des broches IRQ vidéo (cf. Cpu68k::armHblPinAt/.hpp) : cycle BUS
+    // auquel la broche doit monter, appliqué par sync() en cours d'instruction.
+    // −1 = inactif. g_pinNextDue = min des deux (chemin chaud O(1) dans sync()).
+    int64_t g_hblPinDue   = -1;
+    int64_t g_vblPinDue   = -1;
+    int64_t g_pinNextDue  = -1;
+    inline void recomputePinNextDue() {
+        g_pinNextDue = g_hblPinDue;
+        if (g_vblPinDue >= 0 && (g_pinNextDue < 0 || g_vblPinDue < g_pinNextDue))
+            g_pinNextDue = g_vblPinDue;
+    }
     inline int64_t busOfClock(int64_t c) {
         return g_cpuMul == 1 ? c + g_cpuBias : (c + g_cpuBias) >> 1;
     }
@@ -296,6 +307,16 @@ public:
     void sync(int n) override {
         setClock(getClock() + n);             // défaut Moira (avance l'horloge du cœur)
         if (!g_blockDispatch && g_sched && !g_inReset) g_sched->syncTo(busOfClock(static_cast<int64_t>(getClock())));
+        // Broches IRQ vidéo PRÉ-ARMÉES (HBL/VBL) : montée au cycle bus EXACT, en
+        // cours d'instruction — l'instruction qui ENJAMBE l'événement la voit à son
+        // POLL_IPL, comme WinUAE (pin posée dans do_cycles). Cf. Cpu68k::armHblPinAt.
+        if (g_pinNextDue >= 0 && busOfClock(static_cast<int64_t>(getClock())) >= g_pinNextDue) {
+            const int64_t busNow = busOfClock(static_cast<int64_t>(getClock()));
+            if (g_hblPinDue >= 0 && busNow >= g_hblPinDue) { g_hblPinDue = -1; g_hblPending = true; }
+            if (g_vblPinDue >= 0 && busNow >= g_vblPinDue) { g_vblPinDue = -1; g_vblPending = true; }
+            recomputePinNextDue();
+            neostUpdateIpl();
+        }
         // DEEP cpuipldelay : propage le niveau IPL désiré vers la broche une fois le délai de
         // reconnaissance (4 cyc) écoulé depuis son changement → POLL_IPL le voit alors, comme
         // WinUAE ipl_fetch_next. Gated NEOST_IPLDELAY ; sinon setIPL est immédiat (cf. neostUpdateIpl).
@@ -682,6 +703,20 @@ void Cpu68k::raiseHbl() {
     g_hblPending = true;
     neostUpdateIpl();
 }
+
+// Pré-armement des broches IRQ vidéo — cf. .hpp. Appelées par Machine au moment
+// où l'événement est PLANIFIÉ (l'instant exact est connu d'avance) ; sync() les
+// applique au cycle bus près, en cours d'instruction (modèle bloc conservé).
+// NEOST_PIN_ARM : masque A/B — bit0 = HBL, bit1 = VBL. DÉFAUT 1 = HBL seule :
+// la broche VBL exacte casse le loader d'Enchanted Land (mesuré 2026-07-02 :
+// chargement infini, jamais l'intro — cause à investiguer, probablement un
+// couplage d'ordre VBL↔IKBD/FDC pendant le chargement). La broche HBL est LA
+// broche beam-sync critique (handlers par-ligne) ; la VBL garde le comportement
+// historique (levée au dispatch de bloc, retard 0..24 cyc).
+namespace { int g_pinArmMask = []{ const char* s = std::getenv("NEOST_PIN_ARM");
+                                   return s ? std::atoi(s) : 1; }(); }
+void Cpu68k::armHblPinAt(int64_t busCycle) { if (g_pinArmMask & 1) { g_hblPinDue = busCycle; recomputePinNextDue(); } }
+void Cpu68k::armVblPinAt(int64_t busCycle) { if (g_pinArmMask & 2) { g_vblPinDue = busCycle; recomputePinNextDue(); } }
 
 uint32_t Cpu68k::pc() const {
     return g_moira->getPC0();
