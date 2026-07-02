@@ -156,39 +156,40 @@ Cuddly, Super Hang-On). Décision utilisateur (2026-06-16) : **garder le sync-dr
       ⚠ Les diagnostics de cette passe restent branchés (gated) : `NEOST_FRAME_DIAG`
       (phase de l'ancre de trame), `NEOST_BUS_DIAG=<page-pc-hex>` (séquence bus + mod 4
       par accès), champ `into=` dans `NEOST_VC_TRACE`.
-    * 🚧 **CHANTIER OUVERT (plan d'implémentation) — longueurs de ligne PAR-LIGNE
-      (`HBL_Pos`/`nCyclesPerLine`, menu robot Cuddly).** Diagnostic : cf. TODO.md
-      (traces croisées `video_border_h` ↔ `NEOST_GLUE_DIAG` [GLUE]/[GLUP], commit
-      ec40677). Le port des masques/DE de `Video_Update_Glue_State` est FIDÈLE
-      (vérifié branche à branche, y c. verticale top/bottom) ; il MANQUE le canal
-      (HBL_Pos, nCyclesPerLine) que chaque branche « Freq_match » pose (video.c
-      2246-2438 STF, application 2849-2877) :
-      **(a)** match 71 Hz → (220, 224) ; match 60 Hz (lc<Line_Set_Pal) → (504, 508) ;
-      match 50 Hz (lc≤HDE_On_Low_60 ou ≤Line_Set_Pal) → (508, 512) — STF ; les
-      branches phase 2 (milieu de ligne) n'en posent PAS.
-      **(b)** application live : si la ligne de l'écriture == ligne HBL courante,
-      REPROGRAMMER l'événement HBL de la ligne à lineStart+HBL_Pos (≙
-      Video_AddInterruptHBL) et poser la longueur ; à la dernière ligne, ajuster la
-      VBL (±4, ≙ CyclesPerVBL). Timer B : repositionné si DE start/end a changé
-      (≙ Video_AddInterruptTimerB — vérifier que le recalcul par-ligne actuel de
-      Machine::onTimerB suffit quand l'écriture arrive APRÈS la planification).
-      **(c)** ATTRIBUTION : calculer (ligne, lineCyc) AU MOMENT de recordSyncWrite
-      (échelle des débuts de ligne réels, ≙ ShifterLines[].StartCycle /
-      Video_ConvertPosition avec les cas frontière ±4 de video.c:1195-1241) et les
-      STOCKER dans SyncWrite — liveGlueCatchUp/replayGlue consomment ces champs au
-      lieu de diviser par cpl fixe. Machine maintient le début de ligne réel
-      (généralisation de lineCarry_ : cumul des (cpl − nCyclesPerLine) de toutes
-      les lignes écoulées, plus seulement le cas hi-res V2).
-      **(d)** generaliser l'ébauche V2 de replayGlue (longueur par ligne = dernier
-      nCyclesPerLine posé pendant la ligne, défaut cpl) et retirer le heuristique
-      « impulsion hi ≤57 → 224 ».
-      **(e)** datation beamClock par-ligne (fc/cpl dans Shifter::position,
-      videoCounter, WDIAG…) — dernier étage, à ne faire qu'après (a)-(d) verts.
-      Gate : NEOST_LINELEN (défaut OFF tant que étalons+EL lock 100 %+LX ne sont pas
-      re-validés avec). Bancs : menu robot (saut {0,−3,−6} → 0 ; mur pleine largeur),
-      étalons 19/19, EL in-game lock 100 %, poll-entry.
-      Outils prêts : NEOST_VARLINE_TRACE (mesure fixe↔variable sans rien changer),
-      repro headless une commande, oracle AVI + trace border (session scratchpad).
+    * ✅ **Canal longueurs de ligne PAR-LIGNE porté** (`HBL_Pos`/`nCyclesPerLine`, commits
+      `c680e1a`/`10c72b8`, gated `NEOST_LINELEN`). Le menu robot restaure 512 finaux
+      (paires freq/res du menu) — **fidèle, ne corrige PAS le clignotement**. ⇒ les
+      longueurs de ligne ne sont **plus** le suspect du menu Cuddly (mesuré 2026-07-02).
+    * 🚧 **CHANTIER OUVERT — menu robot Cuddly (clignotement vertical, bistable).**
+      Diagnostic raffiné (2026-07-02 fin de session, traces `video_border_h` +
+      `NEOST_GLUE_DIAG`, cf. TODO.md) :
+      **Chaîne causale mesurée :**
+      1. ~**47 %** des trames ratent le retrait bordure haute → fenêtre oscille
+         **34..310** (haut+bas ouverts) ↔ **63..263** (nominale) = le clignotement.
+      2. Trames ratées : 1ʳᵉ paire 60/50 émise à **L34** au lieu de **L33** → rampe
+         démo une ligne trop tard.
+      3. Poll son départ **`pc=f264`** (échantillonne L34–36) lit **`$8209`** : l'avancement
+         du compteur dépend du retrait haut **de la trame courante** — trame verrouillée →
+         compteur avance dès L34 ; trame ratée → gelé (**Δ=−160/ligne**, mesuré).
+      4. **Boucle bistable** NeoST (oscille entre les deux états) vs Hatari qui converge
+         vers l'attracteur « toujours verrouillé ». Écart initial = **±160 octets** (une
+         ligne) dans la valeur `$8209` vue par le poll.
+      **Éliminé (avec mesures) :** longueurs de ligne (canal ci-dessus) ; sortie fenêtre
+      du retrait haut (paire reste 448–456 ≪ 502, démo compense la précession E-clock) ;
+      masques Glue par ligne (strictement identiques trames stables vs sautées).
+      **Objectif restant :** fenêtre verticale **3 lignes** byte-exactes — VDE_On (34 vs 35),
+      comptage lignes bordure haute ouverte, ou `Video_RestartVideoCounter`.
+      **Prochaine sonde :** oracle Hatari `--trace video_addr` sur le menu → comparer
+      `$8209` à **L35**, état verrouillé vs NeoST ; l'écart ±160 dira le levier exact.
+      **Plan d'implémentation résiduel** (port masques/DE Glue = FIDÈLE, ec40677 ; reste
+      V_DE live + datation compteur par trame, cf. video.c 2246-2438 / 2849-2877) :
+      **(a)** VDE_On live + comptage lignes bordure haute (sticky 34, jamais remonter) ;
+      **(b)** `Video_RestartVideoCounter` / latch base compteur (cf. fix EL VC_RESTART) ;
+      **(c)** datation beamClock par-ligne (fc/cpl, dernier étage). Gate : `NEOST_LINELEN`
+      (défaut OFF ; EL lock 100 % + LX verts — re-valider avec le flag ON).
+      Bancs : menu robot (clignotement 47 % → 0 ; mur pleine largeur), étalons 19/19,
+      poll-entry. Repro headless : `--fastfdc --keys-at 3000 " "`, ≈ trame 6000.
+      Outils : `NEOST_VARLINE_TRACE`, `NEOST_GLUE_DIAG`, `NEOST_BORDER_TRACE`, oracle AVI.
 - 🎯 **PERCÉE (2026-06-17) — `NEOST_RAM_SLOT`+`NEOST_IACK` désormais DÉFAUT ON.** Les DEUX flags
   ENSEMBLE font FONCTIONNER le mécanisme d'overscan beam-sync : sans eux le handler HBL d'EL est
   ~88 cyc trop rapide → l'impulsion res se VERROUILLE (trick=0, zéro overscan) ; avec eux la dérive
@@ -550,7 +551,8 @@ Avec la fondation bloc+PT, plus de deadlock ; EL boote/intro propre. Reste, par 
    test-spécifique). C'est de la convergence boot/HBL fine. ⚠ NE PAS ajouter de branche Glue (fidèle :
    `updateGlueState` = port FIDÈLE, glue-selftest 19/19). Cf. [[enchanted-land-glue-live]],
    [[v2-resswitch-validated]], [[video-geometry-50-60-71]].
-2. **LX jitter de titre** (~1.5 %, subtil ; LX rend déjà) ; **Cuddly menu robot** / **SHO course**
+2. **LX jitter de titre** (~1.5 %, subtil ; LX rend déjà) ; **Cuddly menu robot** (clignotement
+   bistable ±160 octets / 3 lignes — cf. chantier ci-dessus, oracle `$8209` L35) / **SHO course**
    (inatteignables headless → navigation requise).
 3. **E-clock @ IACK** (poll-beat période-3 vs Hatari période-5) — RAFFINEMENT de phase ; n'a PAS
    amélioré le screenshot ni les jeux → faible priorité. Si repris : éditer `execInterrupt<C68000>`.
