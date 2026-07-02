@@ -102,6 +102,20 @@ Cuddly, Super Hang-On). Décision utilisateur (2026-06-16) : **garder le sync-dr
       exacte** (chaîne TIMER_B→MFP_IRQ encore dispatch-late) — c'est elle qui fait que
       `IPLFETCH=1` casse le loader EL (boucle FDC sur IRQ MFP : broche tardive + report = un
       octet raté).
+    * 🚨 **4ᵉ PASSE (régression SHO) — pré-armement RETIRÉ, remplacé par le COMMIT au dispatch.**
+      Le pré-armement (broche mi-instruction) créait une DOUBLE-PRISE HBL (exception dans le
+      bloc → IACK efface → le callback re-lève → 2ᵉ HBL, période libre ~427 cyc) → course
+      Super Hang-On injouable. Oracle INSTRUMENTÉ (fprintf [HPIN]/[HFETCH]/[HEXC] dans
+      extern/hatari, gated NEOST_HAT_IPLDIAG) : **Hatari CE traite les INT vidéo À LA
+      FRONTIÈRE d'instruction** (CycInt au boundary, currcycle flushé par instruction) et
+      `intlev_load → ipl_fetch_now` commit l'IPL SANS délai → **exc−broche = 0** (12709/12711).
+      La règle `ipl_fetch_next` 4/2-cyc ne concerne que les changements mid-accès (style Amiga).
+      ⇒ modèle fidèle = **commit immédiat au dispatch** : `NEOST_RAISE_COMMIT` défaut 1 (HBL ;
+      le commit VBL casse le loader EL — couplage VBL↔IKBD/FDC, même signature que le pré-arm
+      VBL, À CREUSER), `NEOST_PIN_ARM` défaut 0. Résultat : cadence d'exception = Hatari EXACT
+      ({508,512,520} @ 2:2:1, motif par-5-lignes {x+8,x+4,x+4,x,x} identique, E-clock {2,4}
+      identique) ; **flicker EL 40/40 — top-trick PARFAIT, une première** ; positions moteur
+      376/384 = Hatari ; taux de lock ~47-66 % = dernier verrou (+ bancs poll à re-fermer).
     * ⚠ **PIÈGE : les bancs poll/poll2 ne sont PAS comparables mono-trame** (précession
       E-clock, 5 contenus distincts, frames AVI dupliquées ~2×) ; et leur ancien « 180/180 »
       était CO-CALIBRÉ avec l'entrée d'avant (broche au dispatch) — depuis broche-exacte/HBL 508
