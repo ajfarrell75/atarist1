@@ -1384,41 +1384,61 @@ uint32_t Shifter::videoCounter() const {
         // Offset intra-ligne UNIQUEMENT si la ligne courante n'a pas déjà été rendue
         // (la < vcLineY_ = bordure droite : le stride de la ligne est déjà accumulé).
         if (la < disp2 && laEff >= vcLineY_) {
-            // Fenêtre DE RÉELLE de la ligne courante (machine Glue LIVE) : une bascule
-            // 60/50 Hz mi-ligne déplace la fin du DE (right-2, stop-middle, retraits) et
-            // le compteur doit le refléter EN DIRECT — port de Video_CalculateAddress,
-            // qui lit ShifterLines[HBL].DisplayStartCycle/EndCycle. C'est ce que mesure
-            // la calibration fullscreen d'Enchanted Land sur $FF8209 (impulsion 60→50
-            // enjambant le comparateur 372 → ligne -2 octets). Trame SANS écriture
-            // freq/res → chemin historique inchangé (zéro régression).
+            // Port FIDÈLE de Video_CalculateAddress (video.c:1508-1565, 2026-07-02) :
+            // pour l'intra-ligne, Hatari NE lit PAS DisplayStart/EndCycle de la Glue —
+            // il RECONSTRUIT le départ (ds) et la TAILLE (CurSize) depuis le
+            // borderMask :  LEFT_OFF → ds = LINE_START_CYCLE_71 = **0** (pas le
+            // HDE_On_Hi=4 de la Glue !), LEFT_PLUS_2 → 52 ; fin = ds + CurSize×2
+            // avec CurSize par la table de bordures (fullscreen = 230). L'ancienne
+            // version NeoST (ds = displayStartCycle, taille = (End−Start)/2 = 229)
+            // était fausse de 2-4 octets sur les lignes à tricks → le stabilisateur
+            // beam-sync d'Enchanted Land en jeu (poll $8209 sur lignes fullscreen)
+            // se calait −16 cyc vs Hatari (freq 360/368 au lieu de 376/384) → ses
+            // impulsions rataient la fenêtre bordure-droite (372,376] → scroll qui
+            // saute. Trame SANS écriture freq/res → chemin historique inchangé.
             int ds = lineStart, lineBytes = bpl;
-            bool leftTrick = false;
+            bool leftOff = false;
+            uint32_t bm = 0;
+            bool haveGlue = false;
             if (frameMode_ != Mode::High && !syncWrites_.empty()
                 && static_cast<std::size_t>(line) + 1 < glueLines_.size()) {
                 const_cast<Shifter*>(this)->liveGlueCatchUp(line);
                 const GlueLine& L = glueLines_[static_cast<std::size_t>(line)];
                 if (L.displayStartCycle >= 0) {
-                    ds = L.displayStartCycle;
-                    lineBytes = (L.displayEndCycle - L.displayStartCycle) >> 1;
-                    if (lineBytes < 0) lineBytes = 0;
-                    leftTrick = (L.borderMask & (glue::LEFT_OFF | glue::LEFT_PLUS_2)) != 0;
+                    haveGlue = true;
+                    bm = L.borderMask;
+                    leftOff = (bm & glue::LEFT_OFF) != 0;
+                    int curSize = 160;                                // BORDERBYTES_NORMAL
+                    if (leftOff)                       curSize += 26; // BORDERBYTES_LEFT
+                    else if (bm & glue::LEFT_PLUS_2)   curSize += 2;
+                    else if (hwScrollCount && hwScrollPrefetch) curSize += 8;
+                    if (bm & glue::STOP_MIDDLE)        curSize -= 106;
+                    else if (bm & glue::RIGHT_MINUS_2) curSize -= 2;
+                    else if (bm & glue::RIGHT_OFF)     curSize += 44; // BORDERBYTES_RIGHT
+                    if (bm & glue::RIGHT_OFF_FULL)     curSize += 22; // BORDERBYTES_RIGHT_FULL
+                    if (bm & glue::LEFT_PLUS_2)        ds = 52;       // LINE_START_CYCLE_60
+                    else if (leftOff)                  ds = 0;        // LINE_START_CYCLE_71
+                    else if (hwScrollCount && hwScrollPrefetch) ds = lineStart - 16;
+                    lineBytes = curSize;
                 }
             }
-            // Scroll fin STE avec PREFETCH : le MMU démarre 16 cycles AVANT le HDE_On
-            // et lit 8 octets de plus (port Video_CalculateAddress : « shifter starts
-            // reading 16 pixels earlier when scrolling with prefetching », sauf si un
-            // trick gauche fixe déjà le départ). C'est l'ANCRE que mesure la
-            // calibration sync-scroll d'Enchanted Land en pollant $FF8209 : sans ce
-            // -16, toutes ses impulsions visaient ~16 cycles trop tôt et aucun
-            // comparateur (372/376/462/502) n'était enjambé → bordures fermées.
-            if (hwScrollCount && hwScrollPrefetch && !leftTrick) { ds -= 16; lineBytes += 8; }
-            int nb = (X - ds) >> 1;                     // 2 cycles par octet
+            // Scroll fin STE avec PREFETCH hors trame à tricks : le MMU démarre 16
+            // cycles avant le HDE_On et lit 8 octets de plus (l'ANCRE que mesure la
+            // calibration sync-scroll d'EL — sans ce −16 ses impulsions visaient
+            // ~16 cyc trop tôt et aucun comparateur n'était enjambé).
+            if (!haveGlue && hwScrollCount && hwScrollPrefetch) { ds -= 16; lineBytes += 8; }
+            int Xc = X;
+            if (Xc < ds) Xc = ds;
+            else if (Xc > ds + lineBytes * 2) {
+                Xc = ds + lineBytes * 2;               // affichage désactivé (bordure droite)
+                addr += static_cast<uint32_t>(lineWidth) * 2u;   // STE : mots sautés dès DE off
+            }
+            int nb = (Xc - ds) >> 1;                    // 2 cycles par octet
             nb &= ~1;                                   // le shifter lit par MOTS
             // Bordure gauche ouverte : 2 octets de moins que la valeur théorique
-            // (26 octets non multiples de 4 cycles — Video_CalculateAddress).
-            if (leftTrick && nb > 0 && (glueLines_[static_cast<std::size_t>(line)].borderMask & glue::LEFT_OFF))
-                nb -= 2;
-            if (nb < 0) nb = 0; else if (nb > lineBytes) nb = lineBytes;
+            // (26 octets non multiples de 4 cycles) — SANS garde nb>0, comme Hatari.
+            if (leftOff) nb -= 2;
+            if (bm & glue::NO_DE) nb = 0;
             addr += static_cast<uint32_t>(nb);
         }
     }
