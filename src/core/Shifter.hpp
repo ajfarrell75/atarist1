@@ -176,6 +176,16 @@ private:
     bool     newHwScrollPrefetch_ = false;
     int      newLineWidth_       = -1;
     int      vcDelayedOffset_    = 0;   // écart compteur (écriture $FF8205/07/09 pendant le DE)
+    // RESTART du compteur en fin de trame (port Video_RestartVideoCounter : ligne
+    // 310/260, cycle 56 [+4 STE], AVANT le VBL) : base RE-LATCHÉE depuis $FF8201/03
+    // à cet instant. −1 = pas (encore) redémarré cette trame. Les lectures
+    // $FF8205/07/09 des lignes ≥ ligne de restart renvoient CETTE base (compteur
+    // rechargé, figé jusqu'au DE de la trame suivante) ; beginFrame la reprend comme
+    // vcFrameBase_. C'est CE relatch (pas le début de trame) que sondent les moteurs
+    // double-buffer beam-syncés (Enchanted Land en jeu : le stabilisateur lit $8209
+    // et doit voir la base posée par le handler VBL, écrite APRÈS la ligne 0 NeoST).
+    int64_t  vcRestartBase_      = -1;
+    int      vcRestartLine_      = 0;   // ligne absolue du restart effectué
     // Fin de ligne active (≙ fin de Video_CopyScreenLine) : avance vcLineBase_ du
     // stride (+2 si scroll fin = prefetch d'un mot), applique l'offset compteur
     // différé puis les valeurs HSCROLL/LINEWIDTH en attente. Appelée par renderLine.
@@ -191,6 +201,12 @@ public:
     // Pilote les tics Timer B event-count (Machine::onTimerB), comme Hatari
     // Video_AddInterruptTimerB recalculé par ligne.
     bool liveLineDisplayed(int line);
+
+    // RESTART du compteur vidéo en fin de trame (port Video_RestartVideoCounter,
+    // cf. vcRestartBase_). Appelé par Machine à la ligne 310 (50 Hz) / 260 (60 Hz),
+    // cycle 56 (STF) / 60 (STE), si la fréquence du registre sync correspond
+    // (check LIVE, comme Hatari qui relit $FF820A à cet instant).
+    void restartVideoCounter(int line);
 
 private:
     // Position du faisceau : ligne absolue + cycle dans la ligne. false si pas d'horloge.

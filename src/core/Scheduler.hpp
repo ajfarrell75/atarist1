@@ -57,7 +57,9 @@ public:
     // séquenceurs qui streament la sortie MIDI par interruption (cf. midi.c).
     // BLITTER = tranche non-hog suivante du blitter : 64 accès bus blitter (256
     // cycles, CPU arrêté) alternés avec 64 accès CPU (cf. Blitter::onSlice).
-    enum Source { RENDER, TIMER_A, TIMER_B, TIMER_B_DELAY, TIMER_C, TIMER_D, MFP_IRQ, FDC, FDC_INDEX, DMASND, IKBD, IKBD_RX, IKBD_TX, MIDI_TX, MICROWIRE, BLITTER, HBL, VBL, SRC_COUNT };
+    // VC_RESTART = rechargement du compteur vidéo en fin de trame (port
+    // Video_RestartVideoCounter : ligne 310/260, cycle 56 [+4 STE]) — cf. Machine.
+    enum Source { RENDER, TIMER_A, TIMER_B, TIMER_B_DELAY, TIMER_C, TIMER_D, MFP_IRQ, FDC, FDC_INDEX, DMASND, IKBD, IKBD_RX, IKBD_TX, MIDI_TX, MICROWIRE, BLITTER, VC_RESTART, HBL, VBL, SRC_COUNT };
 
     using Callback = std::function<void()>;
 

@@ -15,6 +15,45 @@ Cuddly, Super Hang-On). Décision utilisateur (2026-06-16) : **garder le sync-dr
 > mesurées » avant de rouvrir une piste.
 
 **État actuel (résumé).** Tout est sur `main`, **build vert** (`run_etalons` 19/0 + TOUS OK).
+- 🎯🎯 **REFONTE COORDONNÉE §8 EXÉCUTÉE (2026-07-02, oracle Hatari 2.6.1-devel bâti dans
+  `extern/hatari/build`, Ubuntu).** Le résidu de phase **+24 est ATTRIBUÉ et CORRIGÉ** — c'était
+  un CUMUL de 4 biais, tous mesurés :
+  1. **+8 IACK sur-compté** : l'ancien `willInterrupt` ajoutait E-wait+14 PAR-DESSUS les
+     `SYNC(4)+SYNC(4)` stock de Moira. → hooks `iackSyncBefore/After` AU point d'IACK réel
+     (Moira.h + MoiraExceptions_cpp.h vendorisés, `NEOST_IACK_AT` défaut ON). Fait émerger le
+     motif **mod-20** des positions d'IRQ (= Hatari).
+  2. **+2 skew d'alignement** : `chipWait8` alignait le point-MILIEU de l'accès Moira au lieu du
+     DÉBUT (WinUAE) → fin d'accès ≡2 mod 4 vs ≡0 Hatari. → `slot=(c+bias−2)&3`.
+  3. **−8 origine d'horloge trame** (NeoST lit +8 vs les coordonnées ligne Hatari), mesuré 2×
+     indépendamment : read fidèle empirique **−14** (banc poll + variante `lsr#3` exposant le
+     bit 3 : l'ancien +4 était FAUX de +8 octets, invisible en palette) ; write fidèle **−6**
+     (diff du calibrateur loader EL, beam-syncé : positions 456/452/448/444 = Hatari EXACT).
+     → `kVideoCounterReadOffsetCyc=−14`, `kSyncWriteOffsetCyc=−6`, `syncCpuBus` aligne fc+2.
+  4. **HBL à la frontière de ligne** (512, `HBL_VIDEO_CYCLE_OFFSET=0`) au lieu de cpl−4
+     (calibration périmée d'avant l'IACK fidèle). `NEOST_HBL_OFF` pour A/B.
+  - **+ 2 bugs structurels débusqués par l'oracle** : (a) le **commit du compteur à DE_end** —
+    une écriture 60 Hz datée 376 (scan de calibration du loader EL, ouverture bordure droite)
+    arrivait APRÈS le commit → $8209 figé → **loader bloqué à $ee78 pour toujours** ; fix =
+    commit PARESSEUX (`while (vcLineY_ < y) endVideoLine()` en tête de renderLine, ≙
+    `Video_EndHBL`). (b) **`Video_RestartVideoCounter` NON porté** (ligne 310/260, cycle 56) :
+    la base était latchée à la ligne 0, AVANT le handler VBL du jeu → le stabilisateur d'EL
+    lisait l'ANCIEN buffer toute la trame (aveugle) ; fix = event `VC_RESTART` (Scheduler) +
+    latch figé (`vcRestartBase_`). L'étalon `overscan_top` re-baseliné : les 24 px de diff
+    étaient FAUX dans l'ancienne référence (vérifié pixel-à-pixel contre Hatari).
+  - **RÉSULTATS** : poll-bench **180/180 byte-identique** Hatari (2 variantes) ; loader EL
+    **répare** ; flicker EL **38-40/40** (base 34/40) ; **LX titre 0,00 % de churn** (était
+    ~1,5 %) ; EL en jeu : paysage NET, moteur fullscreen verrouillé **72 %** (53 % avant HBL@512)
+    vs Hatari 100 % ; étalons **19/0 + TOUS OK**. `NEOST_IPLFETCH=1` casse le loader EL même en
+    config fidèle → reste OFF.
+  - **RESTE (pièce vidéo, plus CPU)** : le moteur par-ligne d'EL verrouille à **−16 (freq) /
+    +4 (res)** vs l'oracle in-game (Hatari : freq 376/384, res 4/12 & 444/456, sd=0) → ses
+    impulsions freq ratent la fenêtre bordure-droite (372,376] → retraits G/D sporadiques au
+    lieu de chaque-ligne → micro-sauts de scroll résiduels. Balayé : `NEOST_ECLOCK_PHASE`
+    (déplace le TAUX 57-75 %, jamais la POSITION), offsets read (cassent le loader, verrouillé
+    par l'oracle). Piste suivante : instrumenter l'entrée du handler HBL in-game (+4 constant
+    sur les sites res à pc IDENTIQUES ; le +(−20) du site freq vient du nop-slide auto-patché).
+    Oracle : cmd-fifo réel ~100 s (`hatari-event keydown 57` / `keyup`, `hatari-option --trace
+    video_sync,video_res` — PAS `hatari-trace`, et la fifo est créée PAR Hatari).
 - 🎯 **PERCÉE (2026-06-17) — `NEOST_RAM_SLOT`+`NEOST_IACK` désormais DÉFAUT ON.** Les DEUX flags
   ENSEMBLE font FONCTIONNER le mécanisme d'overscan beam-sync : sans eux le handler HBL d'EL est
   ~88 cyc trop rapide → l'impulsion res se VERROUILLE (trick=0, zéro overscan) ; avec eux la dérive

@@ -80,6 +80,11 @@ namespace {
     // _cpp.h:533-537). On l'ajoute à la phase E-clock pour la calculer comme au cycle d'IACK,
     // bien que le setClock soit fait depuis willInterrupt (seul point fiable hors mid-accès).
     int     g_iackLead    = []{ const char* s = std::getenv("NEOST_IACK_LEAD"); return s ? std::atoi(s) : 14; }();
+    // NEOST_IACK_AT (défaut ON) : E-clock + bloc IACK appliqués AU point d'IACK réel
+    // (hooks iackSyncBefore/After dans execInterrupt<C68000>), en REMPLACEMENT des
+    // SYNC(4)+SYNC(4) stock — fidèle Hatari iack_cycle. =0 → ancien modèle willInterrupt
+    // (lead constant, sur-compte +8, phase E-clock détruite par l'alignement du push).
+    bool    g_iackAt      = []{ const char* s = std::getenv("NEOST_IACK_AT"); return s ? std::atoi(s) != 0 : true; }();
     // DEEP (opt-in NEOST_IPLDELAY) : règle cpuipldelay de WinUAE (ipl_fetch_next, newcpu.c:4982).
     // Moira reconnaît l'IPL IMMÉDIATEMENT (POLL_IPL = reg.ipl = ipl) ; WinUAE DIFFÈRE la
     // reconnaissance d'une instruction si le pin IPL a changé < 4 cyc avant le point
@@ -246,14 +251,21 @@ public:
     void latchDb8(moira::u8 v) const { g_bus->cpuDb = moira::u16((moira::u16(v) << 8) | v); }
 
     // Alignement créneau bus 4 cyc (8 MHz) sur la RAM ST avant un accès — cf. g_ramSlot.
-    // slot = horloge bus & 3 ; si non nul, attendre (4 - slot) cycles. Port fidèle de
-    // wait_cpu_cycle_read (custom.c) : la GLUE partage la RAM en créneaux de 4 cyc bus,
-    // le CPU attend son tour. Pas de +4 (l'accès lui-même est déjà facturé par Moira).
+    // Port fidèle de wait_cpu_cycle_read (custom.c) : la GLUE partage la RAM en créneaux
+    // de 4 cyc bus, le CPU attend son tour. Pas de +4 (l'accès est déjà facturé par Moira).
+    // ⚠ PHASE (2026-07-02) : WinUAE aligne le DÉBUT de l'accès sur la grille — l'accès
+    // occupe [4k, 4k+4], fin ≡ 0 (mod 4). Ce callback est appelé au point-MILIEU de
+    // l'accès Moira (read<>/write<> : SYNC(2) · callback · SYNC(2)), soit début+2 → on
+    // aligne (c − 2). L'ancienne version alignait c lui-même (= le milieu) → fin d'accès
+    // ≡ 2 (mod 4), skew structurel de +2 vs Hatari sur TOUTE la datation MMIO (mesuré au
+    // banc respulse : line_cyc Hatari ≡ 0 mod 4 en fin d'accès, NeoST ≡ 2). Les offsets
+    // de datation Shifter (write +2, read −6) supposent CE repère. NEOST_RAM_SLOT_PHASE=2
+    // restaure l'ancien alignement (A/B).
     void chipWait8(moira::u32 a) const {
         if (!g_ramSlot || (a & 0x00FFFFFFu) >= 0x400000u) return;
         auto* self = const_cast<NeostMoira*>(this);
         const moira::i64 c = self->getClock();
-        const int slot = int((c + g_cpuBias + g_ramSlotPhase) & 3);
+        const int slot = int((c + g_cpuBias + g_ramSlotPhase - 2) & 3);
         if (slot) self->setClock(c + (4 - slot));
     }
 
@@ -318,7 +330,13 @@ public:
     // le timing des instructions reste intact.
     void willInterrupt(moira::u8 level) override {
         if (g_iackOn) {                                          // IACK fidèle WinUAE (E-clock @ IACK + bloc occupé)
-            // setClock fiable ICI (≠ readIrqUserVector qui est mid-accès → écrasé par les SYNC du read<>).
+            if (g_iackAt) return;                                // ← nouveau modèle : tout se fait AU point d'IACK
+                                                                 //   (iackSyncBefore/After), plus rien ici.
+            // LEGACY (NEOST_IACK_AT=0) : E-clock + bloc appliqués AVANT l'entrée d'exception,
+            // avec un lead-in constant. ⚠ Mesuré (2026-07-02) : SUR-COMPTE de +8 (les SYNC(4)+
+            // SYNC(4) stock de Moira restent facturés en plus du bloc) et la phase E-clock est
+            // fausse (l'alignement bus du push PClo re-quantifie l'horloge APRÈS ce calcul →
+            // positions d'impulsion uniformes mod 4 au lieu du motif mod 20 de Hatari).
             if (level == 2 || level == 4) {                      // auto-vecteur HBL/VBL : E-clock + bloc vidéo
                 const int64_t busClk = busOfClock(getClock() + g_iackLead) + g_eclockPhase;
                 int wait = 10 - static_cast<int>(((busClk % 10) + 10) % 10);
@@ -335,6 +353,38 @@ public:
         int wait = 10 - static_cast<int>(busClk % 10);           // cycles BUS jusqu'au prochain front E
         if (wait == 10) wait = 0;                                // déjà aligné
         if (wait) setClock(getClock() + static_cast<int64_t>(wait) * g_cpuMul);
+    }
+
+    // Port FIDÈLE de Hatari `iack_cycle` (newcpu.c:2958-3019) AU point d'IACK du 68000
+    // (execInterrupt<C68000> : entre le push PClo et les pushes SR/PChi — cf. hooks
+    // Moira.h). Remplace les SYNC(4)+SYNC(4) stock (total 8) par :
+    //   HBL/VBL (niv 2/4) : E-clock wait (0..8, motif [0 8 6 4 2], calculé ICI — la
+    //     phase d'horloge est déjà quantifiée par l'alignement bus du push PClo,
+    //     comme chez Hatari où M68000_WaitEClock lit l'horloge APRÈS ce push) puis
+    //     CPU_IACK_CYCLES_VIDEO_CE(10) + idle(4) = g_iackVideo (14).
+    //   MFP (niv 6) : vecteur lu immédiatement (comme MFP_ProcessIACK), puis
+    //     CPU_IACK_CYCLES_MFP_CE(12) + idle(4) = g_iackMfp + 4.
+    //   Autres (dont SCC niv 5) : stock Moira 4/4 (inchangé).
+    // C'est CE placement qui fait émerger le motif mod-20 (E-clock mod-10 × créneau
+    // bus mod-4) des positions d'entrée d'IRQ mesuré chez Hatari — l'ancien modèle
+    // willInterrupt+lead le détruisait (positions uniformes mod 4). Cf.
+    // docs/MOIRA_WINUAE_CONVERGENCE.md §8. NEOST_IACK_AT=0 restaure l'ancien modèle.
+    int iackSyncBefore(moira::u8 level) override {
+        if (!g_iackOn || !g_iackAt) return 4;                    // stock Moira
+        if (level == 2 || level == 4) {                          // E-clock wait au cycle d'IACK
+            const int64_t busClk = busOfClock(static_cast<int64_t>(getClock())) + g_eclockPhase;
+            int wait = 10 - static_cast<int>(((busClk % 10) + 10) % 10);
+            if (wait == 10) wait = 0;
+            return wait * g_cpuMul;
+        }
+        if (level == 6) return 0;                                // MFP : vecteur immédiat
+        return 4;
+    }
+    int iackSyncAfter(moira::u8 level) override {
+        if (!g_iackOn || !g_iackAt) return 4;                    // stock Moira
+        if (level == 2 || level == 4) return g_iackVideo * g_cpuMul;   // 10 (IACK→DTACK) + 4 idle
+        if (level == 6) return (g_iackMfp + 4) * g_cpuMul;             // 12 (IACK→DTACK) + 4 idle
+        return 4;
     }
 
     moira::u16 readIrqUserVector(moira::u8 level) const override {

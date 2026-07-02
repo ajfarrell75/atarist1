@@ -346,7 +346,16 @@ protected:
     
     // Called when an interrupt is about to be processed
     virtual void willInterrupt(u8 level) { }
-    
+
+    // NEOST : cycles idle autour du CYCLE D'IACK du 68000 (execInterrupt<C68000>,
+    // entre l'empilement de PClo et celui de SR/PChi). Stock Moira = SYNC(4) avant
+    // la lecture du vecteur et SYNC(4) après. Un sous-classeur (NeoST) peut y porter
+    // le modèle Hatari/WinUAE `iack_cycle` (newcpu.c) : attente E-clock (avant) +
+    // bloc IACK→DTACK + idle (après), calculés À CE POINT précis — la phase
+    // d'horloge y est déjà quantifiée par l'alignement bus du push PClo.
+    virtual int iackSyncBefore(u8 level) { return 4; }
+    virtual int iackSyncAfter(u8 level) { return 4; }
+
     // Called when the CPU jumps to an exception vector
     virtual void didJumpToVector(int nr, u32 addr) { }
 

@@ -87,6 +87,27 @@ taguées (0.1.x). Le restant est dans [`TODO.md`](TODO.md).
   `--trace video_res`) — séparément, aucun des deux ne suffit. **Désormais défaut ON** (`=0` pour
   désactiver) ; zone active byte-identique Hatari, `overscan_top` re-baseliné (56 px en bordure overscan
   seule). Reste l'overscan VERTICAL (phase absolue par-ligne). Détail/limites → doc maître.
+- **Refonte beam-sync COORDONNÉE (2026-07-02) — le résidu de phase +24 ATTRIBUÉ et CORRIGÉ.**
+  Oracle Hatari 2.6.1-devel bâti dans `extern/hatari/build` (Ubuntu). Quatre biais mesurés et
+  retirés ENSEMBLE : **(1)** IACK sur-compté +8 (E-clock+bloc appliqués PAR-DESSUS les SYNC stock
+  de Moira) → hooks `iackSyncBefore/After` AU point d'IACK réel (`MoiraExceptions_cpp.h` vendorisé,
+  `NEOST_IACK_AT` défaut ON) — fait émerger le motif mod-20 des positions d'IRQ = Hatari ; **(2)**
+  `chipWait8` alignait le point-MILIEU de l'accès au lieu du DÉBUT (WinUAE) → fin d'accès ≡0 mod 4
+  = Hatari ; **(3)** origine d'horloge trame +8 vs coordonnées ligne Hatari → datations calibrées à
+  l'oracle : read `$FF8205/07/09` **−14** (banc poll + variante `lsr#3` : l'ancien +4 était faux de
+  +8 octets, invisibles en palette), write freq/res **−6** (calibrateur loader EL beam-syncé =
+  Hatari EXACT) — **rustines +16/+4 retirées** ; **(4)** IRQ HBL à la frontière de ligne (512,
+  `HBL_VIDEO_CYCLE_OFFSET=0`) au lieu de cpl−4. + 2 bugs structurels débusqués par l'oracle :
+  **commit du compteur vidéo à DE_end** (une impulsion 60 Hz datée 376 arrivait APRÈS → `$8209`
+  figé → **loader EL bloqué à jamais**) → commit PARESSEUX en tête de `renderLine` (≙ Video_EndHBL) ;
+  **`Video_RestartVideoCounter` porté** (ligne 310/260 cycle 56, event `VC_RESTART`) : la base est
+  relue à CET instant (après le handler VBL du jeu) — sans quoi le stabilisateur beam-sync d'EL
+  lisait l'ancien buffer double-buffer toute la trame. **Validé** : poll-bench 180/180 byte-identique
+  Hatari (2 variantes), loader EL réparé, bordure haute EL stable (38-40/40), **Lethal Xcess titre
+  0,00 % de churn** (était ~1,5 %), étalons 19/0 + TOUS OK (`overscan_top` re-baseliné : l'ancienne
+  référence était fausse de 24 px, vérifié pixel-à-pixel contre Hatari). Reste (pièce vidéo) : le
+  moteur fullscreen d'EL verrouille à 72 % avec ses impulsions freq à −16 vs oracle → micro-sauts
+  de scroll résiduels (cf. doc maître, bloc 2026-07-02).
 
 ## Types de machine & mémoire
 - **Zone RAM « void » : on relit le dernier mot du bus de données** (port Hatari
