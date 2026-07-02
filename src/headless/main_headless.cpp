@@ -155,8 +155,10 @@ int main(int argc, char** argv) {
     // Injections DATÉES dans la boucle principale (≠ --keys/--joy qui agissent après/avant) :
     // indispensables pour piloter un menu de démo (intro → menu → déplacement) tout en
     // gardant --shot-every actif (calibration d'étalons, diagnostic scrolling).
-    int         keysAtFrame = -1;     // --keys-at N STR : tape STR à partir de la trame N
-    std::string keysAt;
+    // --keys-at N STR : tape STR à partir de la trame N. RÉPÉTABLE : plusieurs
+    // occurrences = plusieurs frappes datées (menus en cascade — cracktro D-BUG
+    // « Y/N » PUIS « press any key », etc.).
+    std::vector<std::pair<int, std::string>> keysAtList;
     int         joyAtFrame  = -1;     // --joy-at N P1 : pose l'état joystick port 1 à la trame N
     uint8_t     joyAt1      = 0;
     // --mouse-at N "SCRIPT" : pilote la souris (mode REL) à partir de la trame N pour
@@ -212,7 +214,7 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(a, "--glue-selftest")) glueSelfTest = true;
         else if (!std::strcmp(a, "--shot-every"))  { shotEvery = std::atoi(next(a)); shotPrefix = next(a); }
         else if (!std::strcmp(a, "--shot-from"))   shotFrom = std::atoi(next(a));
-        else if (!std::strcmp(a, "--keys-at"))     { keysAtFrame = std::atoi(next(a)); keysAt = next(a); }
+        else if (!std::strcmp(a, "--keys-at"))     { const int f = std::atoi(next(a)); keysAtList.emplace_back(f, next(a)); }
         else if (!std::strcmp(a, "--joy-at"))      { joyAtFrame = std::atoi(next(a)); joyAt1 = (uint8_t)std::strtoul(next(a), nullptr, 0); }
         else if (!std::strcmp(a, "--mouse-at"))    { mouseAtFrame = std::atoi(next(a)); mouseAt = next(a); }
         else if (!std::strcmp(a, "--joy-script"))  { joyScrFrame = std::atoi(next(a)); joyScr = next(a); }
@@ -316,11 +318,12 @@ int main(int argc, char** argv) {
         // Injections datées (--keys-at / --joy-at) : pilotage d'un menu de démo en
         // PLEINE boucle (l'intro Cuddly attend espace ; le robot du menu, le stick),
         // sans perdre --shot-every. Une touche = make à +0, break à +2, 4 trames/char.
-        if (keysAtFrame >= 0 && frame >= keysAtFrame) {
-            const int rel = frame - keysAtFrame;
+        for (const auto& [kf, ks] : keysAtList) {
+            if (frame < kf) continue;
+            const int rel = frame - kf;
             const int idx = rel / 4;
-            if (idx < (int)keysAt.size()) {
-                const uint8_t sc = stScancode(keysAt[idx]);
+            if (idx < (int)ks.size()) {
+                const uint8_t sc = stScancode(ks[idx]);
                 if (sc) {
                     if      (rel % 4 == 0) { machine.ikbd.keyEvent(sc, true);  machine.cpu.updateIpl(); }
                     else if (rel % 4 == 2) { machine.ikbd.keyEvent(sc, false); machine.cpu.updateIpl(); }
