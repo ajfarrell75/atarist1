@@ -5,6 +5,19 @@
 // =============================================================================
 #include "io/Mfp.hpp"
 #include <cstdio>
+#include <cstdlib>
+
+// NEOST_MFP_EXACT : broche IRQ MFP au cycle exact (port fidèle du couple
+// MFP_TimerB_EventCount + MFP_ProcessIRQ de Hatari). bit0 = ANTI-DATATION du tic
+// Timer B event-count (l'IRQ est datée à l'échéance TIMER_B servie — ≙
+// Delayed_Cycles=PendingCycles — et non à la frontière de bloc, en retard de
+// 0..24 cyc) ; bit1 = PRISE À LA FRONTIÈRE courante quand le délai de 4 cyc est
+// déjà écoulé (l'événement MFP_IRQ est armé à l'horloge live → commit de l'IPL à
+// cette frontière, ≙ MFP_ProcessIRQ « clock − IRQ_Time ≥ 4 → exception » ; l'ancien
+// modèle n'armait RIEN dans ce cas → broche seule, reconnue UNE instruction plus
+// tard). Défaut 3 (les deux) ; =0 restaure l'ancien comportement.
+namespace { const int g_mfpExact = []{ const char* s = std::getenv("NEOST_MFP_EXACT");
+                                       return s ? std::atoi(s) : 3; }(); }
 
 // RESET matériel du MC68901 (port de MFP_Reset, mfp.c:519-569). Le vrai MFP n'a PAS
 // de signal de reset dédié pour le GPIP/USART, mais sur l'ST la broche /RESET du 68000
@@ -405,7 +418,14 @@ void Mfp::hblank() {
     if ((tbcr_ & 0x0F) != 0x08 || tbCounter_ == 0) return;
     if (--tbCounter_ == 0) {
         tbCounter_ = tbReload_;
-        raise(SRC_TIMERB);
+        // Anti-datation du tic (bit0 NEOST_MFP_EXACT, ≙ MFP_TimerB_EventCount qui
+        // passe Delayed_Cycles=PendingCycles) : l'IRQ est datée à l'échéance
+        // TIMER_B servie (firingDue), pas à la frontière de bloc — le délai de
+        // 4 cyc vers le CPU court depuis l'événement DE réel, comme les timers
+        // délai (cf. onTimerExpire).
+        const int64_t due = (g_mfpExact & 1) && sched_ ? sched_->firingDue() : -1;
+        if (due >= 0) raiseAt(SRC_TIMERB, due);
+        else          raise(SRC_TIMERB);
     }
 }
 
@@ -525,7 +545,17 @@ void Mfp::updateIrq(int64_t eventTime) {
     if (!sched_) return;
     if (irq_) {
         const int64_t visibleAt = irqTime_ + kIrqDelayToCpu;
-        if (sched_->liveNow() < visibleAt) sched_->schedule(Scheduler::MFP_IRQ, visibleAt);
+        const int64_t now = sched_->liveNow();
+        if (now < visibleAt) sched_->schedule(Scheduler::MFP_IRQ, visibleAt);
+        // Délai déjà écoulé (IRQ anti-datée servie en retard) : la prise doit se
+        // faire À CETTE frontière d'instruction, pas une instruction plus tard
+        // (bit1 NEOST_MFP_EXACT, ≙ MFP_ProcessIRQ : « clock − IRQ_Time ≥ 4 →
+        // exception » testé à chaque frontière). On arme MFP_IRQ à l'horloge
+        // live : depuis un callback du dispatch (TIMER_B < MFP_IRQ dans l'énum),
+        // il part dans le MÊME runTo ; depuis un accès MMIO mid-instruction, la
+        // préemption coupe le bloc et il part à la frontière suivante — dans les
+        // deux cas le commit de l'IPL a lieu à la première frontière éligible.
+        else if (g_mfpExact & 2) sched_->schedule(Scheduler::MFP_IRQ, now);
     } else {
         sched_->cancel(Scheduler::MFP_IRQ);
     }

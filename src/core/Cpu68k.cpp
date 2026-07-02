@@ -280,8 +280,19 @@ public:
         if (slot) self->setClock(c + (4 - slot));
     }
 
-    moira::u8  read8 (moira::u32 a) const override { if (g_bus->blitterWinEnd >= 0) noteBlitterPreStart(); if (g_bus->busFaultN(a, 1, false) && faultOrHalt(a, false)) return 0; moira::u8 v; if (g_cpuMul == 2) v = moira::u8(readMste16Mhz(a, 1)); else { chipWait8(a); v = g_bus->read8(a); } latchDb8(v); return v; }
-    moira::u16 read16(moira::u32 a) const override { if (g_bus->blitterWinEnd >= 0) noteBlitterPreStart(); if (g_bus->busFaultN(a, 2, false) && faultOrHalt(a, false)) return 0; moira::u16 v; if (g_cpuMul == 2) v = readMste16Mhz(a, 2); else { chipWait8(a); v = g_bus->read16(a); } latchDb(v); return v; }
+    // DIAG (NEOST_BUS_DIAG=<pc-hex-préfixe-8bits>) : séquence bus (addr, horloge mod 4)
+    // de chaque accès CPU quand PC0 est dans la page donnée — traque de phase créneau.
+    void busDiag(char k, moira::u32 a, moira::i64 c) const {
+        static const long page = []{ const char* s = std::getenv("NEOST_BUS_DIAG");
+                                     return s ? std::strtol(s, nullptr, 16) : -1L; }();
+        if (page < 0) return;
+        const moira::u32 pc = getPC0() & 0xFFFFFFu;
+        if ((pc >> 8) != (moira::u32)page) return;
+        std::fprintf(stderr, "[BUS] %c pc=%06x a=%06x c=%lld m4=%d\n",
+                     k, pc, a & 0xFFFFFFu, (long long)c, (int)(c & 3));
+    }
+    moira::u8  read8 (moira::u32 a) const override { if (g_bus->blitterWinEnd >= 0) noteBlitterPreStart(); if (g_bus->busFaultN(a, 1, false) && faultOrHalt(a, false)) return 0; moira::u8 v; if (g_cpuMul == 2) v = moira::u8(readMste16Mhz(a, 1)); else { chipWait8(a); busDiag('r', a, getClock()); v = g_bus->read8(a); } latchDb8(v); return v; }
+    moira::u16 read16(moira::u32 a) const override { if (g_bus->blitterWinEnd >= 0) noteBlitterPreStart(); if (g_bus->busFaultN(a, 2, false) && faultOrHalt(a, false)) return 0; moira::u16 v; if (g_cpuMul == 2) v = readMste16Mhz(a, 2); else { chipWait8(a); busDiag('R', a, getClock()); v = g_bus->read16(a); } latchDb(v); return v; }
     void write8 (moira::u32 a, moira::u8  v) const override { if (g_bus->blitterWinEnd >= 0) noteBlitterPreStart(); if (g_bus->busFaultN(a, 1, true)) { if (faultOrHalt(a, true)) return; } latchDb8(v); if (g_cpuMul == 2) { writeMste16Mhz(a, 1, v); return; } chipWait8(a); g_bus->write8(a, v); }
     void write16(moira::u32 a, moira::u16 v) const override { if (g_bus->blitterWinEnd >= 0) noteBlitterPreStart(); if (g_bus->busFaultN(a, 2, true)) { if (faultOrHalt(a, true)) return; } latchDb(v); if (g_cpuMul == 2) { writeMste16Mhz(a, 2, v); return; } chipWait8(a); g_bus->write16(a, v); }
     // Lecture du vecteur de reset (SSP/PC) via l'overlay ROM : jamais de bus error.
@@ -598,6 +609,18 @@ int Cpu68k::run(int cycles) {
             const int64_t jumpTo = (nd > busNow && nd < targetBus) ? nd : targetBus;
             g_moira->setClock(cpuClockForBus(jumpTo));
             if (g_sched) g_sched->syncTo(jumpTo);    // dispatche l'event au saut (peut lever l'IPL)
+            // REBASE du quantum : syncTo vient d'avancer sched.now() jusqu'à jumpTo,
+            // or `ran` (retour de run) et cyclesRunInQuantum() mesuraient encore depuis
+            // l'ANCIEN début → le saut était compté DEUX fois (une par syncTo, une par
+            // le runTo(now+ran) de Machine). Conséquence mesurée (EL in-game) :
+            // sched.now()/liveNow prenait une avance δ = jumpTo − quantumStart (4..26 cyc)
+            // sur l'horloge CPU pour tout le reste de la trame → TOUTE la datation vidéo
+            // (beamClock, compteur $8209, écritures freq/res) décalée de δ vs les créneaux
+            // bus — impossible sur le vrai matériel (même horloge) ; quand δ ≡ 2 (mod 4)
+            // le calibrateur beam-sync d'Enchanted Land déverrouillait (lock 47 % vs 100 %
+            // Hatari). Après rebase : liveNow == horloge CPU, ran n'inclut plus le saut.
+            quantumStartBus_   = jumpTo;
+            quantumStartClock_ = static_cast<int64_t>(g_moira->getClock());
         }
     }
     return static_cast<int>(busOfClock(g_moira->getClock()) - quantumStartBus_);
@@ -697,13 +720,14 @@ void Cpu68k::updateIplNow() {
 // NEOST_RAISE_COMMIT : bit0 = HBL, bit1 = VBL — commit IMMÉDIAT de l'IPL au
 // dispatch de l'événement (≙ Hatari CE : CycInt traité à la frontière d'instruction
 // + intlev_load/ipl_fetch_now sans délai → exc−broche = 0, mesuré à l'oracle
-// instrumenté). DÉFAUT 1 = HBL seul : le commit VBL casse le loader d'Enchanted
-// Land (chargement infini — couplage VBL↔IKBD/FDC, même signature que le pré-arm
-// VBL, à investiguer) ; le commit HBL porte le flicker EL à 40/40 (top-trick
-// parfait, une première). Sans commit (bit à 0) : broche pollée → reconnaissance
-// UNE instruction plus tard (l'ancien modèle).
+// instrumenté). DÉFAUT 3 = HBL + VBL (modèle fidèle complet, 2026-07-02) :
+// l'ancien blocage « le commit VBL casse le loader d'Enchanted Land » était en
+// réalité le DOUBLE COMPTAGE du saut STOP dans la comptabilité de quantum
+// (cf. Cpu68k::run, rebase de quantumStartBus_) — corrigé, le commit VBL passe
+// (loader OK, lock moteur 100 %, étalons TOUS OK). Sans commit (bit à 0) :
+// broche pollée → reconnaissance UNE instruction plus tard (l'ancien modèle).
 namespace { int g_raiseCommit = []{ const char* s = std::getenv("NEOST_RAISE_COMMIT");
-                                    return s ? std::atoi(s) : 1; }(); }
+                                    return s ? std::atoi(s) : 3; }(); }
 void Cpu68k::raiseVbl() {
     g_vblPending = true;
     // COMMIT IMMÉDIAT (2026-07-02, mesuré à l'oracle instrumenté [HPIN]/[HEXC] :

@@ -108,6 +108,27 @@ taguées (0.1.x). Le restant est dans [`TODO.md`](TODO.md).
   référence était fausse de 24 px, vérifié pixel-à-pixel contre Hatari). Reste (pièce vidéo) : le
   moteur fullscreen d'EL verrouille à 72 % avec ses impulsions freq à −16 vs oracle → micro-sauts
   de scroll résiduels (cf. doc maître, bloc 2026-07-02).
+- **Saut STOP : double comptage du quantum CORRIGÉ (5ᵉ passe, 2026-07-02) — lock moteur EL
+  100 %.** Dans le chemin STOP de `Cpu68k::run` (modèle bloc), `setClock(jumpTo)` +
+  `syncTo(jumpTo)` avançaient `sched.now_`, mais le retour `ran` (et `cyclesRunInQuantum`)
+  mesuraient toujours depuis l'ANCIEN début de quantum → le `runTo(now+ran)` de Machine
+  recomptait le saut : `sched.now()`/`liveNow()` prenait une avance **δ = 4..26 cyc** sur
+  l'horloge CPU, stable jusqu'au STOP suivant. Toute la datation vidéo (beamClock, lectures
+  `$8209`, écritures freq/res) était décalée de δ vs les créneaux bus — impossible sur le vrai
+  matériel. Quand δ ≡ 2 (mod 4), le calibrateur beam-sync d'Enchanted Land déverrouillait
+  (corrélation mesurée 546/546 lock à phase ≡0 vs 69/69 unlock à ≡2). Fix : **rebase de
+  `quantumStartBus_/Clock_` après le saut**. Le taux de lock du moteur fullscreen passe de
+  46,9 % à **100,0 %** (12402/12402 écritures freq à la position Hatari-exacte) — micro-sauts
+  de scroll éliminés. Résout aussi deux mystères de la 4ᵉ passe (mêmes causes) : le **commit
+  VBL ne casse plus le loader EL** → `NEOST_RAISE_COMMIT` **défaut 3 = HBL+VBL** (modèle
+  fidèle Hatari CE complet), et `NEOST_IPLFETCH=1` ne casse plus le loader (reste opt-in).
+  + **Broche MFP exacte portée** (`NEOST_MFP_EXACT`, défaut 3) : anti-datation du tic Timer B
+  event-count (≙ `MFP_TimerB_EventCount` avec `Delayed_Cycles` — le délai de 4 cyc court
+  depuis l'échéance TIMER_B servie, pas la frontière de bloc) + prise à la frontière courante
+  quand le délai est déjà écoulé (≙ `MFP_ProcessIRQ`) — fidèle, non nécessaire au lock (A/B).
+  Diagnostics gated ajoutés : `NEOST_FRAME_DIAG`, `NEOST_BUS_DIAG=<page-pc>`, champ `into=`
+  dans `NEOST_VC_TRACE`. **Validé** : étalons 19/0 TOUS OK aux défauts finaux, loader EL OK,
+  LX titre 0,00 % churn, SHO titre/menus propres (période HBL régulière, pas de double-prise).
 
 ## Types de machine & mémoire
 - **Zone RAM « void » : on relit le dernier mot du bus de données** (port Hatari

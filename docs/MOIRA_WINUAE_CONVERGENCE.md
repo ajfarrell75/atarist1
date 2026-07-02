@@ -121,6 +121,41 @@ Cuddly, Super Hang-On). Décision utilisateur (2026-06-16) : **garder le sync-dr
       était CO-CALIBRÉ avec l'entrée d'avant (broche au dispatch) — depuis broche-exacte/HBL 508
       ils ne matchent plus AUCUNE phase (les valeurs bougent par ligne, pas d'un offset
       constant). À re-fermer AVEC le front reconnaissance.
+    * 🎯🎯 **5ᵉ PASSE (2026-07-02) — LE DERNIER VERROU EST TOMBÉ : lock moteur EL
+      100 % (12402/12402).** La cause n'était PAS la reconnaissance IPL : c'était un
+      **DOUBLE COMPTAGE du saut STOP** dans la comptabilité de quantum (`Cpu68k::run`,
+      chemin STOP) — `setClock(jumpTo)` + `syncTo(jumpTo)` avançaient `sched.now_`,
+      mais `ran` (et `cyclesRunInQuantum`) mesuraient toujours depuis l'ANCIEN début de
+      quantum → le `runTo(now+ran)` de Machine recomptait le saut → `sched.now()`/
+      `liveNow()` prenait une avance **δ = jumpTo − quantumStart ∈ {4..26}** sur
+      l'horloge CPU, STABLE jusqu'au STOP suivant. Toute la datation vidéo (beamClock,
+      compteur $8209, écritures freq/res) était donc décalée de δ vs les créneaux bus —
+      impossible sur le vrai matériel (même horloge). Quand δ ≡ 2 (mod 4), le
+      calibrateur beam-sync d'EL (double lecture $8209 à la ligne 65, pc 8db6/8dba,
+      détection du gel du compteur à DE-end) percevait une géométrie décalée d'un
+      demi-créneau → patch faux → trame déverrouillée. **Corrélation mesurée parfaite** :
+      sweep à phase ≡0 mod 4 → 546/546 trames lock ; ≡2 → 69/69 unlock. Fix = REBASE de
+      `quantumStartBus_/Clock_` après le saut. **Chaîne d'attribution** : lock 46,9 % →
+      instrumentation `into=` (VC trace) → phase X flip à `into` constant → [BUS] diag :
+      CPU épinglé m4=2 PARTOUT → c'est `liveNow`, pas le CPU → drift = δ vs frameStart
+      théorique → le chemin STOP. **Les 3 « mystères » avaient la MÊME cause** (tous
+      re-testés verts après fix) : (a) taux de lock 47-66 % → **100 %** ; (b) « le commit
+      VBL casse le loader EL » → passe, `NEOST_RAISE_COMMIT` **défaut 3 = HBL+VBL**
+      (modèle fidèle complet) ; (c) « IPLFETCH=1 casse le loader » → passe (reste opt-in,
+      non requis). En bonus, port fidèle de la **broche MFP exacte** (`NEOST_MFP_EXACT`,
+      défaut 3) : bit0 = anti-datation du tic Timer B event-count (≙ Delayed_Cycles de
+      `MFP_TimerB_EventCount`, l'IRQ court depuis l'échéance TIMER_B servie, pas la
+      frontière de bloc) ; bit1 = prise à la frontière courante quand le délai de 4 cyc
+      est écoulé (≙ `MFP_ProcessIRQ`) — fidèle mais NON nécessaire au lock (A/B : 100 %
+      sans). **Validé** : étalons 19/0 TOUS OK (défauts finaux), loader EL OK, LX titre
+      churn 0,00 %, SHO titre/menus propres + période HBL régulière (pas de signature
+      double-prise ~427). **Reste** : re-fermer les bancs poll contre un oracle Hatari
+      FRAIS (les fenêtres des anciens AVI ne sont plus reconstructibles) ; re-mesurer le
+      flicker bordure haute EL avec la fenêtre de mesure d'origine (l'étalon
+      `overscan_top` byte-exact couvre déjà la mécanique).
+      ⚠ Les diagnostics de cette passe restent branchés (gated) : `NEOST_FRAME_DIAG`
+      (phase de l'ancre de trame), `NEOST_BUS_DIAG=<page-pc-hex>` (séquence bus + mod 4
+      par accès), champ `into=` dans `NEOST_VC_TRACE`.
 - 🎯 **PERCÉE (2026-06-17) — `NEOST_RAM_SLOT`+`NEOST_IACK` désormais DÉFAUT ON.** Les DEUX flags
   ENSEMBLE font FONCTIONNER le mécanisme d'overscan beam-sync : sans eux le handler HBL d'EL est
   ~88 cyc trop rapide → l'impulsion res se VERROUILLE (trick=0, zéro overscan) ; avec eux la dérive

@@ -1273,12 +1273,13 @@ uint8_t Shifter::read8(uint32_t addr) {
             const int ln = g.cyclesPerLine ? static_cast<int>(fc / g.cyclesPerLine) : 0;
             const int X  = g.cyclesPerLine ? static_cast<int>(fc % g.cyclesPerLine) : 0;
             const uint32_t pc = bus_.cpu ? bus_.cpu->pc() : 0;
+            const int into = bus_.cpu ? static_cast<int>(bus_.cpu->cyclesIntoInstr()) : -1;
             std::fprintf(stderr,
                 "VC reg=%05x base=%06x addr=%06x fc=%lld line=%d X=%d start=%d cpl=%d "
-                "liveStart=%d sync=%zu pc=%06x\n",
+                "liveStart=%d sync=%zu pc=%06x into=%d\n",
                 addr, videoBase & 0xFFFFFFu, vc, static_cast<long long>(fc), ln, X,
                 g.lineStartCycle, g.cyclesPerLine, liveStartHBL_,
-                syncWrites_.size(), pc);
+                syncWrites_.size(), pc, into);
         }
         if (addr == 0xFF8205) return static_cast<uint8_t>(vc >> 16);
         if (addr == 0xFF8207) return static_cast<uint8_t>(vc >> 8);
