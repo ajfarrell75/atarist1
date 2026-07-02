@@ -534,10 +534,13 @@ Moira::execInterrupt(u8 level)
             reg.sp -= 6;
             write<C, AddrSpace::DATA, Word>(reg.sp + 4, reg.pc & 0xFFFF);
 
-            SYNC(4);
+            // NEOST : cycles d'IACK délégués (stock = 4/4). Permet le port fidèle
+            // de Hatari `iack_cycle` : E-clock (avant) + bloc IACK/idle (après),
+            // calculés au point d'IACK réel — cf. Moira.h iackSyncBefore/After.
+            SYNC(iackSyncBefore(level));
             queue.ird = getIrqVector(level);
 
-            SYNC(4);
+            SYNC(iackSyncAfter(level));
             write<C, AddrSpace::DATA, Word>(reg.sp + 0, status);
             write<C, AddrSpace::DATA, Word>(reg.sp + 2, reg.pc >> 16);
             break;

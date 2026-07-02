@@ -223,11 +223,25 @@ void Machine::installSchedulerCallbacks() {
     // Tranche non-hog du blitter (64 accès bus / 64 accès CPU) : la fin de blit
     // peut lever l'IRQ GPIP3 (canal 3 MFP) → IPL recalculé.
     sched.setCallback(Scheduler::BLITTER, [this] { blitter.onSlice(); cpu.updateIpl(); });
+    // RESTART compteur vidéo fin de trame (Video_RestartVideoCounter) : la fréquence
+    // du registre sync est relue À CET INSTANT (live, comme Hatari relit $FF820A) —
+    // le restart n'a lieu que si elle correspond à la ligne (50 Hz↔310, 60 Hz↔260).
+    sched.setCallback(Scheduler::VC_RESTART, [this] {
+        const bool is50 = (shifter.sync & 0x02) != 0;
+        if ((is50 && lpf_ == 313) || (!is50 && lpf_ == 263))
+            shifter.restartVideoCounter(lpf_ - 3);
+    });
 }
 
 // Arme les événements VIDÉO de la trame courante, à des cycles ABSOLUS (horloge
 // continue) = frameStart_ + position dans la trame. Les Timers A/C/D persistent
 // d'une trame à l'autre (datés par le MFP) et ne sont PAS réarmés ici.
+namespace { // Décalage A/B de la position d'IRQ HBL dans la ligne (défaut 0 = Hatari).
+int kHblOff() {
+    static const int v = [] { const char* s = std::getenv("NEOST_HBL_OFF"); return s ? std::atoi(s) : 0; }();
+    return v;
+} }
+
 void Machine::scheduleFrameEvents() {
     renderLine_ = 0;
     tbLine_     = 0;
@@ -254,7 +268,11 @@ void Machine::scheduleFrameEvents() {
     // si la ligne est réellement AFFICHÉE d'après la machine Glue LIVE (cf. onTimerB) —
     // un retrait de bordure haut/bas en cours de trame déplace les tics, comme Hatari.
     sched.schedule(Scheduler::TIMER_B, frameStart_ + timerBPos());
-    sched.schedule(Scheduler::HBL,     frameStart_ + (cpl_ - 4));      // HBL niveau 2 (≈ fin de ligne 0)
+    // Position de l'IRQ HBL dans la ligne : Hatari HBL_VIDEO_CYCLE_OFFSET = 0 →
+    // l'interruption tombe à la FRONTIÈRE de ligne (cycle 512 = 0 de la suivante).
+    // L'ancien −4 était une calibration d'avant la refonte IACK (2026-07-02) ;
+    // NEOST_HBL_OFF le rétablit pour A/B (valeur = décalage vs cpl, ex. -4).
+    sched.schedule(Scheduler::HBL,     frameStart_ + (cpl_ + kHblOff()));   // HBL niveau 2 (frontière ligne 0)
     // VBL niveau 4 — port fidèle de Hatari (Video_InterruptHandler_VBL) : l'IRQ VBL
     // est générée VBL_VIDEO_CYCLE_OFFSET cycles APRÈS la fin de la DERNIÈRE ligne de
     // la trame (313×512 + 64 en 50 Hz STF), donc au tout début du vblank = ~SOMMET de
@@ -264,6 +282,19 @@ void Machine::scheduleFrameEvents() {
     // la trame qui VA s'afficher, comme sur le vrai matériel. Offset STF=64, STE=68.
     const int vblOffset = machineIsSte(machineType_) ? 68 : 64;       // VBL_VIDEO_CYCLE_OFFSET
     sched.schedule(Scheduler::VBL, frameStart_ + vblOffset);
+    // RESTART du compteur vidéo en FIN de trame (port Video_RestartVideoCounter,
+    // ULM DSOTS) : ligne 310 (50 Hz, 313 lignes) / 260 (60 Hz, 263), cycle 56
+    // (STF) / 60 (STE). La base $FF8201/03 est relue À CET INSTANT — après le
+    // handler VBL du jeu — ce qui alimente correctement les moteurs double-buffer
+    // beam-syncés (Enchanted Land en jeu). Le check de fréquence (registre sync
+    // LIVE, comme Hatari qui relit $FF820A) se fait dans le callback. Pas de
+    // restart en 71 Hz (Hatari : lignes définies pour 50/60 Hz seulement).
+    if (lpf_ == 313 || lpf_ == 263) {
+        const int restartLine = lpf_ - 3;
+        const int restartPos  = machineIsSte(machineType_) ? 60 : 56;
+        sched.schedule(Scheduler::VC_RESTART,
+                       frameStart_ + static_cast<int64_t>(restartLine) * cpl_ + restartPos);
+    }
 }
 
 void Machine::onRender() {
@@ -304,7 +335,7 @@ void Machine::onHbl() {
     // V2 : −lineCarry_ décale la ligne suivante du cumul des raccourcissements (=0 hors V2).
     if (hblLine_ < lpf_)
         sched.schedule(Scheduler::HBL,
-                       frameStart_ + static_cast<int64_t>(hblLine_) * cpl_ + (cpl_ - 4) - lineCarry_);
+                       frameStart_ + static_cast<int64_t>(hblLine_) * cpl_ + (cpl_ + kHblOff()) - lineCarry_);
 }
 
 void Machine::onVbl() {

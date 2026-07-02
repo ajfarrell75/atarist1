@@ -53,19 +53,20 @@ static constexpr int kSpec512Threshold = 512;
 // 1ʳᵉ écriture palette ligne 64 datée cyc=80 stable côté Hatari ; NeoST sans correction
 // oscille 76↔80, avec −2 se verrouille sur 80 (= Hatari). Flicker plein-diaporama
 // (BEE512/sun/PLANET/ANIMAL, fenêtre 540..1010) : 111 paires → 0.
-// Datation des LECTURES du compteur vidéo. -2 est calibré sur deux étalons
-// sensibles : le flicker spec512 ET la calibration du loader d'Enchanted Land
-// (poll $FF8209 0→≠0 ; -8 « façon Hatari Video_CalculateAddress » la casse —
-// écran noir après LOADING). L'écart lecture↔écriture résiduel vit côté
-// écritures (kSyncWriteOffsetCyc).
-// Datation des LECTURES du compteur vidéo $FF8205/07/09. Calibré pour le mode
-// MOIRA_PRECISE_TIMING (actif) où Moira date l'accès mémoire au SOUS-CYCLE réel
-// (≈ +6 cyc vs le début d'instruction du mode bloc historique). +4 recale la lecture
-// pour EL (poll $FF8209, sinon « écran noir après LOADING ») ET garde verts les étalons
-// pixel-exacts spec512/overscan/scroll. (Le mode bloc, MOIRA_PRECISE_TIMING=false,
-// demandait -2 ; cf. historique.) NEOST_VC_OFF ajuste pour le diagnostic.
+// Datation des LECTURES du compteur vidéo $FF8205/07/09 — CALIBRÉE À L'ORACLE
+// (2026-07-02, banc tools/make_poll_test.py + variante lsr#3 exposant le bit 3) :
+// −14 rend le motif de barres du poll-test BYTE-IDENTIQUE à Hatari (180/180
+// lignes, bits 0-6 du compteur), avec l'alignement bus début-d'accès (chipWait8
+// −2) et l'IACK au point d'IACK (NEOST_IACK_AT) actifs. Les offsets {+2,+4}
+// (dont l'ancien +4) matchent le motif PALETTE (bits 0-2/4-6) mais sont FAUX de
+// +8 OCTETS sur l'octet entier (bit 3, invisible en palette) — c'est cette
+// erreur qui empêchait le stabilisateur nop-slide d'EL (qui lit l'octet entier)
+// de verrouiller. (La dérivation « fin d'accès − 8 » de Video_CalculateAddress
+// donnerait −6 ; l'écart −8 restant vient du modèle interne de quantification
+// de videoCounter() vs NbBytes Hatari — la calibration à l'oracle prime.)
+// NEOST_VC_OFF ajuste pour le diagnostic/A/B (+18 → ancien +4).
 static const int kVideoCounterReadOffsetCyc =
-    4 + [] { const char* s = std::getenv("NEOST_VC_OFF"); return s ? std::atoi(s) : 0; }();
+    -14 + [] { const char* s = std::getenv("NEOST_VC_OFF"); return s ? std::atoi(s) : 0; }();
 
 // =============================================================================
 //  Machine GLUE — retrait de bordures (port fidèle de Hatari video.c :
@@ -187,7 +188,14 @@ void Shifter::beginFrame() {
     // suivante — comme sur le vrai matériel. Les écritures différées (NewHWScrollCount,
     // NewLineWidth, offset compteur) ne sont PAS effacées : Hatari ne les purge qu'au
     // reset vidéo, elles s'appliquent à la prochaine fin de ligne active.
-    vcFrameBase_ = videoBase & 0xFFFFFFu;
+    // Base de trame : si le RESTART fin-de-trame (ligne 310/260, port
+    // Video_RestartVideoCounter) a eu lieu, c'est SA base (relue à cet instant)
+    // qui fait foi — une écriture $FF8201/03 entre la ligne 310 et la ligne 0
+    // n'est PAS reprise (comme Hatari). Sinon (mono, ou freq inadaptée à la
+    // ligne de restart), latch classique au début de trame.
+    vcFrameBase_ = (vcRestartBase_ >= 0) ? static_cast<uint32_t>(vcRestartBase_)
+                                         : (videoBase & 0xFFFFFFu);
+    vcRestartBase_ = -1;
     vcLineBase_  = vcFrameBase_;
     vcLineY_     = 0;
     // Fond bordure : remplit tout le buffer overscan avec la couleur de bordure
@@ -319,6 +327,21 @@ int Shifter::scrollCounterAdvance() const {
 // (palette, base vidéo) et la place à l'offset bordure dans le buffer overscan.
 void Shifter::renderLine(int y) {
     if (y < 0 || y >= curAH_) return;
+    // Commit PARESSEUX du compteur matérialisé (2026-07-02, fidèle Video_EndHBL) :
+    // les lignes < y sont committées ICI (au rendu de la ligne y = cycle
+    // y·cpl+376), donc APRÈS toute écriture freq/res de FIN de ligne y−1 (ex.
+    // impulsion 60→50 Hz à cyc 372-376 ouvrant la bordure droite : la calibration
+    // du loader d'Enchanted Land lit $FF8209 8 cycles après l'impulsion et doit
+    // voir le compteur ENCORE en marche jusqu'à 460, puis la ligne créditée de
+    // 204 octets). L'ancien commit à DE_end (376) de la ligne COURANTE figeait
+    // la ligne à 160 octets AVANT que l'écriture datée 376 ne soit consommée →
+    // valeur figée (base+160) au lieu d'avancer (base+164) = delta nul → le
+    // scan de calibration EL ne détectait jamais l'ouverture (loader bloqué).
+    // Les lectures sur lignes non-committées passent par l'extrapolation
+    // glueLineBytes (live) de videoCounter — mêmes valeurs, mais la fenêtre DE
+    // de la ligne courante est consultée EN DIRECT. Le re-rendu hors séquence
+    // (spec512/renderFrame) n'avance jamais le compteur (y ≤ vcLineY_).
+    while (vcLineY_ < y) endVideoLine();
     const int  W   = activeWidth();
     const bool hi  = (frameMode_ == Mode::High);
 
@@ -347,10 +370,6 @@ void Shifter::renderLine(int y) {
         for (int x = activeX_ + W; x < curW_; ++x) row[x] = bg;
     }
 
-    // Fin de la ligne active : le compteur matérialisé avance et les écritures STE
-    // différées s'appliquent (uniquement sur le rendu live séquentiel — un re-rendu
-    // hors séquence, spec512/renderFrame, ne doit pas re-avancer le compteur).
-    if (y == vcLineY_) endVideoLine();
 }
 
 // Octets RÉELLEMENT lus par le shifter sur la scanline `scanline` (hors line-offset
@@ -406,6 +425,18 @@ void Shifter::endVideoLine() {
     }
     vcLineBase_ &= 0xFFFFFFu;
     ++vcLineY_;
+}
+
+// RESTART du compteur vidéo en fin de trame — port de Video_RestartVideoCounter
+// (video.c, ULM DSOTS) : à la ligne 310 (50 Hz) / 260 (60 Hz), cycle 56 (STF),
+// le GLUE recharge le compteur depuis $FF8201/03. La base est relue À CET INSTANT
+// (≠ début de trame NeoST) : un jeu double-buffer qui pose sa nouvelle base dans
+// son handler VBL (APRÈS la ligne 0) est donc bien pris en compte — c'est ce que
+// mesure le stabilisateur beam-sync d'Enchanted Land en jeu (poll $FF8209).
+// Les lectures des lignes ≥ restart renvoient cette base figée (videoCounter).
+void Shifter::restartVideoCounter(int line) {
+    vcRestartBase_ = static_cast<int64_t>(videoBase & 0xFFFFFFu);
+    vcRestartLine_ = line;
 }
 
 // Position du faisceau (ligne absolue + cycle dans la ligne) depuis l'horloge de
@@ -528,7 +559,10 @@ void Shifter::applyShifterBusAlignment() {
     int64_t accumWait = 0;                 // total des wait states injectés jusqu'ici
     for (auto& w : colorWrites_) {
         const int64_t arrival = static_cast<int64_t>(w.frameCycle) + accumWait;
-        const int64_t wait = (4 - (arrival & 3)) & 3;     // 0..3 jusqu'à la frontière de 4
+        // Même convention que syncCpuBus : Hatari aligne la FIN de l'accès (= cycle
+        // enregistré + 2, le cycle live NeoST datant le point-MILIEU de l'accès Moira).
+        // syncCpuBus (LIVE) ayant déjà aligné, ceci reste un no-op de garde.
+        const int64_t wait = (4 - ((arrival + 2) & 3)) & 3;   // 0..3 jusqu'à la frontière de 4
         accumWait += wait;
         w.frameCycle = static_cast<int32_t>(arrival + wait);
     }
@@ -561,26 +595,31 @@ void Shifter::recordColorWrite(int index) {
     if (++paletteAccesses_ >= kSpec512Threshold) spec512Active_ = true;
 }
 
-// Wait state de bus 4 cycles (port LIVE de Hatari M68000_SyncCpuBus, cf. .hpp). Le
-// cycle de référence est le cycle LIVE dans la trame (même horloge que recordColorWrite) ;
-// on aligne sur la frontière de 4 en faisant patienter le CPU d'autant.
+// Wait state de bus 4 cycles (port LIVE de Hatari M68000_SyncCpuBus, cf. .hpp). Hatari
+// aligne la FIN de l'accès (Cycles_GetClockCounterOn{Read,Write}Access = currcycle+4)
+// sur la frontière de 4. Le cycle live NeoST date le point-MILIEU de l'accès Moira →
+// fin d'accès = fc + 2 ; on aligne CETTE fin (cohérent avec chipWait8 qui aligne le
+// début d'accès, et avec les offsets de datation write +2 / read −6).
 void Shifter::syncCpuBus() {
     if (!liveFrameClock_ || !bus_.cpu) return;
     const int64_t fc = liveFrameClock_();
     if (fc < 0) return;                                  // hors trame courante
-    const int wait = static_cast<int>((4 - (fc & 3)) & 3);   // 0..3 jusqu'à la frontière
+    const int wait = static_cast<int>((4 - ((fc + 2) & 3)) & 3);   // fin d'accès → frontière
     if (wait) bus_.cpu->addBusWaitCycles(wait);
 }
 
-// Datation des ÉCRITURES freq/res : l'accès bus en ÉCRITURE est daté en FIN
-// d'instruction par Hatari (Cycles_GetClockCounterOnWriteAccess, mode CE), alors
-// que l'horloge live NeoST date le début de l'accès. Décalage CALIBRÉ contre
-// l'oracle (Enchanted Land : impulsions du jeu verrouillées à L63 c376→384 chez
-// Hatari ; NeoST les datait ~16 cycles plus tôt et les comparateurs
-// 372/376/462/502 n'étaient jamais enjambés → aucune détection de bordure en
-// jeu, bordures fermées, scroll cassé). À re-dériver proprement avec le
-// chantier wait states / datation des accès bus.
-static constexpr int kSyncWriteOffsetCyc = 16;
+// Datation des ÉCRITURES freq/res — CALIBRÉE À L'ORACLE (2026-07-02, loader EL
+// beam-syncé : écritures 60/50 Hz du calibrateur à la ligne 63, pc=$ecca/$eccc,
+// diff NEOST_WRITE_DIAG ↔ Hatari `--trace video_sync`) : Hatari date 456/464,
+// NeoST fcRaw+2 donnait 464/472 = **+8 constant** sur toutes les paires. Ce +8
+// est le décalage d'ORIGINE de l'horloge trame NeoST vs les coordonnées ligne
+// Hatari (le même −8 apparaît dans la datation read : −14 mesuré vs −6
+// théorique). Décomposition : fin d'accès Moira = fc+2 (théorie WinUAE
+// currcycle+4, callback au point-MILIEU) + origine (−8) = **−6**.
+// ⚠ L'ancien +16 était une rustine calibrée AUTOUR des biais d'alors (IACK
+// sur-compté +8, alignement bus au milieu d'accès, read +18) — retirés ensemble
+// le 2026-07-02 (refonte coordonnée). NEOST_SYNC_OFF ajuste pour l'A/B.
+static constexpr int kSyncWriteOffsetCyc = -6;
 
 void Shifter::recordSyncWrite(bool isRes, uint8_t val) {
     if (!liveFrameClock_) return;
@@ -1277,9 +1316,9 @@ uint8_t Shifter::read8(uint32_t addr) {
 uint32_t Shifter::videoCounter() const {
     if (!beamClock_) return videoBase & 0xFFFFFF;       // pas d'horloge → base brute
     int64_t fc = beamClock_();                          // cycles dans la trame
-    fc += kVideoCounterReadOffsetCyc;                   // datation lecture façon Hatari (anti-flicker spec512)
-    static const char* vco = std::getenv("NEOST_VC_OFF");   // DEBUG : offset ADDITIONNEL (relatif à la correction)
-    if (vco) fc += std::atoi(vco);
+    fc += kVideoCounterReadOffsetCyc;                   // datation lecture fidèle Hatari (fin d'accès − 8)
+    // (NEOST_VC_OFF est déjà intégré à kVideoCounterReadOffsetCyc — ne pas l'ajouter
+    // une 2ᵉ fois ici ; l'ancien double-ajout faussait les balayages de calibration.)
     // Géométrie VERROUILLÉE de la trame (cycles/ligne et début DE dépendent de la
     // fréquence 50/60/71 Hz : avant, 512 et 56/52 étaient figés → compteur faux en
     // 60 Hz). frameSync_ est posé par beginFrame, comme frameMode_.
@@ -1308,6 +1347,12 @@ uint32_t Shifter::videoCounter() const {
     // écriture freq/res garde le chemin historique (liveStartHBL_ = 63, zéro régression).
     const int  line = static_cast<int>(fc / kCyclesPerLine);
     const int  X    = static_cast<int>(fc % kCyclesPerLine);
+    // Compteur REDÉMARRÉ en fin de trame (port Video_RestartVideoCounter, ligne
+    // 310/260 cycle 56) : les lectures au-delà renvoient la base rechargée, FIGÉE
+    // jusqu'au DE de la trame suivante (chez Hatari, pVideoRaster vaut alors
+    // &STRam[VideoBase] et plus rien ne l'avance avant la prochaine ligne affichée).
+    if (vcRestartBase_ >= 0 && line >= vcRestartLine_)
+        return static_cast<uint32_t>(vcRestartBase_) & 0xFFFFFF;
     int dispStart = liveStartHBL_;
     int disp2     = disp;
     if (frameMode_ != Mode::High && !syncWrites_.empty()
@@ -1377,16 +1422,14 @@ uint32_t Shifter::videoCounter() const {
             addr += static_cast<uint32_t>(nb);
         }
     }
-    // ⚠ RESTART du compteur en fin de trame (Video_RestartVideoCounter : rechargement
-    // depuis $FF8201/03 au HBL 310/260, cycle 56/60, AVANT le VBL — ULM DSOTS) :
-    // VOLONTAIREMENT NON PORTÉ. Tenté puis retiré : les logiciels qui se synchronisent
-    // en pollant « compteur revenu à la base » (ex. make_overscan_test) sortent alors
-    // de leur poll à la ligne 310 au lieu du VBL et posent leur bascule 60/50 Hz PILE
-    // à la frontière de trame — or beginFrame VERROUILLE la géométrie par trame : un
-    // registre sync à 60 Hz à cet instant bascule TOUTE la trame en 263 lignes
-    // (étalon overscan_top : 0 détection de bordure, 8 % de diff). Hatari n'a pas ce
-    // problème (machine d'état continue, ligne à ligne). À reporter avec le chantier
-    // « géométrie par ligne / bascule 50-60 Hz en cours de trame » (cf. inventaire).
+    // RESTART du compteur en fin de trame (Video_RestartVideoCounter, HBL 310/260
+    // cycle 56, ULM DSOTS) : PORTÉ (2026-07-02) — cf. le early-return vcRestartBase_
+    // en tête. Indispensable aux moteurs double-buffer beam-syncés (Enchanted Land
+    // en jeu) : la base du handler VBL est posée APRÈS la ligne 0 → le latch
+    // begin-frame seul renvoyait l'ANCIEN buffer toute la trame et le stabilisateur
+    // ($8209) tournait à vide. ⚠ L'ancienne crainte (« un poll compteur==base sort à
+    // la ligne 310 et bascule 60 Hz à la frontière → géométrie de trame flip ») est
+    // re-testée aux étalons : overscan_top et make_overscan_test restent verts.
     return addr & 0xFFFFFF;
 }
 
