@@ -54,6 +54,23 @@ Cuddly, Super Hang-On). Décision utilisateur (2026-06-16) : **garder le sync-dr
     sur les sites res à pc IDENTIQUES ; le +(−20) du site freq vient du nop-slide auto-patché).
     Oracle : cmd-fifo réel ~100 s (`hatari-event keydown 57` / `keyup`, `hatari-option --trace
     video_sync,video_res` — PAS `hatari-trace`, et la fifo est créée PAR Hatari).
+  - 🔬 **BANC DÉDIÉ AU RÉSIDU : `tools/make_poll_entry_test.py`** (poll-test + délai ~254 cyc →
+    lecture $8209 EN plein DE = la couleur encode la PHASE D'ENTRÉE du handler HBL au cycle près —
+    le poll-test de base lit pendant le blank, compteur FIGÉ, donc INSENSIBLE à l'entrée : il ne
+    validait PAS la latence d'exception). Mesures 2026-07-02 :
+    * **Structure de quantification IDENTIQUE** Hatari↔NeoST : entrées par période de 5 lignes
+      {x, x+4, x+8}, ratio 2:2:1, deltas/ligne {508,512,520} mêmes proportions.
+    * **Latence d'exception NeoST = WinUAE − 12, EXACT** (Δ dernière-instr→handler : NeoST {56,60}
+      vs Hatari {68,72}, mêmes formes). −2 identifiés (WinUAE ajoute `x_do_cycles(2)` avant le
+      2ᵉ prefetch pour l'IPL, newcpu.c:3225) ; −10 restants À ATTRIBUER dans le chemin
+      d'exception (ordre exact E-wait/pads/idles vs Moira execInterrupt/jumpToVector).
+    * ⚠ **Les constantes ajoutées au bloc IACK sont ABSORBÉES** par la boucle main 12 cyc
+      (équilibre auto-verrouillé : `IACK_VIDEO` 18/22/26 → images BYTE-IDENTIQUES entre elles).
+      Le banc mesure l'INTERACTION reconnaissance-IPL × E-clock × alignement, pas la longueur.
+      Baseline NeoST 36/180 vs Hatari ; `IPLFETCH=1` seul : idem ; `IACK_VIDEO`+4..12 ou
+      IPLFETCH+IACK_VIDEO : 72/180 ; legacy `IACK_AT=0` : 72/180. Aucun combo → 180.
+      ⇒ fermer d'abord le −10 de latence (diff pas-à-pas du chemin d'exception), PUIS
+      re-balayer la reconnaissance (IPLFETCH).
 - 🎯 **PERCÉE (2026-06-17) — `NEOST_RAM_SLOT`+`NEOST_IACK` désormais DÉFAUT ON.** Les DEUX flags
   ENSEMBLE font FONCTIONNER le mécanisme d'overscan beam-sync : sans eux le handler HBL d'EL est
   ~88 cyc trop rapide → l'impulsion res se VERROUILLE (trick=0, zéro overscan) ; avec eux la dérive
