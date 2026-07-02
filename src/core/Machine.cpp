@@ -100,6 +100,27 @@ Machine::Machine(std::size_t ramBytes, CpuCore cpuCore, MachineType machine)
     // (cpl-224) via lineCarry_. Port de Hatari HBL_Pos/nCyclesPerLine (video.c:2249,
     // Video_AddInterruptHBL 2849) : laisse dériver la phase du gestionnaire fullscreen.
     v2_ = std::getenv("NEOST_V2") != nullptr;
+    // Chantier longueurs de ligne PAR-LIGNE (port HBL_Pos/nCyclesPerLine de
+    // Video_Update_Glue_State, cf. doc maître) — gated NEOST_LINELEN (opt-in tant
+    // que la validation étalons+EL+LX n'est pas re-passée avec). À chaque écriture
+    // freq/res dont la branche « Freq_match » fixe la géométrie de la ligne HBL
+    // COURANTE : l'IRQ HBL de la ligne est REPROGRAMMÉE à lineStart+hblPos (≙
+    // Video_AddInterruptHBL) et la longueur (224/508/512) est retenue ; onHbl
+    // cumulera le raccourcissement dans lineCarry_ (les événements des lignes
+    // suivantes — HBL/Timer B/RENDER — suivent déjà −lineCarry_).
+    lineLenOn_ = std::getenv("NEOST_LINELEN") != nullptr;
+    shifter.setLineGeom([this](int line, int hblPos, int cyclesLine) {
+        if (!lineLenOn_ || line != hblLine_ || line >= lpf_) return;
+        const int64_t lineStart = frameStart_ + static_cast<int64_t>(line) * cpl_ - lineCarry_;
+        // Ne reprogramme que si l'IRQ HBL de la ligne n'a pas encore été servie
+        // (l'événement est encore armé à une position ≥ maintenant).
+        sched.schedule(Scheduler::HBL, lineStart + hblPos);
+        cpu.armHblPinAt(lineStart + hblPos);
+        curLineLen_ = cyclesLine;
+        if (std::getenv("NEOST_LINELEN_TRACE")) std::fprintf(stderr,
+            "[LLEN] line=%d hblPos=%d len=%d carry=%lld\n", line, hblPos, cyclesLine,
+            (long long)lineCarry_);
+    });
     shifter.setHblShorten([this] {
         if (!v2_ || hblLine_ == v2ShortLine_ || hblLine_ >= lpf_) return;   // déjà raccourcie / hors trame
         // Cycle DANS la ligne courante (grille décalée par lineCarry_). Seule une
@@ -251,12 +272,13 @@ void Machine::scheduleFrameEvents() {
     renderLine_ = 0;
     tbLine_     = 0;
     hblLine_    = 0;
-    lineCarry_   = 0;     // V2 : aucune ligne raccourcie au début de trame
+    lineCarry_   = 0;     // V2/LINELEN : aucune ligne raccourcie au début de trame
     v2ShortLine_ = -1;
     shifter.beginFrame();                          // verrouille résolution + fréquence
     // Géométrie de la trame (50/60/71 Hz) figée pour toute la trame, lue ici.
     const Shifter::Geometry g = shifter.geometry();
     cpl_       = g.cyclesPerLine;
+    curLineLen_ = cpl_;   // LINELEN : longueur nominale tant qu'aucun match freq
     lpf_       = g.linesPerFrame;
     disp_      = g.displayLines;
     deEnd_     = g.lineEndCycle;
@@ -346,6 +368,13 @@ void Machine::onHbl() {
         std::fprintf(stderr, "[HBLD] line=%d sched=%lld live=%lld\n",
                      hblLine_, (long long)sched.now(), (long long)sched.liveNow()); }
     cpu.raiseHbl();                                // HBL niveau 2 (gaté par le SR)
+    // Longueur RÉELLE de la ligne qui se termine (NEOST_LINELEN) : le cumul
+    // lineCarry_ décale toutes les planifications des lignes suivantes (−carry),
+    // comme la chaîne StartCycle+nCyclesPerLine de Hatari.
+    if (lineLenOn_ && curLineLen_ != cpl_) {
+        lineCarry_ += cpl_ - curLineLen_;
+        curLineLen_ = cpl_;
+    }
     ++hblLine_;
     // HBL émis à CHAQUE scanline (hblLine_ = numéro de ligne absolu 0..lpf-1), comme
     // sur le vrai matériel — y compris dans les bordures haut/bas (ancre Video_EndHBL).
@@ -395,7 +424,12 @@ void Machine::runFrame() {
     // la 1ʳᵉ trame démarre. Ancrer sur busClockNow décalerait la grille faisceau de ces 40
     // cyc → déphasage CPU↔faisceau qui casse les calibrations raster (Enchanted Land noir).
     // L'offset reset est ainsi absorbé dans la 1ʳᵉ trame, comme avant.
-    if (frameStartInit_) frameStart_ += static_cast<int64_t>(lpf_) * cpl_;
+    // NEOST_LINELEN : la trame qui se termine était RACCOURCIE du cumul lineCarry_
+    // (lignes 224/508) — l'ancre de la trame suivante avance de sa longueur RÉELLE
+    // (≙ Hatari : la VBL est posée depuis le dernier HBL, la somme des longueurs
+    // de lignes réelles fait la trame). Hors LINELEN, lineCarry_ vaut 0 ici (V2
+    // seul le touche, opt-in) → comportement inchangé.
+    if (frameStartInit_) frameStart_ += static_cast<int64_t>(lpf_) * cpl_ - (lineLenOn_ ? lineCarry_ : 0);
     else { frameStart_ = sched.now(); frameStartInit_ = true; }
     // DIAG (NEOST_FRAME_DIAG) : phase absolue de l'ancre de trame — sur le vrai
     // matériel la vidéo et les créneaux bus dérivent de la MÊME horloge, donc

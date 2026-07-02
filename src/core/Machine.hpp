@@ -179,6 +179,10 @@ private:
     int64_t lineCarry_ = 0;   // décalage cumulé (cyc) dû aux lignes raccourcies cette trame
     int     v2ShortLine_ = -1; // dernière ligne déjà raccourcie (évite double-comptage)
     bool    v2_ = false;      // NEOST_V2 actif ?
+    // Chantier longueurs de ligne PAR-LIGNE (gated NEOST_LINELEN, port complet
+    // HBL_Pos/nCyclesPerLine — cf. setLineGeom dans le ctor + doc maître).
+    bool    lineLenOn_  = false;
+    int     curLineLen_ = CYCLES_PER_LINE;   // longueur retenue pour la ligne HBL courante
     // (Le RTC avance en paresseux à la lecture, cf. Rtc::catchUp — plus de compteur ici.)
 
     // Géométrie de la trame COURANTE (50/60/71 Hz), verrouillée par scheduleFrameEvents
