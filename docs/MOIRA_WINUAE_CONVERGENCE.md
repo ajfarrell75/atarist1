@@ -156,6 +156,39 @@ Cuddly, Super Hang-On). Décision utilisateur (2026-06-16) : **garder le sync-dr
       ⚠ Les diagnostics de cette passe restent branchés (gated) : `NEOST_FRAME_DIAG`
       (phase de l'ancre de trame), `NEOST_BUS_DIAG=<page-pc-hex>` (séquence bus + mod 4
       par accès), champ `into=` dans `NEOST_VC_TRACE`.
+    * 🚧 **CHANTIER OUVERT (plan d'implémentation) — longueurs de ligne PAR-LIGNE
+      (`HBL_Pos`/`nCyclesPerLine`, menu robot Cuddly).** Diagnostic : cf. TODO.md
+      (traces croisées `video_border_h` ↔ `NEOST_GLUE_DIAG` [GLUE]/[GLUP], commit
+      ec40677). Le port des masques/DE de `Video_Update_Glue_State` est FIDÈLE
+      (vérifié branche à branche, y c. verticale top/bottom) ; il MANQUE le canal
+      (HBL_Pos, nCyclesPerLine) que chaque branche « Freq_match » pose (video.c
+      2246-2438 STF, application 2849-2877) :
+      **(a)** match 71 Hz → (220, 224) ; match 60 Hz (lc<Line_Set_Pal) → (504, 508) ;
+      match 50 Hz (lc≤HDE_On_Low_60 ou ≤Line_Set_Pal) → (508, 512) — STF ; les
+      branches phase 2 (milieu de ligne) n'en posent PAS.
+      **(b)** application live : si la ligne de l'écriture == ligne HBL courante,
+      REPROGRAMMER l'événement HBL de la ligne à lineStart+HBL_Pos (≙
+      Video_AddInterruptHBL) et poser la longueur ; à la dernière ligne, ajuster la
+      VBL (±4, ≙ CyclesPerVBL). Timer B : repositionné si DE start/end a changé
+      (≙ Video_AddInterruptTimerB — vérifier que le recalcul par-ligne actuel de
+      Machine::onTimerB suffit quand l'écriture arrive APRÈS la planification).
+      **(c)** ATTRIBUTION : calculer (ligne, lineCyc) AU MOMENT de recordSyncWrite
+      (échelle des débuts de ligne réels, ≙ ShifterLines[].StartCycle /
+      Video_ConvertPosition avec les cas frontière ±4 de video.c:1195-1241) et les
+      STOCKER dans SyncWrite — liveGlueCatchUp/replayGlue consomment ces champs au
+      lieu de diviser par cpl fixe. Machine maintient le début de ligne réel
+      (généralisation de lineCarry_ : cumul des (cpl − nCyclesPerLine) de toutes
+      les lignes écoulées, plus seulement le cas hi-res V2).
+      **(d)** generaliser l'ébauche V2 de replayGlue (longueur par ligne = dernier
+      nCyclesPerLine posé pendant la ligne, défaut cpl) et retirer le heuristique
+      « impulsion hi ≤57 → 224 ».
+      **(e)** datation beamClock par-ligne (fc/cpl dans Shifter::position,
+      videoCounter, WDIAG…) — dernier étage, à ne faire qu'après (a)-(d) verts.
+      Gate : NEOST_LINELEN (défaut OFF tant que étalons+EL lock 100 %+LX ne sont pas
+      re-validés avec). Bancs : menu robot (saut {0,−3,−6} → 0 ; mur pleine largeur),
+      étalons 19/19, EL in-game lock 100 %, poll-entry.
+      Outils prêts : NEOST_VARLINE_TRACE (mesure fixe↔variable sans rien changer),
+      repro headless une commande, oracle AVI + trace border (session scratchpad).
 - 🎯 **PERCÉE (2026-06-17) — `NEOST_RAM_SLOT`+`NEOST_IACK` désormais DÉFAUT ON.** Les DEUX flags
   ENSEMBLE font FONCTIONNER le mécanisme d'overscan beam-sync : sans eux le handler HBL d'EL est
   ~88 cyc trop rapide → l'impulsion res se VERROUILLE (trick=0, zéro overscan) ; avec eux la dérive
