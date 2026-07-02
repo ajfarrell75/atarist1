@@ -725,6 +725,11 @@ uint8_t Fdc::readSectorST(uint8_t track, uint8_t sector, uint8_t side, int* pSiz
     FloppyDisk& dk = drive_[driveSel_];
     const uint32_t off = lsnOffset(track, side, sector, dk.spt, dk.sides);
     if (off + 512u <= dk.image.size()) {
+        static const bool fdcDebug = getenv("NEOST_FDC_DEBUG") != nullptr;
+        if (fdcDebug)
+            std::fprintf(stderr, "[fdc-rd] tr=%d sr=%d side=%d off=%u data=%02x%02x%02x%02x\n",
+                         track, sector, side, off, dk.image[off], dk.image[off+1],
+                         dk.image[off+2], dk.image[off+3]);
         for (int i = 0; i < 512; ++i) bufferAdd(dk.image[off + i]);
         *pSize = 512;
         return 0;
