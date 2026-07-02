@@ -83,12 +83,30 @@ Cuddly, Super Hang-On). Décision utilisateur (2026-06-16) : **garder le sync-dr
       période 5 trames) → comparer une capture NeoST à **5 trames consécutives** de l'AVI Hatari
       (le motif tourne). Et les constantes ajoutées au bloc IACK sont ABSORBÉES par la boucle
       main 12 cyc (équilibre auto-verrouillé : `IACK_VIDEO` 18/22/26 → images byte-identiques).
-    * ◑ **RESTE (borné)** : match poll-entry 72-136/180 selon config (baseline 36) — le résidu =
-      la **micro-structure de reconnaissance** (positions du POLL_IPL par instruction dans Moira
-      vs l'échantillon fin−4 uniforme de WinUAE, sur ~20-40 % des phases de ligne) + le lock
-      moteur EL in-game toujours à **−16** (freq 360/368 vs Hatari 376/384 — invariant sous tous
-      les balayages → suspect côté MODÈLE VIDÉO des lignes à tricks, pas CPU). `IPLFETCH=1`
-      casse toujours le loader EL.
+    * ✅ **LE −16 DU MOTEUR EL = MODÈLE VIDÉO, TROUVÉ ET CORRIGÉ (2026-07-02, 3ᵉ passe).**
+      `Video_CalculateAddress` (video.c:1508-1565) NE lit PAS DisplayStart/EndCycle de la Glue
+      pour l'intra-ligne : il reconstruit **ds** (LEFT_OFF → LINE_START_CYCLE_71 = **0**, pas le
+      HDE_On_Hi=4 de la Glue ; LEFT_PLUS_2 → 52) et la **taille** = CurSize×2 par la table de
+      bordures (fullscreen = 230, pas (End−Start)/2 = 229). L'erreur de 2-4 octets sur lignes à
+      tricks faussait l'estimation faisceau du stabilisateur d'EL → impulsions à −16. **Après le
+      port fidèle : le moteur verrouille à 376/384 = HATARI BYTE-EXACT** (res à −4, une case) ;
+      trames verrouillées churn ~20 % vs 17 % Hatari (le scroll du paysage est LÉGITIME —
+      churn Hatari in-game = 17 % constant, mesuré à l'AVI).
+    * ◑ **RESTE (dernier verrou) : le TAUX de lock (55-66 % vs Hatari 100 %)** = la
+      micro-structure de reconnaissance IPL. Implémenté (gated `NEOST_IPLFETCH`, défaut OFF) :
+      la règle `ipl_fetch_next` COMPLÈTE — seuil `cdp` sur le changement PRÉCÉDENT
+      (`ipl_pin_change_evt_p`), report différé ≙ `regs.ipl[1]` appliqué à la frontière suivante
+      (rotation run-loop). Insuffisant seul (poll-entry 54/180) : la parité byte exige (a) l'audit
+      des POINTS d'échantillonnage PAR INSTRUCTION (Moira POLL_IPL vs WinUAE fin−4 uniforme +
+      re-sample « changement à pre+2 mid-accès », newcpu.c:5030), (b) la **broche MFP (niv 6)
+      exacte** (chaîne TIMER_B→MFP_IRQ encore dispatch-late) — c'est elle qui fait que
+      `IPLFETCH=1` casse le loader EL (boucle FDC sur IRQ MFP : broche tardive + report = un
+      octet raté).
+    * ⚠ **PIÈGE : les bancs poll/poll2 ne sont PAS comparables mono-trame** (précession
+      E-clock, 5 contenus distincts, frames AVI dupliquées ~2×) ; et leur ancien « 180/180 »
+      était CO-CALIBRÉ avec l'entrée d'avant (broche au dispatch) — depuis broche-exacte/HBL 508
+      ils ne matchent plus AUCUNE phase (les valeurs bougent par ligne, pas d'un offset
+      constant). À re-fermer AVEC le front reconnaissance.
 - 🎯 **PERCÉE (2026-06-17) — `NEOST_RAM_SLOT`+`NEOST_IACK` désormais DÉFAUT ON.** Les DEUX flags
   ENSEMBLE font FONCTIONNER le mécanisme d'overscan beam-sync : sans eux le handler HBL d'EL est
   ~88 cyc trop rapide → l'impulsion res se VERROUILLE (trick=0, zéro overscan) ; avec eux la dérive

@@ -298,6 +298,16 @@ Moira::execute()
             }
         }
 
+        // NEOST_IPLFETCH : applique le niveau DIFFÉRÉ (changement de broche vu <2 cyc
+        // avant l'échantillon) — il devient la valeur pollée pour la frontière
+        // SUIVANTE, ≙ la rotation `ipl[0] = ipl[1]` de la run loop WinUAE
+        // (newcpu.c:5693, APRÈS do_specialties). No-op quand la feature est OFF.
+        if (iplDeferred >= 0) {
+            reg.ipl = u8(iplDeferred);
+            iplDeferred = -1;
+            flags |= State::CHECK_IRQ;
+        }
+
         // If the CPU is stopped, poll the IPL lines and return
         if (flags & STOPPED) {
 
@@ -830,9 +840,10 @@ Moira::setIPL(u8 val)
 {
     if (ipl != val) {
 
-        // NEOST_IPLFETCH : historise la broche (≙ WinUAE update_ipl) pour que
-        // pollIpl() puisse différer la reconnaissance selon l'ancienneté du
-        // changement. Sans effet quand la feature est OFF (iplDelay4 == 0).
+        // NEOST_IPLFETCH : historise la broche (≙ WinUAE update_ipl, newcpu.c:5022) —
+        // le changement PRÉCÉDENT (valeur + horloge) est conservé pour le seuil
+        // « cdp » de pollIpl. Sans effet quand la feature est OFF (iplDelay4 == 0).
+        iplChangeClockPrev = iplChangeClock;
         iplPrev = ipl;
         iplChangeClock = clock;
         ipl = val;
@@ -853,14 +864,18 @@ Moira::pollIpl()
     // (étalons 19/0 vérifiés). POLL_IPL ≡ reg.ipl = ipl.
     if (iplDelay4 == 0) { reg.ipl = ipl; return; }
 
-    // NEOST_IPLFETCH : port fidèle de WinUAE ipl_fetch_next (mécanisme B). Selon
-    // l'ancienneté du dernier changement de broche au moment de l'échantillon :
-    //   ≥ iplDelay4 cyc  → broche stabilisée  → nouvelle valeur
-    //   ≥ iplDelay2 cyc  → changée 2-4 cyc avant → ANCIENNE valeur (latch pas à jour)
-    //   <  iplDelay2 cyc → reconnaissance différée (reg.ipl inchangé)
-    const i64 elapsed = clock - iplChangeClock;
-    if (elapsed >= iplDelay4)      reg.ipl = ipl;
-    else if (elapsed >= iplDelay2) reg.ipl = iplPrev;
+    // NEOST_IPLFETCH : port FIDÈLE de WinUAE ipl_fetch_next (newcpu.c:4996-5011).
+    // L'échantillon se fait ~4 cyc avant la FIN de l'instruction (placement des
+    // POLL_IPL de Moira). Trois cas, comme WinUAE :
+    //   cd  = clock − dernier changement  ≥ 4 → broche stabilisée → nouvelle valeur
+    //   cdp = clock − changement PRÉCÉDENT ≥ 2 → latch pas à jour → valeur PRÉCÉDENTE
+    //   sinon → DIFFÉRÉ (≙ regs.ipl[1]) : la valeur devient pollée à la frontière
+    //   SUIVANTE (applyDeferredIpl, rotation ipl[0]=ipl[1] de la run loop WinUAE).
+    const i64 cd  = clock - iplChangeClock;
+    const i64 cdp = clock - iplChangeClockPrev;
+    if (cd >= iplDelay4)       { reg.ipl = ipl;     iplDeferred = -1; }
+    else if (cdp >= iplDelay2) { reg.ipl = iplPrev; iplDeferred = -1; }
+    else                       { iplDeferred = ipl; }
 }
 
 u16
