@@ -75,10 +75,16 @@ protected:
     // (port fidèle de WinUAE ipl_fetch_next). iplDelay4 == 0 ⇒ feature OFF, donc
     // pollIpl() ≡ reg.ipl = ipl. Réglé via setIplDelay(). Edit dans le sous-module
     // → cf. docs/MOIRA_WINUAE_CONVERGENCE.md (clobbérable au submodule update).
-    u8  iplPrev {};            // valeur précédente de la broche
-    i64 iplChangeClock {};     // horloge (cycles) du dernier changement de broche
+    u8  iplPrev {};            // valeur précédente de la broche (≙ regs.ipl_pin_p)
+    i64 iplChangeClock {};     // horloge (cycles) du dernier changement (≙ ipl_pin_change_evt)
+    i64 iplChangeClockPrev {-1000};  // horloge du changement PRÉCÉDENT (≙ ipl_pin_change_evt_p)
     i64 iplDelay4 {0};         // seuil « broche stabilisée » (cyc) ; 0 ⇒ OFF
     i64 iplDelay2 {0};         // seuil « ancienne valeur » (cyc)
+    // Report « différé » de WinUAE (regs.ipl[1]) : un changement de broche vu <2 cyc
+    // avant l'échantillon n'est PAS pris pour la frontière qui vient, mais devient
+    // la valeur POLLÉE à la frontière SUIVANTE (rotation ipl[0]=ipl[1] de la run
+    // loop, newcpu.c:5693). −1 = rien en attente.
+    int iplDeferred {-1};
 
     // Value on the lower two function code pins (FC1|FC0)
     u8 fcl {2};
