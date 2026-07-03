@@ -88,6 +88,13 @@ private:
     // recharge est ici ; les drapeaux FXSR/NFSR de la ligne en cours survivent
     // à la coupure de tranche.
     uint16_t xReset_   = 0;                  // recharge du X count (latché au départ)
+    // Compteur Y VIVANT (port Hatari BlitterRegs.y_count) : la conversion 0→65536
+    // se fait À L'ÉCRITURE du registre $FF8A38 (Blitter_LinesPerBitblock_WriteWord),
+    // PAS à la relecture du résiduel. Indispensable pour distinguer « le programme
+    // a écrit 0 = 65536 lignes » d'un « transfert DÉJÀ terminé (résiduel 0) » :
+    // dans ce second cas, re-poser BUSY ne relance RIEN (blitter.c:1433-1437 — le
+    // protocole restart du driver blitter du TOS re-set BUSY après chaque blit).
+    uint32_t yLatch_   = 0;
     bool     midBlit_  = false;              // un transfert est engagé (même en pause)
     bool     haveFxsr_ = false;              // lecture source extra déjà faite (ligne)
     bool     nfsrInt_  = false;              // dernière lecture source de la ligne sautée
