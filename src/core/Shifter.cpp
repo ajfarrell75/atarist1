@@ -18,16 +18,20 @@
 // pipeline du shifter documenté (« [NP] '7' is required to align pixels and colors »).
 // Une écriture à la position-ligne L apparaît donc au pixel (L − LineStartCycle − 28).
 // Côté NeoST, Moira date l'écriture au DÉBUT du cycle bus (~4 cyc avant la convention
-// Hatari instr_end−8), d'où un net de −28 + 4 = −24, AFFINÉ à −23 (1 cyc) une fois le
-// flicker spec512 corrigé (cf. kVideoCounterReadOffsetCyc) : la correction du compteur
-// vidéo a VERROUILLÉ l'état des écritures (qui oscillait ±4 cyc une trame sur deux), si
-// bien que l'alignement rendu optimal s'est figé à −23. Indissociable de
-// applyShifterBusAlignment (sans le recalage des wait states bus, la position dérive de
-// −2 cyc/ligne). VALIDÉ : diff pixel vs oracle Hatari = **0 px** sur LES 4 images du
-// slideshow Spectrum 512 — BEE512 (honeycomb), sun (dégradé), PLANET (sci-fi), cougar
-// (photo) — soit 100 % pixel-identique. À −24 il restait 122/54/210/319 px (frontières
-// décalées d'1 px sur les images à arêtes nettes). Sweep en V confirmant −23 sur chaque.
-static constexpr int kSpec512AlignCyc = -23;
+// Hatari instr_end−8). Indissociable de applyShifterBusAlignment (sans le recalage des
+// wait states bus, la position dérive de −2 cyc/ligne).
+// **−25 (2026-07-03) = modèle spec512.c EXACT.** Hatari stocke la position d'écriture
+// 4-alignée (bus) et l'applique par CELLULES de 4 cycles : premier pixel affecté =
+// cyc_hatari − 84 (50 Hz : pré-spans (56−0)/4 + 7 = 21 → count 84 au 1ᵉʳ pixel visible,
+// cf. Spec512_StartScanLine). Les écritures NeoST étant TOUTES ≡2 mod 4 (syncCpuBus,
+// convention −2 vs Hatari), −25 place le front à c = w−82 = (w+2)−84 ≡ 0 mod 4 —
+// quantification de cellule REPRODUITE par le seul offset, sans code de plus.
+// VALIDÉ : diaporama étalon spectrum_512_auto_diapo — les **10** images du cycle à
+// **0 px** vs oracle Hatari fastfdc aligné trame-à-trame (l'ancien −23 laissait
+// 350/23/415/666/15/6 px sur 6 des 10 : marges d'index serrées autour des fronts ;
+// les traces NEOST_SPEC512_TRACE ↔ TRACE_VIDEO_COLOR matchaient déjà à Δ=+2 constant
+// sur les 9552 écritures/trame → seule la règle de quantification différait).
+static constexpr int kSpec512AlignCyc = -25;
 
 // Seuil de détection « image spec512 » : nombre d'écritures palette MOT par trame
 // au-delà duquel on bascule sur le re-rendu intra-ligne. Bien au-dessus d'un usage

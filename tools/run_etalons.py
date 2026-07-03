@@ -92,6 +92,10 @@ def run_hatari_oracle(entry: dict, out_png: Path) -> int:
     frame = str(entry.get("frame", int(vbls) - 10))
     machine = entry.get("machine", "st")
     cmd = ["bash", str(HATARI_ORACLE), rom, disk, vbls, frame, str(out_png), machine]
+    # oracle_fastfdc : aligne la timeline Hatari sur le run NeoST --fastfdc (sans quoi
+    # les numéros de trame divergent — le FDC réel charge chaque image bien plus tard).
+    if entry.get("oracle_fastfdc"):
+        cmd.append("fastfdc")
     print("  $", " ".join(cmd))
     return subprocess.run(cmd, cwd=ROOT).returncode
 

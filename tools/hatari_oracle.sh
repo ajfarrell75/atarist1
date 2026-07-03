@@ -13,16 +13,29 @@ else
 fi
 TOS=${1:?tos}; DISK=${2:?disk}; VBLS=${3:-1400}; FRAME=${4:-1300}; OUT=${5:-/tmp/hatari_frame.png}
 MACHINE=${6:-st}
+# 7ᵉ arg optionnel « fastfdc » : aligne la timeline oracle sur un run NeoST --fastfdc
+# (sinon FDC vitesse réelle — les numéros de trame ne correspondent PAS entre les deux).
+FASTFDC=()
+[[ "${7:-}" == "fastfdc" ]] && FASTFDC=(--fastfdc on)
 AVI=/tmp/hatari_oracle.avi
 rm -f "$AVI"
 export SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy HOME=/tmp/hatari_home
 mkdir -p /tmp/hatari_home
-"$HATARI" --machine "$MACHINE" --tos "$TOS" --monitor rgb \
-  --disk-a "$DISK" \
-  --sound off --fast-forward on --confirm-quit off --statusbar off \
-  --frameskips 0 --alert-level fatal \
-  --run-vbls "$VBLS" \
-  --avirecord --avi-vcodec png --avi-file "$AVI" >/tmp/hatari_oracle.log 2>&1 || true
+# --avirecord : booléen explicite (« on ») requis sur le build Linux (extern/hatari),
+# refusé par le binaire Homebrew macOS (flag nu). On tente « on », repli flag nu.
+run_hatari() {
+  "$HATARI" --machine "$MACHINE" --tos "$TOS" --monitor rgb \
+    --disk-a "$DISK" \
+    --sound off --fast-forward on --confirm-quit off --statusbar off \
+    --frameskips 0 --alert-level fatal \
+    ${FASTFDC[@]+"${FASTFDC[@]}"} \
+    --run-vbls "$VBLS" \
+    "$@" --avi-vcodec png --avi-file "$AVI" >/tmp/hatari_oracle.log 2>&1 || true
+}
+run_hatari --avirecord on
+if [[ ! -s "$AVI" ]]; then
+  run_hatari --avirecord
+fi
 # Extrait la frame demandée (l'AVI a 1 image par VBL avec --frameskips 0).
 ffmpeg -y -loglevel error -i "$AVI" -vf "select=eq(n\,$FRAME)" -frames:v 1 -update 1 "$OUT"
 echo "oracle frame $FRAME -> $OUT ($MACHINE)"
