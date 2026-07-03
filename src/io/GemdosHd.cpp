@@ -1248,8 +1248,14 @@ int GemdosHd::loadAndReloc(const std::string& prgName, uint32_t baseaddr, bool f
     };
     uint32_t nText = be32(2), nData = be32(6), nBss = be32(10), nSym = be32(14);
 
+    // En-tête PRG mensonger : la copie texte+données lit prg[28 .. 28+nText+nData[,
+    // il faut donc que tout tienne dans le fichier. Calcul en 64 bits : nText+nData
+    // peuvent approcher 2^32 et la somme déborderait en 32 bits.
+    if ((uint64_t)28 + nText + nData > prg.size()) return GEMDOS_EPLFMT;
+
     uint32_t memtop = (baseaddr < 0x1000000) ? readLong(0x436) : readLong(0x5a4);
-    if (baseaddr + 0x100 + nText + nData + nBss > memtop) return GEMDOS_ENSMEM;
+    // Même précaution : la somme peut déborder en uint32_t et passer le test à tort.
+    if ((uint64_t)baseaddr + 0x100 + nText + nData + nBss > memtop) return GEMDOS_ENSMEM;
 
     flushCache();
     // Texte + données → baseaddr+0x100
@@ -1273,18 +1279,25 @@ int GemdosHd::loadAndReloc(const std::string& prgName, uint32_t baseaddr, bool f
         writeLong(baseaddr + 44, baseaddr + 40);
     }
 
-    // Si FASTLOAD non posé, efface le tas.
+    // Si FASTLOAD non posé, efface le tas — version bornée (esprit de
+    // STMemory_SafeClear) : si p_hitpa < cur, la soustraction non signée donnait
+    // ~4 Go d'écritures (gel). On n'efface que si p_hitpa > cur, sans jamais
+    // dépasser la RAM réelle.
     if (!(prg[25] & 1)) {
-        uint32_t cur = baseaddr + 0x100 + nText + nData + nBss;
-        uint32_t lenClr = readLong(baseaddr + 4) - cur;
-        for (uint32_t i = 0; i < lenClr; i++) writeByte(cur + i, 0);
+        uint32_t cur = baseaddr + 0x100 + nText + nData + nBss;   // ≤ memtop (vérifié plus haut)
+        uint32_t hitpa = readLong(baseaddr + 4);                  // p_hitpa (fourni par l'invité)
+        uint32_t limit = std::min<uint32_t>(hitpa, (uint32_t)bus_.ram.size());
+        for (uint32_t i = cur; i < limit; i++) writeByte(i, 0);
     }
 
     if (prg[26] != 0 || prg[27] != 0) return 0;   // pas d'info de relocation
 
-    long relIdx = 0x1c + nText + nData;
-    if (relIdx > fileSize - 3) return GEMDOS_EPLFMT;
-    if (relIdx + (long)nSym <= fileSize - 3) relIdx += nSym;
+    // Lecture de 4 octets (premier offset de relocation) à relIdx : elle doit
+    // tenir dans le fichier (Hatari borne à fileSize-3, off-by-one d'un octet ;
+    // ici prg fait exactement fileSize octets → borne stricte).
+    long relIdx = (long)(0x1cu + nText + nData);   // ≤ fileSize (vérifié plus haut, pas de wrap)
+    if (relIdx + 4 > fileSize) return GEMDOS_EPLFMT;
+    if (relIdx + (long)nSym + 4 <= fileSize) relIdx += nSym;
 
     uint32_t relOff = (uint32_t)((prg[relIdx] << 24) | (prg[relIdx + 1] << 16)
                                | (prg[relIdx + 2] << 8) | prg[relIdx + 3]);

@@ -10,6 +10,7 @@
 // =============================================================================
 #include "io/Acsi.hpp"
 
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <sys/stat.h>
@@ -123,7 +124,12 @@ void Acsi::cmdTestUnitReady() { status_ = HD_STATUS_OK; }
 void Acsi::cmdInquiry() {
     Dev& dev = devs_[target_];
     int n = count();
-    uint8_t* buf = prepRespBuf(n);
+    // Longueur d'allocation 0 possible (count() == 0) : Hatari écrit buf[0] sans
+    // condition dans un tampon persistant jamais rétréci. On garantit ici au moins
+    // 1 octet de stockage, puis on retronque dataLen_ (octets renvoyés au DMA) à
+    // la longueur demandée par l'invité.
+    uint8_t* buf = prepRespBuf(std::max(n, 1));
+    dataLen_ = n;
     if (n > (int)sizeof(inquiry_bytes)) {
         memset(buf + sizeof(inquiry_bytes), 0, n - sizeof(inquiry_bytes));
         n = sizeof(inquiry_bytes);
@@ -143,8 +149,12 @@ void Acsi::cmdRequestSense() {
     int n = count();
     if (n == 0 && dev.scsiVersion == 1) n = 4;
     else if (n > 22) n = 22;
-    uint8_t* b = prepRespBuf(n);
-    memset(b, 0, n);
+    // Comme pour INQUIRY : la branche n <= 4 écrit b[0..3] sans condition (fidèle
+    // à HDC_Cmd_RequestSense) → garantir 4 octets de stockage minimum, dataLen_
+    // restant la longueur demandée (n peut valoir 1..3 sur commande farfelue).
+    uint8_t* b = prepRespBuf(std::max(n, 4));
+    dataLen_ = n;
+    memset(b, 0, std::max(n, 4));
     if (n <= 4) {
         b[0] = dev.lastError;
         if (dev.setLastBlockAddr) {

@@ -145,6 +145,16 @@ bool Audio::start() {
         delete dev;
         return false;
     }
+    // TOUT ce que le callback render() lit (rate_, coussin primeSamples_, anneau,
+    // amorçage primed_) doit être posé AVANT ma_device_start : le thread audio
+    // démarre DANS cet appel et appellerait sinon render() sur un état à moitié
+    // initialisé (data race). La fréquence réelle négociée est connue dès
+    // ma_device_init.
+    rate_    = dev->sampleRate ? dev->sampleRate : cfg.sampleRate;  // fréquence réelle négociée
+    primeSamples_ = rate_ * 85 / 1000;        // coussin ≈ 85 ms (latence visée) à la fréquence réelle
+    ring_.clear();
+    primed_      = false;                     // ré-amorçage propre
+    sampleCarry_ = 0.0;
     if (ma_device_start(dev) != MA_SUCCESS) {
         std::fprintf(stderr, "[Audio] ma_device_start a échoué\n");
         ma_device_uninit(dev);
@@ -153,11 +163,6 @@ bool Audio::start() {
     }
     device_  = dev;
     started_ = true;
-    rate_    = dev->sampleRate ? dev->sampleRate : cfg.sampleRate;  // fréquence réelle négociée
-    primeSamples_ = rate_ * 85 / 1000;        // coussin ≈ 85 ms (latence visée) à la fréquence réelle
-    ring_.clear();
-    primed_      = false;                     // ré-amorçage propre
-    sampleCarry_ = 0.0;
     std::printf("[Audio] miniaudio démarré : %u Hz STÉRÉO, latence ~%u ms (modèle push : PSG horodaté + DMA L/R + lecteur)\n",
                 rate_, primeSamples_ * 1000 / rate_);
     std::fflush(stdout);   // visible même si l'appli est tuée (diagnostic)

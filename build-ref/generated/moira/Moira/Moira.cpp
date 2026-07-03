@@ -335,15 +335,6 @@ Moira::execute()
             }
 
             POLL_IPL;
-            // NEOST : le STOP du 68000 est NIVEAU-sensible — il compare IPL au masque
-            // en continu, pas seulement sur un CHANGEMENT de broche. Si le niveau
-            // pollé dépasse déjà le masque (IRQ levée AVANT le stop, masquée par le
-            // SR d'alors, démasquée par l'opérande du stop), il faut re-armer
-            // CHECK_IRQ : sans ça, checkForIrq() ne re-testerait jamais et le CPU
-            // dormirait malgré une IRQ présentée (cas mesuré : raster « stop #$2100 »
-            // de Super Hang-On, réveil ~350 cyc trop tard sur un événement tiers).
-            if (reg.ipl > reg.sr.ipl || reg.ipl == 7)
-                flags |= State::CHECK_IRQ;
             sync(MOIRA_MIMIC_MUSASHI ? 1 : 2);
             return;
         }

@@ -82,6 +82,8 @@ void MidiAcia::raiseIfReady() {
     // L'ACIA active sa ligne d'IRQ dès qu'une cause RX (octet dispo + RIE) ou TX
     // (TDRE + TIE) est active → canal 6 du MFP via GPIP4 (cf. ACIA_UpdateIRQ).
     const bool active = (rdrf_ && (control_ & 0x80)) || (txEnableInt_ && tdre_);
+    // Le canal 6 est levé par le détecteur de FRONT du setter (wire-OR avec le
+    // clavier : si GPIP4 est déjà bas, pas de nouveau front → pas d'IRQ, comme
+    // sur le vrai MFP). Pas de raise() manuel.
     mfp_.setAciaLineMidi(active);
-    if (active) mfp_.raise(Mfp::SRC_ACIA);
 }

@@ -47,6 +47,15 @@ public:
     void finishFrame();
     bool spec512Active() const { return spec512Active_; }
 
+    // Remise à zéro au RESET machine — port de Video_Reset (video.c:810) : base
+    // vidéo, registres STE (line-offset/scroll + modifications différées), compteur
+    // vidéo matérialisé, dernier Freq/Res vus par la Glue (ShifterFrame.Freq/Res =
+    // −1 → le filtre « même valeur ignorée » repart neutre) et état glue par-trame.
+    // Ne touche PAS la palette (Video_Reset ne la réinitialise pas : le contenu des
+    // registres couleur survit au reset, seul TOS la reprogramme). Appelé par
+    // Machine::reset() (branché par l'orchestrateur).
+    void reset();
+
     // Auto-test DÉTERMINISTE de la machine Glue (chemin STF) : injecte des écritures
     // freq/res synthétiques à des cycles EXACTS et vérifie l'état d'affichage résultant
     // (DisplayStartCycle/EndCycle/BorderMask, nStartHBL/nEndHBL) contre les valeurs
@@ -160,6 +169,10 @@ public:
     // de ligne) — CÂBLÉE dans renderLine et videoCounter. Une écriture APRÈS la fin
     // du Display-Enable de la ligne courante est DIFFÉRÉE (port NewLineWidth).
     uint8_t lineWidth = 0;
+    // Dernière valeur BRUTE écrite dans $FF8264 (STE) : Hatari n'intercepte PAS la
+    // relecture de ce registre (ioMemTabSTE → Video_HorScroll_Read_8264, video.c:5813
+    // — IoMem conserve l'octet écrit, y compris les bits hauts non masqués).
+    uint8_t hwScrollReg8264_ = 0;
 
 private:
     static uint32_t stColorToArgb(uint16_t c);   // $0RGB → ARGB8888
@@ -251,6 +264,14 @@ private:
     // live, pour la détection de RETRAIT de bordures (port machine Glue Hatari,
     // Video_Update_Glue_State). `isRes` = $FF8260, sinon $FF820A.
     void recordSyncWrite(bool isRes, uint8_t val);
+    // Dernier Freq (bit1 de $FF820A) / dernière Res ($FF8260 & 3) VUS par la Glue —
+    // port de ShifterFrame.Freq / ShifterFrame.Res : une réécriture de la MÊME
+    // valeur est IGNORÉE par la machine Glue (Video_Sync_WriteByte video.c:3056,
+    // Video_WriteToGlueRes video.c:1630 — `if (Freq == ShifterFrame.Freq) return;`).
+    // Persistants À TRAVERS les trames ; remis à −1 SEULEMENT au reset (Video_Reset
+    // video.c:824-825), jamais à beginFrame. −1 = aucune écriture vue.
+    int lastGlueFreq_ = -1;
+    int lastGlueRes_  = -1;
 
     // Wait state de bus 4 cycles (port LIVE de Hatari M68000_SyncCpuBus) : appelé AU
     // DÉBUT d'un accès CPU à un registre couleur ($FF8240-5F) / résolution ($FF8260) /
@@ -333,7 +354,9 @@ private:
 
     // Décode `nPix` pixels d'une ligne à partir de l'adresse vidéo `base` (modèle
     // fenêtré pour les bordures) dans `idx`. Comme decodeLineIndices mais largeur
-    // explicite et base fournie (pas de stride interne).
+    // explicite et base fournie (pas de stride interne). Applique le scroll fin STE
+    // (même modèle prefetch/sans-prefetch que decodeLineIndices) et renvoie le
+    // décalage scroll (l'appelant lit idx[s + scroll]).
     int decodeWindowIndices(uint32_t base, int nPix, uint8_t* idx) const;
     // Variante depuis une CAPTURE de ligne (octets déjà échantillonnés au faisceau,
     // cf. lineSnap_) : même décodage planaire, source tampon au lieu du bus.

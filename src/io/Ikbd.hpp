@@ -37,6 +37,12 @@ public:
     // Échéance : l'IKBD a fini son auto-test → envoie $F1 (réponse de reset).
     void    onResetResponse();
 
+    // Warm-boot de la ROM IKBD (port d'IKBD_Boot_ROM(false) d'Hatari) : remise
+    // aux défauts, tampons vidés, scanState_ effacé, puis fenêtre critique et
+    // réponse $F1 différée. Commun au reset $80,$01, à exitExeMode et au reset
+    // MACHINE (Machine::reset — Hatari reset.c appelle IKBD_Reset).
+    void    bootRom();
+
     // Échéance : le registre d'émission de l'ACIA s'est vidé (~1 octet série après
     // une écriture $FFFC02 sous TIE) → TDRE repasse à 1 et ré-arme l'IRQ TX. Datée
     // par write8 seulement quand l'IRQ d'émission est armée (cf. raiseIfReady).
@@ -116,7 +122,7 @@ private:
     void commonBoot(uint8_t v);              // boot-stub : accumule le prog principal en ExeMode
     void customWriteDispatch(uint8_t v);     // écriture $FFFC02 → handler custom actif
     void customReadDispatch();               // event clavier/souris/VBL → handler custom actif
-    void exitExeMode();                      // sortie du mode Execute (jmp $f000 / reset 68000)
+    void exitExeMode();                      // sortie du mode Execute (jmp $f000) → bootRom() (public)
     int  checkPressedKey() const;            // 1er scancode pressé dans scanState_, ou -1
     // Handlers de programmes connus (cf. CustomCodeDefinitions[] de Hatari).
     void froggiesWrite(uint8_t v);
@@ -192,9 +198,12 @@ private:
     // flèches clavier ($0A) ; OFF = souris désactivée ($12).
     enum MouseMode { REL, ABS, OFF, CURSOR };
     MouseMode mouseMode_ = REL;
+    // Défauts = état après IKBD_Boot_ROM (Hatari), l'IKBD bootant sa ROM dès la
+    // mise sous tension : bornes ABS_MAX_X/Y_ONRESET (320/200) et cache boutons
+    // ABS_PREVBUTTONS (0x0A = rien à signaler à la 1re interrogation $0D).
     uint16_t absX_ = 0, absY_ = 0;           // position absolue courante (mode ABS)
-    uint16_t absMaxX_ = 0, absMaxY_ = 0;     // bornes inclusives (commande $09)
-    uint8_t  prevAbsButtons_ = 0;            // boutons signalés à la dernière interrogation $0D
+    uint16_t absMaxX_ = 320, absMaxY_ = 200; // bornes inclusives (commande $09)
+    uint8_t  prevAbsButtons_ = 0x0A;         // boutons signalés à la dernière interrogation $0D
     bool     prevL_ = false, prevR_ = false; // état persistant des boutons (mode ABS)
 
     // --- Paramètres du paquet souris relatif (cf. Hatari KeyboardProcessor.Mouse) ---
@@ -262,7 +271,10 @@ private:
     // --- État du code 6301 custom ($20/$22, cf. Hatari ikbd.c) ------------------
     // Identifie le handler actif (NeoST utilise des id plutôt que des pointeurs de
     // fonction membre). CW_ = écritures $FFFC02 ; CR_ = lectures (event-driven).
-    enum CustomW { CW_NONE, CW_BOOT, CW_FROGGIES, CW_DRAGONNELS, CW_CHAOSAD, CW_AS };
+    // CW_IGNORE = handler présent mais qui jette les octets (Transbeauce 2, cf.
+    // IKBD_CustomCodeHandler_Transbeauce2Menu_Write) : en ExeMode les écritures
+    // ne retombent pas dans le parseur standard.
+    enum CustomW { CW_NONE, CW_BOOT, CW_IGNORE, CW_FROGGIES, CW_DRAGONNELS, CW_CHAOSAD, CW_AS };
     enum CustomR { CR_NONE, CR_TRANSB2, CR_CHAOSAD, CR_AS_COLOR, CR_AS_MONO };
     CustomW   customWrite_ = CW_NONE;
     CustomR   customRead_  = CR_NONE;

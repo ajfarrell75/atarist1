@@ -22,12 +22,14 @@ static constexpr float kDmaGain = 0.7f;
 static constexpr int64_t CPU_HZ = 8021248;
 
 // Programme l'échéance « fin de trame » sur l'ordonnanceur (thread émulation) :
-// durée = nombre d'échantillons de la trame × cycles CPU par échantillon.
+// durée = nombre d'échantillons de la trame × cycles CPU par échantillon. La
+// longueur (frameLen_, latchée par startNewFrame) porte le wrap 24 bits : fin ≤
+// début n'annule PLUS l'échéance — le compteur traverse l'espace d'adressage
+// (jusqu'à 2^24 octets si début == fin, cf. Hatari dmaSnd.c:336-341).
 void DmaSound::scheduleFrameEnd() {
     if (!sched_) return;
-    if (endAddr_ <= startAddr_) { sched_->cancel(Scheduler::DMASND); return; }
     const uint32_t step    = (mode_ & 0x80) ? 1u : 2u;        // mono 1 octet, stéréo 2
-    const int64_t  samples = (endAddr_ - startAddr_) / step;
+    const int64_t  samples = frameLen_ / step;
     const int64_t  rate    = int64_t(kRate[mode_ & 0x03]);
     const int64_t  dur     = samples * CPU_HZ / rate;
     sched_->schedule(Scheduler::DMASND, sched_->now() + (dur > 0 ? dur : 1));
@@ -56,15 +58,17 @@ void DmaSound::setXsint(bool level) {
 }
 
 // (Re)démarre une trame DMA : recale le compteur sur l'adresse de début et arme
-// l'échéance de fin. Port de Hatari DmaSnd_StartNewFrame (dmaSnd.c:462-480) : si
-// début == fin ET repeat OFF, la trame est VIDE → on coupe la lecture SANS lever
-// XSINT (sinon GPIP7 resterait figé HAUT, faussant la détection moniteur ; bug des
-// demos start==end comme l'Amberstar cracktro). Repeat ON → on ne coupe pas.
+// l'échéance de fin. Port de Hatari DmaSnd_StartNewFrame (dmaSnd.c:456-479) : si
+// début == fin (égalité STRICTE, comparateur du HW) ET repeat OFF, la trame est
+// VIDE → on coupe la lecture SANS lever XSINT (sinon GPIP7 resterait figé HAUT,
+// faussant la détection moniteur ; bug des demos start==end comme l'Amberstar
+// cracktro). Repeat ON, ou fin < début → on ne coupe pas : le compteur avance
+// avec wrap 24 bits (cf. frameLen_).
 void DmaSound::startNewFrame() {
     curAddr_ = startAddr_;
     phase_   = 0.0;
     haveCur_ = false;                                  // 1er octet (re)tiré et filtré au prochain mix
-    if (endAddr_ <= startAddr_ && !(ctrl_ & 0x02)) {   // trame vide, pas de repeat → arrêt sec
+    if (endAddr_ == startAddr_ && !(ctrl_ & 0x02)) {   // trame vide, pas de repeat → arrêt sec
         playing_ = false;
         ctrl_   &= ~0x01;
         setXsint(false);                               // surtout PAS de XSINT HAUT
@@ -73,9 +77,15 @@ void DmaSound::startNewFrame() {
     }
     // Latch de la trame (port DmaSnd_StartNewFrame) + cycle de départ pour le
     // compteur live $FF8909+ (liveNow : un play lancé en plein bloc CPU est daté
-    // au cycle exact de l'écriture, pas au début du quantum).
+    // au cycle exact de l'écriture, pas au début du quantum). Longueur en OCTETS
+    // avec wrap 24 bits : (fin − début) mod 2^24 ; début == fin (repeat ON) →
+    // 2^24 octets, le compteur traverse TOUT l'espace d'adressage et le son joue
+    // la RAM — vérifié sur STE réel (Hatari dmaSnd.c:336-341, « same as playing
+    // a 2^24 bytes sample », démo « A Little Bit Insane » de Lazer).
     frameStartAddr_  = startAddr_;
     frameEndAddr_    = endAddr_;
+    frameLen_        = int64_t((endAddr_ - startAddr_) & 0xFFFFFF);
+    if (frameLen_ == 0) frameLen_ = int64_t(1) << 24;
     frameStartCycle_ = sched_ ? sched_->liveNow() : 0;
     playing_ = true;
     recordEvent(0);                                    // PLAY start daté (modèle push audio)
@@ -84,6 +94,15 @@ void DmaSound::startNewFrame() {
 }
 
 void DmaSound::onFrameEnd() {
+    // Cas « début == fin, repeat ON » (trame 2^24 octets, latchée) : sur STE réel
+    // AUCUNE interruption de fin de trame n'est générée (Hatari dmaSnd.c:336-341 :
+    // « end of frame interrupt is not generated ») — on relance la trame SANS
+    // pulser XSINT (ni event Timer A, ni front GPIP7). Le re-latch équivaut au
+    // wrap : début + 2^24 mod 2^24 = début.
+    if ((ctrl_ & 0x02) && frameEndAddr_ == frameStartAddr_) {
+        startNewFrame();                          // XSINT déjà HAUT → setXsint no-op
+        return;
+    }
     setXsint(false);                              // fin de trame : XSINT → BAS (compte Timer A si AER bit4=0)
     if (ctrl_ & 0x02) {
         startNewFrame();                          // repeat : nouvelle trame (→ XSINT HAUT, gère start==end)
@@ -160,6 +179,16 @@ void DmaSound::decodeMicrowire() {
         case 5: mwLeft_   = cmd & 0x1F; break;
         default: break;
     }
+}
+
+// Valeur relue en $FF8924 : pendant le transfert le masque TOURNE au rythme du
+// shift — `(mask << (16 - étapes_restantes)) | (mask >> étapes_restantes)`, port
+// exact de Hatari DmaSnd_InterruptHandler_Microwire (dmaSnd.c:1063-1064). Après
+// les 16 pas la rotation est complète → le masque relu redevient la valeur écrite
+// (c'est aussi pourquoi decodeMicrowire peut décoder sur mwMask_ intact).
+uint16_t DmaSound::mwMaskRead() const {
+    if (mwSteps_ <= 0) return mwMask_;
+    return uint16_t((mwMask_ << (16 - mwSteps_)) | (mwMask_ >> mwSteps_));
 }
 
 // Une étape du transfert série Microwire (datée toutes les 8 cycles par le
@@ -343,9 +372,11 @@ uint32_t DmaSound::liveCounter() const {
     if (elapsed <= 0) return frameStartAddr_;
     const uint32_t step    = (mode_ & 0x80) ? 1u : 2u; // octets par échantillon
     const int64_t  rate    = int64_t(kRate[mode_ & 0x03]);
-    int64_t addr = int64_t(frameStartAddr_) + (elapsed * rate / CPU_HZ) * step;
-    if (addr > int64_t(frameEndAddr_)) addr = frameEndAddr_;
-    return uint32_t(addr);
+    int64_t bytes = (elapsed * rate / CPU_HZ) * step;  // octets lus depuis le début
+    if (bytes > frameLen_) bytes = frameLen_;          // borné à la fin latchée
+    // Wrap 24 bits : fin < début (ou trame 2^24 quand début == fin) → le compteur
+    // traverse le haut de l'espace d'adressage et reboucle (cf. startNewFrame).
+    return uint32_t((int64_t(frameStartAddr_) + bytes) & 0xFFFFFF);
 }
 
 uint8_t DmaSound::read8(uint32_t addr) {
@@ -367,8 +398,10 @@ uint8_t DmaSound::read8(uint32_t addr) {
         case 0x21: return mode_;
         case 0x22: return uint8_t(mwShift_ >> 8);     // microwire data : valeur EN COURS de shift
         case 0x23: return uint8_t(mwShift_);          // (→ 0 quand le transfert est fini)
-        case 0x24: return uint8_t(mwMask_ >> 8);      // microwire mask
-        case 0x25: return uint8_t(mwMask_);
+        // Masque microwire : en ROTATION pendant le shift (cf. mwMaskRead) — un
+        // programme qui polle $FF8924 voit le masque tourner puis revenir.
+        case 0x24: return uint8_t(mwMaskRead() >> 8);
+        case 0x25: return uint8_t(mwMaskRead());
         default:   return 0xFF;
     }
 }
@@ -395,24 +428,29 @@ void DmaSound::write8(uint32_t addr, uint8_t v) {
         case 0x0F: endAddr_   = (endAddr_   & 0x00FFFF) | (uint32_t(v) << 16); break;
         case 0x11: endAddr_   = (endAddr_   & 0xFF00FF) | (uint32_t(v) << 8);  break;
         case 0x13: endAddr_   = (endAddr_   & 0xFFFF00) | (uint32_t(v) & 0xFE); break;
-        case 0x21: mode_ = v; break;                   // fréquence + mono/stéréo
-        // Microwire : mots 16 bits ($FF8922 data, $FF8924 mask). On décode la
-        // commande LMC1992 quand l'octet bas de la donnée est écrit (mot complet).
-        case 0x22: mwData_ = uint16_t((mwData_ & 0x00FF) | (v << 8)); break;
+        // Mode : seuls les bits existant sur un vrai STE sont câblés — masque 0x8F
+        // (bit7 mono + bits0-1 fréquence), la relecture montre la valeur masquée
+        // (Hatari DmaSnd_SoundModeCtrl_WriteByte, dmaSnd.c:1013-1027).
+        case 0x21: mode_ = v & 0x8F; break;            // fréquence + mono/stéréo
+        // Microwire : mots 16 bits ($FF8922 data, $FF8924 mask). Pendant un
+        // transfert EN COURS (shift), les écritures data/mask sont IGNORÉES —
+        // « Only update, if no shift is in progress » (Hatari DmaSnd_MicrowireData/
+        // Mask_WriteWord, dmaSnd.c:1195-1206 et 1238-1244).
+        case 0x22: if (mwSteps_ == 0) mwData_ = uint16_t((mwData_ & 0x00FF) | (v << 8)); break;
         case 0x23:
-            mwData_ = uint16_t((mwData_ & 0xFF00) | v);
-            // Écriture d'un mot data → démarre un transfert série Microwire (16
-            // décalages de 8 cycles, cf. Hatari DmaSnd_MicrowireData_WriteWord), SAUF
-            // si un transfert est déjà en cours. $FF8922 lira la valeur décalée
+            // Écriture de l'octet bas de la donnée (mot complet) → démarre un
+            // transfert série Microwire (16 décalages de 8 cycles, cf. Hatari
+            // DmaSnd_MicrowireData_WriteWord). $FF8922 lira la valeur décalée
             // jusqu'à 0, puis decodeMicrowire(). Sans scheduler → décodage immédiat.
             if (mwSteps_ == 0) {
+                mwData_ = uint16_t((mwData_ & 0xFF00) | v);
                 mwShift_ = mwData_;
                 if (sched_) { mwSteps_ = 16; sched_->schedule(Scheduler::MICROWIRE, sched_->now() + 8); }
                 else        { mwShift_ = 0; decodeMicrowire(); }
             }
             break;
-        case 0x24: mwMask_ = uint16_t((mwMask_ & 0x00FF) | (v << 8)); break;
-        case 0x25: mwMask_ = uint16_t((mwMask_ & 0xFF00) | v); break;
+        case 0x24: if (mwSteps_ == 0) mwMask_ = uint16_t((mwMask_ & 0x00FF) | (v << 8)); break;
+        case 0x25: if (mwSteps_ == 0) mwMask_ = uint16_t((mwMask_ & 0xFF00) | v); break;
         default: break;                                // compteur courant : lecture seule
     }
 }
@@ -454,8 +492,12 @@ void DmaSound::mix(float* out, uint32_t frames, uint32_t sampleRate) {
         phase_ += inc;
         while (phase_ >= 1.0) {                                // avance dans la RAM
             phase_ -= 1.0;
-            curAddr_ += step;
-            if (curAddr_ >= endAddr_) {                        // fin de trame
+            // Compteur 24 bits + comparateur d'ÉGALITÉ (modèle Hatari
+            // DmaSnd_FIFO_Refill, dmaSnd.c:361-367) : fin ≤ début → le compteur
+            // AVANCE à travers l'espace d'adressage (wrap 2^24) en lisant la RAM,
+            // il ne reboucle pas sur un octet.
+            curAddr_ = (curAddr_ + step) & 0xFFFFFF;
+            if (curAddr_ == endAddr_) {                        // fin de trame
                 if (ctrl_ & 0x02) {                            // repeat : reboucle
                     curAddr_ = startAddr_;
                 } else {                                       // sinon : arrêt
@@ -500,8 +542,11 @@ void DmaSound::mixSegment(float* st, const float* ym, uint32_t count, uint32_t s
         aPhase_ += inc;
         while (aPhase_ >= 1.0) {
             aPhase_ -= 1.0;
-            aAddr_ += step;
-            if (aAddr_ >= aEnd_) {
+            // Compteur 24 bits + comparateur d'ÉGALITÉ (cf. mix / Hatari
+            // dmaSnd.c:361-367) : fin ≤ début → avance avec wrap en lisant la RAM
+            // (trame 2^24 si début == fin, repeat ON — « A Little Bit Insane »).
+            aAddr_ = (aAddr_ + step) & 0xFFFFFF;
+            if (aAddr_ == aEnd_) {
                 if (aRepeat_) {
                     aAddr_ = aStart_;
                 } else {                                       // one-shot fini : YM passe sur le reste

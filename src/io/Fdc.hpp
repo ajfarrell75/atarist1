@@ -86,6 +86,12 @@ public:
     // cours d'une ou plusieurs phases et reprogramme la prochaine échéance.
     void    onFdcEvent();
 
+    // Reset matériel (bouton reset / power-cycle) — port de Hatari FDC_Reset :
+    // registres WD1772, machine à états, DMA/FIFO et INTRQ au repos ; à froid,
+    // TR/DR et le mot $FF8604 rémanent sont aussi effacés. Les images montées
+    // et la position physique des têtes survivent.
+    void    reset(bool cold);
+
 private:
     // Une disquette montée (lecteur A ou B).
     struct FloppyDisk {

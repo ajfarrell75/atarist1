@@ -110,6 +110,21 @@ public:
     uint8_t  dmaRead8 (uint32_t addr);
     void     dmaWrite8(uint32_t addr, uint8_t v);
 
+    // Lecture SANS effet de bord pour le débogueur/désassembleur (équivalent du
+    // get_iword_debug d'Hatari) : RAM/ROM/cartouche lues telles quelles, MMIO et
+    // trous → 0xFF SANS dispatcher vers les puces (une lecture $FFFC02 ou $FF8604
+    // depuis le débogueur ne doit ni consommer l'état ACIA/FDC ni facturer de
+    // wait states — cf. Cpu68k::read16Dasm).
+    uint8_t  peek8 (uint32_t addr) const;
+    uint16_t peek16(uint32_t addr) const { return uint16_t((peek8(addr) << 8) | peek8(addr + 1)); }
+
+    // Recopie des vecteurs reset SSP/PC ($0-$7) depuis la ROM en RAM — port de
+    // STMemory_SetDefaultConfig (stMemory.c:251) : sur le vrai ST le GLUE mappe
+    // ces 8 octets sur la ROM en permanence ; sans cette copie, l'idiome de
+    // reboot à chaud « move.l $4.w,a0 ; jmp (a0) » lirait 0. À appeler à chaque
+    // reset machine et après chargement d'une ROM.
+    void     seedResetVectors();
+
     // Fenêtre d'adresses décodée vers la ROM TOS (port memory.c map_banks ROMmem) :
     // une ROM à $E00000 répond sur TOUT $E00000-$EFFFFF (1 Mo, 16 banques), pas
     // seulement sur la taille du fichier — au-delà du TOS chargé on lit 0 (tampon

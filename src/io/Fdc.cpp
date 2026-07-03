@@ -406,6 +406,51 @@ void Fdc::eject(int drive) {
 }
 
 // =============================================================================
+//  Reset matériel — port de Hatari FDC_Reset (fdc.c:1172) : registres WD1772,
+//  machine à états, IRQ et DMA/FIFO remis au repos. Les images montées et la
+//  position PHYSIQUE des têtes (headTrack) survivent, comme sur le vrai matériel.
+// =============================================================================
+void Fdc::reset(bool cold) {
+    cr_  = 0;
+    str_ = 0;
+    sr_  = 1;
+    statusTypeI_ = false;
+    if (cold) {                    // à froid seulement : TR/DR + mot $FF8604 rémanent
+        tr_ = 0;
+        dr_ = 0;
+        ff8604recent_ = 0;
+    }
+    stepDir_ = 1;
+
+    command_      = 0;             // CMD_NULL : plus de commande en vol
+    commandState_ = 0;
+    commandType_  = 0;
+    replaceCommandPossible_ = false;
+    delayIndexPaced_ = false;
+    interruptCond_ = 0;
+    irqSignal_     = 0;            // efface aussi une éventuelle IRQ « forcée »
+    setIntrqLine(false);           // propage vers GPIP5 (FDC_ClearIRQ)
+
+    // Rotation : les positions d'index sont perdues (moteur coupé) et le compteur
+    // de tours repart de zéro (spin-up complet à la prochaine commande).
+    indexCounter_ = 0;
+    indexTime_    = 0;
+
+    // DMA : statut « pas d'erreur, compteur 0 », mode 0, FIFO et tampon vidés.
+    dmaResetFifo();
+    dmaMode_ = 0;
+    dmaBytesToTransfer_ = 0;
+    bufferReset();
+
+    // Une commande datée en vol ne doit pas survivre au reset (sinon la machine à
+    // états reprendrait PENDANT le boot avec des adresses DMA périmées).
+    if (sched_) {
+        sched_->cancel(Scheduler::FDC);
+        sched_->cancel(Scheduler::FDC_INDEX);
+    }
+}
+
+// =============================================================================
 //  Sélection lecteur/face (port A du PSG) et géométrie.
 // =============================================================================
 int Fdc::currentSide() const {
@@ -640,8 +685,10 @@ void Fdc::setIntrqLine(bool on) {
     if (fdcDebug)
         std::fprintf(stderr, "[fdc-irq] @%lldms intrq=%d (sig=%02x)\n",
                      (long long)(nowCyc() / 8021), on ? 1 : 0, irqSignal_);
-    mfp_.setFdcLine(on);                 // ligne GPIP5 (polling, ex. EmuTOS)
-    if (on) mfp_.raise(Mfp::SRC_FDC);    // ET interruption canal 7 (jeux qui l'utilisent)
+    // Ligne GPIP5 (polling EmuTOS via timeout_gpip) ; le canal 7 est levé par le
+    // détecteur de FRONT du setter (règle AER) — pas de raise() manuel : une INTRQ
+    // maintenue (commandes enchaînées) ne regénère pas d'IRQ sans front réel.
+    mfp_.setFdcLine(on);
 }
 
 void Fdc::fdcSetIrq(uint8_t source) {
@@ -1544,6 +1591,7 @@ int Fdc::updateWriteSectors() {
         }
         break;
      case RUN_WS_CRC:
+        if (driveSel_ < 0) { fdcCycles = WAIT_NO_DRIVE; break; }  // pas de lecteur → on attend (même état)
         {
             const uint8_t st = writeSectorST(uint8_t(drive_[driveSel_].headTrack), sr_, side_, bufferSize());
             if (st & STR_RNF) { commandState_ = RUN_WS_RNF; fdcCycles = CMD_IMMEDIATE; }

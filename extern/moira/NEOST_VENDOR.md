@@ -40,4 +40,19 @@ Fichiers touchés vs upstream :
   AddressError/BusError imbriquées comme **double faute → HALT**. Étalon :
   `trace_odd` (`tools/make_trace_odd_test.py`).
 
+## Patch local : STOP niveau-sensible (2026-07-03)
+
+Le 68000 compare IPL/masque **en continu** pendant un STOP (broches niveau-
+sensibles). L'upstream ne re-teste `checkForIrq()` que sur `CHECK_IRQ`, posé au
+CHANGEMENT de broche — une IRQ levée AVANT le `stop` (masquée par le SR d'alors,
+démasquée par l'opérande du stop) n'était jamais re-testée : le CPU dormait
+jusqu'au prochain changement de broche. Fix : dans la branche STOPPED
+d'`execute()` (Moira.cpp), après `POLL_IPL`, re-armer `CHECK_IRQ` si
+`reg.ipl > reg.sr.ipl`. Pendant : garde `!irqDeliverable()` sur le saut
+d'attente STOP de `Cpu68k::run` (NeoST) — sans elle l'horloge était téléportée
+au prochain événement et l'IRQ déjà prenable partait ~350 cyc trop tard. Cas
+mesuré : raster « Timer B + stop #$2100 + HBL » de Super Hang-On (bande blanche
+à l'horizon, 3 écritures palette par activation au lieu de 2, dérive +1 ligne
+par segment). Étalons 19/19 + EL + Cuddly re-validés après fix.
+
 Toute modif future d'un fichier `Moira/` se commit **normalement** dans NeoST.

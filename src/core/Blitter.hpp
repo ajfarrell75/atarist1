@@ -87,7 +87,8 @@ private:
     // count vivant est dans reg_[0x36] (décrémenté, relisible), sa valeur de
     // recharge est ici ; les drapeaux FXSR/NFSR de la ligne en cours survivent
     // à la coupure de tranche.
-    uint16_t xReset_   = 0;                  // recharge du X count (latché au départ)
+    uint16_t xReset_   = 0;                  // recharge du X count (x_count_reset, latché
+                                             // à CHAQUE écriture de $FF8A36, cf. write16)
     // Compteur Y VIVANT (port Hatari BlitterRegs.y_count) : la conversion 0→65536
     // se fait À L'ÉCRITURE du registre $FF8A38 (Blitter_LinesPerBitblock_WriteWord),
     // PAS à la relecture du résiduel. Indispensable pour distinguer « le programme

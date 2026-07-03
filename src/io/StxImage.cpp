@@ -107,8 +107,13 @@ bool StxImage::parse(std::vector<uint8_t> raw) {
         bool simple = false;
         if (trk.sectorsCount > 0 && (trk.flags & TRACK_FLAG_SECTOR_BLOCK) == 0) {
             // Piste = SectorsCount secteurs de 512 o, données juste après l'en-tête.
+            // Invariant : « sectorsCount == sectors.size() toujours » — le FDC
+            // (nextSectorIDStx/readSectorStx) borne ses parcours sur sectorsCount
+            // mais indexe sectors[] : toute désynchronisation = accès hors borne.
             if (inBuf(p, std::size_t(trk.sectorsCount) * 512u))
-                buildSectorsSimple(trk, p);
+                buildSectorsSimple(trk, p);       // resize(sectorsCount) → invariant tenu
+            else
+                trk.sectorsCount = 0;             // image tronquée → piste vide cohérente
             simple = true;
         }
 

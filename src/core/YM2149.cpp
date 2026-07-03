@@ -120,7 +120,10 @@ void YM2149::updateFromRegs(const uint8_t* r) {
     tonePer_[0] = tonePeriod(r[1], r[0]);
     tonePer_[1] = tonePeriod(r[3], r[2]);
     tonePer_[2] = tonePeriod(r[5], r[4]);
-    noisePer_   = std::max(1u, uint32_t(r[6] & 0x1f));
+    // Période de bruit BRUTE, sans plancher à 1 : Hatari (YM2149_NoisePer) garde 0
+    // tel quel — le « per=0 ⇒ per=1 » est réalisé par la structure incrémente-puis-
+    // compare de doSamples250 (comparaison à 250 kHz, cf. sound.c:1050-1058).
+    noisePer_   = uint16_t(r[6] & 0x1f);
     uint32_t ep = (r[12] << 8) | r[11];
     envPer_     = uint16_t(std::max(1u, ep));
     envShape_   = r[13] & 0x0f;
@@ -178,14 +181,16 @@ void YM2149::doSamples250(int n) {
     int pos = buf250Wr_;
 
     for (int i = 0; i < n; ++i) {
-        // Bruit à 125 kHz (moitié de la cadence interne).
+        // Bruit : compteur incrémenté à 125 kHz (moitié de la cadence interne) mais
+        // COMPARAISON à 250 kHz, HORS du bloc 125 kHz — port exact de Hatari
+        // (sound.c:1050-1058). Pour per=0 le LFSR est ainsi retiré à CHAQUE cycle
+        // 250 kHz (2× plus vite que per=1), comme mesuré sur le vrai YM2149.
         freqDiv2_ ^= 1;
-        if (freqDiv2_ == 0) {
+        if (freqDiv2_ == 0)
             noiseCnt_++;
-            if (noiseCnt_ >= noisePer_) {
-                noiseCnt_ = 0;
-                noiseVal_ = rndCompute(rndLfsr_);
-            }
+        if (noiseCnt_ >= noisePer_) {
+            noiseCnt_ = 0;
+            noiseVal_ = rndCompute(rndLfsr_);
         }
 
         for (int ch = 0; ch < 3; ++ch) {
