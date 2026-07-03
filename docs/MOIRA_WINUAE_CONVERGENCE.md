@@ -160,7 +160,27 @@ Cuddly, Super Hang-On). Décision utilisateur (2026-06-16) : **garder le sync-dr
       `c680e1a`/`10c72b8`, gated `NEOST_LINELEN`). Le menu robot restaure 512 finaux
       (paires freq/res du menu) — **fidèle, ne corrige PAS le clignotement**. ⇒ les
       longueurs de ligne ne sont **plus** le suspect du menu Cuddly (mesuré 2026-07-02).
-    * 🚧 **CHANTIER OUVERT — menu robot Cuddly (clignotement vertical, bistable).**
+    * ✅✅ **MENU ROBOT CUDDLY RÉSOLU (2026-07-03) — clignotement 10-47 % → 0 (250/250
+      trames verrouillées), commit `125388b`.** La cause n'était AUCUNE des pistes de la
+      fenêtre verticale « 3 lignes » ci-dessous : c'était les **datations lecture/écriture
+      du compteur vidéo**, co-calibrées autour d'une « origine −8 » devenue artefact après
+      le fix STOP de la 5ᵉ passe. Mesure décisive (oracle `video_addr` + `cpu_disasm`,
+      landmarks f02e/f200/f264) : le synchroniseur de la démo (pc=f264, paire 60/50 par
+      ligne, sortie sur octet bas de $8209 > $40 **SIGNÉ**) a un chemin CPU et une ancre
+      VBL IDENTIQUES à Hatari (f200 = VBL+16548 des deux côtés), mais lisait des valeurs
+      4-6 octets plus petites → sortie L34 (marge Hatari +6..10) glissant à L36 → paire
+      une ligne trop tard → retrait haut raté. **Fix : read −14→−6 et write −6→+2
+      ENSEMBLE (+8 chacun) = les valeurs fidèles théoriques de la table §8** (cibles #1
+      et #2 — la refonte coordonnée est ACHEVÉE : plus aucune rustine d'origine).
+      Validé aux défauts : Cuddly 250/250 (mur régulier = Hatari), EL loader + top-trick
+      40/40, LX titre propre, SHO byte-identique, étalons 19/19 + TOUS OK.
+      ÉLIMINÉ en route (mesures) : lignes 508 pendant le poll (l'oracle montre
+      cycles_line=512, le canal LINELEN est fidèle) ; VDE_On 34/35 ; restart compteur.
+      Bonus gated `NEOST_LINELEN` : videoCounter() mappe désormais la lecture sur la
+      grille réelle glueLineStart_ (port Video_ConvertPosition), défaut OFF.
+      ⚠ Balayages d'offsets : read seul (+8) verrouille Cuddly mais CASSE EL (0/40) —
+      la co-calibration read/write est réelle, ne bouger que PAR PAIRE.
+    * 🚧 **(archive — diagnostic antérieur, cause réelle ci-dessus) menu robot Cuddly.**
       Diagnostic raffiné (2026-07-02 fin de session, traces `video_border_h` +
       `NEOST_GLUE_DIAG`, cf. TODO.md) :
       **Chaîne causale mesurée :**
