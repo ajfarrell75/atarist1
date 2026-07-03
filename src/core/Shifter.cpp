@@ -53,20 +53,22 @@ static constexpr int kSpec512Threshold = 512;
 // 1ʳᵉ écriture palette ligne 64 datée cyc=80 stable côté Hatari ; NeoST sans correction
 // oscille 76↔80, avec −2 se verrouille sur 80 (= Hatari). Flicker plein-diaporama
 // (BEE512/sun/PLANET/ANIMAL, fenêtre 540..1010) : 111 paires → 0.
-// Datation des LECTURES du compteur vidéo $FF8205/07/09 — CALIBRÉE À L'ORACLE
-// (2026-07-02, banc tools/make_poll_test.py + variante lsr#3 exposant le bit 3) :
-// −14 rend le motif de barres du poll-test BYTE-IDENTIQUE à Hatari (180/180
-// lignes, bits 0-6 du compteur), avec l'alignement bus début-d'accès (chipWait8
-// −2) et l'IACK au point d'IACK (NEOST_IACK_AT) actifs. Les offsets {+2,+4}
-// (dont l'ancien +4) matchent le motif PALETTE (bits 0-2/4-6) mais sont FAUX de
-// +8 OCTETS sur l'octet entier (bit 3, invisible en palette) — c'est cette
-// erreur qui empêchait le stabilisateur nop-slide d'EL (qui lit l'octet entier)
-// de verrouiller. (La dérivation « fin d'accès − 8 » de Video_CalculateAddress
-// donnerait −6 ; l'écart −8 restant vient du modèle interne de quantification
-// de videoCounter() vs NbBytes Hatari — la calibration à l'oracle prime.)
-// NEOST_VC_OFF ajuste pour le diagnostic/A/B (+18 → ancien +4).
+// Datation des LECTURES du compteur vidéo $FF8205/07/09 — VALEUR FIDÈLE
+// THÉORIQUE **−6** (2026-07-03) = la dérivation « fin d'accès − 8 » de
+// Video_CalculateAddrees (doc convergence §8, cible #1). L'ancien −14
+// « calibré à l'oracle » (2026-07-02, banc poll) était CO-CALIBRÉ avec
+// l'ancienne datation write (−6) autour d'un résidu commun de +8 : les DEUX
+// datations ont été ramenées ENSEMBLE (+8 chacune) à leurs valeurs fidèles
+// de la table §8 (read −6, write +2). Mesure décisive (menu robot Cuddly,
+// oracle video_addr + cpu_disasm) : chemin CPU inter-trame et ancre VBL
+// IDENTIQUES à Hatari, mais valeur $8209 lue 4-6 octets PLUS PETITE au même
+// instant → la sortie du synchroniseur (pc=f264, octet bas > $40 en SIGNÉ)
+// glissait de L34 à L36 ~1 trame/10 → clignotement vertical bistable.
+// Validé ENSEMBLE : Cuddly 250/250 verrouillées (225/250 avant), EL top-trick
+// 40/40, LX titre propre, SHO byte-identique, étalons 19/19 + TOUS OK.
+// NEOST_VC_OFF ajuste pour le diagnostic/A/B (−8 → ancien −14).
 static const int kVideoCounterReadOffsetCyc =
-    -14 + [] { const char* s = std::getenv("NEOST_VC_OFF"); return s ? std::atoi(s) : 0; }();
+    -6 + [] { const char* s = std::getenv("NEOST_VC_OFF"); return s ? std::atoi(s) : 0; }();
 
 // =============================================================================
 //  Machine GLUE — retrait de bordures (port fidèle de Hatari video.c :
@@ -668,18 +670,20 @@ void Shifter::syncCpuBus() {
     if (wait) bus_.cpu->addBusWaitCycles(wait);
 }
 
-// Datation des ÉCRITURES freq/res — CALIBRÉE À L'ORACLE (2026-07-02, loader EL
-// beam-syncé : écritures 60/50 Hz du calibrateur à la ligne 63, pc=$ecca/$eccc,
-// diff NEOST_WRITE_DIAG ↔ Hatari `--trace video_sync`) : Hatari date 456/464,
-// NeoST fcRaw+2 donnait 464/472 = **+8 constant** sur toutes les paires. Ce +8
-// est le décalage d'ORIGINE de l'horloge trame NeoST vs les coordonnées ligne
-// Hatari (le même −8 apparaît dans la datation read : −14 mesuré vs −6
-// théorique). Décomposition : fin d'accès Moira = fc+2 (théorie WinUAE
-// currcycle+4, callback au point-MILIEU) + origine (−8) = **−6**.
-// ⚠ L'ancien +16 était une rustine calibrée AUTOUR des biais d'alors (IACK
-// sur-compté +8, alignement bus au milieu d'accès, read +18) — retirés ensemble
-// le 2026-07-02 (refonte coordonnée). NEOST_SYNC_OFF ajuste pour l'A/B.
-static constexpr int kSyncWriteOffsetCyc = -6;
+// Datation des ÉCRITURES freq/res — VALEUR FIDÈLE THÉORIQUE **+2** (2026-07-03)
+// = fin d'accès Moira (fc+2, ≙ WinUAE currcycle+4, callback au point-MILIEU),
+// SANS décalage d'origine (doc convergence §8, cible #2). L'« origine −8 »
+// mesurée le 2026-07-02 (write −6 / read −14) était un ARTEFACT co-calibré :
+// la mesure croisée à l'oracle (menu Cuddly, ancre VBL f02e + chemin CPU
+// identique) montre que l'origine d'horloge trame NeoST = Hatari, et que les
+// DEUX datations devaient revenir ENSEMBLE (+8 chacune) aux valeurs fidèles
+// de la table §8 (read −6, write +2). Historique : le +16 initial puis le −6
+// étaient des rustines calibrées autour de biais CPU corrigés depuis (IACK
+// sur-compté, alignement bus, double comptage STOP). Validé ENSEMBLE :
+// Cuddly menu 250/250 verrouillées, EL loader + top-trick 40/40, LX titre
+// propre, SHO byte-identique, étalons 19/19 + TOUS OK.
+// NEOST_SYNC_OFF ajuste pour l'A/B (−8 → ancien −6).
+static constexpr int kSyncWriteOffsetCyc = +2;
 
 void Shifter::recordSyncWrite(bool isRes, uint8_t val) {
     if (!liveFrameClock_) return;
@@ -1427,8 +1431,34 @@ uint32_t Shifter::videoCounter() const {
     // puis vérifient si elle a réellement ouvert le haut (Enchanted Land en jeu :
     // le moteur croyait sa visée bonne alors que le GLUE la refusait). Un écran sans
     // écriture freq/res garde le chemin historique (liveStartHBL_ = 63, zéro régression).
-    const int  line = static_cast<int>(fc / kCyclesPerLine);
-    const int  X    = static_cast<int>(fc % kCyclesPerLine);
+    int line = static_cast<int>(fc / kCyclesPerLine);
+    int X    = static_cast<int>(fc % kCyclesPerLine);
+    // NEOST_LINELEN : la LECTURE du compteur se mappe sur la GRILLE RÉELLE des
+    // débuts de ligne (glueLineStart_), pas sur la grille fixe 512 — port du
+    // Video_ConvertPosition sur nCyclesPerLine réel qu'utilise
+    // Video_CalculateAddress (video.c). Décisif pour The Cuddly Demos (menu
+    // robot) : le synchroniseur de la démo (pc=f264) émet une paire 60/50 Hz
+    // PAR LIGNE → ces lignes font 508 cycles au comparateur HBL → chez Hatari le
+    // compteur de chaque ligne suivante démarre 4 cyc plus tôt (+2 octets lus
+    // par paire émise). En grille fixe, NeoST lisait 4-6 octets de MOINS que
+    // Hatari au même instant → la sortie du poll (octet bas > $40, comparaison
+    // SIGNÉE) glissait de la ligne 34 à la ligne 36 ~1 trame sur 10 → le
+    // clignotement vertical bistable (fenêtre 34..310 ↔ 63..263). Mesuré à
+    // l'oracle (traces video_addr + cpu_disasm, 2026-07-03) : chemin CPU et
+    // ancre VBL identiques, seule la fonction valeur(t) différait.
+    static const bool lineLenRead = std::getenv("NEOST_LINELEN") != nullptr;
+    if (lineLenRead && frameMode_ != Mode::High && !syncWrites_.empty()
+        && static_cast<std::size_t>(line) + 2 < glueLineStart_.size()) {
+        const_cast<Shifter*>(this)->liveGlueCatchUp(line + 1);
+        int wl = liveGlueLine_ < line + 1 ? liveGlueLine_ : line + 1;
+        if (wl >= 0) {
+            while (wl > 0 && fc < glueLineStart_[wl]) --wl;
+            while (wl < liveGlueLine_ && static_cast<std::size_t>(wl) + 1 < glueLineStart_.size()
+                   && fc >= glueLineStart_[wl + 1]) ++wl;
+            line = wl;
+            X = static_cast<int>(fc - glueLineStart_[wl]);
+        }
+    }
     // Compteur REDÉMARRÉ en fin de trame (port Video_RestartVideoCounter, ligne
     // 310/260 cycle 56) : les lectures au-delà renvoient la base rechargée, FIGÉE
     // jusqu'au DE de la trame suivante (chez Hatari, pVideoRaster vaut alors
