@@ -33,5 +33,11 @@ Fichiers touchés vs upstream :
   méthodes `setIplDelay()` + `pollIpl()`
 - `Moira/Moira.cpp` — historisation de la broche dans `setIPL`, règle 3-cas dans
   `pollIpl()`
+- `Moira/Moira.cpp` — **gardes d'exception** (2026-07-03) : les chemins TRACE,
+  PRIVILEGE-depuis-STOP et LOOPING de `execute()` passent par `processException`
+  (un vecteur impair y jette `AddressError` → address error 68000, pas un abort) ;
+  `processException` corrige le `throw df` (pointeur jamais rattrapé) et traite
+  AddressError/BusError imbriquées comme **double faute → HALT**. Étalon :
+  `trace_odd` (`tools/make_trace_odd_test.py`).
 
 Toute modif future d'un fichier `Moira/` se commit **normalement** dans NeoST.
