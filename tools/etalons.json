@@ -37,6 +37,22 @@
       "max_diff_px": 0
     },
     {
+      "id": "spectrum512_diapo2",
+      "name": "Spectrum 512 auto diapo (image exigeante — frontières de cellules serrées)",
+      "subsystem": "shifter/spec512",
+      "rom": "roms/tos102uk.img",
+      "disk": "disks/utils/spectrum_512_auto_diapo.st",
+      "machine": "st",
+      "mem": "512k",
+      "cpu": "moira",
+      "fastfdc": true,
+      "frames": 1651,
+      "frame": 1650,
+      "crop": "active",
+      "max_diff_px": 0,
+      "oracle_fastfdc": true
+    },
+    {
       "id": "overscan_top",
       "name": "Overscan retrait bordure HAUTE (make_overscan_test)",
       "subsystem": "shifter/glue",
