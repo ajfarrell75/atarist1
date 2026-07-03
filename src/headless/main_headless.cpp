@@ -27,6 +27,7 @@ void usage() {
         "Usage: neost-headless [options] [rom]\n"
         "  --frames N        nombre de trames à exécuter (défaut 200, ~4 s ST)\n"
         "  --trace FILE      écrit la trace d'instructions ('-' = stdout)\n"
+        "  --trace-from N    n'active la trace qu'à partir de la trame N\n"
         "  --regs            ajoute l'état des registres à chaque instruction\n"
         "  --irq             trace aussi les interruptions prises\n"
         "  --until-pc HEX    arrête dès que PC atteint cette adresse (hex)\n"
@@ -129,6 +130,9 @@ uint8_t stScancode(char c) {
 int main(int argc, char** argv) {
     int         frames     = 200;
     std::string tracePath;
+    int         traceFrom  = 0;       // --trace-from N : n'active la trace qu'à la trame N
+                                      // (fenêtrer un diff oracle sur une scène tardive — menu
+                                      // de démo — sans traîner des Go de boot)
     std::string shotPath;
     std::string diskPath   = "disks/diskA.st";
     std::string diskBPath;                       // lecteur B (optionnel, --diskb)
@@ -190,6 +194,7 @@ int main(int argc, char** argv) {
         };
         if      (!std::strcmp(a, "--frames"))     frames    = std::atoi(next(a));
         else if (!std::strcmp(a, "--trace"))      tracePath = next(a);
+        else if (!std::strcmp(a, "--trace-from")) traceFrom = std::atoi(next(a));
         else if (!std::strcmp(a, "--regs"))       regs      = true;
         else if (!std::strcmp(a, "--irq"))        irq       = true;
         else if (!std::strcmp(a, "--screenshot")) shotPath  = next(a);
@@ -288,7 +293,9 @@ int main(int argc, char** argv) {
         }
         tracer.setLogRegs(regs);
         tracer.setLogInterrupts(irq);
-        machine.cpu.setTracer(&tracer);    // active le hook d'instruction
+        if (traceFrom <= 0)
+            machine.cpu.setTracer(&tracer);    // active le hook d'instruction
+        // --trace-from N > 0 : le hook n'est branché qu'à la trame N (boucle principale).
     }
 
     // Mode déterministe absolu : l'horloge RTC Mega ST(E) doit être constante.
@@ -315,6 +322,9 @@ int main(int argc, char** argv) {
     // Note : --until-pc s'évalue par trame (granularité d'une trame), suffisant
     // pour borner une capture autour d'un point d'intérêt.
     for (int frame = 0; frame < frames; ++frame) {
+        // Trace fenêtrée (--trace-from N) : branche le hook d'instruction à la trame N.
+        if (traceFrom > 0 && frame == traceFrom && !tracePath.empty())
+            machine.cpu.setTracer(&tracer);
         // Injections datées (--keys-at / --joy-at) : pilotage d'un menu de démo en
         // PLEINE boucle (l'intro Cuddly attend espace ; le robot du menu, le stick),
         // sans perdre --shot-every. Une touche = make à +0, break à +2, 4 trames/char.
