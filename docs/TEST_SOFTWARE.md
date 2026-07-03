@@ -38,7 +38,16 @@ Hatari : `video.c`, `spec512.c`.
 |--------|---------|-----------|------------------|------------|
 | **Spectrum 512** | Inshape | Réécrit la palette plusieurs fois par ligne → >512 couleurs affichées | Synchro cycle-près `MOVE.W` ↔ position du faisceau. Défaut : couleurs décalées verticalement, bandes/flicker | ✅ **RÉSOLU** — diaporama étalon **0 px vs Hatari** (4 images), flicker éliminé. Reste : scroll fin mi-ligne |
 | **Enchanted Land** | Thalion | Scrolling horizontal pixel-près SANS Blitter : bascule 50↔60 Hz en fin de ligne pour tromper le compteur d'adresse interne du Shifter et décaler l'adresse de base | 1 cycle d'erreur → écran qui saute/déchire ou plante. Exige la géométrie variable EN COURS de trame | « Suppression de bordures » (géométrie mi-trame) |
-| **The Cuddly Demos** | The Carebears (TCB), 1989 | 1ʳᵉ démo à ouvrir les **4 bordures** (haut/bas/gauche/droite) simultanément : boucles de NOP calibrées qui commutent la fréquence au moment où le canon atteint les limites de l'affichage standard | Précision des timings de génération HSYNC/VSYNC + tampons internes Shifter | « Suppression de bordures » (BORDERMASK_*) |
+| **The Cuddly Demos** | The Carebears (TCB), 1989 | 1ʳᵉ démo à ouvrir les **4 bordures** (haut/bas/gauche/droite) simultanément : boucles de NOP calibrées qui commutent la fréquence au moment où le canon atteint les limites de l'affichage standard. Le robot du menu est dessiné puis **effacé en course avec le faisceau** (un seul buffer) : seul un rendu échantillonné PAR LIGNE le voit (cf. `lineSnap_`, commit 08b58e1) | Précision des timings de génération HSYNC/VSYNC + tampons internes Shifter | « Suppression de bordures » (BORDERMASK_*) |
+
+### Quirk connu — PAS un bug d'émulation
+
+- **Captain Blood** (ERE, crack 42-Crew anglais) : au chargement, le jeu scanne la ROM
+  TOS à la recherche de la chaîne `AZER` (table clavier AZERTY, code en RAM `$1d69a`).
+  TOS **français** détecté → affiche « KEYBOARD PROBLEM » (Cconws VT52) puis attend une
+  touche et **reboote**. Comportement IDENTIQUE sous Hatari (oracle vérifié trame à
+  trame) : ce n'est pas l'IKBD/ACIA. **Lancer ce crack avec un TOS US/UK** (`tos102uk`)
+  → le jeu démarre (écran planète) et se joue normalement.
 
 ## 2. MFP 68901 / interruptions
 
