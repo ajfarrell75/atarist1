@@ -38,6 +38,8 @@ void usage() {
         "  --mem SIZE        ST-RAM : 256k, 512k (défaut), 1m, 2m, 4m\n"
         "  --walk-mouse      après le boot, injecte un mouvement souris + clic (diag)\n"
         "  --keys STR        après le boot, tape STR au clavier (ex. menus de diag)\n"
+        "  --key-down N C    make SEUL du caractère C à la trame N (touche TENUE)\n"
+        "  --key-up N C      break SEUL du caractère C à la trame N\n"
         "  --joy P1[,P0]     maintient un état joystick (bits haut$01 bas$02 g$04 d$08 feu$80)\n"
         "  --disk FILE       monte une image dans le lecteur A (défaut disks/diskA.st)\n"
         "  --diskb FILE      monte une image dans le lecteur B (2e lecteur)\n"
@@ -163,6 +165,11 @@ int main(int argc, char** argv) {
     // occurrences = plusieurs frappes datées (menus en cascade — cracktro D-BUG
     // « Y/N » PUIS « press any key », etc.).
     std::vector<std::pair<int, std::string>> keysAtList;
+    // --key-down N C / --key-up N C : make SEUL à la trame N (resp. break seul) —
+    // reproduit une touche TENUE comme en GUI (≠ --keys-at qui pulse make/break
+    // toutes les 4 trames). C = caractère de la table stScancode ('[' ']' '<' '>'…).
+    // RÉPÉTABLES (paires down/up successives).
+    std::vector<std::pair<int, char>> keyDownList, keyUpList;
     int         joyAtFrame  = -1;     // --joy-at N P1 : pose l'état joystick port 1 à la trame N
     uint8_t     joyAt1      = 0;
     // --mouse-at N "SCRIPT" : pilote la souris (mode REL) à partir de la trame N pour
@@ -220,6 +227,8 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(a, "--shot-every"))  { shotEvery = std::atoi(next(a)); shotPrefix = next(a); }
         else if (!std::strcmp(a, "--shot-from"))   shotFrom = std::atoi(next(a));
         else if (!std::strcmp(a, "--keys-at"))     { const int f = std::atoi(next(a)); keysAtList.emplace_back(f, next(a)); }
+        else if (!std::strcmp(a, "--key-down"))    { const int f = std::atoi(next(a)); keyDownList.emplace_back(f, next(a)[0]); }
+        else if (!std::strcmp(a, "--key-up"))      { const int f = std::atoi(next(a)); keyUpList.emplace_back(f, next(a)[0]); }
         else if (!std::strcmp(a, "--joy-at"))      { joyAtFrame = std::atoi(next(a)); joyAt1 = (uint8_t)std::strtoul(next(a), nullptr, 0); }
         else if (!std::strcmp(a, "--mouse-at"))    { mouseAtFrame = std::atoi(next(a)); mouseAt = next(a); }
         else if (!std::strcmp(a, "--joy-script"))  { joyScrFrame = std::atoi(next(a)); joyScr = next(a); }
@@ -328,6 +337,13 @@ int main(int argc, char** argv) {
         // Injections datées (--keys-at / --joy-at) : pilotage d'un menu de démo en
         // PLEINE boucle (l'intro Cuddly attend espace ; le robot du menu, le stick),
         // sans perdre --shot-every. Une touche = make à +0, break à +2, 4 trames/char.
+        // Touche tenue (--key-down / --key-up) : make ou break isolé à la trame dite.
+        for (const auto& [kf, kc] : keyDownList)
+            if (frame == kf) { const uint8_t sc = stScancode(kc);
+                               if (sc) { machine.ikbd.keyEvent(sc, true);  machine.cpu.updateIpl(); } }
+        for (const auto& [kf, kc] : keyUpList)
+            if (frame == kf) { const uint8_t sc = stScancode(kc);
+                               if (sc) { machine.ikbd.keyEvent(sc, false); machine.cpu.updateIpl(); } }
         for (const auto& [kf, ks] : keysAtList) {
             if (frame < kf) continue;
             const int rel = frame - kf;

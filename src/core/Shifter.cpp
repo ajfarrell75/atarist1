@@ -225,6 +225,10 @@ void Shifter::beginFrame() {
     if (frameMode_ != Mode::High) {
         const Geometry g = geometry();
         glueLines_.assign(static_cast<std::size_t>(g.linesPerFrame) + 2, GlueLine{ -1, 0, 0, 0 });
+        // Capture par ligne (cf. lineSnap_) : remise à zéro des longueurs — le gros
+        // tampon d'octets n'a pas besoin d'être effacé (len fait foi).
+        lineSnapLen_.assign(glueLines_.size(), 0);
+        lineSnap_.resize(glueLines_.size() * static_cast<std::size_t>(kLineSnapBytes));
         glueStartHBL_   = g.dispStartLine;
         glueEndHBL_     = g.dispStartLine + g.displayLines;
         glueVOverscan_  = 0;
@@ -468,7 +472,22 @@ void Shifter::endVideoLine() {
     // élargies/raccourcies). Sans trick, glueLineBytes == bpl (chemin historique).
     if (!syncWrites_.empty())
         liveGlueCatchUp(liveStartHBL_ + vcLineY_);
-    const int bpl = glueLineBytes(liveStartHBL_ + vcLineY_);
+    const int sl  = liveStartHBL_ + vcLineY_;
+    const int bpl = glueLineBytes(sl);
+    // Capture les octets que le shifter vient de lire sur CETTE ligne (échantillon
+    // daté au faisceau, cf. lineSnap_) : bpl + marge d'arrondi au groupe de 16 px
+    // du décodage fenêtré (+ avance scroll STE). Consommé par renderGlueFrame —
+    // donc capturé SEULEMENT si la trame a des écritures freq/res (candidate au
+    // rendu glue) : zéro coût sur le chemin normal.
+    if (!syncWrites_.empty() && bpl > 0 &&
+        sl >= 0 && sl < static_cast<int>(lineSnapLen_.size())) {
+        int n = bpl + scrollCounterAdvance() + 8;
+        if (n > kLineSnapBytes) n = kLineSnapBytes;
+        uint8_t* snap = lineSnap_.data() + static_cast<std::size_t>(sl) * kLineSnapBytes;
+        for (int i = 0; i < n; ++i)
+            snap[i] = bus_.read8((vcLineBase_ + static_cast<uint32_t>(i)) & 0xFFFFFFu);
+        lineSnapLen_[sl] = static_cast<uint16_t>(n);
+    }
     vcLineBase_ += static_cast<uint32_t>(bpl);
     vcLineBase_ += static_cast<uint32_t>(scrollCounterAdvance());   // prefetch : +1 mot PAR PLAN
     vcLineBase_ += static_cast<uint32_t>(lineWidth) * 2u;  // line-offset STE (mots sautés)
@@ -1151,6 +1170,32 @@ int Shifter::decodeWindowIndices(uint32_t base, int nPix, uint8_t* idx) const {
     return px;
 }
 
+int Shifter::decodeWindowIndicesFromBytes(const uint8_t* src, int srcLen, int nPix, uint8_t* idx) const {
+    // Même décodage planaire que decodeWindowIndices, mais depuis la CAPTURE de la
+    // ligne (octets échantillonnés au faisceau) au lieu du bus. Au-delà de srcLen
+    // (marge de capture épuisée) : octets à 0, comme une RAM vierge.
+    const int planes = (frameMode_ == Mode::Medium) ? 2 : 4;
+    const int groupB = 2 * planes;
+    const int groups = (nPix + 15) / 16;
+    auto rd16 = [&](int off) -> uint16_t {
+        const uint8_t hiB = (off     < srcLen) ? src[off]     : 0;
+        const uint8_t loB = (off + 1 < srcLen) ? src[off + 1] : 0;
+        return static_cast<uint16_t>((hiB << 8) | loB);
+    };
+    int px = 0;
+    for (int gI = 0; gI < groups; ++gI) {
+        const int off     = gI * groupB;
+        const uint16_t p0 = rd16(off);
+        const uint16_t p1 = planes > 1 ? rd16(off + 2) : 0;
+        const uint16_t p2 = planes > 2 ? rd16(off + 4) : 0;
+        const uint16_t p3 = planes > 3 ? rd16(off + 6) : 0;
+        for (int bit = 15; bit >= 0; --bit)
+            idx[px++] = static_cast<uint8_t>(((p0 >> bit) & 1) | (((p1 >> bit) & 1) << 1)
+                                           | (((p2 >> bit) & 1) << 2) | (((p3 >> bit) & 1) << 3));
+    }
+    return px;
+}
+
 // Re-rendu de la trame AVEC retrait de bordures : pour chaque LIGNE du buffer
 // overscan, on calcule la scanline correspondante (sl = baseStart + row - activeY_),
 // et si elle est affichée [glueStartHBL_, glueEndHBL_) on décode sa fenêtre
@@ -1202,7 +1247,20 @@ void Shifter::renderGlueFrame() {
         // decodeWindowIndices décode des GROUPES de 16 px : la plage valide de idx est
         // [0, nDec) avec nDec arrondi au groupe supérieur → marge pour le DisplayPixelShift.
         const int  nDec = lineHasDE ? ((nPix + 15) / 16) * 16 : 0;
-        if (nPix > 0) decodeWindowIndices(addr, nPix, idx);
+        // Source des pixels : la CAPTURE datée au faisceau de cette scanline si elle
+        // existe (cf. lineSnap_ — seul l'échantillon voit un sprite dessiné puis
+        // effacé EN COURSE avec le faisceau, ex. robot du menu Cuddly), sinon repli
+        // relecture RAM en fin de trame (lignes non committées : bordure haute
+        // ouverte, bas de trame au-delà des lignes actives).
+        if (nPix > 0) {
+            const bool haveSnap = sl >= 0 && sl < static_cast<int>(lineSnapLen_.size())
+                                  && lineSnapLen_[sl] > 0;
+            if (haveSnap)
+                decodeWindowIndicesFromBytes(lineSnap_.data() + static_cast<std::size_t>(sl) * kLineSnapBytes,
+                                             lineSnapLen_[sl], nPix, idx);
+            else
+                decodeWindowIndices(addr, nPix, idx);
+        }
 
         uint32_t* dst = frame_.data() + static_cast<std::size_t>(row) * W;
         for (int x = 0; x < W; ++x) {

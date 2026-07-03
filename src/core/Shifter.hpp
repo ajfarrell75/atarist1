@@ -197,6 +197,17 @@ private:
     // stride (+2 si scroll fin = prefetch d'un mot), applique l'offset compteur
     // différé puis les valeurs HSCROLL/LINEWIDTH en attente. Appelée par renderLine.
     void endVideoLine();
+    // --- Capture PAR LIGNE des octets lus par le shifter (esprit Video_CopyScreenLine
+    // d'Hatari : la RAM vidéo est échantillonnée AU FIL DU FAISCEAU, ligne par ligne,
+    // jamais en fin de trame). Indispensable aux moteurs à UN buffer qui dessinent
+    // puis effacent un sprite EN COURSE avec le faisceau (robot du menu Cuddly) :
+    // en fin de trame le sprite n'est déjà plus en RAM, seul l'échantillon daté le
+    // voit. Remplie par endVideoLine (commit de la ligne) ; consommée par
+    // renderGlueFrame à la place d'une relecture RAM. Indexée par SCANLINE absolue ;
+    // len 0 = pas de capture (repli : relecture RAM, comportement historique).
+    static constexpr int kLineSnapBytes = 256;   // ≥ 230 (LEFT+RIGHT_OFF) + marge décodage
+    std::vector<uint8_t>  lineSnap_;             // [scanline * kLineSnapBytes]
+    std::vector<uint16_t> lineSnapLen_;          // octets valides par scanline
     // Octets lus par le shifter sur une scanline (160 nominal, modulé par les
     // drapeaux de bordure glue — port BORDERBYTES_*). Hors line-offset/scroll STE.
     int  glueLineBytes(int scanline) const;
@@ -324,6 +335,9 @@ private:
     // fenêtré pour les bordures) dans `idx`. Comme decodeLineIndices mais largeur
     // explicite et base fournie (pas de stride interne).
     int decodeWindowIndices(uint32_t base, int nPix, uint8_t* idx) const;
+    // Variante depuis une CAPTURE de ligne (octets déjà échantillonnés au faisceau,
+    // cf. lineSnap_) : même décodage planaire, source tampon au lieu du bus.
+    int decodeWindowIndicesFromBytes(const uint8_t* src, int srcLen, int nPix, uint8_t* idx) const;
 
     // --- Spec512 : palette intra-ligne (port Hatari spec512.c) --------------
     // Une écriture palette dans la trame, datée au cycle (façon CyclePalettes[]).
