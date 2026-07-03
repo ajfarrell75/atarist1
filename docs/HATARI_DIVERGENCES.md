@@ -198,12 +198,14 @@ règle word/long : **conformes**.
 Logique de données **fidèle** (HOP/LOP 16 cas + tables `need_src`/`need_dst`, FXSR/NFSR, smudge,
 halftone, masques de bord, bug « 63 accès », IRQ GPIP3 fin de blit, arbitration MegaSTE/STE).
 
-- **[B1 — HAUTE] ✅ corrigé** — Compteur X **ou** Y écrit à `0` désormais interprété comme **65536**
-  (`Blitter.cpp` : early-return dégénéré supprimé ; X via bouclage 16 bits, Y via `int 0→65536`).
-  *Description initiale :* compteur à `0` non interprété comme **65536** :
-  `start()` traite `xc==0 || yc==0` comme blit dégénéré « rien à faire » et efface BUSY/HOG
-  (`Blitter.cpp:99-101`). Hatari : `x_count==0 → 65536`, `y_count==0 → 65536`
-  (`blitter.c:1343-1366`). *Impact : un blit chargeant 0 pour 65536 (légal) est avorté ; bug latent.*
+- **[B1 — HAUTE] ✅ corrigé (2 passes)** — Compteur X **ou** Y écrit à `0` interprété comme **65536**
+  (X via bouclage 16 bits ; Y via `yLatch_`, conversion **à l'écriture** du registre `$FF8A38` ≙
+  `Blitter_LinesPerBitblock_WriteWord` blitter.c:1356). ⚠ La 1ʳᵉ passe (0→65536 relu dans
+  `runSlice`) avait INTRODUIT une régression HAUTE : le restart du driver TOS (`bset #7` après
+  chaque blit, y_count **résiduel** 0) relançait un blit de 65536 lignes → RAM labourée →
+  **bureau TOS 1.06 STE scramblé au moindre redraw**. Modèle complet fidèle (commit c96311c) :
+  start avec résiduel 0 → BUSY+HOG **effacés**, aucun blit (`Blitter_Control_WriteByte`
+  blitter.c:1433-1437) ; écrire 0 PUIS démarrer → 65536 lignes (légal).
 - **[BL2 — moyenne] ✅ corrigé** — `write8` ignore désormais un accès octet aux registres MOT
   (`off < 0x3A`, `Blitter.cpp`) ; seuls HOP/LOP/contrôle/skew restent accessibles en octet.
   *Avant :* accès **octet** aux registres mot/long non rejetés (`Blitter.cpp:50-61`)
