@@ -277,8 +277,16 @@ Moira::execute()
             }
 
             // Process pending trace exception (if any)
+            // NEOST : gardé par processException — un vecteur TRACE IMPAIR fait
+            // jeter AddressError depuis jumpToVector ; sur 68000 c'est une
+            // ADDRESS ERROR (groupe 0) à prendre, pas un abort de l'émulateur
+            // (crash « terminate » observé sur Beyond the Ice Palace, bureau TOS).
             if (flags & TRACE_EXC) {
-                execException(M68kException::TRACE);
+                try {
+                    execException(M68kException::TRACE);
+                } catch (const std::exception &exc) {
+                    processException(exc);
+                }
                 goto done;
             }
 
@@ -312,11 +320,17 @@ Moira::execute()
         if (flags & STOPPED) {
 
             // Initiate a privilege exception if the supervisor bit is cleared
+            // NEOST : gardé par processException (même raison que TRACE ci-dessus —
+            // vecteur PRIVILEGE impair → AddressError à prendre, pas à laisser fuir).
             if (!reg.sr.s) {
                 sync(4);
                 reg.pc -= 2;
                 flags &= ~STOPPED;
-                execException(M68kException::PRIVILEGE);
+                try {
+                    execException(M68kException::PRIVILEGE);
+                } catch (const std::exception &exc) {
+                    processException(exc);
+                }
                 return;
             }
 
@@ -335,8 +349,14 @@ Moira::execute()
 
         if (flags & LOOPING) {
 
+            // NEOST : gardé par processException (cohérence avec le chemin exec —
+            // mode loop 68010, un accès impair y jetterait AddressError).
             assert(loop[queue.ird]);
-            (this->*loop[queue.ird])(queue.ird);
+            try {
+                (this->*loop[queue.ird])(queue.ird);
+            } catch (const std::exception &exc) {
+                processException(exc);
+            }
 
         } else {
 
@@ -411,11 +431,29 @@ Moira::processException(const std::exception &exc)
 
         if (auto df = dynamic_cast<const DoubleFault *>(&exc); df) {
 
-            throw df;
+            // NEOST : l'upstream faisait `throw df` (un POINTEUR) que le
+            // catch (DoubleFault &) ci-dessous NE rattrape PAS → fuite hors de
+            // l'émulateur. Double faute = HALT du 68000, directement.
+            halt();
+            return;
         }
 
     } catch (DoubleFault &df) {
 
+        halt();
+        return;
+
+    } catch (AddressError &) {
+
+        // NEOST : erreur d'adresse PENDANT le traitement d'une exception groupe 0
+        // (ex. vecteur BUS ERROR impair) = double faute → HALT, comme le vrai 68000.
+        halt();
+        return;
+
+    } catch (BusError &) {
+
+        // NEOST : bus error pendant l'empilement d'une exception groupe 0
+        // (pile dans une zone bus-error) = double faute → HALT.
         halt();
         return;
     }
