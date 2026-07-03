@@ -93,7 +93,11 @@ spec512, scroll fin STE de base, masquage palette par machine : **conformes**.
 
 - **[V1 — moyenne]** Branche **STE** de la Glue absente (`Shifter.cpp:670-839` = STF seul) :
   `Preload_Start_*`, `Line_Set_Pal=56`, `LEFT_OFF_2_STE` (+20 o, shift −8) non gérés. *Impact :
-  overscan de démos STE (E605, DHS) mal placé.*
+  overscan de démos STE (E605, DHS) mal placé.* **Contrepartie mesurée (2026-07-03, oracle
+  AVI)** : les démos STF rendent « trop propre » en config STE — le menu robot Cuddly est
+  PARFAIT chez NeoST STE (timings STF appliqués partout) alors que Hatari STE (= vrai STE) le
+  CASSE (couleurs faussées, bordures non ouvertes, scroller haché). Un rapport GUI « menu
+  cassé en STE » peut donc être FIDÈLE — vérifier la machine avant de conclure à un bug.
 - **[V2 — moyenne]** Tricks de bordure par **changement de résolution** non répliqués : pas
   d'équivalent de `Video_WriteToGlueRes` (`video.c:1618-1820`) — overscan med-res, stab
   hi/med/lo, scroll « hardware » 1/5/9/13 px. NeoST verrouille une résolution par trame
