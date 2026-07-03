@@ -23,6 +23,16 @@ namespace {
     // arbitration de restitution blitter → CPU (Blitter_BusArbitration).
     constexpr int kPreStartCycles   = 4;
     constexpr int kArbOut           = 4;
+
+    // Masques matériels appliqués À L'ÉCRITURE des registres 8 bits (la relecture
+    // montre la valeur masquée, comme Hatari) : HOP & 3 (Blitter_HalftoneOp_WriteByte,
+    // « h/ware reg masks out the top 6 bits »), LOP & 0xF (Blitter_LogOp_WriteByte,
+    // blitter.c:1386), contrôle $FF8A3C & 0xEF (bit 4 non câblé,
+    // Blitter_Control_WriteByte blitter.c:1421). Le skew ($FF8A3D) garde ses 8 bits :
+    // Hatari stocke l'octet ENTIER (Blitter_Skew_WriteByte, pas de masque).
+    constexpr uint8_t regWriteMask(uint32_t off) {
+        return off == 0x3A ? 0x03 : off == 0x3B ? 0x0F : off == 0x3C ? 0xEF : 0xFF;
+    }
 }
 
 void Blitter::reset() {
@@ -55,7 +65,7 @@ void Blitter::write8(uint32_t addr, uint8_t v) {
     // comme sur le vrai blitter (cf. Hatari Blitter_CheckAccess_Byte). Les
     // écritures mot/long, elles, passent par write16/write32 (Bus).
     if (off < 0x3A) return;
-    reg_[off] = v;
+    reg_[off] = v & regWriteMask(off);   // bits non câblés masqués À L'ÉCRITURE (cf. regWriteMask)
     if (off == 0x3C) {
         // Écriture du registre contrôle ($FF8A3C) : BUSY (bit7) à 1 → démarre ou
         // REPREND ; à 0 pendant un transfert → PAUSE (le CPU peut arrêter le
@@ -73,8 +83,14 @@ void Blitter::write8(uint32_t addr, uint8_t v) {
 // → plan 0 décalé par rapport aux plans 1-3 (franges de couleur).
 void Blitter::write16(uint32_t addr, uint16_t v) {
     const uint32_t off = addr & 0x3F;
-    reg_[off]              = uint8_t(v >> 8);
-    reg_[(off + 1) & 0x3F] = uint8_t(v);
+    reg_[off]              = uint8_t(v >> 8) & regWriteMask(off);
+    reg_[(off + 1) & 0x3F] = uint8_t(v)      & regWriteMask((off + 1) & 0x3F);
+    // X count ($FF8A36) : recharge x_count_reset latchée À CHAQUE écriture du
+    // registre (Hatari Blitter_WordsPerLine_WriteWord, blitter.c:1338-1350) — pas
+    // seulement au départ du blit. La règle 0→65536 est portée par la
+    // représentation 16 bits (0 ≡ 65536 via le bouclage, cf. start()).
+    if (off <= 0x36 && off + 1 >= 0x37)
+        xReset_ = uint16_t((reg_[0x36] << 8) | reg_[0x37]);
     // Y count ($FF8A38) : conversion 0→65536 latchée À L'ÉCRITURE (Hatari
     // Blitter_LinesPerBitblock_WriteWord) — cf. yLatch_ (Blitter.hpp).
     if (off <= 0x38 && off + 1 >= 0x39) {
@@ -89,10 +105,14 @@ void Blitter::write16(uint32_t addr, uint16_t v) {
 
 void Blitter::write32(uint32_t addr, uint32_t v) {
     const uint32_t off = addr & 0x3F;
-    reg_[off]              = uint8_t(v >> 24);
-    reg_[(off + 1) & 0x3F] = uint8_t(v >> 16);
-    reg_[(off + 2) & 0x3F] = uint8_t(v >> 8);
-    reg_[(off + 3) & 0x3F] = uint8_t(v);
+    reg_[off]              = uint8_t(v >> 24) & regWriteMask(off);
+    reg_[(off + 1) & 0x3F] = uint8_t(v >> 16) & regWriteMask((off + 1) & 0x3F);
+    reg_[(off + 2) & 0x3F] = uint8_t(v >> 8)  & regWriteMask((off + 2) & 0x3F);
+    reg_[(off + 3) & 0x3F] = uint8_t(v)       & regWriteMask((off + 3) & 0x3F);
+    // X count ($FF8A36) couvert par l'écriture longue → latch de x_count_reset
+    // (cf. write16 / Hatari Blitter_WordsPerLine_WriteWord).
+    if (off <= 0x36 && off + 3 >= 0x37)
+        xReset_ = uint16_t((reg_[0x36] << 8) | reg_[0x37]);
     // Y count ($FF8A38) couvert par l'écriture longue → latch 0→65536 (cf. write16).
     if (off <= 0x38 && off + 3 >= 0x39) {
         const uint16_t y = uint16_t((reg_[0x38] << 8) | reg_[0x39]);
@@ -111,9 +131,10 @@ void Blitter::write32(uint32_t addr, uint32_t v) {
 // -----------------------------------------------------------------------------
 void Blitter::start() {
     // Compteur X écrit à 0 = 65536 (cf. Hatari Blitter_WordsPerLine_WriteWord) via
-    // le bouclage 16 bits (fin de ligne à xCount==1) quand xReset_=0. Côté Y, le
-    // compteur vivant est yLatch_ (0→65536 converti À L'ÉCRITURE du registre).
-    const uint16_t xc = uint16_t((reg_[0x36] << 8) | reg_[0x37]);
+    // le bouclage 16 bits (fin de ligne à xCount==1) quand xReset_=0 ; la recharge
+    // xReset_ (x_count_reset) est latchée À L'ÉCRITURE du registre $FF8A36, PAS
+    // ici (cf. write16/write32). Côté Y, le compteur vivant est yLatch_ (0→65536
+    // converti À L'ÉCRITURE du registre).
 
     // Transfert DÉJÀ terminé (y_count résiduel 0) : poser BUSY ne relance RIEN —
     // BUSY et HOG sont effacés (port fidèle blitter.c:1433-1437). C'est le
@@ -126,7 +147,6 @@ void Blitter::start() {
     }
 
     if (!midBlit_) {                       // vrai départ (pas une reprise de pause)
-        xReset_   = xc;                    // latch de la recharge X (Hatari x_count_reset)
         haveFxsr_ = false;
         nfsrInt_  = false;
         midBlit_  = true;
@@ -211,13 +231,13 @@ void Blitter::pauseTransfer() {
 }
 
 // Fin de transfert (yCount==0) : le blitter abaisse la ligne GPU_DONE (GPIP3,
-// active bas) et demande l'IRQ canal 3 (cf. Hatari Blitter_Start ligne 916).
-// raise() respecte IERB → si le canal 3 n'est pas activé, aucun bit IPR n'est
-// posé (inoffensif). N'est atteint que sur Mega ST/STE/Mega STE (le blitter
-// n'est câblé au bus que sur ces modèles → auto-gaté).
+// active bas) — le canal 3 est levé par le détecteur de FRONT du setter (règle
+// AER, IPR posé seulement si IERB arme le canal), cf. Hatari Blitter_Start
+// ligne 916. N'est atteint que sur Mega ST/STE/Mega STE (le blitter n'est
+// câblé au bus que sur ces modèles → auto-gaté).
 void Blitter::finishTransfer() {
     midBlit_ = false;
-    if (bus_.mfp) { bus_.mfp->setBlitterLine(true); bus_.mfp->raise(Mfp::SRC_GPU); }
+    if (bus_.mfp) bus_.mfp->setBlitterLine(true);
 }
 
 // -----------------------------------------------------------------------------
@@ -369,6 +389,11 @@ bool Blitter::runSlice(int maxBusAccesses) {
     wr16(0x38, uint16_t(yCount));          // 65536 → 0 (16 bits) : readback fidèle au matériel
     yLatch_ = uint32_t(yCount);            // compteur vivant (résiduel SANS re-conversion)
 
+    // Réécriture de $FF8A3C en fin de tranche — équivaut au Hatari
+    // « ctrl = (ctrl & 0xF0) | halftone_line » (blitter.c:908) puis, blit fini,
+    // « ctrl &= ~(0x80|0x40) » (blitter.c:913) : le bit 4 est toujours 0 grâce au
+    // masque 0xEF appliqué à l'écriture (cf. regWriteMask), donc &0x70 / &0x30
+    // reproduisent exactement &0xF0 avec/sans BUSY+HOG.
     if (yCount > 0) {                       // tranche finie, transfert pas terminé
         reg_[0x3C] = uint8_t(0x80 | (ctrl & 0x70) | (htLine & 0x0F));   // BUSY maintenu
         return false;

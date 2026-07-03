@@ -17,6 +17,7 @@
 #include "io/MidiAcia.hpp"
 #include "io/Scc.hpp"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -41,6 +42,9 @@ bool Bus::loadTos(const std::string& path) {
     romBase = (rom.size() <= 192u * 1024u) ? stmap::ROM_FC0000 : stmap::ROM_E00000;
     // Version du TOS : mot big-endian de l'en-tête à l'offset 2 (cf. adjustMachineForTos).
     tosVersion = rom.size() >= 4 ? uint16_t((rom[2] << 8) | rom[3]) : 0;
+    // Vecteurs reset $0-$7 : le GLUE les mappe sur la ROM en permanence — on les
+    // recopie en RAM dès le chargement (et à chaque reset, cf. seedResetVectors).
+    seedResetVectors();
     std::fprintf(stderr, "[Bus] TOS chargé : %s (%zu Ko @ $%06X, version $%04X)\n",
                  path.c_str(), rom.size() / 1024, romBase, tosVersion);
     return true;
@@ -395,8 +399,15 @@ bool Bus::busFaultN(uint32_t addr, unsigned n, bool write) const {
         if (cpu && !cpu->supervisor()) return true;
     }
 
-    // 3) Carte par octet (whitelist Hatari) : faute uniquement si TOUS les octets
-    //    de l'accès fautent.
+    // 3) Banque sélectionnée par l'adresse de DÉPART (Hatari cpu/memory.c : le
+    //    dispatch lget/wget choisit la banque sur le premier octet). Un accès qui
+    //    démarre HORS de l'espace IO ne consulte jamais la whitelist ioMem, même
+    //    s'il déborde dedans : `move.l $FF7FFE` faute inconditionnellement
+    //    (BusErrMem_bank), il ne « sauve » pas ses octets $FF8000-01.
+    if (addr < stmap::MMIO_BASE) return busFault(addr);
+
+    // 4) Espace IO : carte par octet (whitelist ioMem) — un word/long ne faute
+    //    que si TOUS ses octets fautent.
     for (unsigned i = 0; i < n; ++i)
         if (!busFault(addr + i)) return false;
     return true;
@@ -479,18 +490,46 @@ void Bus::dmaWrite8(uint32_t addr, uint8_t v) {
     write8(addr, v);
 }
 
+// Lecture débogueur : même plan mémoire que read8 mais SANS effet de bord (pas
+// de dispatch MMIO, pas de wait state, pas de bus error). Cf. Bus.hpp.
+uint8_t Bus::peek8(uint32_t addr) const {
+    addr &= stmap::ADDR_MASK;
+    if (addr < 0x400000) {
+        const int64_t phys = mmuTranslate(addr);
+        return phys >= 0 ? ram[static_cast<std::size_t>(phys)] : 0xFF;
+    }
+    if (addr >= romBase && addr < romBase + romWindowSize())
+        return addr < romBase + rom.size() ? rom[addr - romBase] : 0x00;
+    if (!cart.empty() && addr >= stmap::CART_BASE && addr < stmap::CART_BASE + cart.size())
+        return cart[addr - stmap::CART_BASE];
+    return 0xFF;                             // MMIO / trous : neutre, sans dispatch
+}
+
+// Vecteurs reset $0-$7 : recopie ROM → RAM (STMemory_SetDefaultConfig). Écrit la
+// RAM physique directement — l'écriture CPU y fauterait (miroir ROM, cf. busFaultN).
+void Bus::seedResetVectors() {
+    const std::size_t n = std::min<std::size_t>(8, std::min(rom.size(), ram.size()));
+    for (std::size_t i = 0; i < n; ++i) ram[i] = rom[i];
+}
+
 // --- Accès 16/32 bits : le 68000 est big-endian, on assemble octet par octet --
 uint16_t Bus::read16(uint32_t addr) {
     const uint8_t saved = ioAccessWidth_;
     ioAccessWidth_ = 2;
-    const uint16_t v = static_cast<uint16_t>((read8(addr) << 8) | read8(addr + 1));
+    // Séquencement EXPLICITE octet fort puis octet faible : les opérandes de « | »
+    // ne sont pas ordonnés en C++, or la MMIO a des effets de bord — l'ordre des
+    // dispatchs doit être reproductible quel que soit le compilateur (déterminisme
+    // du headless clang/gcc).
+    const uint16_t hi = read8(addr);
+    const uint16_t v  = static_cast<uint16_t>((hi << 8) | read8(addr + 1));
     ioAccessWidth_ = saved;
     return v;
 }
 uint32_t Bus::read32(uint32_t addr) {
     const uint8_t saved = ioAccessWidth_;
     ioAccessWidth_ = 4;
-    const uint32_t v = (static_cast<uint32_t>(read16(addr)) << 16) | read16(addr + 2);
+    const uint32_t hi = read16(addr);          // séquencé : mot fort d'abord (cf. read16)
+    const uint32_t v  = (hi << 16) | read16(addr + 2);
     ioAccessWidth_ = saved;
     return v;
 }
@@ -545,18 +584,26 @@ uint8_t Bus::mmioRead8(uint32_t addr) {
     if (addr >= 0xFF8A00 && addr <= 0xFF8A3F && blitter && machineHasBlitter(machine))
         return blitter->read8(addr);      // blitter ($FF8A00) — Mega ST/STE/Mega STE
     if (addr >= stmap::MFP_BASE && addr < stmap::MFP_BASE + 0x40 && mfp) {
-        if (cpu) cpu->addMfpWaitCycles();      // wait state MFP (4 cyc / accès)
+        // Wait state MFP (4 cyc) facturé UNE fois par accès : seul l'octet IMPAIR
+        // porte un registre câblé (Hatari : M68000_WaitState(4) dans le handler du
+        // registre ; l'octet pair d'un accès mot n'ajoute rien).
+        if (cpu && (addr & 1)) cpu->addMfpWaitCycles();
         const uint8_t v = mfp->read8(addr);
         if (cpu) cpu->updateIpl();        // l'état d'IRQ a pu changer
         return v;
     }
     if (addr >= stmap::ACIA_BASE && addr < stmap::ACIA_BASE + 4 && ikbd) {
+        // $FFFC01/$FFFC03 : octets impairs non décodés (« void », ioMemTabST.c) →
+        // 0xFF sans effet de bord ACIA ni wait state. Ainsi un accès MOT à $FFFC00
+        // ne touche l'ACIA qu'une fois (et n'est facturé qu'une fois).
+        if (addr & 1) return 0xFF;
         if (cpu) cpu->addAciaWaitCycles();     // wait state ACIA (6 cyc + E-Clock)
         const uint8_t v = ikbd->read8(addr);   // ACIA clavier $FFFC00/$FFFC02
         if (cpu) cpu->updateIpl();
         return v;
     }
     if (addr >= 0xFFFC04 && addr < 0xFFFC08 && midi) {
+        if (addr & 1) return 0xFF;             // $FFFC05/$FFFC07 : void (cf. ACIA clavier)
         if (cpu) cpu->addAciaWaitCycles();     // ACIA MIDI : même timing que l'ACIA clavier
         const uint8_t v = midi->read8(addr);   // ACIA MIDI ($FFFC04/06) — bouclage OUT→IN
         if (cpu) cpu->updateIpl();             // une lecture peut effacer l'IRQ ACIA
@@ -646,18 +693,21 @@ void Bus::mmioWrite8(uint32_t addr, uint8_t v) {
         return;
     }
     if (addr >= stmap::MFP_BASE && addr < stmap::MFP_BASE + 0x40 && mfp) {
-        if (cpu) cpu->addMfpWaitCycles();      // wait state MFP (4 cyc / accès)
+        // Wait state MFP facturé UNE fois par accès : octet impair seulement (cf. mmioRead8).
+        if (cpu && (addr & 1)) cpu->addMfpWaitCycles();
         mfp->write8(addr, v);
         if (cpu) cpu->updateIpl();        // (dé)masquage, fin d'interruption...
         return;
     }
     if (addr >= stmap::ACIA_BASE && addr < stmap::ACIA_BASE + 4 && ikbd) {
+        if (addr & 1) return;                  // $FFFC01/$FFFC03 : void — écriture absorbée (cf. mmioRead8)
         if (cpu) cpu->addAciaWaitCycles();     // wait state ACIA (6 cyc + E-Clock)
         ikbd->write8(addr, v);
         if (cpu) cpu->updateIpl();
         return;
     }
     if (addr >= 0xFFFC04 && addr < 0xFFFC08 && midi) {
+        if (addr & 1) return;                  // $FFFC05/$FFFC07 : void — écriture absorbée
         if (cpu) cpu->addAciaWaitCycles();     // ACIA MIDI : même timing que l'ACIA clavier
         midi->write8(addr, v);            // ACIA MIDI ($FFFC04/06) — bouclage OUT→IN
         if (cpu) cpu->updateIpl();        // un octet bouclé peut lever l'IRQ ACIA

@@ -112,19 +112,24 @@ public:
     // OU l'AUTRE a un octet en attente — sinon un MIDI inactif effaçait une IRQ
     // clavier pendante (clobber). Le handler _int_acia d'EmuTOS lit GPIP bit4 pour
     // savoir quand cesser de vider l'ACIA, AVANT d'effacer son bit in-service.
-    void setAciaLineKbd (bool active) { aciaLineKbd_  = active; }
-    void setAciaLineMidi(bool active) { aciaLineMidi_ = active; }
+    // Chaque setter applique la règle de FRONT d'Hatari (MFP_GPIP_Set_Line_Input) :
+    // le canal GPIP correspondant n'est levé QUE sur une transition du pin dont le
+    // nouveau niveau égale le bit AER (DDR=entrée exigé) — les appelants ne doivent
+    // PAS appeler raise() eux-mêmes (sinon IPR reposé sans front réel : une ligne
+    // déjà basse — wire-OR ACIA, INTRQ maintenue — regénérerait des IRQ fantômes).
+    void setAciaLineKbd (bool active) { gpipSetLine(aciaLineKbd_,  active); }
+    void setAciaLineMidi(bool active) { gpipSetLine(aciaLineMidi_, active); }
     // Alias de compatibilité (l'ancienne API ne pilotait qu'une seule ligne).
-    void setAciaLine(bool active) { aciaLineKbd_ = active; }
+    void setAciaLine(bool active) { setAciaLineKbd(active); }
 
     // Ligne d'interruption du FDC sur GPIP5 (active BAS). EmuTOS attend la fin
     // d'une commande disque en pollant GPIP bit5 (timeout_gpip).
-    void setFdcLine(bool active) { fdcLine_ = active; }
+    void setFdcLine(bool active) { gpipSetLine(fdcLine_, active); }
 
     // Ligne GPU_DONE du blitter sur GPIP3 (active BAS). Le blitter la met HAUT au
     // démarrage puis BAS à la fin du transfert (cf. Hatari Blitter_Start). N'existe
     // que sur Mega ST/STE/Mega STE (le blitter n'est câblé au bus que sur ces modèles).
-    void setBlitterLine(bool active) { gpuLine_ = active; }
+    void setBlitterLine(bool active) { gpipSetLine(gpuLine_, active); }
 
     // Type de moniteur lu sur GPIP bit7 : couleur (basse rés) ou mono (haute rés).
     // À changer AVANT un reset pour que TOS détecte la bonne résolution au boot.
@@ -289,6 +294,18 @@ private:
     // Cas réel : une écriture AER (ex. bset/bclr #0,$FFFA03 des démos « M »/« Realtime »)
     // peut lever une IRQ alors même que la ligne d'entrée n'a pas bougé.
     void gpipUpdateInterrupt(uint8_t gpipOld, uint8_t gpipNew, uint8_t aerOld, uint8_t aerNew);
+
+    // Pose une ligne d'entrée GPIP avec détection de front (port MFP_GPIP_Set_Line_Input,
+    // mfp.c:1180) : capture du GPIP avant/après le changement, puis gpipUpdateInterrupt
+    // lève le canal seulement si la ligne est en ENTRÉE (DDR), a réellement basculé au
+    // niveau du pin (le wire-OR ACIA absorbe une 2ᵉ ligne qui tombe) et que le front
+    // correspond à l'AER. Sans transition : aucun effet.
+    void gpipSetLine(bool& line, bool active) {
+        if (line == active) return;
+        const uint8_t before = gpipInput();
+        line = active;
+        gpipUpdateInterrupt(before, gpipInput(), aer, aer);
+    }
 
     // Recalcule la config USART effective (cf. serialBaud) et la journalise au
     // premier réglage / à chaque CHANGEMENT (boîte à hack : on VOIT la négociation).

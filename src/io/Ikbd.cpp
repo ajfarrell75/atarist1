@@ -262,51 +262,10 @@ void Ikbd::dispatchCommand() {
     }
     switch (opcode) {
         case 0x80:
-            // Reset 0x80,0x01 : l'IKBD fait son auto-test puis renvoie $F1 APRÈS
-            // ~502000 cycles (valeur Hatari IKBD_RESET_CYCLES). Répondre
-            // INSTANTANÉMENT casse les diagnostics qui arment l'IRQ ACIA puis
-            // attendent la réponse : l'IRQ serait levée avant l'armement (donc
-            // perdue) → « Keyboard not responding ». On diffère via
-            // l'ordonnanceur ; à défaut (pas de scheduler), repli immédiat.
-            if (inBuf_[1] == 0x01) {
-                // L'IKBD repart de ses défauts (cf. Hatari IKBD_Boot_ROM) : souris
-                // RELATIVE, joystick AUTO, seuils 1, pas d'échelle, axe Y vers le
-                // haut, état de bouton/joystick émis remis à zéro.
-                mouseMode_     = REL;
-                joyMode_       = JOY_AUTO;
-                prevJoy0_      = prevJoy1_ = 0;
-                xThreshold_    = yThreshold_ = 1;
-                xScale_        = yScale_ = 0;
-                yAxis_         = 1;
-                mouseAction_   = 0;
-                keyCodeDeltaX_ = keyCodeDeltaY_ = 1;
-                bOldL_         = bOldR_ = false;
-                mouseDeltaX_   = mouseDeltaY_ = 0;
-                mouseLeft_     = mouseRight_ = false;
-                absX_ = absY_  = 0;            // ABS_X/Y_ONRESET
-                absMaxX_       = 320;          // ABS_MAX_X_ONRESET
-                absMaxY_       = 200;          // ABS_MAY_Y_ONRESET
-                prevAbsButtons_ = 0x0A;        // ABS_PREVBUTTONS
-                // Drapeaux des quirks de la fenêtre de reset (cf. IKBD_Boot_ROM).
-                mouseDisabled_ = joystickDisabled_ = false;
-                mouseEnabledDuringReset_ = false;
-                bothMouseAndJoy_ = false;
-                pauseOutput_   = false;
-                rx_.clear();                   // BufferHead=Tail=0 dans IKBD_Boot_ROM
-                rdrf_ = false;                 // RDR vidé + livraison en vol annulée
-                rxOverrun_ = ovrn_ = srRead_ = false;   // overrun oublié (reset IKBD)
-                rxPending_ = false;
-                if (sched_) sched_->cancel(Scheduler::IKBD_RX);
-                duringResetCriticalTime_ = true;
-                // Le reset annule tout code 6301 custom en cours (cf. Hatari
-                // IKBD_Boot_ROM : LoadMemory/ExeMode coupés).
-                exeMode_ = false; customRead_ = CR_NONE; customWrite_ = CW_NONE;
-                memLoadLeft_ = 0;
-                // L'horloge ($1B/$1C) est CONSERVÉE (reset à chaud, cf. Hatari).
-                constexpr int64_t kIkbdResetCycles = 502000;
-                if (sched_) sched_->schedule(Scheduler::IKBD, sched_->now() + kIkbdResetCycles);
-                else        onResetResponse();
-            }
+            // Reset 0x80,0x01 : warm-boot de la ROM IKBD (cf. Hatari
+            // IKBD_Boot_ROM(false)) — remise aux défauts + réponse $F1 différée.
+            if (inBuf_[1] == 0x01)
+                bootRom();
             break;
         case 0x08:
             // $08 = SET RELATIVE MOUSE POSITION REPORTING (cf. Hatari
@@ -376,7 +335,9 @@ void Ikbd::dispatchCommand() {
             break;
         case 0x1C:
             // $1C = INTERROGATE CLOCK (cf. Hatari IKBD_Cmd_ReadClock) : paquet
-            // $FC + les 6 octets BCD de l'horloge.
+            // $FC + les 6 octets BCD de l'horloge. Garde « paquet entier ou
+            // rien » (IKBD_OutputBuffer_CheckFreeCount(7)) : tampon plein → jeté.
+            if (!rxFree(7)) break;
             pushRx(0xFC);
             for (int i = 0; i < 6; ++i) pushRx(clock_[i]);
             break;
@@ -468,8 +429,12 @@ void Ikbd::dispatchCommand() {
             // (suffit à éviter « J2 Joystick time-out ») ; sous fixture de bouclage
             // la sonde écrase l'état hôte pour refléter le port parallèle (cf.
             // Machine) — test « Printer/Joystick » complet.
+            // Garde « paquet entier ou rien » (IKBD_OutputBuffer_CheckFreeCount(3)) :
+            // des jeux (Downfall, Fokker) répètent $16 sans lire les réponses →
+            // tampon plein → le paquet $FD est jeté en entier, jamais tronqué.
             uint8_t joy0 = hostJoy_[0], joy1 = hostJoy_[1];
             if (joyProbe_) joyProbe_(joy0, joy1);
+            if (!rxFree(3)) break;
             pushRx(0xFD);
             pushRx(joy0);
             pushRx(joy1);
@@ -486,6 +451,8 @@ void Ikbd::dispatchCommand() {
         case 0x21:
             // $21 = READ MEMORY (cf. Hatari IKBD_Cmd_ReadMemory) : en-tête $F6 $20
             // puis 6 octets nuls (NeoST n'émule pas la RAM interne du 6301).
+            // Paquet de 8 octets entier ou rien (CheckFreeCount(8), comme Hatari).
+            if (!rxFree(8)) break;
             pushRx(0xF6);
             pushRx(0x20);
             for (int i = 0; i < 6; ++i) pushRx(0x00);
@@ -498,13 +465,16 @@ void Ikbd::dispatchCommand() {
         // --- Commandes de RAPPORT d'état $87-$9A (cf. Hatari IKBD_Cmd_Report*) ---
         // Réponse : $F6 + opcode du réglage + 6 octets de paramètres (zéro-remplis).
         // Un programme qui interroge son réglage et attend la réponse restait
-        // bloqué tant que ces commandes étaient des NOP.
+        // bloqué tant que ces commandes étaient des NOP. Chaque réponse (8 octets)
+        // est gardée « paquet entier ou rien » (CheckFreeCount(8), comme Hatari).
         case 0x87: {                          // REPORT MOUSE BUTTON ACTION
+            if (!rxFree(8)) break;
             pushRx(0xF6); pushRx(0x07); pushRx(mouseAction_);
             for (int i = 0; i < 5; ++i) pushRx(0x00);
             break;
         }
         case 0x88: case 0x89: case 0x8A: {    // REPORT MOUSE MODE
+            if (!rxFree(8)) break;
             pushRx(0xF6);
             switch (mouseMode_) {
                 case ABS:
@@ -528,28 +498,34 @@ void Ikbd::dispatchCommand() {
             break;
         }
         case 0x8B:                            // REPORT MOUSE THRESHOLD
+            if (!rxFree(8)) break;
             pushRx(0xF6); pushRx(0x0B);
             pushRx(uint8_t(xThreshold_)); pushRx(uint8_t(yThreshold_));
             for (int i = 0; i < 4; ++i) pushRx(0x00);
             break;
         case 0x8C:                            // REPORT MOUSE SCALE
+            if (!rxFree(8)) break;
             pushRx(0xF6); pushRx(0x0C);
             pushRx(uint8_t(xScale_)); pushRx(uint8_t(yScale_));
             for (int i = 0; i < 4; ++i) pushRx(0x00);
             break;
         case 0x8F: case 0x90:                 // REPORT MOUSE VERTICAL COORDINATES
+            if (!rxFree(8)) break;
             pushRx(0xF6); pushRx(yAxis_ == -1 ? 0x0F : 0x10);
             for (int i = 0; i < 6; ++i) pushRx(0x00);
             break;
         case 0x92:                            // REPORT MOUSE AVAILABILITY
+            if (!rxFree(8)) break;
             pushRx(0xF6); pushRx(mouseMode_ == OFF ? 0x12 : 0x00);
             for (int i = 0; i < 6; ++i) pushRx(0x00);
             break;
         case 0x94: case 0x95: case 0x99:      // REPORT JOYSTICK MODE
+            if (!rxFree(8)) break;
             pushRx(0xF6); pushRx(joyMode_ == JOY_AUTO ? 0x14 : 0x15);
             for (int i = 0; i < 6; ++i) pushRx(0x00);
             break;
         case 0x9A:                            // REPORT JOYSTICK AVAILABILITY
+            if (!rxFree(8)) break;
             pushRx(0xF6); pushRx(joyMode_ == JOY_OFF ? 0x1A : 0x00);
             for (int i = 0; i < 6; ++i) pushRx(0x00);
             break;
@@ -558,6 +534,61 @@ void Ikbd::dispatchCommand() {
             // paramètre.
             break;
     }
+}
+
+void Ikbd::bootRom() {
+    // Warm-boot de la ROM IKBD ($F000) — port de Hatari IKBD_Boot_ROM(false),
+    // commun au reset logiciel $80,$01 et à la sortie du mode Execute
+    // (exitExeMode). Le reset à froid = état de construction (défauts du .hpp,
+    // alignés sur IKBD_Boot_ROM) + horloge amorcée sur l'heure hôte.
+    // L'IKBD fait son auto-test puis renvoie $F1 APRÈS ~502000 cycles (valeur
+    // Hatari IKBD_RESET_CYCLES). Répondre INSTANTANÉMENT casse les diagnostics
+    // qui arment l'IRQ ACIA puis attendent la réponse : l'IRQ serait levée
+    // avant l'armement (donc perdue) → « Keyboard not responding ». On diffère
+    // via l'ordonnanceur ; à défaut (pas de scheduler), repli immédiat.
+    //
+    // L'IKBD repart de ses défauts : souris RELATIVE, joystick AUTO, seuils 1,
+    // pas d'échelle, axe Y vers le haut, état de bouton/joystick émis remis à zéro.
+    mouseMode_     = REL;
+    joyMode_       = JOY_AUTO;
+    prevJoy0_      = prevJoy1_ = 0;
+    xThreshold_    = yThreshold_ = 1;
+    xScale_        = yScale_ = 0;
+    yAxis_         = 1;
+    mouseAction_   = 0;
+    keyCodeDeltaX_ = keyCodeDeltaY_ = 1;
+    bOldL_         = bOldR_ = false;
+    mouseDeltaX_   = mouseDeltaY_ = 0;
+    mouseLeft_     = mouseRight_ = false;
+    absX_ = absY_  = 0;            // ABS_X/Y_ONRESET
+    absMaxX_       = 320;          // ABS_MAX_X_ONRESET
+    absMaxY_       = 200;          // ABS_MAY_Y_ONRESET
+    prevAbsButtons_ = 0x0A;        // ABS_PREVBUTTONS
+    // Table d'état des touches effacée (ScanCodeState[] dans IKBD_Boot_ROM) :
+    // toutes réputées relâchées après le boot.
+    for (auto& s : scanState_) s = 0;
+    // Commande multi-octets en cours abandonnée (nBytesInInputBuffer = 0).
+    inBufLen_ = 0;
+    cmdExpected_ = 0;
+    // Drapeaux des quirks de la fenêtre de reset (cf. IKBD_Boot_ROM).
+    mouseDisabled_ = joystickDisabled_ = false;
+    mouseEnabledDuringReset_ = false;
+    bothMouseAndJoy_ = false;
+    pauseOutput_   = false;
+    rx_.clear();                   // BufferHead=Tail=0 dans IKBD_Boot_ROM
+    rdrf_ = false;                 // RDR vidé + livraison en vol annulée
+    rxOverrun_ = ovrn_ = srRead_ = false;   // overrun oublié (reset IKBD)
+    rxPending_ = false;
+    if (sched_) sched_->cancel(Scheduler::IKBD_RX);
+    duringResetCriticalTime_ = true;
+    // Le boot annule tout code 6301 custom en cours (cf. Hatari
+    // IKBD_Boot_ROM : LoadMemory/ExeMode coupés).
+    exeMode_ = false; customRead_ = CR_NONE; customWrite_ = CW_NONE;
+    memLoadLeft_ = 0;
+    // L'horloge ($1B/$1C) est CONSERVÉE (reset à chaud, cf. Hatari).
+    constexpr int64_t kIkbdResetCycles = 502000;
+    if (sched_) sched_->schedule(Scheduler::IKBD, sched_->now() + kIkbdResetCycles);
+    else        onResetResponse();
 }
 
 void Ikbd::checkResetDisableBug() {
@@ -868,9 +899,10 @@ void Ikbd::pushRx(uint8_t b) {
     if (duringResetCriticalTime_)
         return;
     // Tampon de sortie borné à 1024 octets (SIZE_KEYBOARD_BUFFER du vrai HD6301) :
-    // plein → l'octet est jeté. Les émetteurs de paquets testent rxFree() avant le
-    // 1er octet (jamais de demi-paquet) ; ce garde ne fait que borner les pushRx
-    // isolés (réponses de commande, quirks) — robustesse mémoire absolue.
+    // plein → l'octet est jeté. TOUS les émetteurs de paquets (événements ET
+    // réponses de commande) testent rxFree() avant le 1er octet (jamais de
+    // demi-paquet, cf. IKBD_OutputBuffer_CheckFreeCount) ; ce garde ne fait que
+    // borner les pushRx isolés ($F1, handlers custom) — robustesse mémoire absolue.
     if (rx_.size() + (rdrf_ ? 1u : 0u) >= 1024)
         return;
     rx_.push_back(b);
@@ -926,12 +958,11 @@ bool Ikbd::irqActive() const {
 
 void Ikbd::raiseIfReady() {
     // L'ACIA active sa ligne d'IRQ dès qu'une cause (RX ou TX) est active. On la
-    // publie sur GPIP4 (lue par _int_acia pour vider l'ACIA) ET on déclenche le
-    // canal 6 du MFP.
-    const bool active = irqActive();
-    mfp_.setAciaLineKbd(active);
-    if (active)
-        mfp_.raise(Mfp::SRC_ACIA);
+    // publie sur GPIP4 (lue par _int_acia pour vider l'ACIA) ; le canal 6 du MFP
+    // est levé par le détecteur de FRONT du setter (règle AER, wire-OR avec le
+    // MIDI) — pas de raise() manuel, sinon IPR reposé sans front réel (octet
+    // doublé côté handlers qui ne testent pas le SR).
+    mfp_.setAciaLineKbd(irqActive());
 }
 
 void Ikbd::onTxEmpty() {
@@ -972,7 +1003,7 @@ void Ikbd::commonBoot(uint8_t v) {
     struct Def { int nb; uint32_t crc; CustomR r; CustomW w; };
     static const Def defs[] = {
         { 167, 0xe7110b6du, CR_NONE,     CW_FROGGIES   },   // Froggies Over The Fence
-        { 165, 0x5617c33cu, CR_TRANSB2,  CW_NONE       },   // Transbeauce 2
+        { 165, 0x5617c33cu, CR_TRANSB2,  CW_IGNORE     },   // Transbeauce 2 (écritures ignorées)
         {  83, 0xdf3e5a88u, CR_NONE,     CW_DRAGONNELS },   // Dragonnels
         { 109, 0xa11d8be5u, CR_CHAOSAD,  CW_CHAOSAD    },   // Chaos A.D.
         {  91, 0x119b26edu, CR_AS_COLOR, CW_AS         },   // Audio Sculpture (couleur)
@@ -1000,6 +1031,11 @@ void Ikbd::commonBoot(uint8_t v) {
 void Ikbd::customWriteDispatch(uint8_t v) {
     switch (customWrite_) {
         case CW_BOOT:       commonBoot(v);          break;
+        // Transbeauce 2 : le handler d'écriture IGNORE les octets (cf. Hatari
+        // IKBD_CustomCodeHandler_Transbeauce2Menu_Write) — en ExeMode ils ne
+        // doivent JAMAIS retomber dans le parseur de commandes standard
+        // (IKBD_Process_RDR court-circuite IKBD_RunKeyboardCommand).
+        case CW_IGNORE:                             break;
         case CW_FROGGIES:   froggiesWrite(v);       break;
         case CW_DRAGONNELS: dragonnelsWrite(v);     break;
         case CW_CHAOSAD:    chaosWrite(v);          break;
@@ -1019,11 +1055,11 @@ void Ikbd::customReadDispatch() {
 }
 
 void Ikbd::exitExeMode() {
-    // Sortie du mode Execute (le 6301 fait jmp $f000) : retour au comportement ROM.
-    exeMode_     = false;
-    customRead_  = CR_NONE;
-    customWrite_ = CW_NONE;
-    memLoadLeft_ = 0;
+    // Sortie du mode Execute (le 6301 fait jmp $f000) : Hatari appelle
+    // IKBD_Boot_ROM(false) — même warm-boot que le reset $80,$01 : remise aux
+    // défauts des modes souris/joystick, vidage des tampons, effacement de
+    // scanState_, fenêtre critique puis réponse $F1 différée (~502000 cycles).
+    bootRom();
 }
 
 int Ikbd::checkPressedKey() const {

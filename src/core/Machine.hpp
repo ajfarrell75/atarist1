@@ -79,12 +79,20 @@ public:
         return printerFile_ != nullptr;
     }
     // À chaud : LMC1992 préservé. Mega STE : $FF8E21 → 0 (8 MHz, cache invalidé,
-    // port de Hatari MegaSTE_CPU_Cache_Reset) + FPU au repos.
+    // port de Hatari MegaSTE_CPU_Cache_Reset) + FPU au repos. Couverture calquée
+    // sur Hatari reset.c : Video_Reset, FDC_Reset, Blitter_Reset (annule un blit
+    // en vol — sinon il continuerait de corrompre la RAM PENDANT le boot),
+    // IKBD_Reset (→ $F1 différé) et recopie des vecteurs reset $0-$7 en RAM.
     void reset() {
         psg.reset(); dmasnd.reset(/*cold=*/false); mfp.reset();
+        shifter.reset();           // Video_Reset : scroll/linewidth/offset différé STE, glue
+        fdc.reset(/*cold=*/false); // FDC_Reset : commande/DMA en vol annulés
+        blitter.reset();           // Blitter_Reset : blit en vol annulé, BUSY retombe
+        ikbd.bootRom();            // IKBD_Reset (chaud) : modes aux défauts, $F1 différé
         bus.megaSteReset(); cpu.setMegaSteSpeed(false); bus.fpu.reset(); bus.scu.reset(/*cold=*/false);
         gemdos.reset();    // ferme les fichiers HD GEMDOS ouverts (no-op si inactif)
         scc.reset();       // SCC série (Mega STE) au repos
+        bus.seedResetVectors();    // vecteurs SSP/PC $0-$7 : miroir ROM en RAM (stMemory.c)
         cpu.reset();
         frameStartInit_ = false;   // FIX1 : ré-ancre frameStart_ sur sched.now() à la 1re trame post-reset
     }
@@ -94,9 +102,14 @@ public:
     void hardReset() {
         bus.ram.assign(bus.ram.size(), 0);
         psg.reset(); dmasnd.reset(/*cold=*/true); mfp.reset();
+        shifter.reset();           // cf. reset() : couverture Hatari reset.c
+        fdc.reset(/*cold=*/true);
+        blitter.reset();
+        ikbd.bootRom();
         bus.megaSteReset(); cpu.setMegaSteSpeed(false); bus.fpu.reset(); bus.scu.reset(/*cold=*/true);
         gemdos.reset();    // ferme les fichiers HD GEMDOS ouverts (no-op si inactif)
         scc.reset();       // SCC série (Mega STE) au repos
+        bus.seedResetVectors();    // vecteurs SSP/PC $0-$7 (après l'effacement RAM !)
         cpu.reset();
         frameStartInit_ = false;   // FIX1 : ré-ancre frameStart_ sur sched.now() à la 1re trame post-reset
     }
@@ -115,6 +128,10 @@ public:
         bus.megaSteReset();                // $FF8E21 → 0 (8 MHz, cache invalidé)
         cpu.setMegaSteSpeed(false);
         cpu.setCore(cpuCore);              // bascule de cœur 68000 si nécessaire
+        // DIP switches $FF9200 : l'octet haut dépend du modèle (0xBF MegaSTE,
+        // 0xFF sinon) — sans cette mise à jour, une bascule STE↔MegaSTE à chaud
+        // exposait les DIP de l'ancienne machine (cf. ctor).
+        bus.stePads.setMegaSte(machine == MachineType::MegaSte);
         psg.setOutputScale(machineIsSte(machine) ? 0.5f : 1.0f);   // ½ ampli YM sur STE (cf. ctor)
         psg.setStfLowPass(!machineIsSte(machine));                 // LPF_STF sur ST/Mega ST, PWM sur STE
     }

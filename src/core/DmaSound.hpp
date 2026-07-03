@@ -105,6 +105,10 @@ private:
     // Synchronise l'état audio (aXxx_) sur l'état CPU live (repli sans horloge push).
     void    syncAudioFromCpu();
     void    decodeMicrowire();                            // décode la commande LMC1992
+    // Valeur LUE en $FF8924 : masque en ROTATION pendant le shift (revient
+    // identique après les 16 pas), valeur écrite hors transfert — port de Hatari
+    // DmaSnd_InterruptHandler_Microwire (dmaSnd.c:1063-1064).
+    uint16_t mwMaskRead() const;
     void    scheduleFrameEnd();                           // date la prochaine fin de trame
     void    startNewFrame();                              // (re)démarre une trame (gère start==end)
     void    setXsint(bool level);                         // pilote la ligne XSINT (→ MFP GPIP7)
@@ -137,6 +141,11 @@ private:
     // lecture ne vaut que pour la trame SUIVANTE). Sert au compteur live $FF8909+.
     uint32_t frameStartAddr_  = 0;   // adresse de début latchée
     uint32_t frameEndAddr_    = 0;   // adresse de fin latchée
+    // Longueur de la trame latchée en OCTETS, avec wrap 24 bits : (fin − début)
+    // mod 2^24, et début == fin (repeat ON) → 2^24 octets — le compteur AVANCE à
+    // travers tout l'espace d'adressage et le son joue la RAM (vérifié sur STE
+    // réel, cf. Hatari dmaSnd.c:336-341 ; démo « A Little Bit Insane » de Lazer).
+    int64_t  frameLen_        = 0;
     int64_t  frameStartCycle_ = 0;   // cycle (horloge émulée live) du début de trame
     uint16_t mwData_ = 0, mwMask_ = 0;  // microwire $FF8922/$FF8924 (mots 16 bits)
     uint16_t mwShift_ = 0;              // valeur LUE en $FF8922 pendant le shift (→ 0)

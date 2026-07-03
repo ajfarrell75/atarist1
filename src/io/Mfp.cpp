@@ -178,7 +178,7 @@ void Mfp::write8(uint32_t addr, uint8_t v) {
                    // pendant le test « S RS232 » ; les impressions série normales (RE=0)
                    // ne doivent donc PAS générer d'IRQ parasite (sinon le test clavier,
                    // au boot, échoue). C'est le comportement matériel du MFP 68901.
-                   if (loopback_) {              // connecteur branché : TxD→RxD (buffer 1 octet)
+                   if (loopback_ && (timer_[0x2B] & 0x01)) {   // connecteur branché ET récepteur activé (RE) : TxD→RxD (buffer 1 octet)
                        if (rxFull_) { rxOverrun_ = true; raise(SRC_RXERR); }  // octet sur buffer plein → overrun (canal 11)
                        rxByte_ = v;
                        rxFull_ = true;
@@ -415,7 +415,9 @@ void Mfp::onTimerExpire(int timer) {
 void Mfp::hblank() {
     // En mode event-count (TBCR bits 0-3 == 0x08), Timer B décompte d'une unité
     // par ligne ; à 0 il recharge et lève l'IRQ Timer B (canal 8) si armée.
-    if ((tbcr_ & 0x0F) != 0x08 || tbCounter_ == 0) return;
+    // Pas de garde sur compteur==0 : comme pour le Timer A, data reg 0 vaut 256
+    // — le décrément 0→255 est le wrap voulu (MFP_TimerB_EventCount, mfp.c).
+    if ((tbcr_ & 0x0F) != 0x08) return;
     if (--tbCounter_ == 0) {
         tbCounter_ = tbReload_;
         // Anti-datation du tic (bit0 NEOST_MFP_EXACT, ≙ MFP_TimerB_EventCount qui

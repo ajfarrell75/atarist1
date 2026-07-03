@@ -387,12 +387,13 @@ int main(int argc, char** argv) {
                     case 'D': dy =  8; break;
                     case '1': l = true; mClickL = true; break;   // clic gauche : appui
                     case '2': r = true; mClickR = true; break;   // clic droit : appui
+                    case '3': l = r = true; mClickL = mClickR = true; break;  // les deux (ex. nitro Super Hang-On)
                     default: break;                              // '.' = idle
                 }
                 // Maintien d'un clic : si la trame précédente était un appui et celle-ci
                 // ne l'est pas, on relâche (paquet bouton=0) pour finir le clic.
-                if (t != '1' && mClickL) { l = false; mClickL = false; }
-                if (t != '2' && mClickR) { r = false; mClickR = false; }
+                if (t != '1' && t != '3' && mClickL) { l = false; mClickL = false; }
+                if (t != '2' && t != '3' && mClickR) { r = false; mClickR = false; }
                 machine.ikbd.mouseEvent(dx, dy, l, r);
                 machine.cpu.updateIpl();
             }

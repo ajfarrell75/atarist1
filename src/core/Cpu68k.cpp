@@ -298,8 +298,9 @@ public:
     // Lecture du vecteur de reset (SSP/PC) via l'overlay ROM : jamais de bus error.
     moira::u16 read16OnReset(moira::u32 a) const override { const moira::u16 v = g_bus->read16(a); latchDb(v); return v; }
     // Lecture pour le désassembleur : pas d'effet de bord MMIO ni de bus error
-    // (équivaut aux anciens m68k_read_disassembler_* de Musashi).
-    moira::u16 read16Dasm(moira::u32 a) const override { return g_bus->read16(a); }
+    // (équivaut aux anciens m68k_read_disassembler_* de Musashi). peek16 lit la
+    // RAM/ROM sans dispatcher vers les puces ni avancer l'horloge (get_iword_debug).
+    moira::u16 read16Dasm(moira::u32 a) const override { return g_bus->peek16(a); }
 
     // Le 68000 est-il en attente (instruction STOP) ? Permet à la boucle d'horloge
     // de SAUTER l'attente au lieu de la simuler cycle par cycle (cf. run()).
@@ -349,6 +350,13 @@ public:
         reg.ipl = lvl;                     // déjà échantillonné : visible immédiatement
         flags |= moira::State::CHECK_IRQ;  // force le re-test même si la broche n'a pas bougé
     }
+
+    // Une IRQ est-elle DÉJÀ prenable (niveau échantillonné > masque SR) ? Sert au
+    // saut d'attente STOP de Cpu68k::run : si oui, le prochain execute() sort du
+    // STOP au cycle COURANT — il ne faut PAS téléporter l'horloge au prochain
+    // événement (le vrai 68000, niveau-sensible, sert l'IRQ immédiatement ; cas
+    // mesuré : « stop #$2100 » avec HBL pendante — raster Super Hang-On).
+    bool irqDeliverable() const { return reg.ipl > reg.sr.ipl || reg.ipl == 7; }
 
     // Synchro E-clock à l'ENTRÉE d'exception (port de Hatari M68000_WaitEClock,
     // m68000.c:810 + iack_cycle newcpu.c:2971-2990) : les IRQ AUTO-VECTORISÉES HBL
@@ -602,7 +610,7 @@ int Cpu68k::run(int cycles) {
         // STOP au bon cycle. Sans événement avant la cible, on saute droit à la cible.
         // (≠ ancien modèle : on saute à l'EVENT, pas à la cible, sinon on zapperait
         // tous les events de la trame — la cible du bloc est maintenant la fin de trame.)
-        if (g_moira->isStopped()) {
+        if (g_moira->isStopped() && !g_moira->irqDeliverable()) {
             const int64_t busNow = busOfClock(g_moira->getClock());
             if (busNow >= targetBus) break;
             const int64_t nd = g_sched ? g_sched->peekNextDue() : -1;
