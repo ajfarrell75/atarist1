@@ -27,7 +27,7 @@ namespace {
 
 void Blitter::reset() {
     for (auto& b : reg_) b = 0;
-    buffer_ = 0; busWord_ = 0;
+    buffer_ = 0; busWord_ = 0; yLatch_ = 0;
     midBlit_ = false; haveFxsr_ = false; nfsrInt_ = false;
     busCountError_ = false;
     clearPreStartWindow();
@@ -75,6 +75,12 @@ void Blitter::write16(uint32_t addr, uint16_t v) {
     const uint32_t off = addr & 0x3F;
     reg_[off]              = uint8_t(v >> 8);
     reg_[(off + 1) & 0x3F] = uint8_t(v);
+    // Y count ($FF8A38) : conversion 0→65536 latchée À L'ÉCRITURE (Hatari
+    // Blitter_LinesPerBitblock_WriteWord) — cf. yLatch_ (Blitter.hpp).
+    if (off <= 0x38 && off + 1 >= 0x39) {
+        const uint16_t y = uint16_t((reg_[0x38] << 8) | reg_[0x39]);
+        yLatch_ = y ? y : 65536u;
+    }
     if (off <= 0x3C && off + 1 >= 0x3C) {
         if (reg_[0x3C] & 0x80) start();
         else if (midBlit_) pauseTransfer();
@@ -87,6 +93,11 @@ void Blitter::write32(uint32_t addr, uint32_t v) {
     reg_[(off + 1) & 0x3F] = uint8_t(v >> 16);
     reg_[(off + 2) & 0x3F] = uint8_t(v >> 8);
     reg_[(off + 3) & 0x3F] = uint8_t(v);
+    // Y count ($FF8A38) couvert par l'écriture longue → latch 0→65536 (cf. write16).
+    if (off <= 0x38 && off + 3 >= 0x39) {
+        const uint16_t y = uint16_t((reg_[0x38] << 8) | reg_[0x39]);
+        yLatch_ = y ? y : 65536u;
+    }
     if (off <= 0x3C && off + 3 >= 0x3C) {
         if (reg_[0x3C] & 0x80) start();
         else if (midBlit_) pauseTransfer();
@@ -99,12 +110,20 @@ void Blitter::write32(uint32_t addr, uint32_t v) {
 //  suite (le blitter prend le bus en premier), puis alternance via l'ordonnanceur.
 // -----------------------------------------------------------------------------
 void Blitter::start() {
-    // Compteur X/Y écrit à 0 = 65536 (cf. Hatari Blitter_WordsPerLine_WriteWord /
-    // Blitter_LinesPerBitblock_WriteWord), et NON un blit « vide » : il n'existe
-    // aucun cas dégénéré qui effacerait BUSY ici. Côté X, le bouclage 16 bits
-    // (fin de ligne à xCount==1) parcourt bien 65536 mots quand xReset_=0 ; côté
-    // Y, runSlice interprète un y_count de 0 comme 65536 lignes.
+    // Compteur X écrit à 0 = 65536 (cf. Hatari Blitter_WordsPerLine_WriteWord) via
+    // le bouclage 16 bits (fin de ligne à xCount==1) quand xReset_=0. Côté Y, le
+    // compteur vivant est yLatch_ (0→65536 converti À L'ÉCRITURE du registre).
     const uint16_t xc = uint16_t((reg_[0x36] << 8) | reg_[0x37]);
+
+    // Transfert DÉJÀ terminé (y_count résiduel 0) : poser BUSY ne relance RIEN —
+    // BUSY et HOG sont effacés (port fidèle blitter.c:1433-1437). C'est le
+    // protocole restart du driver blitter du TOS (re-set BUSY après chaque blit) :
+    // l'ancien code relisait 0→65536 et relançait un blit de 65536 lignes qui
+    // labourait toute la RAM (bureau TOS 1.06 STE scramblé au moindre redraw).
+    if (!midBlit_ && yLatch_ == 0) {
+        reg_[0x3C] &= ~(0x80 | 0x40);
+        return;
+    }
 
     if (!midBlit_) {                       // vrai départ (pas une reprise de pause)
         xReset_   = xc;                    // latch de la recharge X (Hatari x_count_reset)
@@ -233,8 +252,8 @@ bool Blitter::runSlice(int maxBusAccesses) {
     uint32_t       dstAddr = rd32(0x32) & 0xFFFFFE;
     const uint16_t xReset  = xReset_;
     uint16_t       xCount  = rd16(0x36);              // compteur VIVANT (relisible)
-    int            yCount  = rd16(0x38);              // y_count = 0 ⇒ 65536 lignes (Hatari)
-    if (yCount == 0) yCount = 65536;
+    int            yCount  = int(yLatch_);            // compteur Y VIVANT (0→65536 latché
+                                                      // à l'écriture, cf. Blitter.hpp)
     int            htLine  = ctrl & 0x0F;             // ligne halftone courante
 
     // Registre à décalage source (32 bits) + dernier mot ayant transité sur le BUS.
@@ -348,6 +367,7 @@ bool Blitter::runSlice(int maxBusAccesses) {
     wr16(0x32, uint16_t(dstAddr >> 16)); wr16(0x34, uint16_t(dstAddr));
     wr16(0x36, xCount);
     wr16(0x38, uint16_t(yCount));          // 65536 → 0 (16 bits) : readback fidèle au matériel
+    yLatch_ = uint32_t(yCount);            // compteur vivant (résiduel SANS re-conversion)
 
     if (yCount > 0) {                       // tranche finie, transfert pas terminé
         reg_[0x3C] = uint8_t(0x80 | (ctrl & 0x70) | (htLine & 0x0F));   // BUSY maintenu
