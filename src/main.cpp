@@ -52,12 +52,14 @@ static std::string resolveData(const std::string& given, const std::string& exeD
 // cpu = cœur 68000 (toujours "moira", cycle-exact ; clé conservée pour rétro-compat —
 // une ancienne valeur "musashi" est tolérée puis ramenée à "moira" avec un avertissement).
 // Défaut machine : 512 Ko ST + cœur Moira.
-// kbdjoy = émulation joystick au clavier active ; joyport = port ST visé par
-// l'émulation clavier (0 ou 1, défaut 1 = port « jeux »).
+// joyport = port ST visé par l'émulation joystick clavier (0 ou 1, défaut 1 =
+// port « jeux »). L'activation de cette émulation N'EST PAS persistée : elle
+// démarre toujours OFF (elle avale flèches + Ctrl droit, ce qui « casse » le
+// clavier des jeux — Cuddly, Captain Blood…) ; F11/menu l'activent à la session.
 struct Config { std::string rom; std::string disk; std::string cart; bool mono = false;
                 std::string cpu = "moira"; std::string machine = "st";
                 std::string mem = "512k"; bool fpu = false;   // MC68881 Mega STE (cf. Fpu.hpp)
-                bool kbdjoy = false; int joyport = 1;
+                int joyport = 1;
                 float joydeadzone = 0.30f; bool fastfdc = false;
                 bool showDisk = true, showCart = true, showHex = true, showCpu = true;
                 bool showJoy = false;
@@ -101,7 +103,6 @@ static Config loadConfig(const std::string& exeDir) {
         else if (line.rfind("machine=", 0) == 0) c.machine = line.substr(8);
         else if (line.rfind("mem=", 0)  == 0) c.mem  = line.substr(4);
         else if (line.rfind("fpu=", 0)  == 0) c.fpu  = (line.substr(4) == "1");
-        else if (line.rfind("kbdjoy=", 0) == 0) c.kbdjoy = (line.substr(7) == "1");
         else if (line.rfind("joyport=", 0) == 0) c.joyport = (line.substr(8) == "0") ? 0 : 1;
         else if (line.rfind("joydeadzone=", 0) == 0) c.joydeadzone = std::strtof(line.substr(12).c_str(), nullptr);
         else if (line.rfind("fastfdc=", 0) == 0) c.fastfdc = (line.substr(8) == "1");
@@ -123,7 +124,7 @@ static void saveConfig(const std::string& exeDir, Config& c, Machine* machine = 
              << "\nmono=" << (c.mono ? 1 : 0)
              << "\ncpu=" << c.cpu << "\nmachine=" << c.machine << "\nmem=" << c.mem
              << "\nfpu=" << (c.fpu ? 1 : 0)
-             << "\nkbdjoy=" << (c.kbdjoy ? 1 : 0) << "\njoyport=" << c.joyport
+             << "\njoyport=" << c.joyport
              << "\njoydeadzone=" << c.joydeadzone << "\nfastfdc=" << (c.fastfdc ? 1 : 0)
              << "\nshowDisk=" << (c.showDisk ? 1 : 0)
              << "\nshowCart=" << (c.showCart ? 1 : 0)
@@ -943,7 +944,9 @@ int main(int argc, char** argv) {
 
     // Callbacks installés AVANT ImGui : ImGui chaîne les nôtres derrière les siens.
     g_ikbd = &machine.ikbd;
-    g_kbdJoy     = cfg.kbdjoy;          // émulation joystick clavier (mémorisée)
+    g_kbdJoy     = false;               // émulation joystick clavier : TOUJOURS off au
+                                        // lancement (non persistée — elle avale les
+                                        // flèches, cf. F11 pour l'activer à la session)
     g_kbdJoyPort = cfg.joyport;
     g_joyDeadzone = cfg.joydeadzone;    // zone morte des sticks (mémorisée)
     glfwSetKeyCallback(window, onKey);
@@ -1053,8 +1056,7 @@ int main(int argc, char** argv) {
             static bool f11Prev = false;
             const bool f11 = glfwGetKey(window, GLFW_KEY_F11) == GLFW_PRESS;
             if (f11 && !f11Prev) {
-                g_kbdJoy = !g_kbdJoy;
-                cfg.kbdjoy = g_kbdJoy; saveConfig(exeDir, cfg, &machine);
+                g_kbdJoy = !g_kbdJoy;   // bascule de session (jamais persistée)
                 std::fprintf(stderr, "[joystick] émulation clavier %s (port %d)\n",
                              g_kbdJoy ? "ON" : "OFF", g_kbdJoyPort);
             }
@@ -1246,9 +1248,8 @@ int main(int argc, char** argv) {
             }
             if (ImGui::BeginMenu(ICON_FA_GAMEPAD " Joystick")) {
                 // Émulation au clavier (flèches + Ctrl droit). F11 bascule aussi.
-                if (ImGui::MenuItem(ICON_FA_KEYBOARD " Émulation clavier (flèches + Ctrl droit)", "F11", &g_kbdJoy)) {
-                    cfg.kbdjoy = g_kbdJoy; saveConfig(exeDir, cfg, &machine);
-                }
+                // Réglage de SESSION : jamais persisté (redémarre toujours OFF).
+                ImGui::MenuItem(ICON_FA_KEYBOARD " Émulation clavier (flèches + Ctrl droit)", "F11", &g_kbdJoy);
                 if (ImGui::BeginMenu(ICON_FA_GAMEPAD " Port émulé au clavier")) {
                     if (ImGui::MenuItem("Port 1 (jeux)", nullptr, g_kbdJoyPort == 1)) {
                         g_kbdJoyPort = cfg.joyport = 1; saveConfig(exeDir, cfg, &machine);
@@ -1331,7 +1332,7 @@ int main(int argc, char** argv) {
         if (g_showJoy)  drawJoystickWindow(window, g_lastJoy0, g_lastJoy1);
         // Un réglage joystick a changé dans la fenêtre → resauve neost.cfg.
         if (g_joyCfgDirty) {
-            cfg.kbdjoy = g_kbdJoy; cfg.joyport = g_kbdJoyPort; cfg.joydeadzone = g_joyDeadzone;
+            cfg.joyport = g_kbdJoyPort; cfg.joydeadzone = g_joyDeadzone;
             saveConfig(exeDir, cfg, &machine); g_joyCfgDirty = false;
         }
         ImGui::Render();
