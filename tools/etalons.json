@@ -52,6 +52,22 @@
       "max_diff_px": 0
     },
     {
+      "id": "trace_odd",
+      "name": "Vecteur TRACE impair → address error (fuite d'exception CPU)",
+      "subsystem": "cpu/exceptions",
+      "rom": "roms/tos102uk.img",
+      "disk": "disks/etalons/trace_odd.st",
+      "disk_generate": "tools/make_trace_odd_test.py",
+      "machine": "st",
+      "mem": "512k",
+      "cpu": "moira",
+      "fastfdc": true,
+      "frames": 300,
+      "frame": 290,
+      "crop": "active",
+      "max_diff_px": 0
+    },
+    {
       "id": "cuddly_demos",
       "name": "The Cuddly Demos (boot menu)",
       "subsystem": "shifter/borders",
