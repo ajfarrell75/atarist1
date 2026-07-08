@@ -1,0 +1,100 @@
+//------------------------------------------------------------------------------
+// VisualStudio
+//------------------------------------------------------------------------------
+
+
+//------------------------------------------------------------------------------
+//  VARIABLES
+//------------------------------------------------------------------------------
+
+#include "$VS_Name$.bff"
+#include "WindowsSDK.bff"
+
+.ToolChain_VS_Windows_X86 =
+[
+    Using( .'$VS_Name$_X86_Options' )
+
+    .Compiler                       = '$VS_Name$-Compiler-x86'
+    .CompilerOptionsC               = .CompilerOptions
+    .CompilerOptionsPCH             = .CompilerOptions
+    .CompilerOptionsDeoptimized     = .CompilerOptions
+]
+
+.ToolChain_VS_Windows_X64 =
+[
+    Using( .'$VS_Name$_X86_Options' )
+
+    .Compiler                       = '$VS_Name$-Compiler-x64'
+    .CompilerOptionsC               = .CompilerOptions
+    .CompilerOptionsPCH             = .CompilerOptions
+    .CompilerOptionsDeoptimized     = .CompilerOptions
+]
+
+//------------------------------------------------------------------------------
+// Optimizations (MSVC)
+//------------------------------------------------------------------------------
+
+.VS_Debug_Optimizations =
+[
+//    .CompilerOptions              = ' /MTd /Od /RTC1 /GS /Oy- /GR- /analyze'
+    .CompilerOptions                = ' /MTd /Od /RTC1 /GS /Oy- /GR-'
+    .CompilerOptionsC               = .CompilerOptions
+    .CompilerOptionsPCH             = .CompilerOptions
+]
+
+.VS_Profile_Optimizations =
+[
+    .CompilerOptions                = ' /MT /Ox /Oy /Oi /GS- /GF /Gy /Gw /GR- /analyze /Zo'
+    .CompilerOptionsC               = .CompilerOptions
+    .CompilerOptionsPCH             = .CompilerOptions
+    .LinkerOptions                  = ' /OPT:REF,ICF'
+]
+
+.VS_Release_Optimizations =
+[
+    // Same as Profile, but enable FASTBUILD_DEOPTIMIZE_OBJECT token
+    Using( .VS_Profile_Optimizations )
+    .DeoptimizeWritableFilesWithToken = true
+    .CompilerOptionsDeoptimized     = .CompilerOptions
+                                    - ' /Ox'
+                                    + ' /Od'
+]
+
+
+//------------------------------------------------------------------------------
+// Configurations
+//------------------------------------------------------------------------------
+.VS_BaseConfig =
+[
+    .AdditionalWarnings     = ' /we4062' // enumerator 'identifier' in a switch of enum 'enumeration' is not handled
+                            + ' /we4263' // 'function' : member function does not override any base class virtual member function
+                            + ' /we4265' // 'class': class has virtual functions, but destructor is not virtual
+                            + ' /we4296' // 'operator': expression is always false
+                            + ' /wd4505' // unreferenced local function has been removed
+                            + ' /we4555' // expression has no effect; expected expression with side-effect
+                            + ' /we4619' // #pragma warning : there is no warning number 'number'
+                            + ' /we4640' // 'instance' : construction of local static object is not thread-safe
+                            + ' /we4826' // Conversion from 'type1 ' to 'type_2' is sign-extended. This may cause unexpected runtime behavior.
+                            + ' /we4836' // nonstandard extension used : 'type' : local types or unnamed types cannot be used as template arguments
+                            + ' /we4905' // wide string literal cast to 'LPSTR'
+                            + ' /we4906' // string literal cast to 'LPWSTR'
+
+    .CompilerOptions        = '"%1" /Z7 /nologo /c /W4 /WX'
+                            + .AdditionalWarnings
+                            + ' /fp:fast'
+                            + ' /Fo"%2"'
+                            + ' /I"./"'
+                            + ' /Zp1'
+                            + ' /EHsc'
+                            + .WindowsSDK_Defines
+
+    .CompilerOptionsC       = .CompilerOptions
+    .LibrarianOptions       = '/NODEFAULTLIB /WX /NOLOGO /OUT:"%2" "%1"'
+//    .LinkerOptions          = '/NODEFAULTLIB /WX /NOLOGO /INCREMENTAL:NO /OUT:"%2" "%1" /DEBUG'
+    .LinkerOptions          = '/WX /NOLOGO /INCREMENTAL:NO /OUT:"%2" "%1" /DEBUG'
+
+    .LibExtension           = '.lib'
+    .ExeExtension           = '.exe'
+
+    .UseExceptions          = ' /EHsc'
+]

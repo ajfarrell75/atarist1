@@ -1,0 +1,23 @@
+.ProjectName="HOTPOT"
+
+#include "..\..\..\GODLIB\FAST\head.bff"
+
+.ProjectOptions_Base =
+[
+	Using( .ProjectOptions_Win_Base )
+	.CompilerOptions	+ ' /D dAUDIO_MIXER=1'
+						+ ' /D dCLI=1'
+						+ ' /D dEXCEPTION_SCREEN'
+						+ ' /D dGODLIB_FADE'
+						+ ' /D dSCREENGRAB'
+						+ ' /D dLINKFILE'
+						+ ' /D dGODLIB_PACKAGEMANGER'
+						+ ' /D dDEBUG'
+						+ ' /D dMEMORY_TRACK'
+						+ ' /D dDEBUGLOG'
+]
+#include    "$GodLibDir$\FAST\Base.bff"
+
+.ExtraBuildTargets + 'DataBuild'
+
+#include    "$GodLibDir$\FAST\Combine.bff"

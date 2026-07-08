@@ -1,0 +1,16 @@
+*.DP
+*.fdb
+*.kip
+*.lib
+*.LOG
+*.O
+*.obj
+*.pdb
+*.plk
+*.sln
+*.SAV
+*.SYM
+*.vcxproj
+*.vcxproj.filters
+
+*-Debug.exe

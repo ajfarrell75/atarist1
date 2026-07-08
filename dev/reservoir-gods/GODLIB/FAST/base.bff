@@ -1,0 +1,333 @@
+// FASTBuild
+//------------------------------------------------------------------------------
+
+
+
+//------------------------------------------------------------------------------
+// Settings
+//------------------------------------------------------------------------------
+Settings
+{
+    #if __WINDOWS__
+        #import TMP
+        .Environment    = { "PATH=$VS_PATH$",
+                            "TMP=$TMP$",
+                            "SystemRoot=C:\Windows" }
+        .CachePath      = "$TMP$\.fbuild.cache"
+    #else
+        .CachePath      = "/tmp/.fbuild.cache"
+    #endif
+}
+
+
+
+//------------------------------------------------------------------------------
+// Config Defines
+//------------------------------------------------------------------------------
+.Debug_Config =
+[
+    .CompilerOptions                = ' -DDEBUG -DPROFILING_ENABLED'
+    .CompilerOptionsC               = .CompilerOptions
+    .CompilerOptionsPCH             = .CompilerOptions
+
+    .Config                         = 'Debug'
+]
+.Profile_Config =
+[
+    .CompilerOptions                = ' -DRELEASE -DPROFILING_ENABLED'
+    .CompilerOptionsC               = .CompilerOptions
+    .CompilerOptionsPCH             = .CompilerOptions
+
+    .Config                         = 'Profile'
+]
+.Release_Config =
+[
+    .CompilerOptions                = ' -DRELEASE'
+    .CompilerOptionsC               = .CompilerOptions
+    .CompilerOptionsPCH             = .CompilerOptions
+    .CompilerOptionsDeoptimized     = .CompilerOptions
+
+    .Config                         = 'Release'
+]
+.ASan_Config =
+[
+    .CompilerOptions                = ' -DRELEASE'
+                                    + ' -fsanitize=address -fno-omit-frame-pointer'
+    .CompilerOptionsC               = .CompilerOptions
+    .CompilerOptionsPCH             = .CompilerOptions
+    .LinkerOptions                  = ' -fsanitize=address'
+
+    .Config                         = 'ASan'
+]
+.MSan_Config =
+[
+    .CompilerOptions                = ' -DRELEASE'
+                                    + ' -fsanitize=memory -fsanitize-memory-track-origins -fno-omit-frame-pointer'
+    .CompilerOptionsC               = .CompilerOptions
+    .CompilerOptionsPCH             = .CompilerOptions
+    .LinkerOptions                  = ' -fsanitize=memory -L../External/MSan'
+
+    .Config                         = 'MSan'
+]
+.Fuzzer_Config =
+[
+    // These options are valid for Clang < 6.0.0:
+    .CompilerOptions                = ' -fsanitize-coverage=trace-pc-guard,trace-cmp'
+    // These options are valid for Clang >= 6.0.0:
+    // .CompilerOptions                = ' -fsanitize=fuzzer-no-link'
+    .CompilerOptionsC               = .CompilerOptions
+    .CompilerOptionsPCH             = .CompilerOptions
+]
+
+
+//------------------------------------------------------------------------------
+// Optimizations (Clang/GCC)
+//------------------------------------------------------------------------------
+.Debug_Optimizations =
+[
+    .CompilerOptions                = ' -O0'
+    .CompilerOptionsC               = .CompilerOptions
+    .CompilerOptionsPCH             = .CompilerOptions
+]
+.Profile_Optimizations =
+[
+    .CompilerOptions                = ' -O2'
+    .CompilerOptionsC               = .CompilerOptions
+    .CompilerOptionsPCH             = .CompilerOptions
+]
+.Release_Optimizations =
+[
+    // Same as Profile, but enable FASTBUILD_DEOPTIMIZE_OBJECT token
+    Using( .Profile_Optimizations )
+    .DeoptimizeWritableFilesWithToken = true
+    .CompilerOptionsDeoptimized     = .CompilerOptions
+                                    - ' -O2'
+                                    + ' -O0'
+]
+
+.ProjectOptions_X86 = .ProjectOptions_Base
+.ProjectOptions_X64 = .ProjectOptions_Base
+
+
+// X86
+//------------------------------------------------------------------------------
+.X86BaseConfig =
+[
+    Using( .VS_BaseConfig )
+    .Platform               = 'x86'
+]
+.X86BaseConfig              + .WindowsSDK_X86
+                            + .ToolChain_VS_Windows_X86
+                            + .ProjectOptions_X86
+.X86DebugConfig             = .X86BaseConfig
+                            + .Debug_Config
+                            + .VS_Debug_Optimizations
+.X86ReleaseConfig           = .X86BaseConfig
+                            + .Release_Config
+                            + .VS_Release_Optimizations
+.X86ProfileConfig           = .X86BaseConfig
+                            + .Profile_Config
+                            + .VS_Profile_Optimizations
+
+// X64
+//------------------------------------------------------------------------------
+.X64BaseConfig =
+[
+    Using( .VS_BaseConfig )
+    .Platform               = 'x64'
+]
+.X64BaseConfig              + .WindowsSDK_X64
+                            + .ToolChain_VS_Windows_X64
+                            + .ProjectOptions_X64
+.X64DebugConfig             = .X64BaseConfig
+                            + .Debug_Config
+                            + .VS_Debug_Optimizations
+.X64ReleaseConfig           = .X64BaseConfig
+                            + .Release_Config
+                            + .VS_Release_Optimizations
+.X64ProfileConfig           = .X64BaseConfig
+                            + .Profile_Config
+                            + .VS_Profile_Optimizations
+#include "clang.bff"
+
+#include "linux.bff"
+
+// OSX
+//------------------------------------------------------------------------------
+.OSXBaseConfig =
+[
+    .Compiler               = 'Compiler-x64Clang-LinuxOSX'
+    .Librarian              = '/usr/bin/ar'
+    .Linker                 = '/usr/bin/g++'
+
+    .CompilerOptions        = '-x c++ -o "%2" "%1" -c -g'
+                            + ' -I./'
+                            + ' -D__APPLE__'
+                            + ' -D__OSX__'
+                            + ' -Wall -Werror -Wfatal-errors'       // warnings as errors
+                            + ' -Wextra'
+                            + ' -Wno-#pragma-messages'
+                            + ' -m64'                       // x86-64
+
+                            // Fires on our new/delete operator (Clang bug?)
+                            + ' -Wno-implicit-exception-spec-mismatch' // function previously declared with an explicit exception specification redeclared with an implicit exception specification [-Wimplicit-exception-spec-mismatch]
+    .CompilerOptionsC       = .CompilerOptions
+    .CompilerOptions        + ' -std=c++11'                 // allow C++11 features
+
+    .CompilerOutputExtension= '.o'
+    .LinkerOptions          = '"%1" -o "%2" -g'
+
+    .LibrarianOptions       = 'rcs "%2" "%1"'
+
+    .LibExtension           = '.a'
+    .ExeExtension           = ''
+
+    .UseExceptions          = ' -fexceptions'
+]
+.X64BaseConfig_OSX =
+[
+    Using( .OSXBaseConfig )
+    .Platform               = 'x64OSX'
+]
+.X64DebugConfig_OSX         = .X64BaseConfig_OSX
+                            + .Debug_Config
+                            + .Debug_Optimizations
+.X64ReleaseConfig_OSX       = .X64BaseConfig_OSX
+                            + .Release_Config
+                            + .Release_Optimizations
+.X64ProfileConfig_OSX       = .X64BaseConfig_OSX
+                            + .Profile_Config
+                            + .Profile_Optimizations
+
+//------------------------------------------------------------------------------
+//
+//------------------------------------------------------------------------------
+.OutputBase = '../tmp'
+#if BUILDING_FROM_TESTS
+    // FASTBuild builds itself as part of its tests, so we need a unique output path
+    .OutputBase = '../tmp/Test/BuildFBuild'
+#endif
+
+//------------------------------------------------------------------------------
+// Unity/Blob files (shared across configs)
+//------------------------------------------------------------------------------
+#if !BUILDING_FROM_TESTS
+    .UnityInputIsolateWritableFiles = true
+#endif
+#if __WINDOWS__
+    .UnityOutputBase = '$OutputBase$\Unity-Windows'
+#endif
+#if __LINUX__
+    .UnityOutputBase = '$OutputBase$\Unity-Linux'
+#endif
+#if __OSX__
+    .UnityOutputBase = '$OutputBase$\Unity-OSX'
+#endif
+
+#include "project.bff"
+
+
+
+
+
+// Configurations
+//------------------------------------------------------------------------------
+.Configs_Windows_MSVC   = { .X86DebugConfig, .X86ProfileConfig, .X86ReleaseConfig,
+                            .X64DebugConfig, .X64ProfileConfig, .X64ReleaseConfig }
+.Configs_Windows_Clang  = { .X64ClangDebugConfig, .X64ClangProfileConfig, .X64ClangReleaseConfig }
+.Configs_Linux          = { .X64DebugConfig_Linux, .X64ProfileConfig_Linux, .X64ReleaseConfig_Linux,
+                            .X64ASanConfig_Linux,
+                            .X64ClangDebugConfig_Linux, .X64ClangProfileConfig_Linux, .X64ClangReleaseConfig_Linux,
+                            .X64ClangASanConfig_Linux, .X64ClangMSanConfig_Linux }
+.Configs_OSX_Clang      = { .X64DebugConfig_OSX, .X64ProfileConfig_OSX, .X64ReleaseConfig_OSX }
+
+.ConfigsAll             = { .Configs_Windows_MSVC
+                            .Configs_Windows_Clang
+                            .Configs_Linux
+                            .Configs_OSX_Clang
+                          }
+#if __WINDOWS__
+    .Configs    = .Configs_Windows_MSVC
+                + .Configs_Windows_Clang
+#endif
+#if __LINUX__
+    .Configs    = .Configs_Linux
+#endif
+#if __OSX__
+    .Configs    = .Configs_OSX_Clang
+#endif
+
+// stuff was included here?
+
+
+// Aliases : All-$Platform$
+//------------------------------------------------------------------------------
+//.Platforms = { 'x64', 'x64Clang', 'x64Linux', 'x64ClangLinux', 'x64OSX' }
+.Platforms = { 'x86' }
+.PlatformConfigs_x86           = { 'Debug', 'Profile', 'Release' }
+.PlatformConfigs_x64           = { 'Debug', 'Profile', 'Release' }
+.PlatformConfigs_x64Clang      = { 'Debug', 'Profile', 'Release' }
+.PlatformConfigs_x64Linux      = { 'Debug', 'Profile', 'Release', 'ASan' }
+.PlatformConfigs_x64ClangLinux = { 'Debug', 'Profile', 'Release', 'ASan', 'MSan' }
+.PlatformConfigs_x64OSX        = { 'Debug', 'Profile', 'Release' }
+ForEach( .Platform in .Platforms )
+{
+    Alias( 'All-$Platform$' )
+    {
+        .Targets = {}
+        ForEach( .Config in .'PlatformConfigs_$Platform$' )
+        {
+            ^Targets + { 'All-$Platform$-$Config$' }
+        }
+    }
+}
+
+// Aliases : All
+//------------------------------------------------------------------------------
+#if __WINDOWS__
+    Alias( 'All' )
+    {
+        .Targets        = { 'All-x86' }
+    }
+#endif
+#if __OSX__
+    Alias( 'All' )
+    {
+        .Targets        = { 'All-x64OSX' }
+    }
+#endif
+#if __LINUX__
+    Alias( 'All' )
+    {
+        .Targets        = { 'All-x64Linux',
+                            'All-x64ClangLinux'
+                          }
+    }
+#endif
+
+
+
+//------------------------------------------------------------------------------
+//  Placeholder for data builds
+//------------------------------------------------------------------------------
+
+// We want the databuild to always trigger (TOOLBASE has its own dependency system)
+// So delete output file of databuilder to force rebuild
+
+RemoveDir( 'DataRebuilder' )
+{
+	.RemovePaths = '..'
+	.RemovePatterns = 'TBS_DBG.LOG'
+}
+
+Exec( 'DataBuild' )
+{
+    .ExecExecutable = "..\..\..\TOOLS.RG\BIN\WIN32\TOOLBASE\TOOLBASE.exe"
+    .ExecInput = "..\$ProjectName$.TBS"
+    .ExecArguments = "%1"
+    .ExecWorkingDir = ".."
+    .ExecOutput = "..\TBS_DBG.LOG"
+	.PreBuildDependencies = 'DataRebuilder'
+}
+
+.ExtraBuildTargets = { 'DummyCopy' }
