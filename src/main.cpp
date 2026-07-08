@@ -47,6 +47,32 @@ static std::string resolveData(const std::string& given, const std::string& exeD
     return given;
 }
 
+// Choisit un TOS compatible avec la MACHINE sélectionnée si le ROM courant ne
+// convient pas — pour que « choisir Mega STE » donne un VRAI Mega STE. Seul cas
+// géré : le Mega STE exige TOS ≥ 2.0x (lui seul programme cache 16 Ko / SCU / 16 MHz).
+// Cherche dans roms/ un tos206<pays> (pays du ROM courant), sinon tos206 / tos206us,
+// sinon etos256<pays> / etos256us. Renvoie le chemin LOGIQUE (« roms/tos206fr.img »),
+// ou "" si le ROM courant convient déjà (ou aucun candidat trouvé).
+static std::string pickTosForMachine(const std::string& machine,
+                                     const std::string& curRomLogical,
+                                     const std::string& exeDir,
+                                     const std::string& romsDir) {
+    if (machine != "megaste") return "";
+    { std::ifstream f(resolveData(curRomLogical, exeDir), std::ios::binary);
+      if (f) { uint8_t b[2] = {0, 0}; f.seekg(2); f.read(reinterpret_cast<char*>(b), 2);
+               if (((b[0] << 8) | b[1]) >= 0x0200) return ""; } }   // déjà compatible
+    std::string cc = fs::path(curRomLogical).stem().string();       // ex. "tos162fr"
+    cc = (cc.size() >= 2) ? cc.substr(cc.size() - 2) : std::string();
+    if (cc.size() != 2 || !std::isalpha((unsigned char)cc[0]) || !std::isalpha((unsigned char)cc[1]))
+        cc.clear();
+    auto has = [&](const std::string& n) { std::error_code ec; return fs::exists(fs::path(romsDir) / n, ec); };
+    for (const std::string& cand : { "tos206" + cc + ".img", std::string("tos206.img"),
+                                     std::string("tos206us.img"), "etos256" + cc + ".img",
+                                     std::string("etos256us.img") })
+        if (has(cand)) return "roms/" + cand;
+    return "";
+}
+
 // --- Persistance des préférences (dernier ROM, type de moniteur) -------------
 // Fichier neost.cfg à la racine du projet (à côté de build/).
 // cpu = cœur 68000 (toujours "moira", cycle-exact ; clé conservée pour rétro-compat —
@@ -1202,7 +1228,12 @@ int main(int argc, char** argv) {
                     const char* const labels[] = { "ST", "Mega ST", "STE", "Mega STE" };
                     for (int i = 0; i < 4; ++i)
                         if (ImGui::MenuItem(labels[i], nullptr, cfg.machine == ids[i])) {
-                            cfg.machine = ids[i]; saveConfig(exeDir, cfg, &machine); reqRebuild = true;
+                            cfg.machine = ids[i];
+                            // Mega STE : charge auto un TOS ≥ 2.06 si le ROM courant ne
+                            // le gère pas → un VRAI Mega STE (au lieu de basculer en STE).
+                            std::string autoRom = pickTosForMachine(cfg.machine, cfg.rom, exeDir, romsDir);
+                            if (!autoRom.empty()) cfg.rom = autoRom;
+                            saveConfig(exeDir, cfg, &machine); reqRebuild = true;
                         }
                     // Socket MC68881 du Mega STE ($FFFA40, émulation fonctionnelle —
                     // cf. Fpu.hpp). Décoché (défaut) : bus error → « FPU not found ».
