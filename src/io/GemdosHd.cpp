@@ -721,6 +721,19 @@ bool GemdosHd::gemChDir(uint32_t p) {
 
     std::string host; createHostFileName(drive, name, host);
     cleanFileName(host);
+    // Divergence NeoST (vs Hatari, plus fidèle au vrai TOS) : le bureau TOS 1.62
+    // ouvre un dossier en passant le CHEMIN AVEC son masque de fichier, p.ex.
+    // « C:\DOSSIER\*.* ». Dsetpath ne définit qu'un RÉPERTOIRE : on retire un
+    // dernier composant contenant un joker (createHostFileName l'a recopié tel
+    // quel). Sans ça, access() échoue sur « …/DOSSIER/*.* » → EPTHNF, et le
+    // bureau affiche « Impossible de définir le dossier par défaut » (Hatari a le
+    // même défaut : le masque n'y est pas retiré non plus).
+    {
+        size_t sep = host.rfind(PATHSEP);
+        if (sep != std::string::npos &&
+            host.find_first_of("*?", sep) != std::string::npos)
+            host.resize(sep ? sep : 1);   // garde au moins la racine « / »
+    }
     if (access(host.c_str(), F_OK) != 0) { setD0(cpu_, GEMDOS_EPTHNF); return true; }
     addSlash(host);
     makeAbsoluteName(host);
@@ -1093,16 +1106,14 @@ bool GemdosHd::gemSFirst(uint32_t p) {
     closedir(dir);
     std::sort(all.begin(), all.end());
 
-    // Racine du lecteur ? (dirPath == dossier hôte de base) → on N'énumère PAS « . »/« .. » ;
-    // en sous-répertoire, on les inclut (comme TOS sur un lecteur GEMDOS HD).
-    bool subdir = true;
-    if (drive >= 2) {
-        auto strip = [](std::string s) {
-            while (!s.empty() && (s.back() == '/' || s.back() == '\\')) s.pop_back();
-            return s;
-        };
-        subdir = (strip(dirPath) != strip(emudrives_[drive - 2].hdEmuDir));
-    }
+    // Divergence NeoST (vs Hatari) : on N'énumère JAMAIS « . » / « .. », ni à la
+    // racine ni en sous-répertoire. Hatari (comme un vrai FAT) expose « . » et
+    // « .. » dans les sous-dossiers, mais côté HÔTE ce sont des entrées Unix qui
+    // polluent le bureau TOS (l'utilisateur ne veut pas voir les « points d'Unix »).
+    // subdir=false → fsfirst_match rejette tout nom commençant par « . ». La
+    // navigation « parent » d'un chemin (« ..\FOO ») reste gérée par
+    // createHostFileName, indépendante de ce listing.
+    const bool subdir = false;
 
     dtas_[useidx].centry = 0;
     dtas_[useidx].found.clear();
