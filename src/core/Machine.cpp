@@ -46,6 +46,22 @@ MachineType Machine::adjustMachineForTos(MachineType requested, const std::strin
     return requested;
 }
 
+namespace { // Décalage de la position d'IRQ HBL dans la ligne, relatif à cpl.
+// Hatari Hbl_Int_Pos = cpl−4 en WS1, cpl en WS2/3/4 ET sur STE (video.c:977-979,
+// 1055-1057) — tranché WS3 (2026-07-08, cf. glue:: dans Shifter.cpp) → défaut 0
+// (HBL à 508/512 selon la fréquence, à la FRONTIÈRE de ligne comme l'oracle).
+// Le STE n'a PAS de wakestate : toujours 0, même en A/B NEOST_WS=1.
+// NEOST_HBL_OFF garde la main pour l'A/B (ex. −4 = ancien hybride WS1).
+// Historique : l'ancien défaut −4 citait la table WS1 ; l'A/B à 0 avait été
+// écarté à l'époque car il compensait une broche IPL levée en retard au dispatch
+// de bloc — corrigé depuis par le pré-armement (Cpu68k::armHblPinAt).
+int kHblOff(bool isSte) {
+    static const bool envSet = std::getenv("NEOST_HBL_OFF") != nullptr;
+    static const int  envVal = envSet ? std::atoi(std::getenv("NEOST_HBL_OFF")) : 0;
+    if (envSet) return envVal;                             // A/B explicite : prime partout
+    return (!isSte && Shifter::wakestate() == 1) ? -4 : 0;
+} }
+
 Machine::Machine(std::size_t ramBytes, CpuCore cpuCore, MachineType machine)
     : bus(ramBytes), cpu(bus, cpuCore) {
     machineType_ = machine;
@@ -100,15 +116,20 @@ Machine::Machine(std::size_t ramBytes, CpuCore cpuCore, MachineType machine)
     // (cpl-224) via lineCarry_. Port de Hatari HBL_Pos/nCyclesPerLine (video.c:2249,
     // Video_AddInterruptHBL 2849) : laisse dériver la phase du gestionnaire fullscreen.
     v2_ = std::getenv("NEOST_V2") != nullptr;
-    // Chantier longueurs de ligne PAR-LIGNE (port HBL_Pos/nCyclesPerLine de
-    // Video_Update_Glue_State, cf. doc maître) — gated NEOST_LINELEN (opt-in tant
-    // que la validation étalons+EL+LX n'est pas re-passée avec). À chaque écriture
-    // freq/res dont la branche « Freq_match » fixe la géométrie de la ligne HBL
-    // COURANTE : l'IRQ HBL de la ligne est REPROGRAMMÉE à lineStart+hblPos (≙
+    // Longueurs de ligne PAR-LIGNE (port HBL_Pos/nCyclesPerLine de
+    // Video_Update_Glue_State) — **ON par défaut depuis le tranchage WS3
+    // (2026-07-08)** : validé étalons TOUS OK + Cuddly 190/250 vs oracle + A/B
+    // interne EL/spec512 à 0 px (LX indisponible ici, à re-vérifier au premier
+    // disque). NEOST_LINELEN=0 désactive (A/B). À chaque écriture freq/res dont
+    // la branche « Freq_match » fixe la géométrie de la ligne HBL COURANTE :
+    // l'IRQ HBL de la ligne est REPROGRAMMÉE à lineStart+hblPos (≙
     // Video_AddInterruptHBL) et la longueur (224/508/512) est retenue ; onHbl
     // cumulera le raccourcissement dans lineCarry_ (les événements des lignes
     // suivantes — HBL/Timer B/RENDER — suivent déjà −lineCarry_).
-    lineLenOn_ = std::getenv("NEOST_LINELEN") != nullptr;
+    lineLenOn_ = [] {
+        const char* s = std::getenv("NEOST_LINELEN");
+        return s ? (std::atoi(s) != 0) : true;
+    }();
     shifter.setLineGeom([this](int line, int hblPos, int cyclesLine) {
         if (!lineLenOn_ || line != hblLine_ || line >= lpf_) return;
         const int64_t lineStart = frameStart_ + static_cast<int64_t>(line) * cpl_ - lineCarry_;
@@ -130,7 +151,7 @@ Machine::Machine(std::size_t ramBytes, CpuCore cpuCore, MachineType machine)
         const int64_t lineCyc   = (sched.liveNow() - frameStart_) - lineStart;
         if (lineCyc < 0 || lineCyc > 56) return;
         v2ShortLine_ = hblLine_;
-        constexpr int kHblPosHi = 220;                    // Hbl_Int_Pos_Hi (hi-res)
+        const int kHblPosHi = 224 + kHblOff(machineIsSte(machineType_));            // Hbl_Int_Pos_Hi = cpl_71 + offset HBL (224 WS3, 220 WS1)
         constexpr int kLineLenHi = 224;                   // CYCLES_PER_LINE_71HZ
         sched.schedule(Scheduler::HBL, frameStart_ + lineStart + kHblPosHi);
         lineCarry_ += cpl_ - kLineLenHi;                  // lignes suivantes décalées plus tôt
@@ -187,7 +208,7 @@ Machine::Machine(std::size_t ramBytes, CpuCore cpuCore, MachineType machine)
     });
     fdc.setScheduler(&sched);   // le FDC diffère la fin de commande (BUSY → INTRQ)
     blitter.setScheduler(&sched);  // tranches non-hog du blitter (cf. Scheduler::BLITTER)
-    dmasnd.setScheduler(&sched);   // le son DMA date sa fin de trame (→ Timer A)
+    dmasnd.setScheduler(&sched);   // le son DMA date sa consommation DAC (FIFO → Timer A)
     dmasnd.setMfp(&mfp);
     // STE/Mega STE : le YM2149 est mixé à DEMI-amplitude (marge pour le son DMA, évite la
     // saturation) ; ST/Mega ST : pleine amplitude. Cf. YM2149::setOutputScale.
@@ -226,8 +247,8 @@ void Machine::installSchedulerCallbacks() {
     sched.setCallback(Scheduler::FDC,     [this] { fdc.onFdcEvent(); cpu.updateIpl(); });
     // (Scheduler::FDC_INDEX n'est plus utilisé : l'index est géré dans la machine
     // à états du FDC — comptage de tours pour spin-up / arrêt moteur, bit INDEX.)
-    // Fin de trame du son DMA STE : pulse Timer A (event-count) → IRQ canal 13.
-    sched.setCallback(Scheduler::DMASND, [this] { dmasnd.onFrameEnd(); cpu.updateIpl(); });
+    // (Scheduler::DMASND n'est plus armé : la fin de trame du son DMA STE est
+    // détectée au FETCH de la FIFO 8 octets, cadencée par le HBL — DmaSound::onHbl.)
     // Réponse de reset du clavier ($F1) : l'IKBD l'a datée → on l'émet + IRQ ACIA.
     sched.setCallback(Scheduler::IKBD,   [this] { ikbd.onResetResponse(); cpu.updateIpl(); });
     // Livraison cadencée IKBD → ACIA (un octet série ≈ 10240 cycles) : l'octet en
@@ -257,16 +278,6 @@ void Machine::installSchedulerCallbacks() {
 // Arme les événements VIDÉO de la trame courante, à des cycles ABSOLUS (horloge
 // continue) = frameStart_ + position dans la trame. Les Timers A/C/D persistent
 // d'une trame à l'autre (datés par le MFP) et ne sont PAS réarmés ici.
-namespace { // Décalage de la position d'IRQ HBL dans la ligne, relatif à cpl.
-// Défaut −4 = FIDÈLE Hatari : Hbl_Int_Pos_Low_50 = CYCLES_PER_LINE_50HZ − 4 = 508
-// (video.c:978 — le commentaire « HBL_VIDEO_CYCLE_OFFSET=0 » de video.h est
-// TROMPEUR, la position réelle est cpl−4). L'A/B à 0 (=512) n'améliorait les
-// métriques QUE parce qu'il compensait la broche IPL levée en retard au dispatch
-// de bloc — corrigé depuis par le pré-armement (Cpu68k::armHblPinAt).
-int kHblOff() {
-    static const int v = [] { const char* s = std::getenv("NEOST_HBL_OFF"); return s ? std::atoi(s) : -4; }();
-    return v;
-} }
 
 void Machine::scheduleFrameEvents() {
     renderLine_ = 0;
@@ -299,11 +310,11 @@ void Machine::scheduleFrameEvents() {
     // l'interruption tombe à la FRONTIÈRE de ligne (cycle 512 = 0 de la suivante).
     // L'ancien −4 était une calibration d'avant la refonte IACK (2026-07-02) ;
     // NEOST_HBL_OFF le rétablit pour A/B (valeur = décalage vs cpl, ex. -4).
-    sched.schedule(Scheduler::HBL,     frameStart_ + (cpl_ + kHblOff()));   // HBL niveau 2 (frontière ligne 0)
+    sched.schedule(Scheduler::HBL,     frameStart_ + (cpl_ + kHblOff(machineIsSte(machineType_))));   // HBL niveau 2 (frontière ligne 0)
     // Broche IPL pré-armée au cycle EXACT (montée mid-instruction via sync(), cf.
     // Cpu68k::armHblPinAt) — le dispatch de l'événement (frontière de bloc) arrive
     // 0..24 cyc plus tard et ne fait que re-poser la broche (idempotent).
-    cpu.armHblPinAt(frameStart_ + (cpl_ + kHblOff()));
+    cpu.armHblPinAt(frameStart_ + (cpl_ + kHblOff(machineIsSte(machineType_))));
     // VBL niveau 4 — port fidèle de Hatari (Video_InterruptHandler_VBL) : l'IRQ VBL
     // est générée VBL_VIDEO_CYCLE_OFFSET cycles APRÈS la fin de la DERNIÈRE ligne de
     // la trame (313×512 + 64 en 50 Hz STF), donc au tout début du vblank = ~SOMMET de
@@ -311,7 +322,9 @@ void Machine::scheduleFrameEvents() {
     // frameStart_ + offset, et NON plus à la ligne 201 (~112 lignes / 57000 cyc trop
     // tôt) : le handler VBL du jeu (base écran, palette, sprites…) s'applique alors à
     // la trame qui VA s'afficher, comme sur le vrai matériel. Offset STF=64, STE=68.
-    const int vblOffset = machineIsSte(machineType_) ? 68 : 64;       // VBL_VIDEO_CYCLE_OFFSET
+    // VBL_VIDEO_CYCLE_OFFSET : STE = 68 ; STF = 64 en WS2/3/4 (tranché WS3), 60 en WS1.
+    const int vblOffset = machineIsSte(machineType_) ? 68
+                        : (Shifter::wakestate() == 1 ? 60 : 64);
     sched.schedule(Scheduler::VBL, frameStart_ + vblOffset);
     cpu.armVblPinAt(frameStart_ + vblOffset);          // broche niveau 4 au cycle exact (cf. armHblPinAt)
     // RESTART du compteur vidéo en FIN de trame (port Video_RestartVideoCounter,
@@ -368,6 +381,10 @@ void Machine::onHbl() {
         std::fprintf(stderr, "[HBLD] line=%d sched=%lld live=%lld\n",
                      hblLine_, (long long)sched.now(), (long long)sched.liveNow()); }
     cpu.raiseHbl();                                // HBL niveau 2 (gaté par le SR)
+    // Son DMA STE : la FIFO 8 octets est entretenue à CHAQUE HBL (fetch au faisceau
+    // + consommation DAC datée) — port de l'appel DmaSnd_STE_HBL_Update du handler
+    // HBL d'Hatari (video.c:3322). Peut pulser Timer A (fin de trame) → IPL.
+    if (machineHasDmaSound(machineType_)) { dmasnd.onHbl(); cpu.updateIpl(); }
     // Longueur RÉELLE de la ligne qui se termine (NEOST_LINELEN) : le cumul
     // lineCarry_ décale toutes les planifications des lignes suivantes (−carry),
     // comme la chaîne StartCycle+nCyclesPerLine de Hatari.
@@ -381,7 +398,7 @@ void Machine::onHbl() {
     // V2 : −lineCarry_ décale la ligne suivante du cumul des raccourcissements (=0 hors V2).
     if (hblLine_ < lpf_) {
         const int64_t next = frameStart_ + static_cast<int64_t>(hblLine_) * cpl_
-                           + (cpl_ + kHblOff()) - lineCarry_;
+                           + (cpl_ + kHblOff(machineIsSte(machineType_))) - lineCarry_;
         sched.schedule(Scheduler::HBL, next);
         cpu.armHblPinAt(next);                 // broche au cycle exact (cf. armHblPinAt)
     }

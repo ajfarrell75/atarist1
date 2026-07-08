@@ -291,10 +291,10 @@ public:
         std::fprintf(stderr, "[BUS] %c pc=%06x a=%06x c=%lld m4=%d\n",
                      k, pc, a & 0xFFFFFFu, (long long)c, (int)(c & 3));
     }
-    moira::u8  read8 (moira::u32 a) const override { if (g_bus->blitterWinEnd >= 0) noteBlitterPreStart(); if (g_bus->busFaultN(a, 1, false) && faultOrHalt(a, false)) return 0; moira::u8 v; if (g_cpuMul == 2) v = moira::u8(readMste16Mhz(a, 1)); else { chipWait8(a); busDiag('r', a, getClock()); v = g_bus->read8(a); } latchDb8(v); return v; }
-    moira::u16 read16(moira::u32 a) const override { if (g_bus->blitterWinEnd >= 0) noteBlitterPreStart(); if (g_bus->busFaultN(a, 2, false) && faultOrHalt(a, false)) return 0; moira::u16 v; if (g_cpuMul == 2) v = readMste16Mhz(a, 2); else { chipWait8(a); busDiag('R', a, getClock()); v = g_bus->read16(a); } latchDb(v); return v; }
-    void write8 (moira::u32 a, moira::u8  v) const override { if (g_bus->blitterWinEnd >= 0) noteBlitterPreStart(); if (g_bus->busFaultN(a, 1, true)) { if (faultOrHalt(a, true)) return; } latchDb8(v); if (g_cpuMul == 2) { writeMste16Mhz(a, 1, v); return; } chipWait8(a); g_bus->write8(a, v); }
-    void write16(moira::u32 a, moira::u16 v) const override { if (g_bus->blitterWinEnd >= 0) noteBlitterPreStart(); if (g_bus->busFaultN(a, 2, true)) { if (faultOrHalt(a, true)) return; } latchDb(v); if (g_cpuMul == 2) { writeMste16Mhz(a, 2, v); return; } chipWait8(a); g_bus->write16(a, v); }
+    moira::u8  read8 (moira::u32 a) const override { if (g_bus->blitterWinEnd >= 0 || g_bus->blitterCountCpu) noteBlitterPreStart(); if (g_bus->busFaultN(a, 1, false) && faultOrHalt(a, false)) return 0; moira::u8 v; if (g_cpuMul == 2) v = moira::u8(readMste16Mhz(a, 1)); else { chipWait8(a); busDiag('r', a, getClock()); v = g_bus->read8(a); } latchDb8(v); return v; }
+    moira::u16 read16(moira::u32 a) const override { if (g_bus->blitterWinEnd >= 0 || g_bus->blitterCountCpu) noteBlitterPreStart(); if (g_bus->busFaultN(a, 2, false) && faultOrHalt(a, false)) return 0; moira::u16 v; if (g_cpuMul == 2) v = readMste16Mhz(a, 2); else { chipWait8(a); busDiag('R', a, getClock()); v = g_bus->read16(a); } latchDb(v); return v; }
+    void write8 (moira::u32 a, moira::u8  v) const override { if (g_bus->blitterWinEnd >= 0 || g_bus->blitterCountCpu) noteBlitterPreStart(); if (g_bus->busFaultN(a, 1, true)) { if (faultOrHalt(a, true)) return; } latchDb8(v); if (g_cpuMul == 2) { writeMste16Mhz(a, 1, v); return; } chipWait8(a); g_bus->write8(a, v); }
+    void write16(moira::u32 a, moira::u16 v) const override { if (g_bus->blitterWinEnd >= 0 || g_bus->blitterCountCpu) noteBlitterPreStart(); if (g_bus->busFaultN(a, 2, true)) { if (faultOrHalt(a, true)) return; } latchDb(v); if (g_cpuMul == 2) { writeMste16Mhz(a, 2, v); return; } chipWait8(a); g_bus->write16(a, v); }
     // Lecture du vecteur de reset (SSP/PC) via l'overlay ROM : jamais de bus error.
     moira::u16 read16OnReset(moira::u32 a) const override { const moira::u16 v = g_bus->read16(a); latchDb(v); return v; }
     // Lecture pour le désassembleur : pas d'effet de bord MMIO ni de bus error
@@ -451,16 +451,21 @@ NeostMoira* g_moira = nullptr;     // cœur Moira actif
 }
 
 namespace {
-// Bug « 63 accès » du blitter (port Blitter_HOG_CPU_mem_access_before, phase
-// PRE_START) : si cet accès bus CPU tombe dans la fenêtre de 4 cycles précédant
-// la prise de bus du blitter non-hog, le blitter le compte à tort comme un de SES
-// accès (la tranche suivante n'en fera que 63). Date de l'accès = horloge bus
-// absolue (busOfClock, même domaine que Scheduler::liveNow).
+// Accès bus CPU signalé au blitter non-hog (Moira seul). Deux rôles, port des
+// hooks Blitter_HOG_CPU_mem_access_before/after d'Hatari :
+//  - bug « 63 accès » (phase PRE_START) : si l'accès tombe dans la fenêtre de
+//    4 cycles précédant la prise de bus, le blitter le compte à tort comme un de
+//    SES accès (la tranche suivante n'en fera que 63) ;
+//  - fenêtre CPU (phase COUNT_CPU_BUS) : le blitter attend 64 accès bus CPU réels
+//    avant de reprendre le bus — le 64ᵉ date la tranche suivante (+4 cycles).
+// Date de l'accès = horloge bus absolue (busOfClock, domaine Scheduler::liveNow).
 void noteBlitterPreStart() {
     if (!g_moira || !g_bus->blitter) return;
     const int64_t t = busOfClock(static_cast<int64_t>(g_moira->getClock()));
     if (t >= g_bus->blitterWinStart && t < g_bus->blitterWinEnd)
         g_bus->blitter->notePreStartCpuAccess();
+    if (g_bus->blitterCountCpu)
+        g_bus->blitter->noteCpuBusAccess(t);
 }
 
 // Recalcule l'IPL présenté au CPU : MFP (6) > VBL (4) > HBL (2).

@@ -73,6 +73,7 @@ public:
     // `target` (0-7, généralement 0). Le TOS/EmuTOS détecte le périphérique au boot,
     // lit la table de partitions et monte les partitions FAT (C:, D:…). Cf. io/Acsi.hpp.
     bool mountAcsi(const std::string& path, int target = 0) { return acsi_.mount(target, path); }
+    void unmountAcsi() { acsi_.unmountAll(); }   // le TOS ne le verra qu'au prochain boot
     bool acsiActive() const { return acsi_.anyEnabled(); }
     int  acsiPartitionCount() const { return acsi_.partitionCount(); }
     bool inserted(int drive = 0) const { return drive_[drive & 1].present(); }

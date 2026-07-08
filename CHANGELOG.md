@@ -153,6 +153,46 @@ taguées (0.1.x). Le restant est dans [`TODO.md`](TODO.md).
   d'etos192 sur MegaSTE (SCU non programmé). Pour le STE/Mega STE : EmuTOS 256 Ko ou TOS 1.62/2.06.
 
 ## Vidéo (Shifter)
+- **Canal « longueurs de ligne par-ligne » ACTIVÉ par défaut (2026-07-08)** : le port
+  `HBL_Pos/nCyclesPerLine` (chaque « Freq_match » de la Glue fixe la position de l'IRQ HBL et
+  la longueur — 224/508/512 — de la ligne courante, cumul `lineCarry_` pour les suivantes)
+  était complet mais gated opt-in `NEOST_LINELEN`. Débloqué par le tranchage WS3 (les
+  positions Hbl_Pos de la table sont désormais résolues), validé : étalons TOUS OK, Cuddly-ST
+  190/250 vs oracle (identique au canal OFF), A/B interne EL/spec512 0 px, cloche STE
+  bit-identique. `NEOST_LINELEN=0` pour désactiver (A/B). LX à re-vérifier au premier disque.
+  Prérequis pratique de V2 (lignes hi-res 224 par-ligne).
+- **V1 — branche STE de la Glue portée (2026-07-08)** : la machine Glue n'appliquait que le
+  chemin STF sur toutes les machines. La phase 1 (freq avant DE_start) est désormais PAR
+  MACHINE (`glue::Timing` : table STF WS3 / table STE), port de la branche STE de
+  `Video_Update_Glue_State` (video.c:2444-2651) — le GST MCU du STE teste les positions de
+  PRELOAD du MMU (36/40 : le shifter charge 16 cyc avant DE), `Line_Set_Pal` 56, HSync
+  −52/−12, RemoveBorder 500, et n'a PAS le latch res à −1 cyc du GLUE STF (video.c:2224).
+  Nouveau trick : **LEFT_OFF_2_STE** (retour lo-res PILE au cycle 4 → retrait gauche COURT,
+  +20 octets, DE_start 16, écran décalé de 8 px). Selftest : 3 cas STE ajoutés (22/22 sur
+  STE, 19/19 sur ST). **Validé** : étalons TOUS OK, chemin ST strictement inchangé
+  (Cuddly-ST 0 px vs oracle) ; le menu Cuddly lancé sur machine STE **casse désormais comme
+  le vrai STE** (couleurs faussées, hachures, scroller corrompu) — **196/250 trames
+  pixel-identiques à l'oracle Hatari-STE** (le reste = glissements de phase du clignotement
+  bistable de la casse, sensible au cycle de la touche). Avant : NeoST-STE rendait le menu
+  « parfait » (timings STF partout), divergence documentée du 2026-07-03 résorbée.
+- **Wakeup state STF TRANCHÉ : WS3 complet (2026-07-08)** — fin de l'« hybride WS1/WS3 »
+  (positions Glue WS1 + HBL 508 + VBL 64) documenté dans `docs/HATARI_DIVERGENCES.md`. NeoST
+  adopte le défaut de l'oracle (`VIDEO_TIMING_DEFAULT = WS3`, video.c:624), qui partage avec le
+  STE l'IRQ HBL à cpl : positions horizontales de la Glue **+1** (`glue::kWsInc` — fenêtres de
+  tricks, DE stockés, RemoveBorder 503, HSync −49/−9, canal Hbl_Pos 512/508/224), **IRQ HBL à la
+  frontière de ligne** (`kHblOff` 0 ; 512 en 50 Hz comme l'oracle ET comme le STE), VBL 64
+  (inchangé). Découverte structurante dans le code Hatari : compteur vidéo
+  (`Video_CalculateAddress`), `spec512.c`, copie écran et Timer B par défaut utilisent les
+  constantes **FIXES** `LINE_START/END_CYCLE_*` (video.h:91-95) HORS table wakestate → les
+  ancres de rendu NeoST (56/376) restent fixes, les DE stockés (table WS, ≙ `ShifterLines`)
+  sont re-normalisés −inc au rendu, et les datations read −6 / write +2 / spec512 −25 sont
+  **inchangées** (fidèles-théoriques, WS-indépendantes — zéro recalibration). `NEOST_WS=1..4`
+  pour A/B (WS1 = HBL cpl−4 + VBL 60). **Validé** : glue-selftest 19/19, étalons TOUS OK,
+  boot STF 50 Hz **0 px** vs oracle, menu Cuddly **pixel-identique à la baseline** (190/250
+  trames à 0 px vs oracle Hatari fifo-piloté, le résidu = phase d'anim des drapeaux due à la
+  latence de touche oracle, identique baseline), flicker spec512 inchangé, son STE : cloche
+  bit-identique (fetch FIFO suit le HBL déplacé, 0,003 % sur l'étalon DMA — voulu). Débloque
+  V1/V2 (la branche STE d'Hatari se portera telle quelle) et `NEOST_LINELEN`.
 - **Wait-state de la lecture du compteur vidéo `$FF8205/07/09` (+2 cyc, valeur d'abord)** —
   `Shifter::read8` échantillonne la valeur du compteur AU CYCLE D'ACCÈS (façon Hatari
   `Cycles_GetCounterOnReadAccess`) PUIS retarde le CPU d'un wait-state FIXE de **+2 cyc bus**.
@@ -948,6 +988,90 @@ taguées (0.1.x). Le restant est dans [`TODO.md`](TODO.md).
   dé-assertée (« pas fini ») au (re)démarrage de chaque blit et rabaissée à l'achèvement, au lieu de
   rester « fini » dès le 1ᵉʳ blit → un programme qui scrute GPIP3 / son IRQ pour la fin de blit voit
   désormais un front correct à chaque blit. Cf. `docs/HATARI_DIVERGENCES.md` §2ᵉ passe (BL-GPIP3).
+- **Blitter — audit de correspondance ligne à ligne vs `blitter.c` (2026-07-07)** : cœur de
+  données, restart/pause, 0→65536, GPIP3, arbitration, bug « 63 accès » confirmés fidèles.
+  Trois résidus corrigés : **accès bus = modèle DMA** (`Blitter::readWord/writeWord` porte
+  `STMemory_DMA_ReadWord/WriteWord` : zone fautive → lecture `0x0000`/écriture absorbée, et
+  vecteurs `$0-$7` protégés en écriture comme `SysMem_wput`) ; **masques matériels à l'écriture**
+  des incréments (`&0xFFFE`) et adresses src/dst (`&0x00FFFFFE`) via `regWriteMask` ;
+  **`busCountError_` remis à zéro** à chaque entrée en PRE_START (blitter.c:1457).
+  Étalons `run_etalons.py` TOUS OK. Cf. `docs/HATARI_DIVERGENCES.md` § Blitter.
+- **GUI — contrôle de volume dans la barre de menu** : menu haut-parleur (icône selon le
+  niveau : muet/bas/haut) avec slider 0-100 % et bascule « Muet » (mémorise et restaure le
+  niveau). Volume MAÎTRE de la sortie hôte, appliqué au mix final dans `Audio::produceFrame`
+  (avant clamp) — indépendant du LMC1992 émulé, qui appartient à la machine. Persisté dans
+  `neost.cfg` (`volume=`, sauvé en fin de glissé), ré-appliqué au démarrage.
+- **Son — S3 : le YM STE ressort à pleine amplitude (×2 LMC porté)** : Hatari compense la
+  demi-amplitude du YM en STE (`YM_OUTPUT_LEVEL>>1`, marge anti-saturation DMA) en DOUBLANT
+  les gains LMC1992 (`left/right_gain × 2`, dmaSnd.c:1152-1153/1460-1461) — NeoST ne le
+  faisait pas → **YM STE 6 dB sous le ST**, enterré sous le DMA. Fix : `kLmcMakeup = 2.0`
+  dans `gainLeft/gainRight/masterGain` (`DmaSound.cpp`) + `kDmaGain` 0.7 → **0.375** (= ¾ × ½ :
+  la comptabilité « DMA sound is 3/4 level of YM sound » d'Hatari, rapportée à l'échelle demie
+  puis re-doublée). À volume LMC plein (init TOS) : YM = 1.0, DMA = 0.75, exactement Hatari.
+  **Validé** : cloche/keyclick GEM (EmuTOS, YM pur) — ratio RMS STE/ST = **1.000** (avant :
+  0.5) ; musique Rick Dangerous II STE saine, pas d'écrêtage.
+- **Son — S4 : table DAC YM MESURÉE par défaut (comme Hatari)** : le rendu des 3 voies passait
+  par le seul « modèle de circuit » (`YM2149_BuildModelVolumeTable`) alors que le DÉFAUT
+  d'Hatari est `YM_TABLE_MIXING` — la table 16³ mesurée sur un vrai ST par Paulo Simoes
+  (`ym2149_fixed_vol.h`, © 2012, **vendorisé** dans `src/core/`) interpolée en 32³ par moyennes
+  géométriques (port exact d'`interpolate_volumetable`, sound.c:505-543). L'interaction
+  NON-LINÉAIRE réelle des 3 voies (timbre/balance des accords) remplace le modèle ;
+  `NEOST_YM_MIXING=model` rebranche l'ancien pour A/B. Indexation plate 1:1 (idx = A|B<<5|C<<10
+  ≙ `ymout5[Tone3Voices]`), normalisation ≙ `YM2149_Normalise_5bit_Table` (le niveau STE ÷2
+  restant porté par `outScale_`).
+- **Headless — `--sound-dump F.wav`** : dump audio 48 kHz stéréo s16 de la boucle `--frames`,
+  même chaîne que la GUI (YM2149 horodaté modèle push + DMA STE + gains/tonalité LMC1992,
+  débit exact sans asservissement d'anneau) → l'A/B audio contre l'oracle Hatari (WAV) ou
+  entre configs devient scriptable (profil RMS par seconde). Cf. `DEV.md`.
+- **Son — S2 : FIFO 8 octets du DMA STE fetchée AU FAISCEAU (2026-07-07 soir)** : port complet
+  du modèle Hatari (`DmaSnd_FIFO_*`, `DmaSnd_STE_HBL_Update`). Le DMA fetche des MOTS dans une
+  FIFO anneau de 8 octets entretenue à **chaque HBL** (`DmaSound::onHbl` ← `Machine::onHbl`,
+  ≙ video.c:3322) ; la consommation DAC est datée au reste fractionnaire (`updateDac` ≙
+  `Sound_Update`) et **capture les octets tirés** dans un anneau fixe que le rendu audio
+  consomme — `mixStereo`/`mix` ne relisent PLUS la RAM en fin de trame. Conséquences fidèles :
+  un programme qui **modifie le tampon pendant la lecture** est correct (Mental Hangover,
+  Power Up Plus) ; la **fin de trame tombe au FETCH** du dernier mot (XSINT/Timer A en avance
+  ≤ 8 octets, quantifiée HBL, comme le vrai HW — `Scheduler::DMASND` supprimé) ; le compteur
+  `$FF8909+` montre l'adresse de **fetch** après synchronisation (≙ `DmaSnd_GetFrameCount`) ;
+  passage mono→stéréo réaligné sur frontière paire (`fifoSetStereo`). Piège : la dette de
+  rééchantillonnage du rendu hôte est PLAFONNÉE à 1 octet en sous-alimentation, sinon le
+  rattrapage saute des octets en rafale (mesuré : 21 % d'octets B au lieu de 33 % sur l'étalon).
+  **Validé contre l'oracle Hatari bâti dans le conteneur** (SDL2 présent — AVI audio + `--trace
+  dmasound`) via un étalon dédié `tools/make_dmasnd_test.py` (secteur de boot STE : sample en
+  boucle + handler VBL qui écrit un plateau B transitoire mid-trame, invisible à la frontière
+  de trame) : NeoST fetch **33,3 %** de mots B = oracle **33,2 %**, et le WAV rendu montre le
+  même ratio. `NEOST_DMASND_TRACE=1` émet le refill au format Hatari (diff direct). Étalons
+  19/0 + 8 OK ; WAV cloche GEM / Rick Dangerous II **bit-identiques** (YM intact).
+- **Divergences Hatari — 5ᵉ passe de rafraîchissement (2026-07-07, 4 agents)** : tous les
+  statuts de `docs/HATARI_DIVERGENCES.md` remis en phase avec le code réel. Découverte : le
+  commit `bc15a67` contient l'INTÉGRALITÉ du bug hunt 39-findings (pas seulement le fix STOP) —
+  9 entrées passées à ✅ (M1 fronts GPIP, Timer B evt=0, $FF8264, VoidRead 0x00, read32 void,
+  trou MMU STF, bruit 250 kHz, `mode_&0x8f`, filtre freq/res redondant), 4 reclassées FAUX
+  POSITIFS (D4 6268, BL-MST, cartouche 0xFF, bits SR MIDI — Hatari fait pareil), V3
+  partiellement résolu (restart compteur porté). Nouvelles entrées : **S4 table DAC YM**
+  (défaut Hatari = mesures P. Simoes, NeoST = modèle circuit), **hybride WS1/WS3** (HBL 508 =
+  WS1 vs oracle WS3 à 512), **troncature MFP→CPU sans reste** (dérive de phase timer↔faisceau).
+  Deux chantiers ciblés et testables documentés : lignes raster transitoires SHO (3 candidats +
+  traces) et son YM STE (S3 gain LMC ×2 + S4, oracle `--ym-mixing model`). Cf.
+  `docs/HATARI_DIVERGENCES.md` § 5ᵉ passe.
+- **Blitter — partage de bus non-hog cycle-exact (2ᵉ passe, 2026-07-07 soir)** : les deux
+  dernières divergences de timing portées depuis le modèle CE d'Hatari (celui de l'oracle).
+  **Suspension MID-WORD** (`BLITTER_CONTINUE_LATER_IF_MAX_BUS_REACHED`) : la tranche rend le
+  bus exactement au 64ᵉ (ou 63ᵉ) accès, même entre la lecture et l'écriture d'un même mot —
+  l'état du mot en cours (`haveSrc_/haveDst_/fetchSrc_/dstWord_` ≙ `BlitterState` d'Hatari)
+  persiste entre tranches. ⚠ Piège corrigé pendant la mise au point : ces drapeaux doivent être
+  SAUVEGARDÉS en fin de tranche, sinon la reprise refait la lecture source (double `srcShift` →
+  pipeline skew corrompu → mots perdus au bord des icônes GEM). **Part CPU = 64 accès bus CPU
+  RÉELS** (port `BLITTER_PHASE_COUNT_CPU_BUS`) : comptés par les callbacks mémoire de Moira
+  (`Blitter::noteCpuBusAccess` via `Bus::blitterCountCpu`), le 64ᵉ accès arme la fenêtre
+  PRE_START et date la tranche suivante à +4 cycles — remplace le forfait de 256 cycles (un CPU
+  qui ne touche pas le bus, cycles internes ou STOP, retarde désormais le blitter comme sur le
+  vrai matériel). Diag `NEOST_BLIT_TRACE=1` ajouté (un état des lieux par blit, pendant du
+  `--trace blitter` d'Hatari). Validation : étalons TOUS OK ; scénario blitter-intensif
+  `--walk-mouse` tos106fr STE (132 blits, redraws d'icônes FXSR/NFSR/skew) **byte-identique**
+  à l'ancien modèle ; Enchanted Land et Super Hang-On inchangés (SHO n'utilise pas le blitter :
+  0 blit mesuré jusqu'au menu). Reste documenté : pas d'exécution CPU parallèle pendant la
+  tranche (hooks par-cycle Moira requis), cf. `docs/HATARI_DIVERGENCES.md`.
 - **Bus — largeur d'accès `ioAccessWidth_` non fuitée par le blitter** : `write16`/`write32`
   restaurent la largeur sauvegardée avant leur `return` de la branche blitter ; sans ça, après le
   1ᵉʳ blit mot, les bus-errors d'accès **octet** ($FF9200/lightpen/FDC) restaient désarmées en
@@ -1165,6 +1289,15 @@ les **2 cœurs**, avec un vrai TOS. Restes (« Hard error »/VME/FPU) = périph�
 fidèles à Hatari, pas des bugs.
 
 ## Frontend & outillage
+- **Étalon V2 « nocooper » rapatrié et intégré (2026-07-08)** : No Cooper (1984, freeware —
+  archive Fujiology) dans `disks/etalons/nocooper.msa`, entrée `etalons.json` avec fetch auto
+  (ZIP membre) et **pilotage daté** (`keys_at` : espace tenue vbl 900 — support ajouté à
+  `run_etalons.py`). L'écran principal (~trame 6800) ouvre les bordures G/D en **MED-RES**
+  (cas d'école `Video_WriteToGlueRes`, chantier V2) : la CIBLE oracle est archivée
+  (`tests/reference/nocooper_oracle.png`, Hatari WS3, alignement frame 6788 ↔ NeoST 6800) ;
+  la référence courante (`--update-ref`) capture l'état NeoST = non-régression, écart V2
+  assumé **891 px** (crop actif — chiffre de départ du chantier). Suite étalons : 9 + selftest,
+  TOUS OK.
 - Écran ST dans une fenêtre ImGui ; visualiseur hexa + registres 68000 ; boutons Reset /
   Hard Reset ; barre résolution. Bridage **50 fps réels**. Persistance (`neost.cfg`).
 - **`neost-headless`** : trace d'instructions façon MAME, registres, IRQ (`--irq`), capture

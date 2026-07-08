@@ -16,6 +16,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <cmath>
 #include <string>
 
 #include "core/Machine.hpp"
@@ -26,6 +27,8 @@ void usage() {
     std::printf(
         "Usage: neost-headless [options] [rom]\n"
         "  --frames N        nombre de trames à exécuter (défaut 200, ~4 s ST)\n"
+        "  --sound-dump F    dump audio WAV (48 kHz stéréo s16) : YM2149 + DMA STE + LMC,\n"
+        "                    même chaîne que la GUI (boucle --frames uniquement)\n"
         "  --trace FILE      écrit la trace d'instructions ('-' = stdout)\n"
         "  --trace-from N    n'active la trace qu'à partir de la trame N\n"
         "  --regs            ajoute l'état des registres à chaque instruction\n"
@@ -144,6 +147,7 @@ int main(int argc, char** argv) {
     std::string printerPath;                     // --printer FILE : capture Centronics (port parallèle)
     std::string gemdosDir;                       // --gemdos DIR : disque dur GEMDOS (dossier hôte)
     std::string acsiImg;                         // --acsi IMG : image disque dur ACSI (cible 0)
+    std::string soundDumpPath;                   // --sound-dump F : WAV 48 kHz de la boucle --frames
     bool        regs       = false;
     bool        irq        = false;
     bool        haveUntil  = false;
@@ -200,6 +204,7 @@ int main(int argc, char** argv) {
             return argv[++i];
         };
         if      (!std::strcmp(a, "--frames"))     frames    = std::atoi(next(a));
+        else if (!std::strcmp(a, "--sound-dump")) soundDumpPath = next(a);
         else if (!std::strcmp(a, "--trace"))      tracePath = next(a);
         else if (!std::strcmp(a, "--trace-from")) traceFrom = std::atoi(next(a));
         else if (!std::strcmp(a, "--regs"))       regs      = true;
@@ -327,6 +332,49 @@ int main(int argc, char** argv) {
                      joy1Hold, joy0Hold);
     }
 
+    // Dump audio (--sound-dump) : même chaîne que Audio::produceFrame (GUI) —
+    // YM2149 horodaté (modèle push) + DMA STE + gains/tonalité LMC1992 — mais
+    // débit EXACT (frameCycles × 48 kHz / CPU_HZ, report fractionnaire) sans
+    // asservissement d'anneau (pas de périphérique). Couvre la boucle --frames.
+    constexpr uint32_t kDumpRate = 48000;
+    std::vector<int16_t> dumpPcm;                 // stéréo entrelacé s16
+    std::vector<float>   dumpYm, dumpSt;
+    double dumpCarry = 0.0;
+    const bool soundDump = !soundDumpPath.empty();
+    if (soundDump) {
+        machine.psg.setCycleClock([&machine] { return machine.frameRelCycle(); });
+        machine.dmasnd.setCycleClock([&machine] { return machine.frameRelCycle(); });
+        dumpPcm.reserve(size_t(frames) * kDumpRate / 50 * 2);
+    }
+    auto dumpFrame = [&]() {
+        static constexpr double CPU_HZ = 8021248.0;
+        const int64_t fc = machine.frameCycles();
+        dumpCarry += double(fc) * kDumpRate / CPU_HZ;
+        const int n = int(dumpCarry);
+        dumpCarry -= n;
+        if (n <= 0) return;
+        if (int(dumpYm.size()) < n)     dumpYm.assign(n, 0.0f);
+        if (int(dumpSt.size()) < 2 * n) dumpSt.assign(2 * n, 0.0f);
+        float* ym = dumpYm.data();
+        float* st = dumpSt.data();
+        machine.psg.synthesizeFrame(ym, uint32_t(n), kDumpRate, fc);
+        if (machineHasDmaSound(machine.bus.machine)) {
+            machine.dmasnd.mixStereo(st, ym, uint32_t(n), kDumpRate, fc);
+            const float gL = machine.dmasnd.gainLeft(), gR = machine.dmasnd.gainRight();
+            if (gL != 1.0f || gR != 1.0f)
+                for (int i = 0; i < n; ++i) { st[2 * i] *= gL; st[2 * i + 1] *= gR; }
+            machine.dmasnd.applyToneStereo(st, uint32_t(n), kDumpRate);
+        } else {
+            for (int i = 0; i < n; ++i) { st[2 * i] = ym[i]; st[2 * i + 1] = ym[i]; }
+        }
+        for (int i = 0; i < 2 * n; ++i) {         // clamp → s16 (comme l'anneau GUI)
+            float s = st[i];
+            if (s >  1.0f) s =  1.0f;
+            if (s < -1.0f) s = -1.0f;
+            dumpPcm.push_back(int16_t(std::lround(s * 32767.0f)));
+        }
+    };
+
     // Exécution déterministe : nombre fixe de trames (pas de Date/random/sleep).
     // Note : --until-pc s'évalue par trame (granularité d'une trame), suffisant
     // pour borner une capture autour d'un point d'intérêt.
@@ -418,6 +466,7 @@ int main(int argc, char** argv) {
             }
         }
         machine.runFrame();
+        if (soundDump) dumpFrame();
         if (shotEvery > 0 && frame >= shotFrom && (frame % shotEvery) == 0) {
             char path[512];
             std::snprintf(path, sizeof(path), "%s%05d.ppm", shotPrefix.c_str(), frame);
@@ -427,6 +476,24 @@ int main(int argc, char** argv) {
         if (haveUntil && machine.cpu.pc() == untilPc) {
             std::fprintf(stderr, "[headless] PC=$%06X atteint à la trame %d\n", untilPc, frame);
             break;
+        }
+    }
+
+    // Écriture du WAV (--sound-dump) : PCM 16 bits stéréo 48 kHz, en-tête RIFF canonique.
+    if (soundDump && !dumpPcm.empty()) {
+        std::FILE* wf = std::fopen(soundDumpPath.c_str(), "wb");
+        if (wf) {
+            const uint32_t dataLen = uint32_t(dumpPcm.size() * 2);
+            auto w32 = [&](uint32_t v) { std::fwrite(&v, 4, 1, wf); };
+            auto w16 = [&](uint16_t v) { std::fwrite(&v, 2, 1, wf); };
+            std::fwrite("RIFF", 4, 1, wf); w32(36 + dataLen); std::fwrite("WAVE", 4, 1, wf);
+            std::fwrite("fmt ", 4, 1, wf); w32(16); w16(1); w16(2);
+            w32(kDumpRate); w32(kDumpRate * 4); w16(4); w16(16);
+            std::fwrite("data", 4, 1, wf); w32(dataLen);
+            std::fwrite(dumpPcm.data(), 2, dumpPcm.size(), wf);
+            std::fclose(wf);
+            std::fprintf(stderr, "[headless] dump audio → %s (%.1f s à %u Hz)\n",
+                         soundDumpPath.c_str(), double(dumpPcm.size() / 2) / kDumpRate, kDumpRate);
         }
     }
 
