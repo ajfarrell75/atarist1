@@ -30,14 +30,23 @@ OUT="$ROOT/gemdos/etalon"
 #   build.sh --prog FICHIER.c NOM   -> compile un programme C autonome contre GODLIB,
 #                                      les modules GODLIB necessaires etant tires par
 #                                      resolution automatique au link. -> NOM.TOS
+#   build.sh --game FICHIER.PRJ NOM -> compile un JEU complet (arbre CODE/ + modules
+#                                      GODLIB listés dans son .PRJ Pure C). -> NOM.TOS
 PROG_MODE=0
+GAME_MODE=0
 if [ "${1:-}" = "--prog" ]; then
     PROG_MODE=1
     PROG_SRC="${2:?usage: build.sh --prog FICHIER.c NOM}"
     SAMPLE="${3:?usage: build.sh --prog FICHIER.c NOM}"
     [ -f "$PROG_SRC" ] || { echo "!! $PROG_SRC introuvable" >&2; exit 1; }
+elif [ "${1:-}" = "--game" ]; then
+    GAME_MODE=1
+    PRJ="${2:?usage: build.sh --game FICHIER.PRJ NOM}"
+    SAMPLE="${3:?usage: build.sh --game FICHIER.PRJ NOM}"
+    [ -f "$PRJ" ] || { echo "!! $PRJ introuvable" >&2; exit 1; }
+    GAMEDIR="$(cd "$(dirname "$PRJ")" && pwd)"      # racine du jeu (contient CODE/)
 else
-    SAMPLE="${1:?usage: build.sh <EXEMPLE> | --prog FICHIER.c NOM}"
+    SAMPLE="${1:?usage: build.sh <EXEMPLE> | --prog FICHIER.c NOM | --game FICHIER.PRJ NOM}"
     SPL="$RG/GODLIB.SPL/$SAMPLE"
     PRJ="$SPL/$SAMPLE.PRJ"
     [ -f "$PRJ" ] || { echo "!! $PRJ introuvable" >&2; exit 1; }
@@ -51,6 +60,9 @@ rsync -a --delete --include='*/' --include='*.[CHSI]' --exclude='*' "$RG/GODLIB/
 if [ "$PROG_MODE" = 1 ]; then
     mkdir -p "$BUILD/$SAMPLE"
     cp "$PROG_SRC" "$BUILD/$SAMPLE/$SAMPLE.C"
+elif [ "$GAME_MODE" = 1 ]; then
+    # tout l'arbre du jeu (CODE/*.C/.H/.S), sources locales incluses par "quote"
+    rsync -a --delete --include='*/' --include='*.[CHSI]' --exclude='*' "$GAMEDIR/" "$BUILD/$SAMPLE/"
 else
     rsync -a --delete "$SPL/" "$BUILD/$SAMPLE/"
 fi
@@ -106,7 +118,12 @@ find "$BUILD" -type f \( -name '*.S' -o -name '*.I' \) | while read -r f; do
             nom = $0; sub(/\r$/, "", nom); sub(/;.*/, "", nom)
             match(nom, /^[ \t]*[A-Za-z]+[ \t]+/); nom = substr(nom, RSTART + RLENGTH)
             gsub(/[ \t]/, "", nom)
-            if (nom != "" && nom !~ /^@/) { exported[nom] = 1; print out; print "\texport\t@" nom; next }
+            # Normalise indentation : export/xdef en COLONNE 0 (certains fichiers
+            # RG ne les indentent pas, ex. AMIXER_S.S) est lu par vasm comme un
+            # label, son operande devient un mnemonique inconnu. Force une tab.
+            norm = out; gsub(/\r/, "", norm); sub(/^[ \t]+/, "", norm); norm = "\t" norm
+            if (nom != "" && nom !~ /^@/) { exported[nom] = 1; print norm; print "\texport\t@" nom; next }
+            print norm; next
         }
         if (match(out, /^[A-Za-z_][A-Za-z0-9_]*:/)) {
             lab = substr(out, 1, RLENGTH - 1)
@@ -144,8 +161,20 @@ AS_FLAGS=(-m68000 -Felf -noesc -nowarn=2049 -guess-ext -align)       # + guess-e
 OBJDIR="$BUILD/obj/$SAMPLE"; rm -rf "$OBJDIR"; mkdir -p "$OBJDIR"   # build complet à chaque run
 C_OBJS=(); S_OBJS=()
 
+# En mode jeu : -I sur chaque sous-dossier du jeu pour les #include "LOCAL.H"
+GAME_INCS=()
+if [ "$GAME_MODE" = 1 ]; then
+    while IFS= read -r d; do GAME_INCS+=("-I$d"); done \
+        < <(find "$BUILD/$SAMPLE" -type d)
+fi
+
 # Shim _main → @main : le startup vbcc (ABI pile) appelle _main ; le main de
 # GODLIB est compilé -fastcall (@main, argc en d0 / argv en a0).
+# Ponts ABI fastcall (@X, args en REGISTRES) → libc/libm vbcc (ABI PILE, _X mappé
+# C_X par -Cvbcc). La libc/libm vbcc est stack-only : tout appel standard depuis du
+# C -fastcall a besoin d'un pont. Convention fastcall mesurée : pointeurs en a0/a1,
+# entiers en d0/d1 (ordre des args) ; DOUBLE passé SUR LA PILE (→ jmp direct) ;
+# retour en d0. Les helpers flottants (_ieee*) ont une ABI interne fixe (→ jmp).
 cat > "$OBJDIR/mainshim.s" <<'EOF'
 	export	_main
 	xref	@main
@@ -154,21 +183,85 @@ _main:
 	movea.l	8(a7),a0
 	jmp	@main
 
-; Ponts fastcall → libc (ABI pile) : GODLIB MEMORY.C appelle malloc/free.
-	export	@malloc
+; --- 1 pointeur (a0) : arg poussé sur la pile ---
 	xref	_malloc
+	xref	_free
+	xref	_time
+	xref	_gmtime
+	export	@malloc
 @malloc:
 	move.l	d0,-(a7)
 	jsr	_malloc
 	addq.l	#4,a7
 	rts
 	export	@free
-	xref	_free
 @free:
 	move.l	a0,-(a7)
 	jsr	_free
 	addq.l	#4,a7
 	rts
+	export	@time
+@time:
+	move.l	a0,-(a7)
+	jsr	_time
+	addq.l	#4,a7
+	rts
+	export	@gmtime
+@gmtime:
+	move.l	a0,-(a7)
+	jsr	_gmtime
+	addq.l	#4,a7
+	rts
+
+; --- qsort( base=a0, nmemb=d0, size=d1, compar=a1 ) → pile (droite→gauche) ---
+	xref	_qsort
+	export	@qsort
+@qsort:
+	move.l	a1,-(a7)
+	move.l	d1,-(a7)
+	move.l	d0,-(a7)
+	move.l	a0,-(a7)
+	jsr	_qsort
+	lea	16(a7),a7
+	rts
+
+; --- double sin/cos : l'argument est DÉJÀ sur la pile en fastcall → jmp direct ---
+	xref	_sin
+	xref	_cos
+	export	@sin
+@sin:	jmp	_sin
+	export	@cos
+@cos:	jmp	_cos
+
+; --- helpers flottants vbcc (ABI interne fixe) : simple renommage @_X → __X ---
+	xref	__ieeeaddl
+	xref	__ieeesubl
+	xref	__ieeemull
+	xref	__ieeemuld
+	xref	__ieeed2s
+	xref	__ieees2d
+	xref	__ieeefixlsw
+	export	@_ieeeaddl
+@_ieeeaddl:	jmp	__ieeeaddl
+	export	@_ieeesubl
+@_ieeesubl:	jmp	__ieeesubl
+	export	@_ieeemull
+@_ieeemull:	jmp	__ieeemull
+	export	@_ieeemuld
+@_ieeemuld:	jmp	__ieeemuld
+	export	@_ieeed2s
+@_ieeed2s:	jmp	__ieeed2s
+	export	@_ieees2d
+@_ieees2d:	jmp	__ieees2d
+	export	@_ieeefixlsw
+@_ieeefixlsw:	jmp	__ieeefixlsw
+
+; Fin de segment code : EXCEPT (offset PC au crash) et PROFILER (dimension du
+; buffer) lisent @_etext, symbole du linker préfixé @ par le C fastcall. vasm
+; refuse d'aliaser un symbole importé → valeur approximative exportée (usage
+; cosmétique / outil de dev, non critique à l'exécution du jeu).
+	export	@_etext
+@_etext	=	$80000
 EOF
 vasmm68k_mot -m68000 -Felf -quiet "$OBJDIR/mainshim.s" -o "$OBJDIR/mainshim.o"
 C_OBJS+=("$OBJDIR/mainshim.o")
@@ -177,10 +270,13 @@ for src in "${SRCS[@]}"; do
         ../../GODLIB/*) path="$BUILD/GODLIB/${src#../../GODLIB/}" ;;
         *)              path="$BUILD/$SAMPLE/$src" ;;
     esac
-    obj="$OBJDIR/$(echo "$src" | sed 's#[/.]#_#g').o"
+    # Nom d'objet CANONIQUE (relatif à $BUILD) — DOIT coïncider avec celui que
+    # l'auto-résolution calcule (${c#$BUILD/}), sinon un module listé dans le .PRJ
+    # ET tiré par l'auto-résolution serait compilé DEUX fois (symboles en double).
+    obj="$OBJDIR/$(echo "${path#$BUILD/}" | sed 's#[/.]#_#g').o"
     if [[ "$src" == *.C ]]; then
         echo "CC $src"
-        vc "+$TARGET/vc.config" "${CC_FLAGS[@]}" -I"$BUILD" -I"$BUILD/sysinc" "$path" -o "$obj"
+        vc "+$TARGET/vc.config" "${CC_FLAGS[@]}" -I"$BUILD" -I"$BUILD/sysinc" ${GAME_INCS[@]+"${GAME_INCS[@]}"} "$path" -o "$obj"
         C_OBJS+=("$obj")
     else
         echo "AS $src"
@@ -215,13 +311,15 @@ do_link() {
         "${S_OBJS[@]}" \
         -o "$OUT/$SAMPLE.TOS"
 }
-for essai in 1 2 3 4 5 6; do
+declare -A BRIDGE_DONE      # trampolines asm→C déjà émis (évite les doublons)
+for essai in 1 2 3 4 5 6 7 8; do
     echo "LD $SAMPLE.TOS (essai $essai)"
     LDERR="$(do_link 2>&1)" && { echo "$LDERR" | grep -v "^Warning 22" || true; break; }
     mapfile -t UNDEF < <(echo "$LDERR" | grep -oE 'undefined symbol [_@][A-Za-z0-9_]+' \
                          | sed 's/.*symbol [_@]//' | sort -u)
     [ ${#UNDEF[@]} -gt 0 ] || { echo "$LDERR" | tail -20; exit 1; }
     added=0
+    BRIDGE_NEW=()               # trampolines à émettre cette itération
     for sym in "${UNDEF[@]}"; do
         # Le .S qui exporte le symbole prime (sémantique .PRJ Pure C : l'asm
         # remplace le repli C portable non gardé, ex. GRF_4.C vs GRF_4_S.S).
@@ -240,12 +338,18 @@ for essai in 1 2 3 4 5 6; do
             c="${h%.H}.C"
             [ -f "$c" ] || continue
             obj="$OBJDIR/$(echo "${c#$BUILD/}" | sed 's#[/.]#_#g').o"
-            [ -f "$obj" ] && continue
+            # Déjà compilé → le symbole EXISTE en @sym (C fastcall) mais l'asm le
+            # référence en _sym (ABI Pure C) : pont trampoline _sym → @sym (jmp,
+            # transparent aux registres). Sinon : première compilation du module.
+            if [ -f "$obj" ]; then
+                [ -n "${BRIDGE_DONE[$sym]:-}" ] || { BRIDGE_NEW+=("$sym"); added=1; }
+                break
+            fi
             echo "CC +${c#$BUILD/}  (résout $sym)"
-            vc "+$TARGET/vc.config" "${CC_FLAGS[@]}" -I"$BUILD" -I"$BUILD/sysinc" "$c" -o "$obj"
+            vc "+$TARGET/vc.config" "${CC_FLAGS[@]}" -I"$BUILD" -I"$BUILD/sysinc" ${GAME_INCS[@]+"${GAME_INCS[@]}"} "$c" -o "$obj"
             C_OBJS+=("$obj"); added=1
             break
-        done < <(grep -rlE "(^|[^A-Za-z0-9_])$sym[[:space:]]*\(" "$BUILD/GODLIB" --include='*.H' 2>/dev/null)
+        done < <(grep -rlE "(^|[^A-Za-z0-9_])$sym[[:space:]]*\(" "$BUILD/GODLIB" "$BUILD/$SAMPLE" --include='*.H' 2>/dev/null)
         [ "$added" = 1 ] && continue
         # Ni fonction .H ni export .S : variable globale définie dans un .C
         # (ex. gVbl de VBL.C référencée par VBL_S.S).
@@ -253,11 +357,35 @@ for essai in 1 2 3 4 5 6; do
             obj="$OBJDIR/$(echo "${c#$BUILD/}" | sed 's#[/.]#_#g').o"
             [ -f "$obj" ] && continue
             echo "CC +${c#$BUILD/}  (résout var $sym)"
-            vc "+$TARGET/vc.config" "${CC_FLAGS[@]}" -I"$BUILD" -I"$BUILD/sysinc" "$c" -o "$obj"
+            vc "+$TARGET/vc.config" "${CC_FLAGS[@]}" -I"$BUILD" -I"$BUILD/sysinc" ${GAME_INCS[@]+"${GAME_INCS[@]}"} "$c" -o "$obj"
             C_OBJS+=("$obj"); added=1
             break
-        done < <(grep -rlE "^[A-Za-z_][A-Za-z0-9_ \*]*[^A-Za-z0-9_]$sym[[:space:]]*(\[[^]]*\])?[[:space:]]*(=|;)" "$BUILD/GODLIB" --include='*.C' 2>/dev/null)
+        done < <(grep -rlE "^[A-Za-z_][A-Za-z0-9_ \*]*[^A-Za-z0-9_]$sym[[:space:]]*(\[[^]]*\])?[[:space:]]*(=|;)" "$BUILD/GODLIB" "$BUILD/$SAMPLE" --include='*.C' 2>/dev/null)
+        [ "$added" = 1 ] && continue
+        # Dernier recours : fonction PascalCase Module_Func référencée par de l'asm
+        # en _sym mais DÉFINIE en @sym par un .C compilé (prototype absent des .H,
+        # ex. AudioMixer_Slow, Except_Main, ScreenGrab_Update) → pont trampoline.
+        if [[ "$sym" =~ ^[A-Z][A-Za-z0-9]*_[A-Za-z] ]] && [ -z "${BRIDGE_DONE[$sym]:-}" ] \
+           && grep -rlqE "^[A-Za-z].*[^A-Za-z0-9_]$sym[[:space:]]*\(" "$BUILD/GODLIB" "$BUILD/$SAMPLE" --include='*.C' 2>/dev/null; then
+            BRIDGE_NEW+=("$sym"); added=1
+        fi
     done
+    # Émet les trampolines asm→C collectés cette itération (dans C_OBJS, AVANT
+    # -set-adduscore, donc _sym reste _sym et @sym reste le symbole C fastcall).
+    if [ ${#BRIDGE_NEW[@]} -gt 0 ]; then
+        br="$OBJDIR/bridges_$essai.s"
+        : > "$br"
+        for s in "${BRIDGE_NEW[@]}"; do
+            [ -n "${BRIDGE_DONE[$s]:-}" ] && continue
+            BRIDGE_DONE[$s]=1
+            printf '\texport\t_%s\n\txref\t@%s\n_%s:\tjmp\t@%s\n' "$s" "$s" "$s" "$s" >> "$br"
+            echo "BRIDGE _$s -> @$s"
+        done
+        if [ -s "$br" ]; then
+            vasmm68k_mot -m68000 -Felf -quiet "$br" -o "${br%.s}.o"
+            C_OBJS+=("${br%.s}.o")
+        fi
+    fi
     [ $added -eq 1 ] || { echo "$LDERR" | tail -20; echo "!! symboles irrésolus : ${UNDEF[*]}" >&2; exit 1; }
 done
 ls -la "$OUT/$SAMPLE.TOS"
