@@ -211,21 +211,32 @@ Moira::reset()
 
     SYNC(16);
 
-    // Read the initial (supervisor) stack pointer from memory
-    SYNC(2);
-    reg.sp = read16OnReset(0);
-    SYNC(4);
-    reg.isp = reg.sp = (read16OnReset(2) & ~0x1) | reg.sp << 16;
-    SYNC(4);
-    reg.pc = read16OnReset(4);
-    SYNC(4);
-    reg.pc = (read16OnReset(6) & ~0x1) | reg.pc << 16;
+    // NEOST : gardé — une bus/address error pendant le fetch des vecteurs de
+    // reset (SSP/PC à $0-$7 absents, ex. ROM invalide) est une double faute
+    // pour le 68000 → HALT (cpu_halt(CPU_HALT_DOUBLE_FAULT) chez WinUAE/Hatari),
+    // pas un abort C++ de l'émulateur (« terminate » observé sur ROM tronquée).
+    try {
 
-    // Fill the prefetch queue
-    SYNC(4);
-    queue.irc = read16OnReset(reg.pc & addrMask<C>());
-    SYNC(2);
-    prefetch<C>();
+        // Read the initial (supervisor) stack pointer from memory
+        SYNC(2);
+        reg.sp = read16OnReset(0);
+        SYNC(4);
+        reg.isp = reg.sp = (read16OnReset(2) & ~0x1) | reg.sp << 16;
+        SYNC(4);
+        reg.pc = read16OnReset(4);
+        SYNC(4);
+        reg.pc = (read16OnReset(6) & ~0x1) | reg.pc << 16;
+
+        // Fill the prefetch queue
+        SYNC(4);
+        queue.irc = read16OnReset(reg.pc & addrMask<C>());
+        SYNC(2);
+        prefetch<C>();
+
+    } catch (const std::exception &) {
+
+        halt();
+    }
 
     // Reset subcomponents
     debugger.reset();

@@ -55,4 +55,14 @@ mesuré : raster « Timer B + stop #$2100 + HBL » de Super Hang-On (bande blanc
 à l'horizon, 3 écritures palette par activation au lieu de 2, dérive +1 ligne
 par segment). Étalons 19/19 + EL + Cuddly re-validés après fix.
 
+## Patch local : reset gardé (2026-07-08)
+
+Une bus/address error pendant le fetch des vecteurs de reset (SSP/PC à $0-$7,
+ex. image ROM tronquée — `roms/tos106us.img` fait 192 Ko au lieu de 256) fuyait
+hors de l'émulateur (`terminate called after throwing moira::BusError`), le
+`processException` ne couvrant que les chemins d'`execute()`. Fidèle 68000 :
+double faute au reset = **HALT** (cpu_halt(CPU_HALT_DOUBLE_FAULT) chez
+WinUAE/Hatari). Fix : `Moira::reset<C>()` (Moira.cpp) enveloppe les
+`read16OnReset` + prefetch dans un try → `halt()`. Étalons 19/19 re-validés.
+
 Toute modif future d'un fichier `Moira/` se commit **normalement** dans NeoST.
