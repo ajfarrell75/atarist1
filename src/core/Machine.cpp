@@ -38,10 +38,22 @@ MachineType Machine::adjustMachineForTos(MachineType requested, const std::strin
     // (le Mega ST tourne nativement sous TOS 1.0x, donc PAS de bascule).
     if (tosVer <= 0x0104 && machineIsSte(requested)) {
         std::fprintf(stderr,
-            "[NeoST] TOS %u.%02u ne fonctionne qu'en mode ST (68000) — bascule %s -> ST.\n"
+            "[NeoST] TOS %X.%02X ne fonctionne qu'en mode ST (68000) — bascule %s -> ST.\n"
             "        Pour le STE/Mega STE, utiliser EmuTOS 256 Ko (etos256*) ou TOS 1.62/2.06.\n",
             tosVer >> 8, tosVer & 0xFF, machineName(requested));
         return MachineType::St;
+    }
+    // Le Mega STE exige un TOS ≥ 2.0x : lui seul programme le cache 16 Ko, le SCU et
+    // les 16 MHz. Un TOS 1.0x/1.6x (STE) ne connaît pas ce matériel et reste bloqué au
+    // boot (combo inexistant sur vrai matériel — chaque machine a son ROM). On bascule
+    // donc en STE, où ce TOS tourne normalement (cf. bug cube3d : Mega STE + TOS 1.62
+    // = écran vide, alors que STE + 1.62 fonctionne).
+    if (tosVer < 0x0200 && requested == MachineType::MegaSte) {
+        std::fprintf(stderr,
+            "[NeoST] TOS %X.%02X ne gère pas le Mega STE (cache/SCU/16 MHz) — bascule Mega STE -> STE.\n"
+            "        Pour un vrai Mega STE, utiliser TOS 2.06 (tos206*) ou EmuTOS 256 Ko (etos256*).\n",
+            tosVer >> 8, tosVer & 0xFF);
+        return MachineType::Ste;
     }
     return requested;
 }
