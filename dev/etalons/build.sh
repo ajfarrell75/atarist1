@@ -76,6 +76,18 @@ find "$BUILD" -type f \( -name '*.S' -o -name '*.I' \) | while read -r f; do
             for (i = 1; i <= nloc; i++) out = gensub("\\y" loc[i] "\\y", loc[i] "\\\\@", "g", out)
         if (inmac && npar > 0)
             for (i = 1; i <= npar; i++) out = gensub("\\y" par[i] "\\y", "\\\\" i, "g", out)
+        # ABI fastcall : le C compilé -fastcall référence `@X` (mangling vbcc) ;
+        # on exporte un alias @X sur chaque label exporté par l asm.
+        if (l ~ /^[ \t]*(export|xdef)[ \t]+/) {
+            nom = $0; sub(/\r$/, "", nom); sub(/;.*/, "", nom)
+            match(nom, /^[ \t]*[A-Za-z]+[ \t]+/); nom = substr(nom, RSTART + RLENGTH)
+            gsub(/[ \t]/, "", nom)
+            if (nom != "" && nom !~ /^@/) { exported[nom] = 1; print out; print "\texport\t@" nom; next }
+        }
+        if (match(out, /^[A-Za-z_][A-Za-z0-9_]*:/)) {
+            lab = substr(out, 1, RLENGTH - 1)
+            if (lab in exported) print "@" lab ":"
+        }
         print out
     }' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
 done
@@ -93,11 +105,40 @@ mapfile -t SRCS < <(awk '/^=/{go=1;next} go' "$PRJ" \
     | grep -E '\.(C|S)$' || true)
 [ ${#SRCS[@]} -gt 0 ] || { echo "!! aucune source .C/.S dans $PRJ" >&2; exit 1; }
 
-CC_FLAGS=(-cpu=68000 -c -c99 -size -O2)                       # GODLIB_ST.MF (FINAL)
-AS_FLAGS=(-m68000 -Felf -noesc -nowarn=2049 -guess-ext)       # GODLIB_ST.MF + guess-ext (vasm récent strict)
+CC_FLAGS=(-cpu=68000 -c -c99 -fastcall -O2)   # GODLIB_ST.MF + -fastcall : les stubs asm GEMDOS_S attendent l ABI registres Pure C
+AS_FLAGS=(-m68000 -Felf -noesc -nowarn=2049 -guess-ext -align)       # + guess-ext, -align (ds.w pairs, sémantique PureBot)
 
 OBJDIR="$BUILD/obj/$SAMPLE"; rm -rf "$OBJDIR"; mkdir -p "$OBJDIR"   # build complet à chaque run
 C_OBJS=(); S_OBJS=()
+
+# Shim _main → @main : le startup vbcc (ABI pile) appelle _main ; le main de
+# GODLIB est compilé -fastcall (@main, argc en d0 / argv en a0).
+cat > "$OBJDIR/mainshim.s" <<'EOF'
+	export	_main
+	xref	@main
+_main:
+	move.l	4(a7),d0
+	movea.l	8(a7),a0
+	jmp	@main
+
+; Ponts fastcall → libc (ABI pile) : GODLIB MEMORY.C appelle malloc/free.
+	export	@malloc
+	xref	_malloc
+@malloc:
+	move.l	d0,-(a7)
+	jsr	_malloc
+	addq.l	#4,a7
+	rts
+	export	@free
+	xref	_free
+@free:
+	move.l	a0,-(a7)
+	jsr	_free
+	addq.l	#4,a7
+	rts
+EOF
+vasmm68k_mot -m68000 -Felf -quiet "$OBJDIR/mainshim.s" -o "$OBJDIR/mainshim.o"
+C_OBJS+=("$OBJDIR/mainshim.o")
 for src in "${SRCS[@]}"; do
     case "$src" in
         ../../GODLIB/*) path="$BUILD/GODLIB/${src#../../GODLIB/}" ;;
@@ -132,15 +173,15 @@ do_link() {
         -L"$TARGET/targets/m68k-atari/lib" \
         "${C_OBJS[@]}" \
         "$TARGET/targets/m68k-atari/lib/startup16.o" \
-        -lvc -lm -set-adduscore \
+        -lvc16 -lm16 -set-adduscore \
         "${S_OBJS[@]}" \
         -o "$OUT/$SAMPLE.TOS"
 }
 for essai in 1 2 3 4 5 6; do
     echo "LD $SAMPLE.TOS (essai $essai)"
     LDERR="$(do_link 2>&1)" && { echo "$LDERR" | grep -v "^Warning 22" || true; break; }
-    mapfile -t UNDEF < <(echo "$LDERR" | grep -oE 'undefined symbol _[A-Za-z0-9_]+' \
-                         | sed 's/.*symbol _//' | sort -u)
+    mapfile -t UNDEF < <(echo "$LDERR" | grep -oE 'undefined symbol [_@][A-Za-z0-9_]+' \
+                         | sed 's/.*symbol [_@]//' | sort -u)
     [ ${#UNDEF[@]} -gt 0 ] || { echo "$LDERR" | tail -20; exit 1; }
     added=0
     for sym in "${UNDEF[@]}"; do
