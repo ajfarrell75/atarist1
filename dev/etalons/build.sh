@@ -56,6 +56,12 @@ else
 fi
 find "$BUILD" -type f \( -name '*.C' -o -name '*.H' \) \
     -exec sed -i -E '/^[[:space:]]*#[[:space:]]*include/ s#\\#/#g' {} +
+# Dialecte Devpac : `OFFSET` sans argument REPART À 0 ; vasm, lui, CONTINUE le
+# compteur du bloc offset précédent → tous les offsets de struct des blocs 2+
+# étaient décalés (prouvé : DrawBox lisait sGraphicRect_mX à +16 au lieu de 0,
+# 3e bloc de GRAPHIC.I). On force la sémantique Devpac avec `offset 0`.
+find "$BUILD" -type f \( -name '*.S' -o -name '*.I' \) \
+    -exec sed -i -E 's/^([[:space:]]*)[Oo][Ff][Ff][Ss][Ee][Tt][[:space:]]*(\r?)$/\1offset\t0\2/' {} +
 # Dialecte PureBot/Devpac → vasm : blocs `rept` fermés par `endm` (vasm exige
 # `endr`, pile rept/macro pour ne réécrire que les bons) et directive `LOCAL`
 # dans les macros (inconnue de vasm → labels suffixés `\@`, l'id unique par
@@ -128,7 +134,11 @@ else
     [ ${#SRCS[@]} -gt 0 ] || { echo "!! aucune source .C/.S dans $PRJ" >&2; exit 1; }
 fi
 
-CC_FLAGS=(-cpu=68000 -c -c99 -fastcall -O2)   # GODLIB_ST.MF + -fastcall : les stubs asm GEMDOS_S attendent l ABI registres Pure C
+# GODLIB_ST.MF + -fastcall : les stubs asm GEMDOS_S attendent l ABI registres Pure C.
+# ⚠ -d2scratch OBLIGATOIRE : l asm GODLIB (Pure C) écrase d1/d2 sans les sauver ;
+# sans ce flag vbcc garde des valeurs vives en d2 à travers les appels (prouvé :
+# Memory_Calloc rendait NULL, son lpMem en d2 rasé par Memory_Clear).
+CC_FLAGS=(-cpu=68000 -c -c99 -fastcall -d2scratch -O2)
 AS_FLAGS=(-m68000 -Felf -noesc -nowarn=2049 -guess-ext -align)       # + guess-ext, -align (ds.w pairs, sémantique PureBot)
 
 OBJDIR="$BUILD/obj/$SAMPLE"; rm -rf "$OBJDIR"; mkdir -p "$OBJDIR"   # build complet à chaque run
@@ -184,7 +194,12 @@ for src in "${SRCS[@]}"; do
 done
 
 # --- 3. Édition de liens (GODLIB_ST.MF : startup16.o + -lvc -lm) --------------
-# Ordre de GODLIB_ST.MF : objets C, startup, -lvc -lm, puis -set-adduscore et
+# ⚠ startup16.o EN PREMIER : un .TOS démarre au début du TEXT, sans champ
+# d'entrée. GODLIB_ST.MF le mettait APRÈS les objets (bug latent du devkit) →
+# le startup vbcc (Mshrink + init du tas libc) ne tournait JAMAIS : Malloc(-1)
+# GEMDOS = 0, malloc = NULL, et Memory_Clear(32000, NULL) rasait la page zéro
+# (écran bouillie de BOX). Prouvé à l'oracle : Hatari rendait les MÊMES zéros.
+# Ensuite ordre GODLIB_ST.MF : objets C, -lvc -lm, puis -set-adduscore et
 # LES OBJETS ASM EN DERNIER — le flag préfixe d'un underscore les symboles des
 # fichiers suivants (réconcilie `gVidelData` asm ↔ `_gVidelData` C de vbcc ;
 # nécessite le vlink patché par setup-toolchain.sh, cf. vlink-adduscore.patch).
@@ -194,8 +209,8 @@ done
 do_link() {
     vlinkm68k -bataritos -tos-flags 7 -x -Bstatic -Cvbcc -P__stksize \
         -L"$TARGET/targets/m68k-atari/lib" \
-        "${C_OBJS[@]}" \
         "$TARGET/targets/m68k-atari/lib/startup16.o" \
+        "${C_OBJS[@]}" \
         -lvc16 -lm16 -set-adduscore \
         "${S_OBJS[@]}" \
         -o "$OUT/$SAMPLE.TOS"
@@ -208,6 +223,19 @@ for essai in 1 2 3 4 5 6; do
     [ ${#UNDEF[@]} -gt 0 ] || { echo "$LDERR" | tail -20; exit 1; }
     added=0
     for sym in "${UNDEF[@]}"; do
+        # Le .S qui exporte le symbole prime (sémantique .PRJ Pure C : l'asm
+        # remplace le repli C portable non gardé, ex. GRF_4.C vs GRF_4_S.S).
+        resolved=0
+        while IFS= read -r s; do
+            obj="$OBJDIR/$(echo "${s#$BUILD/}" | sed 's#[/.]#_#g').o"
+            [ -f "$obj" ] && { resolved=1; break; }
+            echo "AS +${s#$BUILD/}  (résout $sym)"
+            vasmm68k_mot "${AS_FLAGS[@]}" -quiet -I"$(dirname "$s")" "$s" -o "$obj" 2>/dev/null \
+            || vasmm68k_mot "${AS_FLAGS[@]/-m68000/-m68020}" -quiet -I"$(dirname "$s")" "$s" -o "$obj"
+            S_OBJS+=("$obj"); added=1; resolved=1
+            break
+        done < <(grep -rliE "^[[:space:]]*(export|xdef)[[:space:]]+.*\b$sym\b" "$BUILD/GODLIB" --include='*.S' 2>/dev/null)
+        [ "$resolved" = 1 ] && continue
         while IFS= read -r h; do
             c="${h%.H}.C"
             [ -f "$c" ] || continue
@@ -218,16 +246,17 @@ for essai in 1 2 3 4 5 6; do
             C_OBJS+=("$obj"); added=1
             break
         done < <(grep -rlE "(^|[^A-Za-z0-9_])$sym[[:space:]]*\(" "$BUILD/GODLIB" --include='*.H' 2>/dev/null)
-        # Pas trouvé côté C ? Le symbole peut vivre dans un .S qui l'exporte.
-        while IFS= read -r s; do
-            obj="$OBJDIR/$(echo "${s#$BUILD/}" | sed 's#[/.]#_#g').o"
+        [ "$added" = 1 ] && continue
+        # Ni fonction .H ni export .S : variable globale définie dans un .C
+        # (ex. gVbl de VBL.C référencée par VBL_S.S).
+        while IFS= read -r c; do
+            obj="$OBJDIR/$(echo "${c#$BUILD/}" | sed 's#[/.]#_#g').o"
             [ -f "$obj" ] && continue
-            echo "AS +${s#$BUILD/}  (résout $sym)"
-            vasmm68k_mot "${AS_FLAGS[@]}" -quiet -I"$(dirname "$s")" "$s" -o "$obj" 2>/dev/null \
-            || vasmm68k_mot "${AS_FLAGS[@]/-m68000/-m68020}" -quiet -I"$(dirname "$s")" "$s" -o "$obj"
-            S_OBJS+=("$obj"); added=1
+            echo "CC +${c#$BUILD/}  (résout var $sym)"
+            vc "+$TARGET/vc.config" "${CC_FLAGS[@]}" -I"$BUILD" -I"$BUILD/sysinc" "$c" -o "$obj"
+            C_OBJS+=("$obj"); added=1
             break
-        done < <(grep -rliE "^[[:space:]]*(export|xdef)[[:space:]]+.*\b$sym\b" "$BUILD/GODLIB" --include='*.S' 2>/dev/null)
+        done < <(grep -rlE "^[A-Za-z_][A-Za-z0-9_ \*]*[^A-Za-z0-9_]$sym[[:space:]]*(\[[^]]*\])?[[:space:]]*(=|;)" "$BUILD/GODLIB" --include='*.C' 2>/dev/null)
     done
     [ $added -eq 1 ] || { echo "$LDERR" | tail -20; echo "!! symboles irrésolus : ${UNDEF[*]}" >&2; exit 1; }
 done
