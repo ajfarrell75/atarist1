@@ -25,17 +25,35 @@ TARGET="$RG/TOOLS.RG/VBCC/0.9g/vbcc_target_m68k-atari"
 BUILD="$ROOT/dev/etalons/build"
 OUT="$ROOT/gemdos/etalon"
 
-SAMPLE="${1:?usage: build.sh <EXEMPLE> (ex: BOX, JAGPAD, MIXER…)}"
-SPL="$RG/GODLIB.SPL/$SAMPLE"
-PRJ="$SPL/$SAMPLE.PRJ"
-[ -f "$PRJ" ] || { echo "!! $PRJ introuvable" >&2; exit 1; }
+# Deux modes :
+#   build.sh <EXEMPLE>              -> compile GODLIB.SPL/<EXEMPLE> (via son .PRJ)
+#   build.sh --prog FICHIER.c NOM   -> compile un programme C autonome contre GODLIB,
+#                                      les modules GODLIB necessaires etant tires par
+#                                      resolution automatique au link. -> NOM.TOS
+PROG_MODE=0
+if [ "${1:-}" = "--prog" ]; then
+    PROG_MODE=1
+    PROG_SRC="${2:?usage: build.sh --prog FICHIER.c NOM}"
+    SAMPLE="${3:?usage: build.sh --prog FICHIER.c NOM}"
+    [ -f "$PROG_SRC" ] || { echo "!! $PROG_SRC introuvable" >&2; exit 1; }
+else
+    SAMPLE="${1:?usage: build.sh <EXEMPLE> | --prog FICHIER.c NOM}"
+    SPL="$RG/GODLIB.SPL/$SAMPLE"
+    PRJ="$SPL/$SAMPLE.PRJ"
+    [ -f "$PRJ" ] || { echo "!! $PRJ introuvable" >&2; exit 1; }
+fi
 
 export PATH="$TOOLS:$PATH" VBCC="$TARGET"
 
 # --- 1. Arbre de build : GODLIB + l'exemple, #include \ → / -------------------
 mkdir -p "$BUILD" "$OUT"
 rsync -a --delete --include='*/' --include='*.[CHSI]' --exclude='*' "$RG/GODLIB/" "$BUILD/GODLIB/"
-rsync -a --delete "$SPL/" "$BUILD/$SAMPLE/"
+if [ "$PROG_MODE" = 1 ]; then
+    mkdir -p "$BUILD/$SAMPLE"
+    cp "$PROG_SRC" "$BUILD/$SAMPLE/$SAMPLE.C"
+else
+    rsync -a --delete "$SPL/" "$BUILD/$SAMPLE/"
+fi
 find "$BUILD" -type f \( -name '*.C' -o -name '*.H' \) \
     -exec sed -i -E '/^[[:space:]]*#[[:space:]]*include/ s#\\#/#g' {} +
 # Dialecte PureBot/Devpac → vasm : blocs `rept` fermés par `endm` (vasm exige
@@ -99,11 +117,16 @@ for h in "$TARGET/targets/m68k-atari/include"/*.h; do
     ln -sf "$h" "$BUILD/sysinc/$(basename "$h" | tr 'a-z' 'A-Z')"
 done
 
-# --- 2. Sources listées dans le .PRJ (après la ligne '=') ---------------------
-mapfile -t SRCS < <(awk '/^=/{go=1;next} go' "$PRJ" \
-    | sed -E 's/;.*//; s/[[:space:]]+$//; s#\\#/#g' \
-    | grep -E '\.(C|S)$' || true)
-[ ${#SRCS[@]} -gt 0 ] || { echo "!! aucune source .C/.S dans $PRJ" >&2; exit 1; }
+# --- 2. Sources initiales : le .PRJ (mode exemple) OU juste le programme (--prog).
+#     Dans les deux cas, le link auto-résout les modules GODLIB manquants (étape 3).
+if [ "$PROG_MODE" = 1 ]; then
+    SRCS=("$SAMPLE.C")                 # résolu en $BUILD/$SAMPLE/$SAMPLE.C (cas *) )
+else
+    mapfile -t SRCS < <(awk '/^=/{go=1;next} go' "$PRJ" \
+        | sed -E 's/;.*//; s/[[:space:]]+$//; s#\\#/#g' \
+        | grep -E '\.(C|S)$' || true)
+    [ ${#SRCS[@]} -gt 0 ] || { echo "!! aucune source .C/.S dans $PRJ" >&2; exit 1; }
+fi
 
 CC_FLAGS=(-cpu=68000 -c -c99 -fastcall -O2)   # GODLIB_ST.MF + -fastcall : les stubs asm GEMDOS_S attendent l ABI registres Pure C
 AS_FLAGS=(-m68000 -Felf -noesc -nowarn=2049 -guess-ext -align)       # + guess-ext, -align (ds.w pairs, sémantique PureBot)

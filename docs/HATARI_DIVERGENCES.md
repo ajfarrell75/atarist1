@@ -403,9 +403,18 @@ divergences ne casse le boot. Trouvailles actionnables ci-dessous (terrain neuf 
   trompé. (`Acsi.cpp:134` vs `hdc.c:218-246`)
 - **ACSI — pas de délai d'IRQ post-transfert** *(MOYENNE)* : IRQ HDC levée immédiatement ; Hatari
   la diffère de `ACSI_TRANSFER_MIN_CYCLES=1000` (requis par « Idris OS »). (`Fdc.cpp:2043` vs `hdc.c:1162`)
-- **GEMDOS — `Fsfirst`/`Fsnext` n'énumèrent jamais `.`/`..` en sous-répertoire** *(MOYENNE)* :
-  `fsfirst_match` rejette tout nom en `.` sans paramètre `subdir` → gestionnaires de fichiers /
-  archiveurs récursifs affectés. (`GemdosHd.cpp:135-149` vs `gemdos.c:433-484`)
+- **GEMDOS — `Dsetpath` retire un masque de fichier final** *(DIVERGENCE VOLONTAIRE, 2026-07-08)* :
+  le bureau TOS ouvre un dossier via `Dsetpath("C:\DOSSIER\*.*")` (chemin + masque). Hatari
+  laisse `access("…/DOSSIER/*.*")` échouer → EPTHNF → alerte « Impossible de définir le dossier
+  par défaut ». NeoST retire un dernier composant contenant `*`/`?` avant le test (Dsetpath ne
+  définit qu'un RÉPERTOIRE ; vrai TOS ignore la partie fichier). Débloque entrer/écrire/exécuter
+  dans les dossiers au bureau. Dossier inexistant reste -34. (`GemdosHd.cpp` gemChDir)
+- **GEMDOS — `Fsfirst`/`Fsnext` n'énumèrent JAMAIS `.`/`..`** *(DIVERGENCE VOLONTAIRE, 2026-07-08)* :
+  `subdir` forcé à `false` dans `gemSFirst` → les points Unix `.`/`..` n'apparaissent plus dans
+  aucun listing TOS (Hatari les expose en sous-répertoire, comme un vrai FAT). Choix produit :
+  bureau plus propre. Contrepartie : plus d'icône parent « +. » dans une fenêtre dossier ; la
+  navigation parent d'un CHEMIN (`..\FOO`) reste gérée par `createHostFileName`.
+  (`GemdosHd.cpp:135-149`/gemSFirst vs `gemdos.c:433-484`)
 - ✅ **GEMDOS — matching « caractères invalides » (`only_invalid`)** *(MOYENNE)* : `addPathComponent`
   fait désormais DEUX passes distinctes comme Hatari — troncature (`*`, `onlyInvalid=false`) puis
   caractères invalides (`+`→`?`, `onlyInvalid=true`) — et `fsfirst_match` ne fait matcher un `?`
