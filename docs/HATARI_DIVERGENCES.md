@@ -43,7 +43,7 @@ reste. La 5ᵉ passe fait foi en cas de contradiction avec les sections historiq
 | Sous-système | NeoST | Hatari (vérité) | Fidélité | Écarts ouverts M / B (5ᵉ passe 2026-07-07) |
 |---|---|---|---|---|
 | MFP 68901 | `Mfp.cpp` | `mfp.c` | très élevée | 1 (UpdateTimers, mode bloc) / 5 |
-| Vidéo (Shifter/Glue) | `Shifter.cpp` | `video.c` | très élevée (STF WS3 + Glue STE) | 1 (V2 — WS ✅ et V1 ✅ 2026-07-08) / ~8 |
+| Vidéo (Shifter/Glue) | `Shifter.cpp` | `video.c` | très élevée (STF WS3 + Glue STE + tricks res) | 0 moyennes (WS/V1/V2 ✅ 2026-07-08 ; résidus V2 : Paulo Simoes, $FF8261) / ~9 |
 | FDC + DMA + STX | `Fdc.cpp`, `StxImage.cpp` | `fdc.c`, `floppies/stx.c` | très élevée | 2 (D3, wait-state 4 cyc) / 4 (+2 assumés D1/D2) |
 | Son (YM2149 + DMA STE) | `YM2149.cpp`, `DmaSound.cpp` | `psg.c`, `dmaSnd.c`, `sound.c` | très élevée (générateurs 1:1, FIFO DMA au faisceau) | 0 (S2/S3/S4 ✅ 2026-07-07) / ~6 |
 | ACIA 6850 / IKBD / MIDI | `Ikbd.cpp`, `MidiAcia.cpp` | `acia.c`, `ikbd.c` | très élevée | 0 / 7 (délais IKBD…) |
@@ -59,7 +59,7 @@ reste. La 5ᵉ passe fait foi en cas de contradiction avec les sections historiq
 |---|---|---|---|---|---|
 | B1 ✅ | Blitter | Compteur X/Y écrit à `0` non interprété comme **65536** (blit avorté au lieu de maximal) | **HAUTE** | `Blitter.cpp:99-101` | `Blitter_WordsPerLine/LinesPerBitblock_WriteWord` `blitter.c:1343-1366` |
 | V1 ✅ | Vidéo | ~~Branche STE de la Glue absente~~ **portée (2026-07-08)** : table STE (preload MMU 36/40, pal 56, HSync −52/−12) + `LEFT_OFF_2_STE` (+20 o, −8 px) + latch res sans −1 ; Cuddly-STE casse comme le vrai STE (196/250 = oracle) | moyenne | `Shifter.cpp` (`glue::Timing`, phase 1 STE) | `Video_Update_Glue_State` (branche STE) `video.c:2442-2652` |
-| V2 | Vidéo | **Tricks par changement de résolution** non répliqués (overscan med-res, scroll hardware hi/med/lo) | moyenne | — (absent) | `Video_WriteToGlueRes` `video.c:1618-1820` |
+| V2 ✅ | Vidéo | ~~Tricks par changement de résolution~~ **portés (2026-07-08)** : overscan med-res (No Cooper greetings **0 px vs oracle**), stab med, scrolls hard 13/9/5/1 px, rendu multi-rés par ligne. Résidus : hardscroll Paulo Simoes, alias $FF8261 | moyenne | `Shifter.cpp` (`updateGlueRes`) | `Video_WriteToGlueRes` `video.c:1618-1820` |
 | V3 ◐ | Vidéo | Géométrie mid-trame : **restart compteur PORTÉ** (VC_RESTART, 2026-07-02) ; restent CyclesPerVBL±4 + attribution ligne fixe (canal `NEOST_LINELEN` existant, OFF) | moyenne→basse | `Shifter.cpp:602,1722`, `Machine.cpp:250-254` | `Video_RestartVideoCounter` `video.c:4608`, `video.c:2848-2877` |
 | WS ✅ | Vidéo | ~~Hybride WS1/WS3~~ **TRANCHÉ : WS3 complet (2026-07-08)** — positions Glue +1 (`glue::kWsInc`), IRQ HBL à cpl (512/508/224, `kHblOff` 0), VBL 64 ✓. Ancres rendu/compteur/spec512 **fixes** 56/376 (≙ `LINE_START/END_CYCLE_*` hors table WS chez Hatari) ; DE stockés re-normalisés −inc au rendu. `NEOST_WS=1..4` pour A/B. Datations read −6/write +2/spec512 −25 **inchangées** (fidèles-théoriques, WS-indépendantes). Validé : étalons TOUS OK, boot STF 50 Hz 0 px, Cuddly menu == HEAD au px près (190/250 vs oracle, identique baseline) | moyenne (systémique) | `Shifter.cpp` (glue::), `Machine.cpp` | `VIDEO_TIMING_DEFAULT=WS3` `video.c:624`, `video.c:976-1007` |
 | S1 ✅ | Son | **Filtre passe-bas STF (C10) jamais activé** → STF/Mega ST en PWM (code mort) | moyenne | `setStfLowPass` jamais appelé, `YM2149.hpp:165` | `Sound_Update_Filters` `sound.c:1946-1951` |
@@ -578,11 +578,26 @@ MFP, périphériques (FDC/son-statuts/bus/SCC/ACIA), son approfondi (cœur YM + 
   le reste = glissements de phase du clignotement bistable de la casse, sensible au cycle exact
   de la touche fifo — la « contrepartie » documentée du 2026-07-03 est résorbée : NeoST-STE
   n'est plus « trop propre »).
-  **[moyenne] V2 tricks résolution** (med-res overscan, scrolls hard 1/5/9/13 px,
-  alias $FF8261 non mappé) — squelette `NEOST_V2`/`hblShorten_` opt-in existant. **Étalon
-  disponible depuis le 2026-07-08** : `nocooper` (No Cooper/1984, fetch fujiology auto) — écran
-  principal = overscan G/D en med-res, cible oracle archivée `tests/reference/nocooper_oracle.png`
-  (la nappe traverse bord à bord), écart de départ 891 px (crop actif). Cf. TEST_SOFTWARE.md.
+  **[moyenne] V2 tricks résolution ✅ PORTÉ (cœur, 2026-07-08)** — `updateGlueRes`
+  (Shifter.cpp) = port de `Video_WriteToGlueRes` (video.c:1637-1753) : **overscan MED-RES**
+  (LEFT_OFF + med@20/28/36 → `OVERSCAN_MED_RES` + champ décalage source bits 20-23 ; hi→med ≤20
+  → `LEFT_OFF_MED` +26 o ; variante STE `LEFT_OFF_2_STE_MED` +20 o/−16 px), **stab med**
+  (hi/med/lo@16 → retrait gauche low propre) et **scrolls « hardware » droite 13/9/5/1 px**
+  (les deux familles de fenêtres, lo ≤32 après hi/med et lo ≤40 après hi/lo/med). Rendu
+  **multi-résolution PAR LIGNE** (port `Video_StoreResolution`) : lignes med décodées en
+  2 plans (2 px/cyc) au sein d'une trame basse rés, base de décodage décalée de (2−champ)
+  OCTETS (⚠ pas en pixels : stride 186 ≢ 0 mod 4 → l'appariement des mots de plans dépend de
+  l'origine octet), émission = MOYENNE des 2 px med par colonne (même réduction que l'oracle
+  2×, les DEUX phases vérifiées), calage émission −4 px med (1er mot med 2 cyc après DE_start).
+  **VALIDÉ : écran greetings No Cooper 0 px vs oracle Hatari** (étalon `nocooper_greetings`,
+  RÉFÉRENCÉ SUR L'ORACLE, max_diff 0 — chaque ligne : hi@0/lo@12/med@20 + 60/50@376/384 + stab
+  hi/lo@444/456) ; selftest +4 scénarios V2 (31 ST / 34 STE) ; étalons TOUS OK, spectrum/Cuddly
+  inchangés. L'écran principal (`nocooper`) : nappe/logo/bordures déjà 0 px, texte scrollé 2 px/
+  trame à phase de touche près — l'« écart 891 px » d'hier était un artefact de phase (mesuré :
+  0 px à sa phase). **Restent hors périmètre, documentés** : hardscroll 4 px plein écran de
+  Paulo Simoes (med@84 → lo@92-104, ajuste le pointeur vidéo par ligne — étalon requis), hacks
+  « TEMP » Closure/DOLB (reniflage PC/opcode chez Hatari — non portables tels quels), alias
+  $FF8261, rendu med 640 natif en trame mixte (buffer 416 : réduction ×2 documentée).
 - **[basse→moyenne] Rendu par-ligne daté à la frontière d'instruction** : `renderLine(y)` part
   APRÈS l'instruction qui enjambe DE_end (376) — une écriture palette dans `[376, 376+carry)` est
   vue par la ligne y (Hatari : y+1). Intermittent par nature (cf. candidats SHO).

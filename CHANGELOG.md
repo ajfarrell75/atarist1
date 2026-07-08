@@ -153,6 +153,27 @@ taguées (0.1.x). Le restant est dans [`TODO.md`](TODO.md).
   d'etos192 sur MegaSTE (SCU non programmé). Pour le STE/Mega STE : EmuTOS 256 Ko ou TOS 1.62/2.06.
 
 ## Vidéo (Shifter)
+- **V2 — tricks par changement de RÉSOLUTION portés (2026-07-08)** : `updateGlueRes`
+  (post-traitement de chaque écriture $FF8260 après la machine Glue commune) = port de
+  `Video_WriteToGlueRes` (video.c:1637-1753). Détections : **overscan MED-RES** — retrait
+  gauche hi/lo suivi d'une bascule MED aux cycles 20/36 (No Cooper) ou 28 (PYM) → la ligne
+  overscan est en MOYENNE résolution (masque `OVERSCAN_MED_RES` + décalage source en octets
+  dans les bits 20-23) ; **hi→med tôt** → `LEFT_OFF_MED` (+26 octets) ; **variante STE**
+  `LEFT_OFF_2_STE_MED` (+20 o, −16 px) ; **stab med** (hi/med/lo@16) ; **scrolls « hardware »
+  droite 13/9/5/1 px** (deux familles de fenêtres). Rendu **multi-résolution PAR LIGNE**
+  (≙ `Video_StoreResolution`) : les lignes med d'une trame basse rés se décodent en 2 plans,
+  base de décodage décalée de (2−champ) **octets** — piège débusqué : le stride overscan
+  (186 o) n'est pas multiple de 4, l'appariement des mots de plans dépend de l'origine OCTET,
+  un décalage d'index pixel « rayait » le logo une ligne sur deux — émission = MOYENNE des
+  2 px med par colonne (même réduction 2× que l'oracle → les DEUX phases med comptent),
+  calage émission −4 px med calibré à l'oracle. **VALIDÉ : écran greetings No Cooper
+  PIXEL-IDENTIQUE (0 px) à l'oracle Hatari** — nouvel étalon `nocooper_greetings` RÉFÉRENCÉ
+  SUR L'ORACLE (`tests/reference/nocooper_greetings.png`, max_diff 0, recette 5 espaces datés
+  — support liste `keys_at` ajouté au runner). Selftest : 4 scénarios V2 (31 ST / 34 STE).
+  Étalons TOUS OK, spectrum/Cuddly byte-identiques. L'« écart 891 px » de l'écran principal
+  était un artefact de phase de touche (0 px à sa phase, texte scrollé 2 px/trame). Restent
+  documentés : hardscroll 4 px Paulo Simoes (med@84, pointeur vidéo par ligne), hacks TEMP
+  Closure/DOLB (reniflage PC chez Hatari), alias $FF8261, med 640 natif en trame mixte.
 - **Canal « longueurs de ligne par-ligne » ACTIVÉ par défaut (2026-07-08)** : le port
   `HBL_Pos/nCyclesPerLine` (chaque « Freq_match » de la Glue fixe la position de l'IRQ HBL et
   la longueur — 224/508/512 — de la ligne courante, cumul `lineCarry_` pour les suivantes)

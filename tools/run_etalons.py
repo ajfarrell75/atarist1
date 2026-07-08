@@ -75,8 +75,11 @@ def run_headless_capture(entry: dict, out_ppm: Path) -> int:
         cmd += ["--disk", str(ROOT / disk)]
     if entry.get("keys"):
         cmd += ["--keys", entry["keys"]]
-    if entry.get("keys_at"):                 # [trame, "touches"] — pilotage daté (menus/démos)
-        cmd += ["--keys-at", str(entry["keys_at"][0]), entry["keys_at"][1]]
+    if entry.get("keys_at"):                 # [trame, "touches"] ou liste de paires — pilotage daté
+        ka = entry["keys_at"]
+        pairs = ka if isinstance(ka[0], list) else [ka]
+        for n, keys in pairs:
+            cmd += ["--keys-at", str(n), keys]
     if entry.get("cart"):
         cmd += ["--cart", str(ROOT / entry["cart"])]
     print("  $", " ".join(cmd))

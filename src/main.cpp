@@ -154,6 +154,7 @@ static void saveConfig(const std::string& exeDir, Config& c, Machine* machine = 
 // --- Pictogrammes Font Awesome 5 Free Solid (fonts/fa-solid-900.ttf, fusionnés dans
 // la police ImGui — cf. chargement dans main()). Chaînes UTF-8 des codepoints FA de la
 // zone à usage privé. À préfixer à un libellé : ICON_FA_REDO " Reset".
+#define ICON_FA_STAR          "\xef\x80\x85"
 #define ICON_FA_POWER_OFF     "\xef\x80\x91"
 #define ICON_FA_REDO          "\xef\x80\x9e"
 #define ICON_FA_VOLUME_OFF    "\xef\x80\xa6"
@@ -232,6 +233,11 @@ uint8_t g_lastJoy0 = 0, g_lastJoy1 = 0; // dernier octet composé posé sur l'IK
 bool  g_showDisk = true, g_showCart = true, g_showHex = true, g_showCpu = true;  // fenêtres masquables
 bool  g_showJoy = false;               // fenêtre joystick (visualisation live)
 bool  g_joyCfgDirty = false;           // un réglage joystick a changé → resauver neost.cfg
+// Champs de saisie du menu Machine → Disque dur (dossier HD GEMDOS / image ACSI).
+// Globaux (et non statiques du menu) pour que le sous-menu Profils puisse les
+// resynchroniser : g_*Init = false → relecture de cfg à la prochaine ouverture.
+char g_gdBuf[512] = {0}, g_hdBuf[512] = {0};
+bool g_gdInit = false, g_hdInit = false;
 
 void onGlfwError(int code, const char* desc) {
     std::fprintf(stderr, "GLFW erreur %d : %s\n", code, desc);
@@ -968,8 +974,14 @@ int main(int argc, char** argv) {
         if (cfg.cart.empty()) machine.ejectCart();
         else                  machine.loadCart(resolveData(cfg.cart, exeDir));
         // L'eject/loadCart ci-dessus a écrasé la cartouche système du HD GEMDOS →
-        // la réinstalle si un HD GEMDOS est configuré (exclusif avec cfg.cart).
-        if (!cfg.gemdos.empty()) machine.gemdos.setDirectory(resolvePath(cfg.gemdos));
+        // réaligne les montages disque dur sur la config : réinstalle le HD GEMDOS
+        // s'il est configuré (exclusif avec cfg.cart), le démonte sinon — un profil
+        // peut monter OU démonter, et reconfigure() ne touche pas à ces montages.
+        // Idem ACSI (le montage survit à reconfigure, on ne remonte que si absent).
+        if (cfg.gemdos.empty()) machine.gemdos.unmount();
+        else                    machine.gemdos.setDirectory(resolvePath(cfg.gemdos));
+        if (cfg.acsi.empty())   machine.fdc.unmountAcsi();
+        else if (!machine.fdc.acsiActive()) machine.fdc.mountAcsi(resolvePath(cfg.acsi));
         machine.mfp.setColorMonitor(!cfg.mono);
         machine.fdc.setFastFdc(cfg.fastfdc);   // ré-applique le FDC rapide après reconfig
         machine.bus.setFpuPresent(cfg.fpu && machTypeR == MachineType::MegaSte);
@@ -1272,30 +1284,28 @@ int main(int argc, char** argv) {
                 // disques qu'au boot). Chemins mémorisés dans neost.cfg.
                 if (ImGui::BeginMenu(ICON_FA_HDD " Disque dur")) {
                     ImGui::TextDisabled(ICON_FA_FOLDER_OPEN " GEMDOS : dossier hôte monté en C:");
-                    static char gdBuf[512]; static bool gdInit = false;
-                    if (!gdInit) { std::snprintf(gdBuf, sizeof gdBuf, "%s", cfg.gemdos.c_str()); gdInit = true; }
+                    if (!g_gdInit) { std::snprintf(g_gdBuf, sizeof g_gdBuf, "%s", cfg.gemdos.c_str()); g_gdInit = true; }
                     ImGui::SetNextItemWidth(280);
-                    ImGui::InputText("##gemdosDir", gdBuf, sizeof gdBuf);
+                    ImGui::InputText("##gemdosDir", g_gdBuf, sizeof g_gdBuf);
                     ImGui::SameLine();
                     if (machine.gemdos.active()) {
                         if (ImGui::Button(ICON_FA_EJECT " Éjecter##gd")) reqEjectGemdos = true;
                         ImGui::TextDisabled("(actif — exclusif avec la cartouche)");
-                    } else if (ImGui::Button("Monter##gd") && gdBuf[0]) {
-                        reqMountGemdos = gdBuf;
+                    } else if (ImGui::Button("Monter##gd") && g_gdBuf[0]) {
+                        reqMountGemdos = g_gdBuf;
                     }
                     ImGui::Separator();
                     ImGui::TextDisabled(ICON_FA_HDD " ACSI : image disque dur (cible 0)");
-                    static char hdBuf[512]; static bool hdInit = false;
-                    if (!hdInit) { std::snprintf(hdBuf, sizeof hdBuf, "%s", cfg.acsi.c_str()); hdInit = true; }
+                    if (!g_hdInit) { std::snprintf(g_hdBuf, sizeof g_hdBuf, "%s", cfg.acsi.c_str()); g_hdInit = true; }
                     ImGui::SetNextItemWidth(280);
-                    ImGui::InputText("##acsiImg", hdBuf, sizeof hdBuf);
+                    ImGui::InputText("##acsiImg", g_hdBuf, sizeof g_hdBuf);
                     ImGui::SameLine();
                     if (machine.fdc.acsiActive()) {
                         if (ImGui::Button(ICON_FA_EJECT " Éjecter##hd")) reqEjectAcsi = true;
                         ImGui::TextDisabled("(%d partition(s) détectée(s))",
                                             machine.fdc.acsiPartitionCount());
-                    } else if (ImGui::Button("Monter##hd") && hdBuf[0]) {
-                        reqMountAcsi = hdBuf;
+                    } else if (ImGui::Button("Monter##hd") && g_hdBuf[0]) {
+                        reqMountAcsi = g_hdBuf;
                     }
                     // GEMDOS et ACSI montés ensemble : NeoST ne décale pas le lecteur
                     // GEMDOS derrière les partitions ACSI (contrairement à Hatari) →
@@ -1315,6 +1325,34 @@ int main(int argc, char** argv) {
                 }
                 ImGui::Separator();
                 if (ImGui::MenuItem(ICON_FA_SIGN_OUT_ALT " Quitter")) glfwSetWindowShouldClose(window, 1);
+                ImGui::EndMenu();
+            }
+            // Profil : préréglages machine complets (modèle + RAM + ROM + disque dur),
+            // appliqués à chaud comme un changement de modèle. Le profil Mega STE monte
+            // le HD GEMDOS (dossier gemdos/ → C:) ; les deux autres démontent tout
+            // disque dur (GEMDOS et ACSI).
+            if (ImGui::BeginMenu(ICON_FA_STAR " Profil")) {
+                struct Profil { const char* label; const char* machine; const char* mem;
+                                const char* rom; const char* gemdos; };
+                static const Profil profils[] = {
+                    { "520 ST (512 Ko, TOS 1.02 US)",             "st",      "512k", "roms/tos102us.img", ""       },
+                    { "1040 STE (1 Mo, TOS 1.62 FR)",             "ste",     "1m",   "roms/tos162fr.img", ""       },
+                    { "Mega STE (4 Mo, TOS 2.06 FR, disque dur)", "megaste", "4m",   "roms/tos206fr.img", "gemdos" },
+                };
+                for (const auto& p : profils) {
+                    // Coché si la config courante correspond au profil (ROM comparée
+                    // par nom de fichier : cfg.rom peut être un chemin résolu).
+                    const bool cur = cfg.machine == p.machine && cfg.mem == p.mem
+                                  && fs::path(cfg.rom).filename() == fs::path(p.rom).filename()
+                                  && cfg.gemdos == p.gemdos && cfg.acsi.empty();
+                    if (ImGui::MenuItem(p.label, nullptr, cur)) {
+                        cfg.machine = p.machine; cfg.mem = p.mem; cfg.rom = p.rom;
+                        cfg.gemdos = p.gemdos; cfg.acsi.clear();
+                        if (!cfg.gemdos.empty()) cfg.cart.clear();   // HD GEMDOS exclusif avec la cartouche
+                        g_gdInit = g_hdInit = false;   // resynchronise les champs du menu Disque dur
+                        saveConfig(exeDir, cfg, &machine); reqRebuild = true;
+                    }
+                }
                 ImGui::EndMenu();
             }
             if (ImGui::BeginMenu(ICON_FA_DESKTOP " Résolution")) {

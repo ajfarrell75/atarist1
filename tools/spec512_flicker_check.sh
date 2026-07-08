@@ -7,7 +7,7 @@ set -uo pipefail
 # Racine du dépôt = parent du dossier tools/ (robuste au nom du dossier, ex. neost↔NEOST).
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ROM=roms/tos102uk.img
-DISK=disks/utils/spectrum_512_auto_diapo.st
+DISK=disks/etalons/spectrum_512_auto_diapo.st
 FROM=${1:-500}; TO=${2:-1010}
 TMP=$(mktemp -d)
 END=$((TO+2))

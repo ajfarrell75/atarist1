@@ -1717,16 +1717,25 @@ void Shifter::renderGlueFrame() {
         // prefetch, ou offset 16 sans prefetch) : la plage valide de idx est
         // [0, nDec) — marge pour le DisplayPixelShift et le scroll.
         const int  nDec = lineHasDE ? ((nPix + 15) / 16) * 16 + (scroll ? 16 : 0) : 0;
-        // Décalage SOURCE de la ligne med overscan (≙ VideoOffset Hatari = −champ
-        // MED_OFFSET : 0 octet No Cooper, 2 octets PYM ; 1 octet = 4 px med).
-        // kMedCal cale l'origine du chemin med sur celle du chemin low validé —
-        // mesuré contre l'oracle greetings No Cooper (NEOST_MED_CAL pour l'A/B).
+        // Décalage SOURCE de la ligne med overscan, en OCTETS sur la base de
+        // décodage : Hatari VideoOffset = −champ MED_OFFSET (0 No Cooper, −2 PYM)
+        // là où le chemin LOW validé (LEFT_OFF) vaut −2 → différentiel
+        // (2 − champ) octets. ⚠ EN OCTETS et pas en pixels : le stride d'une
+        // ligne overscan (186 o) n'est PAS multiple de 4 — l'appariement des
+        // plans (mot p0, mot p1) dépend de l'origine octet, un décalage d'index
+        // pixel ne réordonnerait pas les plans (logo « rayé » une ligne sur
+        // deux, mesuré sur l'oracle greetings). kMedCal = ajustement d'ÉMISSION
+        // en px med : **−4** (le 1er mot med sort 2 cycles après DE_start —
+        // même famille que le « +7 » pipeline du spec512) — CALIBRÉ à 0 px
+        // contre l'oracle Hatari sur l'écran greetings No Cooper (2026-07-08).
+        // NEOST_MED_CAL pour l'A/B.
         static const int kMedCal = [] {
             const char* e = std::getenv("NEOST_MED_CAL");
-            return e ? std::atoi(e) : 0;
+            return e ? std::atoi(e) : -4;
         }();
-        const int medSrcPx = lineMed
-            ? static_cast<int>((bm & glue::MED_OFFSET_MASK) >> 20) * 4 + kMedCal : 0;
+        const int medSrcBytes = lineMed
+            ? 2 - static_cast<int>((bm & glue::MED_OFFSET_MASK) >> 20) : 0;
+        const int medSrcPx = lineMed ? kMedCal : 0;
         // Source des pixels : la CAPTURE datée au faisceau de cette scanline si elle
         // existe (cf. lineSnap_ — seul l'échantillon voit un sprite dessiné puis
         // effacé EN COURSE avec le faisceau, ex. robot du menu Cuddly), sinon repli
@@ -1736,10 +1745,11 @@ void Shifter::renderGlueFrame() {
             const bool haveSnap = sl >= 0 && sl < static_cast<int>(lineSnapLen_.size())
                                   && lineSnapLen_[sl] > 0;
             if (haveSnap)
-                decodeWindowIndicesFromBytes(lineSnap_.data() + static_cast<std::size_t>(sl) * kLineSnapBytes,
-                                             lineSnapLen_[sl], nPix, idx, lineMed);
+                decodeWindowIndicesFromBytes(lineSnap_.data() + static_cast<std::size_t>(sl) * kLineSnapBytes
+                                                 + medSrcBytes,
+                                             lineSnapLen_[sl] - medSrcBytes, nPix, idx, lineMed);
             else
-                decodeWindowIndices(addr, nPix, idx, lineMed);
+                decodeWindowIndices(addr + static_cast<uint32_t>(medSrcBytes), nPix, idx, lineMed);
         }
 
         uint32_t* dst = frame_.data() + static_cast<std::size_t>(row) * W;
@@ -1758,13 +1768,22 @@ void Shifter::renderGlueFrame() {
                 // Le scroll fin STE décale la source (idx[s + scroll], cf.
                 // decodeWindowIndices — modèle decodeLineIndices).
                 // Ligne MED dans trame LOW : 2 px décodés par cycle, le buffer
-                // (1 px/cycle) émet le pixel PAIR ; le displayPixelShift du
-                // retrait hi (−4) ne s'applique pas au chemin med (Hatari rend
-                // ces lignes via VideoOffset seul, video.c:3932).
+                // (1 px/cycle) émet la MOYENNE des 2 px med de la colonne (même
+                // réduction que l'oracle 2× → un étalon référencé sur l'oracle
+                // vérifie les DEUX phases med). Le displayPixelShift du retrait
+                // hi (−4) ne s'applique pas au chemin med (Hatari rend ces
+                // lignes via VideoOffset seul, video.c:3932).
                 int s = lineMed ? ((cyc - ds) * 2 + medSrcPx)
                                 : ((cyc - ds) * ppc + (x % ppc) - shift + scroll);
                 if (s < 0) s = 0; else if (s >= nDec) s = nDec - 1;
-                dst[x] = stColorToArgb(pal[idx[s]]);       // dans la fenêtre → contenu
+                if (lineMed) {
+                    const int s2 = (s + 1 < nDec) ? s + 1 : s;
+                    const uint32_t a = stColorToArgb(pal[idx[s]]);
+                    const uint32_t b = stColorToArgb(pal[idx[s2]]);
+                    dst[x] = 0xFF000000u | ((((a & 0x00FEFEFE) + (b & 0x00FEFEFE)) >> 1) & 0x00FFFFFF);
+                } else {
+                    dst[x] = stColorToArgb(pal[idx[s]]);   // dans la fenêtre → contenu
+                }
             } else {
                 dst[x] = stColorToArgb(pal[0]);            // hors fenêtre / bordure / blank → registre 0
             }
