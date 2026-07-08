@@ -49,7 +49,10 @@ else
     SAMPLE="${1:?usage: build.sh <EXEMPLE> | --prog FICHIER.c NOM | --game FICHIER.PRJ NOM}"
     SPL="$RG/GODLIB.SPL/$SAMPLE"
     PRJ="$SPL/$SAMPLE.PRJ"
-    [ -f "$PRJ" ] || { echo "!! $PRJ introuvable" >&2; exit 1; }
+    # Le .PRJ ne porte pas toujours le nom du dossier (BLITTER1.PRJ, CLI_TEST.PRJ,
+    # SPRITE1.PRJ) : à défaut, prendre le premier .PRJ présent dans le dossier.
+    [ -f "$PRJ" ] || PRJ="$(ls "$SPL"/*.PRJ 2>/dev/null | head -1)"
+    [ -n "$PRJ" ] && [ -f "$PRJ" ] || { echo "!! aucun .PRJ dans $SPL" >&2; exit 1; }
 fi
 
 export PATH="$TOOLS:$PATH" VBCC="$TARGET"
@@ -255,6 +258,12 @@ _main:
 @_ieees2d:	jmp	__ieees2d
 	export	@_ieeefixlsw
 @_ieeefixlsw:	jmp	__ieeefixlsw
+
+; --- printf vbcc : le C fastcall référence @__v0printf, la lib fournit
+; ___v0printf (même règle @→_ que les helpers ieee ci-dessus). jmp = passe-plat. ---
+	xref	___v0printf
+	export	@__v0printf
+@__v0printf:	jmp	___v0printf
 
 ; Fin de segment code : EXCEPT (offset PC au crash) et PROFILER (dimension du
 ; buffer) lisent @_etext, symbole du linker préfixé @ par le C fastcall. vasm
