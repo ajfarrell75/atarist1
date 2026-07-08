@@ -10,6 +10,9 @@
 
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
+#include <cstring>
+#include <vector>
 
 // Conversion volume fixe 4 bits → index 5 bits dans le DAC (Hatari YmVolume4to5) :
 // volume5 = volume4*2+1, sauf 0 et 1 qui restent 0 et 1 → [0,15] mappé sur [0,31].
@@ -67,28 +70,88 @@ float fixedToSample(int64_t v) {
 } // namespace
 
 // -----------------------------------------------------------------------------
-//  Table de conversion DAC 32×32×32 → échantillon (modèle de circuit Hatari).
+//  Table de conversion DAC 32×32×32 → échantillon. DÉFAUT = table MESURÉE sur un
+//  vrai ST (Paulo Simoes, 16³ interpolée en 32³ par moyennes géométriques) — le
+//  YM_TABLE_MIXING par défaut d'Hatari (configuration.c:807) : l'interaction
+//  NON-LINÉAIRE des 3 voies mesurée, pas modélisée. NEOST_YM_MIXING=model rebranche
+//  l'ancien modèle de circuit (YM2149_BuildModelVolumeTable) pour A/B à l'oreille.
+//  Indexation identique des deux côtés : idx = A | B<<5 | C<<10 (≙ ymout5[Tone3Voices]),
+//  la table d'Hatari étant volumetable[C][B][A] → recopie plate 1:1.
 // -----------------------------------------------------------------------------
+namespace {
+// Mesures 4 bits × 3 voies (ym2149_fixed_vol.h, vendorisé — GPL v2, © 2012 P. Simoes).
+const uint16_t kVolumeTableOriginal[16][16][16] =
+#include "core/ym2149_fixed_vol.h"
+;
+} // namespace
+
 const std::array<float, 32768>& YM2149::dacTable() {
     static const std::array<float, 32768> table = [] {
-        constexpr double MaxVol = 65535.0, FOURTH2 = 1.19, WARP = 1.6666666666666667;
-        constexpr float  kDacMakeup = 1.0f;
-
-        double cond = 2.0 / 3.0 / (1.0 - 1.0 / WARP) - 2.0 / 3.0;
-        double c[32];
-        for (int i = 31; i >= 1; --i) {
-            c[i] = cond / 2.0;
-            cond = 1.0 / (1.0 - 1.0 / FOURTH2 / (1.0 / cond + 1.0)) - 1.0;
-        }
-        c[0] = 1.0e-8;
-
-        const double max = (MaxVol * WARP) / (1.0 + 1.0 / (c[31] + c[31] + c[31]));
+        const char* mixEnv = std::getenv("NEOST_YM_MIXING");
         std::array<float, 32768> t{};
-        for (int idx = 0; idx < 32768; ++idx) {
-            const int a = idx & 31, b = (idx >> 5) & 31, cc = (idx >> 10) & 31;
-            const double v = (MaxVol * WARP) / (1.0 + 1.0 / (c[a] + c[b] + c[cc]));
-            t[idx] = float(v / max) * kDacMakeup;
+
+        if (mixEnv && !std::strcmp(mixEnv, "model")) {
+            // Modèle de circuit (Hatari YM2149_BuildModelVolumeTable, sound.c:617-680).
+            constexpr double MaxVol = 65535.0, FOURTH2 = 1.19, WARP = 1.6666666666666667;
+            double cond = 2.0 / 3.0 / (1.0 - 1.0 / WARP) - 2.0 / 3.0;
+            double c[32];
+            for (int i = 31; i >= 1; --i) {
+                c[i] = cond / 2.0;
+                cond = 1.0 / (1.0 - 1.0 / FOURTH2 / (1.0 / cond + 1.0)) - 1.0;
+            }
+            c[0] = 1.0e-8;
+            const double max = (MaxVol * WARP) / (1.0 + 1.0 / (c[31] + c[31] + c[31]));
+            for (int idx = 0; idx < 32768; ++idx) {
+                const int a = idx & 31, b = (idx >> 5) & 31, cc = (idx >> 10) & 31;
+                const double v = (MaxVol * WARP) / (1.0 + 1.0 / (c[a] + c[b] + c[cc]));
+                t[idx] = float(v / max);
+            }
+            return t;
         }
+
+        // Table mesurée : port EXACT de interpolate_volumetable (sound.c:505-543).
+        // vt(i,j,k) plat = i*1024 + j*32 + k, i=C (panel), j=B (row), k=A (element).
+        std::vector<uint16_t> v(32768, 0);
+        auto vt = [&](int i, int j, int k) -> uint16_t& { return v[(i << 10) | (j << 5) | k]; };
+        auto geo = [](uint16_t x, uint16_t y) -> uint16_t {
+            return uint16_t(0.5 + std::sqrt(double(x) * double(y)));
+        };
+        for (int i = 1; i < 32; i += 2) {              // 16 panels → un bloc
+            for (int j = 1; j < 32; j += 2) {          // 16 rows → un panel
+                for (int k = 1; k < 32; k += 2)        // 16 elements → une row
+                    vt(i, j, k) = kVolumeTableOriginal[(i - 1) / 2][(j - 1) / 2][(k - 1) / 2];
+                vt(i, j, 0) = vt(i, j, 1);             // déplace le 0ᵉ élément
+                vt(i, j, 1) = vt(i, j, 3);             // déplace le 1ᵉʳ élément
+                vt(i, j, 3) = geo(vt(i, j, 1), vt(i, j, 5));    // interpole le 3ᵉ
+                for (int k = 2; k < 32; k += 2)        // interpole les éléments pairs
+                    vt(i, j, k) = geo(vt(i, j, k - 1), vt(i, j, k + 1));
+            }
+            for (int k = 0; k < 32; ++k) {
+                vt(i, 0, k) = vt(i, 1, k);             // déplace la 0ᵉ row
+                vt(i, 1, k) = vt(i, 3, k);             // déplace la 1ʳᵉ row
+                vt(i, 3, k) = geo(vt(i, 1, k), vt(i, 5, k));    // interpole la 3ᵉ
+            }
+            for (int j = 2; j < 32; j += 2)            // interpole les rows paires
+                for (int k = 0; k < 32; ++k)
+                    vt(i, j, k) = geo(vt(i, j - 1, k), vt(i, j + 1, k));
+        }
+        for (int j = 0; j < 32; ++j)
+            for (int k = 0; k < 32; ++k) {
+                vt(0, j, k) = vt(1, j, k);             // déplace le 0ᵉ panel
+                vt(1, j, k) = vt(3, j, k);             // déplace le 1ᵉʳ panel
+                vt(3, j, k) = geo(vt(1, j, k), vt(5, j, k));    // interpole le 3ᵉ
+            }
+        for (int i = 2; i < 32; i += 2)                // interpole les panels pairs
+            for (int j = 0; j < 32; ++j)
+                for (int k = 0; k < 32; ++k)
+                    vt(i, j, k) = geo(vt(i - 1, j, k), vt(i + 1, j, k));
+
+        // Normalisation ≙ YM2149_Normalise_5bit_Table (sound.c:700-724) : [0,max] →
+        // [0,1] flottant, max = entrée « 3 voies à fond » (0x7fff). Le niveau (Level /
+        // Level>>1 STE d'Hatari) est porté par outScale_ ; pas de centrage
+        // (YM_OUTPUT_CENTERED=false), le HPF sous-sonique recentre comme chez Hatari.
+        const float max = float(v[0x7fff]);
+        for (int idx = 0; idx < 32768; ++idx) t[idx] = float(v[idx]) / max;
         return t;
     }();
     return table;

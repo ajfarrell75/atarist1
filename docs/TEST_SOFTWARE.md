@@ -38,6 +38,7 @@ Hatari : `video.c`, `spec512.c`.
 |--------|---------|-----------|------------------|------------|
 | **Spectrum 512** | Inshape | Réécrit la palette plusieurs fois par ligne → >512 couleurs affichées | Synchro cycle-près `MOVE.W` ↔ position du faisceau. Défaut : couleurs décalées verticalement, bandes/flicker | ✅ **RÉSOLU** — diaporama étalon **0 px vs Hatari** (4 images), flicker éliminé. Reste : scroll fin mi-ligne |
 | **Enchanted Land** | Thalion | Scrolling horizontal pixel-près SANS Blitter : bascule 50↔60 Hz en fin de ligne pour tromper le compteur d'adresse interne du Shifter et décaler l'adresse de base | 1 cycle d'erreur → écran qui saute/déchire ou plante. Exige la géométrie variable EN COURS de trame | « Suppression de bordures » (géométrie mi-trame) |
+| **No Cooper** | 1984, 1989 | Écran principal : logo raster + « waver » plein écran par **overscan G/D en MED-RES** (bascules de résolution, pas de bascules 50/60) | Cas d'école `Video_WriteToGlueRes` (chantier V2). NeoST actuel : nappe bornée aux bordures (écart 891 px vs oracle) | « Tricks par résolution » (V2) — étalon `nocooper` (fetch fujiology, touche espace vbl 900, écran ~6800 ; cible = `tests/reference/nocooper_oracle.png`) |
 | **The Cuddly Demos** | The Carebears (TCB), 1989 | 1ʳᵉ démo à ouvrir les **4 bordures** (haut/bas/gauche/droite) simultanément : boucles de NOP calibrées qui commutent la fréquence au moment où le canon atteint les limites de l'affichage standard. Le robot du menu est dessiné puis **effacé en course avec le faisceau** (un seul buffer) : seul un rendu échantillonné PAR LIGNE le voit (cf. `lineSnap_`, commit 08b58e1) | Précision des timings de génération HSYNC/VSYNC + tampons internes Shifter | « Suppression de bordures » (BORDERMASK_*) |
 
 ### Quirk connu — PAS un bug d'émulation
@@ -98,7 +99,8 @@ python3 tools/compare_screenshot.py tests/out/foo_neost.ppm tests/reference/foo.
 ```
 
 Étalons intégrés aujourd'hui : **glue_selftest**, **EmuTOS STE boot**, **Spectrum 512 diapo**,
-**overscan_top** ; fetch auto : **Cuddly Demos** (`disks/etalons/cuddly_demos.msa`). Union Demo
+**overscan_top**, **nocooper** (V2, réf. oracle archivée) ; fetch auto : **Cuddly Demos**
+(`disks/etalons/cuddly_demos.msa`), **No Cooper** (`disks/etalons/nocooper.msa`). Union Demo
 et Troed : à rapatrier / calibrer (frames `etalons.json`).
 
 ---

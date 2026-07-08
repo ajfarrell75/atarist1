@@ -105,6 +105,8 @@ void Audio::produceFrame(int64_t frameCycles) {
         drive_->mix(dv, uint32_t(n));
         for (int i = 0; i < n; ++i) { st[2 * i] += dv[i]; st[2 * i + 1] += dv[i]; }
     }
+    if (masterVol_ != 1.0f)                                // volume maître utilisateur (menu)
+        for (int i = 0; i < 2 * n; ++i) st[i] *= masterVol_;
     for (int i = 0; i < 2 * n; ++i)                        // garde-fou anti-saturation
         st[i] = std::max(-1.0f, std::min(1.0f, st[i]));
 

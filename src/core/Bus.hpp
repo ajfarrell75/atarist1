@@ -176,6 +176,11 @@ public:
     // Champs ICI pour que le test du chemin chaud CPU soit un simple load (Cpu68k.cpp).
     int64_t blitterWinStart = -1;
     int64_t blitterWinEnd   = -1;
+    // Fenêtre CPU du blitter non-hog (port BLITTER_PHASE_COUNT_CPU_BUS, modèle CE
+    // d'Hatari) : true = le blitter attend que le CPU consomme ses 64 accès bus ;
+    // chaque accès CPU est signalé (Blitter::noteCpuBusAccess), le 64ᵉ relance le
+    // blitter. Champ ICI pour la même raison que blitterWinStart/End.
+    bool    blitterCountCpu = false;
     Rtc*     rtc     = nullptr;   // horloge RP5C15 ($FFFC21) — Mega ST / Mega STE
     MidiAcia* midi   = nullptr;   // ACIA MIDI ($FFFC04) — bouclage OUT→IN
     Cpu68k*  cpu     = nullptr;   // pour rafraîchir l'IPL après un accès MMIO

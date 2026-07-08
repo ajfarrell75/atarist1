@@ -7,19 +7,25 @@
 //  de données (HOP, LOP, FXSR/NFSR, smudge, halftone, comptes X/Y, incréments)
 //  est un port fidèle de Hatari blitter.c.
 //
-//  PARTAGE DE BUS (port du modèle non cycle-exact d'Hatari, blitter.c:864-944) :
+//  PARTAGE DE BUS (port du modèle cycle-exact d'Hatari, blitter.c) :
 //   - mode HOG (bit6 de $FF8A3C) : le blitter garde le bus jusqu'à y_count = 0 ;
 //     le CPU est arrêté pendant toute la durée (4 cycles par accès bus, comptés
 //     pendant le transfert et facturés via Cpu68k::addBusWaitCycles) ;
-//   - mode NON-HOG : le blitter transfère par TRANCHES de 64 accès bus (256
-//     cycles, CPU arrêté), puis rend le bus au CPU pour 64 accès (256 cycles)
-//     avant de reprendre (événement Scheduler::BLITTER) — l'alternance 64/64 du
-//     vrai matériel. BUSY et les compteurs/adresses sont lisibles EN COURS de
-//     blit (progression par tranche) ; effacer BUSY pendant le transfert met le
-//     blitter en PAUSE (repris au prochain BUSY=1), comme sur le vrai matériel.
-//  Granularité : la tranche se découpe à la frontière de MOT (un mot peut
-//  déborder le budget de ≤3 accès). Le stall CPU avance l'horloge cycle-exact de
-//  Moira, comme les autres wait states de bus.
+//   - mode NON-HOG : le blitter transfère par TRANCHES de 64 accès bus exactement
+//     (suspension MID-WORD comme BLITTER_CONTINUE_LATER_IF_MAX_BUS_REACHED — l'état
+//     du mot en cours survit à la coupure), puis rend le bus au CPU pour 64 accès
+//     bus CPU RÉELS (port BLITTER_PHASE_COUNT_CPU_BUS : comptés par les callbacks
+//     mémoire de Moira, cf. noteCpuBusAccess ; le 64ᵉ arme la fenêtre PRE_START et
+//     date la tranche suivante à +4 cycles) — l'alternance 64/64 du vrai matériel.
+//     BUSY et les compteurs/adresses sont lisibles EN COURS de blit (progression
+//     par tranche) ; effacer BUSY pendant le transfert met le blitter en PAUSE
+//     (repris au prochain BUSY=1), comme sur le vrai matériel.
+//  Le stall CPU avance l'horloge cycle-exact de Moira, comme les autres wait
+//  states de bus. Limite restante vs Hatari CE : pas d'exécution CPU parallèle
+//  pendant la tranche blitter (Blitter_Check_Simultaneous_CPU) — le CPU est
+//  stallé en bloc, ses cycles internes ne recouvrent pas le blit (sauf les 4
+//  cycles PRE_START). MegaSTE 16 MHz : les hits du cache CPU sont comptés comme
+//  accès bus (approximation, le vrai cache ne sort pas sur le bus).
 //
 //  (c) 2026 VERHILLE Arnaud — projet NeoST.
 // =============================================================================
@@ -74,6 +80,10 @@ public:
     // pendant la fenêtre PRE_START est compté à tort par le blitter — la prochaine
     // tranche non-hog ne fera que 63 accès. Appelé par Cpu68k.cpp (Moira seul).
     void notePreStartCpuAccess();
+    // Fenêtre CPU non-hog (port Blitter_HOG_CPU_mem_access_after, blitter.c:1603) :
+    // chaque accès bus CPU pendant que bus_.blitterCountCpu est armé incrémente le
+    // compteur ; le 64ᵉ relance le blitter (PRE_START à now+4). Appelé par Cpu68k.cpp.
+    void noteCpuBusAccess(int64_t now);
 private:
 
     Bus&       bus_;
@@ -99,6 +109,14 @@ private:
     bool     midBlit_  = false;              // un transfert est engagé (même en pause)
     bool     haveFxsr_ = false;              // lecture source extra déjà faite (ligne)
     bool     nfsrInt_  = false;              // dernière lecture source de la ligne sautée
+    // État du MOT en cours (équivalents BlitterState d'Hatari) : une tranche peut se
+    // suspendre ENTRE deux accès bus d'un même mot (ContinueLater) — ces membres
+    // permettent de reprendre exactement à l'accès suivant.
+    bool     haveSrc_  = false;              // lecture source du mot courant déjà faite
+    bool     haveDst_  = false;              // lecture destination du mot courant déjà faite
+    bool     fetchSrc_ = false;              // une source a été lue (màj src_addr en fin de mot)
+    uint16_t dstWord_  = 0;                  // mot destination lu (survit à la suspension)
     int      sliceBus_ = 0;                  // accès bus consommés par la tranche en cours
+    int      cpuBusCnt_ = 0;                 // accès bus CPU consommés (fenêtre COUNT_CPU_BUS)
     bool     busCountError_ = false;         // accès CPU « volé » en PRE_START → tranche de 63
 };

@@ -40,6 +40,12 @@ public:
     // d'échantillons). À appeler APRÈS Machine::runFrame.
     void produceFrame(int64_t frameCycles);
 
+    // Volume maître de la SORTIE (0..1) — réglage utilisateur (barre de menu, persisté
+    // dans neost.cfg), appliqué au mix final avant clamp. Indépendant du LMC1992 ÉMULÉ
+    // (qui, lui, appartient à la machine). Lu/écrit sur le seul thread d'émulation.
+    void  setMasterVolume(float v) { masterVol_ = v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v); }
+    float masterVolume() const { return masterVol_; }
+
 private:
     YM2149&     psg_;
     DriveSound* drive_   = nullptr;
@@ -56,6 +62,7 @@ private:
     std::vector<float> ymScratch_;       // voie YM mono intermédiaire (frames)
     std::vector<float> driveScratch_;    // bruits lecteur mono intermédiaires (frames)
     uint32_t           rate_ = 48000;    // fréquence de sortie réelle du périphérique (frames/s)
+    float              masterVol_ = 1.0f; // volume maître utilisateur (cf. setMasterVolume)
     double             sampleCarry_ = 0.0; // report fractionnaire (nb d'échantillons/trame exact à long terme)
     uint32_t           primeSamples_ = 4000; // coussin cible (≈ latence visée, ~85 ms) — amorçage + asservissement
     bool               primed_ = false;  // (thread audio) : l'anneau a-t-il atteint le coussin ? sinon → silence

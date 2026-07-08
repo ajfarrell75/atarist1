@@ -61,6 +61,10 @@ débloque l'oracle des scènes qui exigent une touche (menu Cuddly, démos) — 
   une touche au « titre » (vbl ~1500) s'envoie à **~30 s** réelles, pas après quelques sleeps.
 - Joystick : pas d'event direct ; passer par `--joystick <port>` (touches curseur) + une
   touche de tir, ou injecter les scancodes.
+- ⚠ **`keypress` (make+break instantanés) peut être IGNORÉ** par un poll clavier de démo
+  (vérifié : menu Cuddly insensible au `keypress 57`). Recette fiable = appui TENU :
+  `keydown 57`, sleep 0.5, `keyup 57`. Tester la livraison de la fifo avec une commande
+  invalide (`keypress zz`) → l'ERROR dans le log prouve la réception.
 
 ```sh
 FIFO=/tmp/h.fifo; rm -f "$FIFO"
@@ -90,6 +94,15 @@ exec 3>&- ; wait
   ST). Pour MegaSTE il faut un **EmuTOS 256 Ko** (`etos256us/fr.img`, qui se présente
   « Atari Mega STe ») ou un TOS 2.05/2.06. C'est ainsi qu'on a tranché la question du SCU
   (cf. `CHANGELOG` : EmuTOS 256K **programme** le SCU comme TOS 2.06).
+- **`--avirecord` peut exiger un booléen explicite** : sur le build Linux du sous-module
+  (v2.6.1-devel), la forme drapeau `--avirecord` échoue (« Usage: … ») — écrire
+  `--avirecord on`. La forme drapeau passe sur le binaire Homebrew macOS.
+- **Oracle AUDIO** : l'AVI embarque la piste son → `ffmpeg -i h.avi -vn -acodec pcm_s16le h.wav`
+  donne le WAV de référence (48 kHz via `--sound 48000`). ⚠ Hatari applique un HPF sous-sonique
+  + IIR LMC au mix : les métriques à composante continue ne sont PAS comparables à NeoST (pas
+  de HPF sur le canal DMA) — comparer des ratios de contenu (fenêtres, spectres), ou mieux :
+  `--trace dmasound` logge chaque fetch FIFO (« DMA snd fifo refill adr=… ») à diff-er contre
+  `NEOST_DMASND_TRACE=1` côté NeoST (cf. `DEV.md`).
 - **`--avirecord` exige `--avi-file`** ; sans `--avi-vcodec png` le défaut peut être un
   codec moins pratique à décoder.
 - Au **premier lancement** Hatari crée `~/Library/Application Support/Hatari/` (config,

@@ -115,6 +115,19 @@ public:
     uint8_t read8(uint32_t addr);
     void    write8(uint32_t addr, uint8_t v);
 
+    // Wakeup state STF — TRANCHÉ WS3 (défaut oracle Hatari ; NEOST_WS=1..4 pour
+    // A/B). Détermine les positions horizontales de la Glue (+0/+3/+1/+2), la
+    // position de l'IRQ HBL (cpl−4 en WS1, cpl sinon) et la VBL STF (60/64).
+    // Machine s'en sert pour HBL/VBL ; le détail vit dans glue:: (Shifter.cpp).
+    static int wakestate();
+
+    // V2 — post-traitement d'une écriture RES ($FF8260) APRÈS updateGlueState :
+    // détections spécifiques aux bascules de résolution (Video_WriteToGlueRes,
+    // video.c:1637-1753) — overscan MED-RES (No Cooper/PYM), retrait gauche med
+    // (LEFT_OFF_MED), variante courte STE, stab med et scrolls « hardware »
+    // 13/9/5/1 px. `prevRes`/`newRes` = valeur $FF8260&3 avant/après l'écriture.
+    void updateGlueRes(int line, int lineCycles, int prevRes, int newRes);
+
     // Position (cycle DANS la ligne) du tic Timer B en mode event-count, portée de
     // Hatari `Video_TimerB_GetDefaultPos` : on compte les FINS de ligne (DE_end+24)
     // par défaut, ou les DÉBUTS (DE_start+24) si l'AER du MFP sélectionne le front de
@@ -357,10 +370,10 @@ private:
     // explicite et base fournie (pas de stride interne). Applique le scroll fin STE
     // (même modèle prefetch/sans-prefetch que decodeLineIndices) et renvoie le
     // décalage scroll (l'appelant lit idx[s + scroll]).
-    int decodeWindowIndices(uint32_t base, int nPix, uint8_t* idx) const;
+    int decodeWindowIndices(uint32_t base, int nPix, uint8_t* idx, bool medLine = false) const;
     // Variante depuis une CAPTURE de ligne (octets déjà échantillonnés au faisceau,
     // cf. lineSnap_) : même décodage planaire, source tampon au lieu du bus.
-    int decodeWindowIndicesFromBytes(const uint8_t* src, int srcLen, int nPix, uint8_t* idx) const;
+    int decodeWindowIndicesFromBytes(const uint8_t* src, int srcLen, int nPix, uint8_t* idx, bool medLine = false) const;
 
     // --- Spec512 : palette intra-ligne (port Hatari spec512.c) --------------
     // Une écriture palette dans la trame, datée au cycle (façon CyclePalettes[]).

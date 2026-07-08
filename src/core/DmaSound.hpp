@@ -26,17 +26,21 @@ class DmaSound {
 public:
     explicit DmaSound(Bus& bus) : bus_(bus) {}
 
-    // L'ordonnanceur date la fin de trame (→ event-count Timer A du MFP), sur le
-    // thread d'émulation : c'est là que doit tomber l'interruption, pas sur le
-    // thread audio (qui ne fait que générer le son). Branchés par Machine.
+    // L'ordonnanceur fournit l'horloge émulée (liveNow) qui date la consommation
+    // DAC et donc la fin de trame (→ event-count Timer A du MFP), sur le thread
+    // d'émulation. Branché par Machine.
     void setScheduler(Scheduler* s) { sched_ = s; }
     // Câble le MFP et lui SIGNALE la présence du son DMA (modèle STE/Mega STE) :
     // le MFP n'XOR la ligne XSINT dans GPIP7 que si ce flag est posé (cf. Hatari
     // MFP_Main_Compute_GPIP7 : XOR réservé à Config_IsMachineSTE()/TT()).
     void setMfp(Mfp* m);
 
-    // Échéance « fin de trame DMA » : pulse Timer A (TAI), reboucle si repeat.
-    void onFrameEnd();
+    // Tic HBL (thread émulation) — port de DmaSnd_STE_HBL_Update (dmaSnd.c:727-741) :
+    // remplit la FIFO 8 octets (fetch DMA au faisceau), consomme au rythme DAC (les
+    // octets tirés sont CAPTURÉS pour le rendu audio), re-remplit. C'est ICI que la
+    // fin de trame est détectée (au FETCH, en avance sur la lecture DAC, comme le
+    // vrai matériel) → XSINT/Timer A. Appelé par Machine::onHbl (STE/Mega STE).
+    void onHbl();
 
     // MMIO $FF8900-$FF8925 (octets ; le 68000 y fait des mots big-endian).
     uint8_t read8(uint32_t addr);
@@ -67,8 +71,10 @@ public:
     void    setCycleClock(std::function<int64_t()> c) { cycleClock_ = std::move(c); events_.reserve(256); }
 
     // Jette les événements de la trame sans rendre (frontend audio non démarré / trame
-    // sautée) : borne la mémoire. Appelé par Audio::produceFrame sur les chemins early-out.
-    void    clearEvents() { events_.clear(); }
+    // sautée) : borne la mémoire ET draine le flux capturé (sinon un retard s'accumule
+    // et rejouerait en différé au démarrage de l'audio). Appelé par Audio::produceFrame
+    // sur les chemins early-out.
+    void    clearEvents() { events_.clear(); capR_ = capW_; }
 
     // Gain de sortie linéaire (LMC1992 : volume maître + gauche/droite, en mono).
     // S'applique à TOUT le son STE (YM2149 + DMA), comme la puce réelle. 1.0 par
@@ -95,10 +101,21 @@ public:
     bool    playing() const { return playing_; }
 
 private:
-    int     sampleAt(uint32_t addr, bool stereo) const;   // octet(s) RAM → -128..127 mono
-    void    sampleAtLR(uint32_t addr, bool stereo, int& l, int& r) const;  // octets RAM → L/R séparés
+    // ---- FIFO 8 octets + capture (port dmaSnd.c, thread émulation) -----------------
+    void    fifoRefill();            // fetch DMA par MOTS tant qu'il y a ≥ 2 places (≙ DmaSnd_FIFO_Refill)
+    int8_t  fifoPull();              // tire l'octet le plus ancien (refill si vide, ≙ DmaSnd_FIFO_PullByte)
+    void    fifoSetStereo();         // réaligne la FIFO sur frontière paire (≙ DmaSnd_FIFO_SetStereo)
+    void    updateDac();             // consomme au rythme DAC jusqu'à liveNow → capture_ (≙ Sound_Update)
+    // Anneau de CAPTURE des octets tirés par le DAC : produit par le cœur (updateDac),
+    // consommé par le rendu audio (mixSegment/mix). Taille FIXE (jamais de realloc :
+    // le chemin WASM lit depuis un autre thread), les plus vieux octets sont jetés si
+    // personne ne consomme. Indices monotones (modulo à l'accès).
+    size_t  capAvail() const { return capW_ - capR_; }
+    void    capPush(int8_t b);
+    // Tire le prochain échantillon L/R du flux capturé (mono → L=R). false = flux vide.
+    bool    capPullLR(bool stereo, int& l, int& r);
     // Rend `count` échantillons stéréo dans `st` (entrelacé) à partir de l'état audio
-    // (aPlaying_/aAddr_…) en avançant ce dernier ; `ym` aligné sur le 1er échantillon.
+    // (aPlaying_/aMode_…) en consommant le flux capturé ; `ym` aligné sur le 1er échantillon.
     void    mixSegment(float* st, const float* ym, uint32_t count, uint32_t sampleRate);
     // Enregistre un événement de trame DMA daté (si l'horloge push est câblée).
     void    recordEvent(uint8_t kind);
@@ -109,15 +126,13 @@ private:
     // identique après les 16 pas), valeur écrite hors transfert — port de Hatari
     // DmaSnd_InterruptHandler_Microwire (dmaSnd.c:1063-1064).
     uint16_t mwMaskRead() const;
-    void    scheduleFrameEnd();                           // date la prochaine fin de trame
     void    startNewFrame();                              // (re)démarre une trame (gère start==end)
     void    setXsint(bool level);                         // pilote la ligne XSINT (→ MFP GPIP7)
-    // Position LIVE cycle-exacte du compteur de trame ($FF8909/0B/0D) : calculée
-    // depuis l'horloge ÉMULÉE (équivalent du Sound_Update en tête de
-    // DmaSnd_GetFrameCount chez Hatari), pas depuis la production audio hôte —
-    // indispensable en headless (mix() n'y tourne jamais → compteur figé avant)
-    // et pour les programmes qui POLLENT le compteur pour se synchroniser.
-    uint32_t liveCounter() const;
+    // Compteur de trame $FF8909/0B/0D : synchronise la consommation DAC + le fetch
+    // FIFO jusqu'à l'instant émulé courant puis rend l'adresse de FETCH (port exact
+    // de DmaSnd_GetFrameCount : Sound_Update en tête, puis dma.frameCounterAddr —
+    // le compteur matériel montre où le DMA LIT, en avance de la FIFO sur le DAC).
+    uint32_t liveCounter();
 
 public:
     // Une étape du shift série Microwire (datée par le Scheduler, source MICROWIRE) :
@@ -135,18 +150,35 @@ private:
     uint8_t  mode_ = 0;              // $FF8921 : bits0-1 fréquence, bit7 = mono
     uint32_t startAddr_ = 0;         // $FF8903/05/07
     uint32_t endAddr_   = 0;         // $FF890F/11/13
-    uint32_t curAddr_   = 0;         // position de la SYNTHÈSE audio hôte (cf. mix)
+    uint32_t curAddr_   = 0;         // adresse de FETCH du DMA (avance par MOTS, cf. fifoRefill)
     // Trame DMA en cours, LATCHÉE au démarrage (port DmaSnd_StartNewFrame : le HW
     // fige début/fin à l'ouverture de la trame ; réécrire $FF8903+ pendant la
-    // lecture ne vaut que pour la trame SUIVANTE). Sert au compteur live $FF8909+.
+    // lecture ne vaut que pour la trame SUIVANTE). frameEndAddr_ = comparateur
+    // d'ÉGALITÉ du fetch (début == fin, repeat ON → trame 2^24 octets, le fetch
+    // traverse tout l'espace d'adressage — Hatari dmaSnd.c:336-341, démo « A
+    // Little Bit Insane » de Lazer).
     uint32_t frameStartAddr_  = 0;   // adresse de début latchée
     uint32_t frameEndAddr_    = 0;   // adresse de fin latchée
-    // Longueur de la trame latchée en OCTETS, avec wrap 24 bits : (fin − début)
-    // mod 2^24, et début == fin (repeat ON) → 2^24 octets — le compteur AVANCE à
-    // travers tout l'espace d'adressage et le son joue la RAM (vérifié sur STE
-    // réel, cf. Hatari dmaSnd.c:336-341 ; démo « A Little Bit Insane » de Lazer).
-    int64_t  frameLen_        = 0;
-    int64_t  frameStartCycle_ = 0;   // cycle (horloge émulée live) du début de trame
+
+    // ---- FIFO matérielle 8 octets + consommation DAC (thread émulation) -----------
+    // Port du modèle Hatari (dmaSnd.c:117-147) : le DMA fetche des MOTS en RAM dans
+    // une FIFO anneau de 8 octets remplie à chaque HBL ; le DAC la vide à la cadence
+    // programmée. Conséquences fidèles : les octets sont figés AU FETCH (un programme
+    // qui modifie le tampon pendant la lecture — Mental Hangover, Power Up Plus —
+    // n'affecte pas les octets déjà fetchés) et la fin de trame tombe au FETCH du
+    // dernier mot (XSINT/Timer A en avance d'au plus 8 octets sur le DAC).
+    int8_t   fifo_[8] = {};
+    uint16_t fifoPos_ = 0;           // prochain octet à tirer (0-7)
+    uint16_t fifoNb_  = 0;           // octets présents (0-8)
+    int64_t  dacLast_ = 0;           // cycle live de la dernière consommation DAC
+    int64_t  dacRem_  = 0;           // reste fractionnaire (numérateur mod CPU_HZ, ≙ frameCounter_float)
+
+    // Anneau de capture des octets consommés par le DAC (cœur → rendu audio). Taille
+    // fixe, indices monotones ; débordement = octets les plus vieux jetés (aucun
+    // consommateur branché : headless sans --sound-dump).
+    static constexpr size_t kCapSize = 1u << 16;
+    std::vector<int8_t> cap_ = std::vector<int8_t>(kCapSize);
+    size_t   capW_ = 0, capR_ = 0;
     uint16_t mwData_ = 0, mwMask_ = 0;  // microwire $FF8922/$FF8924 (mots 16 bits)
     uint16_t mwShift_ = 0;              // valeur LUE en $FF8922 pendant le shift (→ 0)
     int      mwSteps_ = 0;              // décalages restants (16 au départ, 0 = fini)
@@ -174,26 +206,26 @@ private:
 
     // --- État de lecture côté AUDIO (modèle push horodaté) -------------------------
     // Miroir de la trame DMA vu par le RENDU audio, distinct de l'état CPU (playing_,
-    // curAddr_…) qui pilote la logique du jeu (compteur $FF8909, Timer A). Avancé par
-    // mixSegment et (re)posé par les événements rejoués → permet de finir un sample
-    // après l'effacement CPU du bit PLAY, et de jouer un one-shot intra-trame. PERSISTE
-    // entre les trames (sample multi-trames).
+    // curAddr_…) qui pilote la logique du jeu (compteur $FF8909, Timer A). Les DONNÉES
+    // viennent du flux capturé (cap_) — l'audio ne relit plus la RAM ; les événements
+    // rejoués posent la cadence (aMode_) et l'activité (aPlaying_). Après un STOP, le
+    // flux résiduel est DRAINÉ avant de rendre la main au YM (≙ Hatari : la FIFO finit
+    // de se vider après l'effacement du bit PLAY, dmaSnd.c:548).
     bool     aPlaying_ = false;
-    uint32_t aStart_ = 0, aEnd_ = 0, aAddr_ = 0;
     uint8_t  aMode_ = 0;
-    bool     aRepeat_ = false;
     double   aPhase_ = 0.0;
     bool     aHaveCur_ = false;
 
     // Événement de trame DMA horodaté (cycle CPU frame-relatif). kind : 0 = PLAY start
-    // (start/end/mode/repeat latchés), 1 = STOP (bit PLAY effacé par le CPU).
+    // (0→1 du bit PLAY, ≙ DmaInitSample), 1 = STOP (bit PLAY effacé par le CPU),
+    // 2 = MODE (changement de $FF8921 : cadence/mono-stéréo du rendu).
     struct DmaEvent { uint32_t cycle; uint8_t kind; uint32_t start, end; uint8_t mode; bool repeat; };
     std::vector<DmaEvent>    events_;            // transitions de la trame courante
     std::function<int64_t()> cycleClock_;        // cycle CPU frame-relatif (posé par le frontend push)
 
     // Ligne XSINT (External Sound INTerrupt) du son DMA STE : HAUT pendant qu'une
     // trame joue, BAS à l'arrêt / fin de trame. Câblée à TAI (Timer A event-count,
-    // déjà géré via onFrameEnd) ET à GPIP7 du MFP (XOR avec la détection moniteur).
+    // fin de trame détectée au fetch, cf. fifoRefill) ET à GPIP7 du MFP (XOR moniteur).
     // Réf. Hatari DmaSnd_Update_XSINT_Line / DmaSnd_Get_XSINT_Line.
     bool     xsint_ = false;
 

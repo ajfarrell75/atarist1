@@ -57,10 +57,13 @@ static std::string resolveData(const std::string& given, const std::string& exeD
 // démarre toujours OFF (elle avale flèches + Ctrl droit, ce qui « casse » le
 // clavier des jeux — Cuddly, Captain Blood…) ; F11/menu l'activent à la session.
 struct Config { std::string rom; std::string disk; std::string cart; bool mono = false;
+                std::string gemdos;   // HD GEMDOS : dossier hôte monté en C: (vide = off)
+                std::string acsi;     // image disque dur ACSI cible 0 (vide = off)
                 std::string cpu = "moira"; std::string machine = "st";
                 std::string mem = "512k"; bool fpu = false;   // MC68881 Mega STE (cf. Fpu.hpp)
                 int joyport = 1;
                 float joydeadzone = 0.30f; bool fastfdc = false;
+                float volume = 1.0f;   // volume maître de la sortie audio (0..1, barre de menu)
                 bool showDisk = true, showCart = true, showHex = true, showCpu = true;
                 bool showJoy = false;
                 std::string rtc; std::time_t rtcSaved = 0; };
@@ -98,6 +101,8 @@ static Config loadConfig(const std::string& exeDir) {
         if      (line.rfind("rom=", 0)  == 0) c.rom  = line.substr(4);
         else if (line.rfind("disk=", 0) == 0) c.disk = line.substr(5);
         else if (line.rfind("cart=", 0) == 0) c.cart = line.substr(5);
+        else if (line.rfind("gemdos=", 0) == 0) c.gemdos = line.substr(7);
+        else if (line.rfind("acsi=", 0) == 0) c.acsi = line.substr(5);
         else if (line.rfind("mono=", 0) == 0) c.mono = (line.substr(5) == "1");
         else if (line.rfind("cpu=", 0)  == 0) c.cpu  = line.substr(4);
         else if (line.rfind("machine=", 0) == 0) c.machine = line.substr(8);
@@ -106,6 +111,11 @@ static Config loadConfig(const std::string& exeDir) {
         else if (line.rfind("joyport=", 0) == 0) c.joyport = (line.substr(8) == "0") ? 0 : 1;
         else if (line.rfind("joydeadzone=", 0) == 0) c.joydeadzone = std::strtof(line.substr(12).c_str(), nullptr);
         else if (line.rfind("fastfdc=", 0) == 0) c.fastfdc = (line.substr(8) == "1");
+        else if (line.rfind("volume=", 0) == 0) {
+            c.volume = std::strtof(line.substr(7).c_str(), nullptr);
+            if (c.volume < 0.0f) c.volume = 0.0f;
+            if (c.volume > 1.0f) c.volume = 1.0f;
+        }
         else if (line.rfind("showDisk=", 0) == 0) c.showDisk = (line.substr(9) == "1");
         else if (line.rfind("showCart=", 0) == 0) c.showCart = (line.substr(9) == "1");
         else if (line.rfind("showHex=", 0) == 0) c.showHex = (line.substr(8) == "1");
@@ -121,11 +131,13 @@ static void saveConfig(const std::string& exeDir, Config& c, Machine* machine = 
     std::ofstream f(cfgPath(exeDir));
     if (!f) f.open("neost.cfg");
     if (f) f << "rom=" << c.rom << "\ndisk=" << c.disk << "\ncart=" << c.cart
+             << "\ngemdos=" << c.gemdos << "\nacsi=" << c.acsi
              << "\nmono=" << (c.mono ? 1 : 0)
              << "\ncpu=" << c.cpu << "\nmachine=" << c.machine << "\nmem=" << c.mem
              << "\nfpu=" << (c.fpu ? 1 : 0)
              << "\njoyport=" << c.joyport
              << "\njoydeadzone=" << c.joydeadzone << "\nfastfdc=" << (c.fastfdc ? 1 : 0)
+             << "\nvolume=" << c.volume
              << "\nshowDisk=" << (c.showDisk ? 1 : 0)
              << "\nshowCart=" << (c.showCart ? 1 : 0)
              << "\nshowHex=" << (c.showHex ? 1 : 0)
@@ -144,8 +156,14 @@ static void saveConfig(const std::string& exeDir, Config& c, Machine* machine = 
 // zone à usage privé. À préfixer à un libellé : ICON_FA_REDO " Reset".
 #define ICON_FA_POWER_OFF     "\xef\x80\x91"
 #define ICON_FA_REDO          "\xef\x80\x9e"
+#define ICON_FA_VOLUME_OFF    "\xef\x80\xa6"
+#define ICON_FA_VOLUME_DOWN   "\xef\x80\xa7"
+#define ICON_FA_VOLUME_UP     "\xef\x80\xa8"
+#define ICON_FA_VOLUME_MUTE   "\xef\x9a\xa9"
 #define ICON_FA_ADJUST        "\xef\x81\x82"
 #define ICON_FA_EJECT         "\xef\x81\x92"
+#define ICON_FA_HDD           "\xef\x82\xa0"
+#define ICON_FA_FOLDER_OPEN   "\xef\x81\xbc"
 #define ICON_FA_SAVE          "\xef\x83\x87"
 #define ICON_FA_BOLT          "\xef\x83\xa7"
 #define ICON_FA_DESKTOP       "\xef\x84\x88"
@@ -875,20 +893,35 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "[main] Aucune disquette montée (%s).\n", diskPath.c_str());
     if (!cartPath.empty() && !machine.loadCart(cartPath))
         std::fprintf(stderr, "[main] Aucune cartouche montée (%s).\n", cartPath.c_str());
-    // Disque dur GEMDOS (variable d'environnement NEOST_GEMDOS_DIR) : mappe un
-    // dossier hôte sur C: en redirigeant les appels GEMDOS (façon Hatari). Installe
-    // une cartouche système à $FA0000 → exclusif avec une cartouche externe. Cf.
-    // io/GemdosHd.hpp et l'option --gemdos du headless.
-    if (const char* gd = std::getenv("NEOST_GEMDOS_DIR")) {
+    // Résolution de chemin façon resolveData mais tolérante aux DOSSIERS (le HD
+    // GEMDOS monte un répertoire ; fs::exists accepte fichiers et dossiers).
+    auto resolvePath = [&exeDir](const std::string& given) -> std::string {
+        const std::string cands[] = { given, exeDir + "/" + given, exeDir + "/../" + given, "../" + given };
+        std::error_code ec;
+        for (const auto& c : cands) if (fs::exists(c, ec)) return c;
+        return given;
+    };
+    // Disque dur GEMDOS : mappe un dossier hôte sur C: en redirigeant les appels
+    // GEMDOS (façon Hatari). Installe une cartouche système à $FA0000 → exclusif
+    // avec une cartouche externe. Mémorisé dans neost.cfg (gemdos=) et configurable
+    // via le menu Machine → Disque dur ; NEOST_GEMDOS_DIR prime. Cf. io/GemdosHd.hpp
+    // et l'option --gemdos du headless.
+    if (const char* gd = std::getenv("NEOST_GEMDOS_DIR")) cfg.gemdos = gd;
+    if (const char* hd = std::getenv("NEOST_ACSI_IMG"))   cfg.acsi  = hd;
+    if (!cfg.gemdos.empty()) {
         if (!cartPath.empty())
             std::fprintf(stderr, "[main] cartouche ignorée : incompatible avec GEMDOS HD\n");
-        machine.gemdos.setDirectory(gd);
+        if (!machine.gemdos.setDirectory(resolvePath(cfg.gemdos)))
+            cfg.gemdos.clear();                // dossier invalide → on ne le mémorise pas
     }
-    // Disque dur ACSI (variable d'environnement NEOST_ACSI_IMG) : image de disque dur
-    // (cible 0) ; le TOS lit la table de partitions et monte C:/D:… Cf. io/Acsi.hpp.
-    if (const char* hd = std::getenv("NEOST_ACSI_IMG"))
-        if (machine.fdc.mountAcsi(hd))
+    // Disque dur ACSI (image brute, cible 0) : le TOS lit la table de partitions et
+    // monte C:/D:… Mémorisé (acsi=) et configurable via le menu ; NEOST_ACSI_IMG
+    // prime. Cf. io/Acsi.hpp.
+    if (!cfg.acsi.empty()) {
+        if (machine.fdc.mountAcsi(resolvePath(cfg.acsi)))
             std::fprintf(stderr, "[main] ACSI : %d partition(s)\n", machine.fdc.acsiPartitionCount());
+        else cfg.acsi.clear();                 // image invalide → idem
+    }
     machine.mfp.setColorMonitor(!cfg.mono);   // moniteur mémorisé (avant le reset)
     machine.fdc.setFastFdc(cfg.fastfdc);      // FDC rapide mémorisé (accès disque ÷10)
     // Socket MC68881 (Mega STE uniquement, cf. Fpu.hpp) : sonde + trapping.
@@ -907,6 +940,7 @@ int main(int argc, char** argv) {
         machine.fdc.setSoundSink([&drive](FdcSound e) { drive.onEvent(e); });
     Audio audio(machine.psg, driveSoundOn ? &drive : nullptr, &machine.dmasnd);
     audio.start();   // échec silencieux possible (CI / pas de carte son)
+    audio.setMasterVolume(cfg.volume);   // volume maître mémorisé (menu Son, neost.cfg)
     // Modèle « push » (Phase C) : on ARME l'horodatage des écritures PSG (cycle CPU dans
     // la trame). Dès lors, write8 enregistre les écritures et la synthèse les rejoue au bon
     // instant (digidrums/sync-buzzer). produceFrame (après runFrame) génère et empile la trame.
@@ -933,6 +967,9 @@ int main(int argc, char** argv) {
         updateKbdCountry(machine.bus.rom);   // la nouvelle ROM peut changer de pays clavier
         if (cfg.cart.empty()) machine.ejectCart();
         else                  machine.loadCart(resolveData(cfg.cart, exeDir));
+        // L'eject/loadCart ci-dessus a écrasé la cartouche système du HD GEMDOS →
+        // la réinstalle si un HD GEMDOS est configuré (exclusif avec cfg.cart).
+        if (!cfg.gemdos.empty()) machine.gemdos.setDirectory(resolvePath(cfg.gemdos));
         machine.mfp.setColorMonitor(!cfg.mono);
         machine.fdc.setFastFdc(cfg.fastfdc);   // ré-applique le FDC rapide après reconfig
         machine.bus.setFpuPresent(cfg.fpu && machTypeR == MachineType::MegaSte);
@@ -1135,6 +1172,7 @@ int main(int argc, char** argv) {
         ImGui::NewFrame();
         std::string reqMount; bool reqEject = false;
         std::string reqMountCart; bool reqEjectCart = false;
+        std::string reqMountGemdos, reqMountAcsi; bool reqEjectGemdos = false, reqEjectAcsi = false;
         const bool color = machine.mfp.colorMonitor();
 
         // --- Menu (haut) -----------------------------------------------------
@@ -1229,6 +1267,44 @@ int main(int argc, char** argv) {
                     }
                     ImGui::EndMenu();
                 }
+                // Disque dur : HD GEMDOS (dossier hôte → C:) et image ACSI (cible 0).
+                // Montage/éjection à chaud suivi d'un hard reset (le TOS ne sonde les
+                // disques qu'au boot). Chemins mémorisés dans neost.cfg.
+                if (ImGui::BeginMenu(ICON_FA_HDD " Disque dur")) {
+                    ImGui::TextDisabled(ICON_FA_FOLDER_OPEN " GEMDOS : dossier hôte monté en C:");
+                    static char gdBuf[512]; static bool gdInit = false;
+                    if (!gdInit) { std::snprintf(gdBuf, sizeof gdBuf, "%s", cfg.gemdos.c_str()); gdInit = true; }
+                    ImGui::SetNextItemWidth(280);
+                    ImGui::InputText("##gemdosDir", gdBuf, sizeof gdBuf);
+                    ImGui::SameLine();
+                    if (machine.gemdos.active()) {
+                        if (ImGui::Button(ICON_FA_EJECT " Éjecter##gd")) reqEjectGemdos = true;
+                        ImGui::TextDisabled("(actif — exclusif avec la cartouche)");
+                    } else if (ImGui::Button("Monter##gd") && gdBuf[0]) {
+                        reqMountGemdos = gdBuf;
+                    }
+                    ImGui::Separator();
+                    ImGui::TextDisabled(ICON_FA_HDD " ACSI : image disque dur (cible 0)");
+                    static char hdBuf[512]; static bool hdInit = false;
+                    if (!hdInit) { std::snprintf(hdBuf, sizeof hdBuf, "%s", cfg.acsi.c_str()); hdInit = true; }
+                    ImGui::SetNextItemWidth(280);
+                    ImGui::InputText("##acsiImg", hdBuf, sizeof hdBuf);
+                    ImGui::SameLine();
+                    if (machine.fdc.acsiActive()) {
+                        if (ImGui::Button(ICON_FA_EJECT " Éjecter##hd")) reqEjectAcsi = true;
+                        ImGui::TextDisabled("(%d partition(s) détectée(s))",
+                                            machine.fdc.acsiPartitionCount());
+                    } else if (ImGui::Button("Monter##hd") && hdBuf[0]) {
+                        reqMountAcsi = hdBuf;
+                    }
+                    // GEMDOS et ACSI montés ensemble : NeoST ne décale pas le lecteur
+                    // GEMDOS derrière les partitions ACSI (contrairement à Hatari) →
+                    // les deux revendiquent C:.
+                    if (machine.gemdos.active() && machine.fdc.acsiActive())
+                        ImGui::TextColored(ImVec4(1.f, .6f, .2f, 1.f),
+                                           "GEMDOS et ACSI revendiquent C: tous les deux !");
+                    ImGui::EndMenu();
+                }
                 ImGui::Separator();
                 // FDC rapide (équivalent hatari --fastfdc) : accès disque ÷10. Prend effet
                 // immédiatement (pas de reset), mémorisé dans neost.cfg.
@@ -1284,6 +1360,40 @@ int main(int argc, char** argv) {
                 }
                 if (nPad == 0) ImGui::BulletText("(aucune)");
                 ImGui::EndMenu();
+            }
+            // --- Volume maître (sortie hôte, indépendant du LMC1992 émulé) : icône
+            // haut-parleur selon le niveau, slider 0-100 % + Muet (qui mémorise le
+            // niveau et le restaure). Persisté dans neost.cfg (volume=) en fin de
+            // glissé — pas à chaque frame de drag.
+            {
+                static float volBeforeMute = 1.0f;         // niveau restauré au dé-mute
+                const float  vol   = audio.masterVolume();
+                const bool   muted = vol <= 0.0f;
+                const char*  vicon = muted      ? ICON_FA_VOLUME_MUTE
+                                   : vol < 0.5f ? ICON_FA_VOLUME_DOWN : ICON_FA_VOLUME_UP;
+                char vlabel[48];
+                std::snprintf(vlabel, sizeof vlabel, "%s Son###menuSon", vicon);
+                if (ImGui::BeginMenu(vlabel)) {
+                    int pct = int(vol * 100.0f + 0.5f);
+                    ImGui::SetNextItemWidth(150.0f);
+                    if (ImGui::SliderInt("##volume", &pct, 0, 100, "%d %%"))
+                        audio.setMasterVolume(float(pct) / 100.0f);
+                    if (ImGui::IsItemDeactivatedAfterEdit()) {   // fin de glissé → persiste
+                        cfg.volume = audio.masterVolume();
+                        saveConfig(exeDir, cfg, &machine);
+                    }
+                    if (ImGui::MenuItem(ICON_FA_VOLUME_MUTE " Muet", nullptr, muted)) {
+                        if (muted) {
+                            audio.setMasterVolume(volBeforeMute > 0.0f ? volBeforeMute : 1.0f);
+                        } else {
+                            volBeforeMute = vol;
+                            audio.setMasterVolume(0.0f);
+                        }
+                        cfg.volume = audio.masterVolume();
+                        saveConfig(exeDir, cfg, &machine);
+                    }
+                    ImGui::EndMenu();
+                }
             }
             if (ImGui::BeginMenu(ICON_FA_CLONE " Fenêtres")) {
                 ImGui::MenuItem(ICON_FA_SAVE " Disk Library",  nullptr, &g_showDisk);
@@ -1349,6 +1459,10 @@ int main(int argc, char** argv) {
         }
         // Cart Library : branchement / éjection à chaud du port cartouche.
         if (!reqMountCart.empty()) {
+            if (machine.gemdos.active()) {  // $FA0000 occupé par la cartouche système GEMDOS
+                machine.gemdos.unmount();
+                cfg.gemdos.clear();
+            }
             if (machine.loadCart(reqMountCart)) {
                 cfg.cart = reqMountCart; saveConfig(exeDir, cfg, &machine);
                 reqHardReset = true;       // le TOS sonde le port cartouche au boot
@@ -1358,6 +1472,36 @@ int main(int argc, char** argv) {
             machine.ejectCart();
             cfg.cart.clear(); saveConfig(exeDir, cfg, &machine);
             reqHardReset = true;           // relance sans la ROM $FA0000
+        }
+        // Disque dur (menu Machine → Disque dur) : GEMDOS HD et image ACSI. Chaque
+        // opération force un hard reset — le TOS ne (re)sonde les disques qu'au boot.
+        if (!reqMountGemdos.empty()) {
+            if (!machine.bus.mountedCartPath().empty()) {   // exclusif avec la cartouche
+                machine.ejectCart();
+                cfg.cart.clear();
+            }
+            if (machine.gemdos.setDirectory(resolvePath(reqMountGemdos))) {
+                cfg.gemdos = reqMountGemdos; saveConfig(exeDir, cfg, &machine);
+                reqHardReset = true;
+            }
+        }
+        if (reqEjectGemdos) {
+            machine.gemdos.unmount();
+            cfg.gemdos.clear(); saveConfig(exeDir, cfg, &machine);
+            reqHardReset = true;
+        }
+        if (!reqMountAcsi.empty()) {
+            if (machine.fdc.mountAcsi(resolvePath(reqMountAcsi))) {
+                std::fprintf(stderr, "[main] ACSI : %d partition(s)\n",
+                             machine.fdc.acsiPartitionCount());
+                cfg.acsi = reqMountAcsi; saveConfig(exeDir, cfg, &machine);
+                reqHardReset = true;
+            }
+        }
+        if (reqEjectAcsi) {
+            machine.fdc.unmountAcsi();
+            cfg.acsi.clear(); saveConfig(exeDir, cfg, &machine);
+            reqHardReset = true;
         }
 #else
         screen.drawFullscreen();               // repli sans ImGui

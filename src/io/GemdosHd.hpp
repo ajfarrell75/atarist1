@@ -45,6 +45,11 @@ public:
     // AVANT le reset/boot de la machine. Renvoie true si ≥1 lecteur a été mappé.
     bool setDirectory(const std::string& hostDir);
 
+    // Démonte l'émulation HD : ferme les fichiers hôtes ouverts, retire la
+    // cartouche système ($FA0000) et débranche bus.gemdos. Le TOS ne voit la
+    // disparition des lecteurs qu'au prochain boot (hard reset conseillé).
+    void unmount();
+
     // Vrai si au moins un lecteur GEMDOS est mappé.
     bool active() const { return active_; }
 

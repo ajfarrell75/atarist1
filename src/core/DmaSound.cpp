@@ -9,31 +9,22 @@
 #include "io/Mfp.hpp"
 
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 
 // Fréquences d'échantillonnage STE (cristal 25.175 MHz / diviseurs), bits 0-1 de
 // $FF8921. Réf. doc matérielle / Hatari.
 static const double kRate[4] = { 6258.0, 12517.0, 25033.0, 50066.0 };
 
-// Gain du canal numérique dans le mix (pleine échelle 8 bits ramenée sous le 0 dB
-// pour laisser de la marge au YM2149 ; le volume fin relève du LMC1992, cf. TODO).
-static constexpr float kDmaGain = 0.7f;
+// Gain du canal numérique AVANT les gains LMC — port de la comptabilité Hatari
+// (dmaSnd.c:1146-1158) : « DMA sound is 3/4 level of YM sound », rapporté à
+// l'échelle DEMI du YM STE (outScale_ 0.5, marge anti-saturation) parce que les
+// gains LMC sont DOUBLÉS en compensation (cf. gainLeft/gainRight). Soit
+// 3/4 × 1/2 = 0.375 : à 0 dB le mix sort YM = 1.0 et DMA = 0.75, comme Hatari.
+static constexpr float kDmaGain = 0.375f;
 
-// Horloge CPU (Hz) pour dater la fin de trame en cycles (cf. Mfp / Scheduler).
+// Horloge CPU (Hz) pour dater la consommation DAC en cycles (cf. Mfp / Scheduler).
 static constexpr int64_t CPU_HZ = 8021248;
-
-// Programme l'échéance « fin de trame » sur l'ordonnanceur (thread émulation) :
-// durée = nombre d'échantillons de la trame × cycles CPU par échantillon. La
-// longueur (frameLen_, latchée par startNewFrame) porte le wrap 24 bits : fin ≤
-// début n'annule PLUS l'échéance — le compteur traverse l'espace d'adressage
-// (jusqu'à 2^24 octets si début == fin, cf. Hatari dmaSnd.c:336-341).
-void DmaSound::scheduleFrameEnd() {
-    if (!sched_) return;
-    const uint32_t step    = (mode_ & 0x80) ? 1u : 2u;        // mono 1 octet, stéréo 2
-    const int64_t  samples = frameLen_ / step;
-    const int64_t  rate    = int64_t(kRate[mode_ & 0x03]);
-    const int64_t  dur     = samples * CPU_HZ / rate;
-    sched_->schedule(Scheduler::DMASND, sched_->now() + (dur > 0 ? dur : 1));
-}
 
 // Câble le MFP et lui annonce que cette machine possède le son DMA (STE/Mega STE) :
 // seul ce signal autorise le MFP à XOR la ligne XSINT dans GPIP7 (cf. Hatari
@@ -57,13 +48,13 @@ void DmaSound::setXsint(bool level) {
     }
 }
 
-// (Re)démarre une trame DMA : recale le compteur sur l'adresse de début et arme
-// l'échéance de fin. Port de Hatari DmaSnd_StartNewFrame (dmaSnd.c:456-479) : si
-// début == fin (égalité STRICTE, comparateur du HW) ET repeat OFF, la trame est
-// VIDE → on coupe la lecture SANS lever XSINT (sinon GPIP7 resterait figé HAUT,
-// faussant la détection moniteur ; bug des demos start==end comme l'Amberstar
-// cracktro). Repeat ON, ou fin < début → on ne coupe pas : le compteur avance
-// avec wrap 24 bits (cf. frameLen_).
+// (Re)démarre une trame DMA : recale le fetch sur l'adresse de début et latche
+// début/fin. Port de Hatari DmaSnd_StartNewFrame (dmaSnd.c:456-479) : si début ==
+// fin (égalité STRICTE, comparateur du HW) ET repeat OFF, la trame est VIDE → on
+// coupe la lecture SANS lever XSINT (sinon GPIP7 resterait figé HAUT, faussant la
+// détection moniteur ; bug des demos start==end comme l'Amberstar cracktro).
+// Repeat ON, ou fin < début → on ne coupe pas : le fetch avance avec wrap 24 bits
+// (début == fin, repeat ON → trame 2^24 octets, cf. fifoRefill).
 void DmaSound::startNewFrame() {
     curAddr_ = startAddr_;
     phase_   = 0.0;
@@ -72,50 +63,130 @@ void DmaSound::startNewFrame() {
         playing_ = false;
         ctrl_   &= ~0x01;
         setXsint(false);                               // surtout PAS de XSINT HAUT
-        if (sched_) sched_->cancel(Scheduler::DMASND);
         return;
     }
-    // Latch de la trame (port DmaSnd_StartNewFrame) + cycle de départ pour le
-    // compteur live $FF8909+ (liveNow : un play lancé en plein bloc CPU est daté
-    // au cycle exact de l'écriture, pas au début du quantum). Longueur en OCTETS
-    // avec wrap 24 bits : (fin − début) mod 2^24 ; début == fin (repeat ON) →
-    // 2^24 octets, le compteur traverse TOUT l'espace d'adressage et le son joue
-    // la RAM — vérifié sur STE réel (Hatari dmaSnd.c:336-341, « same as playing
-    // a 2^24 bytes sample », démo « A Little Bit Insane » de Lazer).
-    frameStartAddr_  = startAddr_;
-    frameEndAddr_    = endAddr_;
-    frameLen_        = int64_t((endAddr_ - startAddr_) & 0xFFFFFF);
-    if (frameLen_ == 0) frameLen_ = int64_t(1) << 24;
-    frameStartCycle_ = sched_ ? sched_->liveNow() : 0;
+    frameStartAddr_ = startAddr_;                      // latch de la trame (le HW fige début/fin)
+    frameEndAddr_   = endAddr_;
     playing_ = true;
-    recordEvent(0);                                    // PLAY start daté (modèle push audio)
     setXsint(true);                                    // début de trame : XSINT → HAUT (→ GPIP7)
-    scheduleFrameEnd();                                // date la fin de trame (→ Timer A)
 }
 
-void DmaSound::onFrameEnd() {
-    // Cas « début == fin, repeat ON » (trame 2^24 octets, latchée) : sur STE réel
-    // AUCUNE interruption de fin de trame n'est générée (Hatari dmaSnd.c:336-341 :
-    // « end of frame interrupt is not generated ») — on relance la trame SANS
-    // pulser XSINT (ni event Timer A, ni front GPIP7). Le re-latch équivaut au
-    // wrap : début + 2^24 mod 2^24 = début.
-    if ((ctrl_ & 0x02) && frameEndAddr_ == frameStartAddr_) {
-        startNewFrame();                          // XSINT déjà HAUT → setXsint no-op
-        return;
+// Remplit la FIFO par MOTS tant qu'il y a au moins 2 places — port exact de
+// DmaSnd_FIFO_Refill (dmaSnd.c:342-368). C'est ICI que la fin de trame est
+// détectée : au FETCH du dernier mot (le vrai DMA fetche en avance de la FIFO
+// sur le DAC) → XSINT bas (event Timer A), puis relatch si repeat, sinon le
+// MATÉRIEL auto-efface le bit PLAY ($FF8901 relit 0 — démo STE « Faster »).
+// Le fetch traverse le plan mémoire complet (traduction MMU / aliasing de
+// banques) comme le DMA disque — port STMemory_DMA_ReadByte (Bus::dmaRead8).
+void DmaSound::fifoRefill() {
+    if (!playing_) return;                             // PLAY off : pas de fetch
+    // Trace du fetch (NEOST_DMASND_TRACE=1) : même format que le LOG_TRACE
+    // « DMA snd fifo refill » d'Hatari → diff direct des séquences adr/contenu.
+    static const bool trace = std::getenv("NEOST_DMASND_TRACE") != nullptr;
+    while (8 - fifoNb_ >= 2) {
+        fifo_[(fifoPos_ + fifoNb_ + 0) & 7] = int8_t(bus_.dmaRead8(curAddr_));
+        fifo_[(fifoPos_ + fifoNb_ + 1) & 7] = int8_t(bus_.dmaRead8(curAddr_ + 1));
+        if (trace)
+            std::fprintf(stderr, "DMA snd fifo refill adr=%x pos %d nb %d %x %x\n",
+                         curAddr_, fifoPos_, fifoNb_,
+                         uint8_t(fifo_[(fifoPos_ + fifoNb_ + 0) & 7]),
+                         uint8_t(fifo_[(fifoPos_ + fifoNb_ + 1) & 7]));
+        fifoNb_ += 2;
+        curAddr_ = (curAddr_ + 2) & 0xFFFFFF;
+        if (curAddr_ == frameEndAddr_) {               // fin de trame atteinte AU FETCH
+            // Cas « début == fin, repeat ON » (trame 2^24 octets) : sur STE réel
+            // AUCUNE interruption de fin de trame n'est générée (dmaSnd.c:336-341)
+            // — le fetch vient de wrapper sur début, on continue SANS pulser XSINT.
+            if ((ctrl_ & 0x02) && frameEndAddr_ == frameStartAddr_) continue;
+            setXsint(false);                           // XSINT → BAS (compte Timer A si AER bit4=0)
+            if (ctrl_ & 0x02) {
+                startNewFrame();                       // repeat : relatch depuis les registres → XSINT HAUT
+            } else {
+                ctrl_   &= ~0x01;                      // one-shot : le HW auto-efface PLAY
+                playing_ = false;
+                break;
+            }
+        }
     }
-    setXsint(false);                              // fin de trame : XSINT → BAS (compte Timer A si AER bit4=0)
-    if (ctrl_ & 0x02) {
-        startNewFrame();                          // repeat : nouvelle trame (→ XSINT HAUT, gère start==end)
+}
+
+// Tire l'octet le plus ancien de la FIFO (refill à la volée si elle est vide et
+// que le DMA joue encore) — port de DmaSnd_FIFO_PullByte (dmaSnd.c:387-409).
+int8_t DmaSound::fifoPull() {
+    if (fifoNb_ == 0) {
+        fifoRefill();
+        if (fifoNb_ == 0) return 0;                    // FIFO vide et DMA arrêté
+    }
+    const int8_t s = fifo_[fifoPos_];
+    fifoPos_ = (fifoPos_ + 1) & 7;
+    --fifoNb_;
+    return s;
+}
+
+// Passage mono → stéréo : réaligne la position de lecture de la FIFO sur une
+// frontière PAIRE (octet pair = gauche, impair = droite), en sautant un octet si
+// besoin — port de DmaSnd_FIFO_SetStereo (dmaSnd.c:419-438).
+void DmaSound::fifoSetStereo() {
+    if (fifoPos_ & 1) {
+        fifoPos_ = (fifoPos_ + 1) & 7;
+        if (fifoNb_ > 0) --fifoNb_;
+    }
+}
+
+// Pousse un octet consommé par le DAC dans l'anneau de capture (→ rendu audio).
+// Anneau plein (aucun consommateur branché) : jette le plus vieux — taille fixe,
+// jamais de réallocation (le chemin WASM consomme depuis le thread audio).
+void DmaSound::capPush(int8_t b) {
+    if (capAvail() >= kCapSize) ++capR_;
+    cap_[capW_++ & (kCapSize - 1)] = b;
+}
+
+// Tire le prochain échantillon L/R du flux capturé (stéréo : 2 octets pair/impair,
+// mono : 1 octet dupliqué). false = flux épuisé (rien n'est consommé).
+bool DmaSound::capPullLR(bool stereo, int& l, int& r) {
+    if (stereo) {
+        if (capAvail() < 2) return false;
+        l = cap_[capR_++ & (kCapSize - 1)];
+        r = cap_[capR_++ & (kCapSize - 1)];
     } else {
-        // Trame one-shot terminée : le MATÉRIEL auto-efface le bit PLAY (port
-        // DmaSnd_EndOfFrameReached, dmaSnd.c:510) — $FF8901 doit relire 0. Le TOS
-        // (handler VBL) surveille ce bit pour sa détection moniteur/son : un PLAY
-        // qui reste collé déclenche un RESET en boucle (démo STE « Faster »).
-        // L'effacement vit ICI dans le moteur DMA, pas dans le mixeur audio hôte
-        // (mix() ne tourne pas en headless).
-        ctrl_   &= ~0x01;
-        playing_ = false;
+        if (capAvail() < 1) return false;
+        l = r = cap_[capR_++ & (kCapSize - 1)];
     }
+    return true;
+}
+
+// Consomme la FIFO au rythme du DAC depuis la dernière mise à jour jusqu'à
+// l'instant émulé courant (reste fractionnaire exact, ≙ frameCounter_float), et
+// CAPTURE les octets tirés pour le rendu audio. Équivalent du Sound_Update
+// d'Hatari : appelé à chaque HBL (onHbl) et avant chaque accès registre sensible
+// (compteur $FF8909+, contrôle, mode) pour dater l'état au cycle près.
+void DmaSound::updateDac() {
+    if (!sched_) return;
+    const int64_t now     = sched_->liveNow();
+    const int64_t elapsed = now - dacLast_;
+    if (elapsed <= 0) return;
+    dacLast_ = now;
+    if (!playing_ && fifoNb_ == 0) { dacRem_ = 0; return; }   // DAC inactif
+    const int64_t  rate    = int64_t(kRate[mode_ & 0x03]);
+    const int64_t  num     = elapsed * rate + dacRem_;
+    const int64_t  samples = num / CPU_HZ;
+    dacRem_ = num % CPU_HZ;
+    const uint32_t step  = (mode_ & 0x80) ? 1u : 2u;          // octets par échantillon
+    int64_t        bytes = samples * step;
+    while (bytes-- > 0 && (fifoNb_ > 0 || playing_))
+        capPush(fifoPull());
+}
+
+// Tic HBL — port de DmaSnd_STE_HBL_Update (dmaSnd.c:727-741) : le DMA garde la
+// FIFO pleine à chaque ligne (refill), le DAC consomme ce qui est dû (update),
+// puis la FIFO est re-remplie derrière. C'est ce grain « par ligne » qui rend
+// fidèles les programmes modifiant le tampon PENDANT la lecture (Mental
+// Hangover, Power Up Plus) : les octets sont figés au fetch, pas relus après.
+void DmaSound::onHbl() {
+    if (!playing_ && fifoNb_ == 0) return;             // son DMA totalement inactif
+    fifoRefill();
+    updateDac();
+    fifoRefill();
 }
 
 void DmaSound::reset(bool cold) {
@@ -126,13 +197,16 @@ void DmaSound::reset(bool cold) {
     haveCur_ = false; dmaCur_ = 0.0f; lpW0_ = lpW1_ = 0.0f;   // FIR anti-repliement à zéro
     dmaCurL_ = dmaCurR_ = 0.0f; lpW0L_ = lpW1L_ = lpW0R_ = lpW1R_ = 0.0f;   // idem chemin stéréo
     bx1R_ = bx2R_ = by1R_ = by2R_ = 0; tx1R_ = tx2R_ = ty1R_ = ty2R_ = 0;   // filtres tonalité D
-    aPlaying_ = false; aStart_ = aEnd_ = aAddr_ = 0; aMode_ = 0;            // état audio « push »
-    aRepeat_ = false; aPhase_ = 0.0; aHaveCur_ = false;
+    aPlaying_ = false; aMode_ = 0;                 // état audio « push »
+    aPhase_ = 0.0; aHaveCur_ = false;
     events_.clear();
+    fifoPos_ = fifoNb_ = 0;                        // FIFO vidée (≙ DmaSnd_Reset, dmaSnd.c:253-254)
+    dacLast_ = sched_ ? sched_->liveNow() : 0;
+    dacRem_  = 0;
+    capR_ = capW_;                                 // flux capturé drainé
     startAddr_ = endAddr_ = curAddr_ = 0;          // Hatari met start/end à 0 même au warm reset (fix 'Brace')
     mwShift_ = 0; mwSteps_ = 0;                     // transfert série Microwire éventuel annulé
     setXsint(false);                               // son DMA inactif au reset → XSINT BAS
-    if (sched_) sched_->cancel(Scheduler::DMASND);
     // Le LMC1992/Microwire n'a PAS de broche de reset : ses registres (volumes, basses/
     // aigus, mixage) PERSISTENT au reset à chaud (cf. Hatari, bloc `if (bCold)`). On ne
     // les réinitialise qu'à FROID. NeoST garde des défauts à 0 dB (et non muets comme le
@@ -288,45 +362,35 @@ void DmaSound::applyToneStereo(float* st, uint32_t frames, uint32_t sampleRate) 
     }
 }
 
+// Facteur ×2 des gains LMC — port de Hatari dmaSnd.c:1152-1153/1460-1461 :
+// « lmc1992.left_gain = leftVolume × masterVolume × 2/(65536²) ». Le ×2 compense
+// la DEMI-amplitude du YM en STE (table `YM_OUTPUT_LEVEL>>1` chez Hatari ≙
+// outScale_ 0.5 ici, marge anti-saturation pour le DMA) : à volume LMC plein
+// (init TOS), le YM STE ressort à PLEINE amplitude, identique au YM ST. Sans ce
+// ×2, le YM STE jouait 6 dB sous le ST (S3, cf. docs/HATARI_DIVERGENCES.md).
+static constexpr double kLmcMakeup = 2.0;
+
 float DmaSound::masterGain() const {
     // Pas de 2 dB ; valeurs au-delà du max = 0 dB. Sortie mono → moyenne G/D.
     const double mdB = (mwMaster_ >= 40 ? 0 : (mwMaster_ - 40) * 2);
     const double ldB = (mwLeft_   >= 20 ? 0 : (mwLeft_   - 20) * 2);
     const double rdB = (mwRight_  >= 20 ? 0 : (mwRight_  - 20) * 2);
-    const double gL = std::pow(10.0, (mdB + ldB) / 20.0);
-    const double gR = std::pow(10.0, (mdB + rdB) / 20.0);
+    const double gL = std::pow(10.0, (mdB + ldB) / 20.0) * kLmcMakeup;
+    const double gR = std::pow(10.0, (mdB + rdB) / 20.0) * kLmcMakeup;
     return static_cast<float>((gL + gR) * 0.5);
 }
 
 // Gains linéaires par canal (volume maître × gauche / × droite) — réalisent le
-// panoramique STE. Réf. Hatari : lmc1992.left_gain = leftVolume × masterVolume.
+// panoramique STE. Réf. Hatari : lmc1992.left_gain = leftVolume × masterVolume × 2.
 float DmaSound::gainLeft() const {
     const double mdB = (mwMaster_ >= 40 ? 0 : (mwMaster_ - 40) * 2);
     const double ldB = (mwLeft_   >= 20 ? 0 : (mwLeft_   - 20) * 2);
-    return static_cast<float>(std::pow(10.0, (mdB + ldB) / 20.0));
+    return static_cast<float>(std::pow(10.0, (mdB + ldB) / 20.0) * kLmcMakeup);
 }
 float DmaSound::gainRight() const {
     const double mdB = (mwMaster_ >= 40 ? 0 : (mwMaster_ - 40) * 2);
     const double rdB = (mwRight_  >= 20 ? 0 : (mwRight_  - 20) * 2);
-    return static_cast<float>(std::pow(10.0, (mdB + rdB) / 20.0));
-}
-
-// Lecture d'un échantillon (mono -128..127). En stéréo, moyenne L+R (sortie mono).
-// Le DMA son traverse le plan mémoire complet (traduction MMU / aliasing de
-// banques) comme le DMA disque — port STMemory_DMA_ReadByte, cf. Bus::dmaRead8.
-int DmaSound::sampleAt(uint32_t addr, bool stereo) const {
-    const auto rd = [&](uint32_t a) -> int {
-        return static_cast<int8_t>(bus_.dmaRead8(a));
-    };
-    return stereo ? (rd(addr) + rd(addr + 1)) / 2 : rd(addr);
-}
-
-// Lecture STÉRÉO : octets pairs/impairs → L/R séparés (mono → L=R). Conserve la
-// séparation au lieu de la moyenner (cf. sampleAt). Port STMemory_DMA_ReadByte.
-void DmaSound::sampleAtLR(uint32_t addr, bool stereo, int& l, int& r) const {
-    const int b0 = static_cast<int8_t>(bus_.dmaRead8(addr));
-    if (stereo) { l = b0; r = static_cast<int8_t>(bus_.dmaRead8(addr + 1)); }
-    else        { l = r = b0; }
+    return static_cast<float>(std::pow(10.0, (mdB + rdB) / 20.0) * kLmcMakeup);
 }
 
 // FIR anti-repliement (1,2,1)/4 à état EXTERNE (cf. lowPassPull) — partagé par les
@@ -352,31 +416,20 @@ void DmaSound::recordEvent(uint8_t kind) {
 // Reproduit l'ancien rendu « échantillonné par trame » (le bit PLAY pilote tout).
 void DmaSound::syncAudioFromCpu() {
     if (playing_ && !aPlaying_) {                  // démarrage vu côté CPU → (re)cale l'audio
-        aStart_ = startAddr_; aEnd_ = endAddr_; aMode_ = mode_;
-        aRepeat_ = ctrl_ & 0x02; aAddr_ = curAddr_; aPhase_ = phase_; aHaveCur_ = false;
+        aMode_ = mode_; aPhase_ = 0.0; aHaveCur_ = false;
     }
     aPlaying_ = playing_;
 }
 
-// Position live du compteur de trame DMA — forme fermée depuis le cycle de début
-// de trame : octets lus = échantillons écoulés × octets/échantillon, où
-// échantillons = (cycles écoulés) × fréquence / horloge CPU. Bornée à la fin de
-// trame latchée : le franchissement réel (repeat → nouveau latch, arrêt) est géré
-// par l'événement DMASND de l'ordonnanceur. NB : un changement de fréquence EN
-// COURS de trame fausserait la forme fermée (cas pathologique, les lecteurs
-// posent $FF8921 avant play) — Hatari avance incrémentalement via Sound_Update.
-uint32_t DmaSound::liveCounter() const {
+// Compteur de trame $FF8909/0B/0D — port exact de DmaSnd_GetFrameCount : on
+// synchronise d'abord la consommation DAC + le fetch à l'instant émulé courant
+// (≙ le Sound_Update en tête), puis on rend l'adresse de FETCH (le compteur
+// matériel montre où le DMA LIT, en avance de la FIFO — ≤ 8 octets — sur le
+// DAC). À l'ARRÊT, le vrai HW renvoie l'adresse de DÉBUT (dmaSnd.c:756-759).
+uint32_t DmaSound::liveCounter() {
+    if (playing_ && sched_) { updateDac(); fifoRefill(); }
     if (!playing_) return startAddr_;                  // à l'arrêt : adresse de DÉBUT
-    if (!sched_)   return curAddr_;                    // sans ordonnanceur (tests)
-    const int64_t  elapsed = sched_->liveNow() - frameStartCycle_;
-    if (elapsed <= 0) return frameStartAddr_;
-    const uint32_t step    = (mode_ & 0x80) ? 1u : 2u; // octets par échantillon
-    const int64_t  rate    = int64_t(kRate[mode_ & 0x03]);
-    int64_t bytes = (elapsed * rate / CPU_HZ) * step;  // octets lus depuis le début
-    if (bytes > frameLen_) bytes = frameLen_;          // borné à la fin latchée
-    // Wrap 24 bits : fin < début (ou trame 2^24 quand début == fin) → le compteur
-    // traverse le haut de l'espace d'adressage et reboucle (cf. startNewFrame).
-    return uint32_t((int64_t(frameStartAddr_) + bytes) & 0xFFFFFF);
+    return curAddr_;
 }
 
 uint8_t DmaSound::read8(uint32_t addr) {
@@ -409,15 +462,19 @@ uint8_t DmaSound::read8(uint32_t addr) {
 void DmaSound::write8(uint32_t addr, uint8_t v) {
     switch (addr & 0xFF) {
         case 0x01: {                                  // contrôle : play / repeat
+            updateDac();                               // date l'état AVANT le changement (≙ Sound_Update
+                                                       // en tête de DmaSnd_SoundControl_WriteWord)
             const bool wasPlaying = ctrl_ & 0x01;
             ctrl_ = v & 0x03;
             if ((ctrl_ & 0x01) && !wasPlaying) {       // 0→1 : (re)démarre la trame
-                startNewFrame();                       // recale + arme la fin (gère start==end)
-            } else if (!(ctrl_ & 0x01)) {              // bit play à 0 : arrêt
+                dacLast_ = sched_ ? sched_->liveNow() : 0;
+                dacRem_  = 0;                          // ≙ frameCounter_float = 0 au start
+                startNewFrame();                       // latch + XSINT haut (gère start==end)
+                if (playing_) recordEvent(0);          // PLAY daté (≙ DmaInitSample — pas au relatch repeat)
+            } else if (!(ctrl_ & 0x01) && wasPlaying) { // bit play à 0 : arrêt
                 playing_ = false;
                 recordEvent(1);                        // STOP daté (modèle push audio)
-                setXsint(false);                       // arrêt : XSINT → BAS
-                if (sched_) sched_->cancel(Scheduler::DMASND);
+                setXsint(false);                       // arrêt : XSINT → BAS (la FIFO finit de se vider)
             }
             break;
         }
@@ -430,8 +487,16 @@ void DmaSound::write8(uint32_t addr, uint8_t v) {
         case 0x13: endAddr_   = (endAddr_   & 0xFFFF00) | (uint32_t(v) & 0xFE); break;
         // Mode : seuls les bits existant sur un vrai STE sont câblés — masque 0x8F
         // (bit7 mono + bits0-1 fréquence), la relecture montre la valeur masquée
-        // (Hatari DmaSnd_SoundModeCtrl_WriteByte, dmaSnd.c:1013-1027).
-        case 0x21: mode_ = v & 0x8F; break;            // fréquence + mono/stéréo
+        // (Hatari DmaSnd_SoundModeCtrl_WriteByte, dmaSnd.c:1013-1027). La
+        // consommation due est datée à l'ANCIENNE cadence avant le changement, et
+        // le passage mono → stéréo réaligne la FIFO sur frontière paire.
+        case 0x21: {
+            updateDac();
+            const uint8_t newMode = v & 0x8F;
+            if ((mode_ & 0x80) && !(newMode & 0x80)) fifoSetStereo();
+            if (newMode != mode_) { mode_ = newMode; recordEvent(2); }   // MODE daté (cadence du rendu)
+            break;
+        }
         // Microwire : mots 16 bits ($FF8922 data, $FF8924 mask). Pendant un
         // transfert EN COURS (shift), les écritures data/mask sont IGNORÉES —
         // « Only update, if no shift is in progress » (Hatari DmaSnd_MicrowireData/
@@ -470,10 +535,9 @@ float DmaSound::lowPassPull(int in, bool enabled) {
 }
 
 void DmaSound::mix(float* out, uint32_t frames, uint32_t sampleRate) {
-    if (!playing_ || sampleRate == 0) return;
+    if ((!playing_ && capAvail() == 0) || sampleRate == 0) return;
     const double inc    = kRate[mode_ & 0x03] / sampleRate;   // pas de rééchantillonnage
     const bool   stereo = !(mode_ & 0x80);                    // bit7=0 → stéréo entrelacé
-    const uint32_t step = stereo ? 2u : 1u;                   // octets par trame DMA
     const bool lowPass  = kRate[mode_ & 0x03] > double(sampleRate);   // anti-repliement
 
     // Registre de mixage du LMC1992 (commande 0) : seul mixing==1 mélange YM2149 + DMA ;
@@ -483,57 +547,56 @@ void DmaSound::mix(float* out, uint32_t frames, uint32_t sampleRate) {
     const bool addYm = (mwMixing_ == 1);
     for (uint32_t i = 0; i < frames; ++i) {
         if (!haveCur_) {                                      // 1er échantillon de la trame
-            dmaCur_  = lowPassPull(sampleAt(curAddr_, stereo), lowPass);
-            haveCur_ = true;
+            int l, r;
+            if (capPullLR(stereo, l, r)) {
+                dmaCur_  = lowPassPull((l + r) / 2, lowPass); // sortie mono → moyenne L+R
+                haveCur_ = true;
+            }
         }
         const float dma = (dmaCur_ / 4.0f / 128.0f) * kDmaGain;   // /4 = gain du FIR
         if (addYm) out[i] += dma;                             // YM2149 + DMA
         else       out[i]  = dma;                             // DMA seul (écrase le YM)
         phase_ += inc;
-        while (phase_ >= 1.0) {                                // avance dans la RAM
-            phase_ -= 1.0;
-            // Compteur 24 bits + comparateur d'ÉGALITÉ (modèle Hatari
-            // DmaSnd_FIFO_Refill, dmaSnd.c:361-367) : fin ≤ début → le compteur
-            // AVANCE à travers l'espace d'adressage (wrap 2^24) en lisant la RAM,
-            // il ne reboucle pas sur un octet.
-            curAddr_ = (curAddr_ + step) & 0xFFFFFF;
-            if (curAddr_ == endAddr_) {                        // fin de trame
-                if (ctrl_ & 0x02) {                            // repeat : reboucle
-                    curAddr_ = startAddr_;
-                } else {                                       // sinon : arrêt
-                    playing_ = false;
-                    ctrl_ &= ~0x01;
-                    return;                                    // reste de `out` = silence
-                }
+        while (phase_ >= 1.0) {                                // avance dans le flux capturé
+            int l, r;
+            if (!capPullLR(stereo, l, r)) {
+                if (!playing_) return;                         // flux drainé, DMA arrêté → reste = YM
+                // Sous-alimenté transitoire : tient l'échantillon. La dette est
+                // PLAFONNÉE à 1 octet — sinon le rattrapage SAUTERAIT des octets
+                // en rafale au retour du flux (rendu déformé : octets « mangés »).
+                phase_ = 1.0;
+                break;
             }
+            phase_ -= 1.0;
             // Octet suivant tiré à la cadence DMA → filtré ICI (pas à la cadence
             // hôte) : c'est ce qui fait l'anti-repliement.
-            dmaCur_ = lowPassPull(sampleAt(curAddr_, stereo), lowPass);
+            dmaCur_ = lowPassPull((l + r) / 2, lowPass);
         }
     }
 }
 
 // Rend `count` échantillons stéréo (entrelacés dans `st`) depuis l'état AUDIO (aXxx_),
-// qu'il avance. `ym` est aligné sur le 1er échantillon du segment. DMA audio inactif →
-// YM recopié L=R. Même moteur que mix() (resample bloquant-zéro + FIR anti-repliement),
-// mais sur l'état audio découplé du CPU (cf. en-tête mixStereo).
+// qu'il avance en CONSOMMANT le flux capturé (cap_) — les octets ont été figés au
+// fetch par le cœur (FIFO au faisceau), l'audio ne relit plus la RAM. `ym` est aligné
+// sur le 1er échantillon du segment. DMA inactif ET flux drainé → YM recopié L=R.
 void DmaSound::mixSegment(float* st, const float* ym, uint32_t count, uint32_t sampleRate) {
-    if (!aPlaying_ || sampleRate == 0) {                      // DMA inactif → YM seul (L=R)
+    if ((!aPlaying_ && capAvail() == 0) || sampleRate == 0) { // DMA inactif → YM seul (L=R)
         for (uint32_t i = 0; i < count; ++i) { st[2 * i] = ym[i]; st[2 * i + 1] = ym[i]; }
         return;
     }
     const double inc    = kRate[aMode_ & 0x03] / sampleRate;
     const bool   stereo = !(aMode_ & 0x80);
-    const uint32_t step = stereo ? 2u : 1u;
     const bool lowPass  = kRate[aMode_ & 0x03] > double(sampleRate);
     const bool addYm    = (mwMixing_ == 1);                   // 1 = YM+DMA, sinon DMA écrase YM (live)
 
     for (uint32_t i = 0; i < count; ++i) {
-        if (!aHaveCur_) {
-            int l, r; sampleAtLR(aAddr_, stereo, l, r);
-            dmaCurL_ = fir121(lpW0L_, lpW1L_, l, lowPass);
-            dmaCurR_ = fir121(lpW0R_, lpW1R_, r, lowPass);
-            aHaveCur_ = true;
+        if (!aHaveCur_) {                                     // 1er octet du flux (≙ DmaInitSample)
+            int l, r;
+            if (capPullLR(stereo, l, r)) {
+                dmaCurL_ = fir121(lpW0L_, lpW1L_, l, lowPass);
+                dmaCurR_ = fir121(lpW0R_, lpW1R_, r, lowPass);
+                aHaveCur_ = true;
+            }
         }
         const float dl = (dmaCurL_ / 4.0f / 128.0f) * kDmaGain;
         const float dr = (dmaCurR_ / 4.0f / 128.0f) * kDmaGain;
@@ -541,21 +604,21 @@ void DmaSound::mixSegment(float* st, const float* ym, uint32_t count, uint32_t s
         else       { st[2 * i] = dl;         st[2 * i + 1] = dr; }
         aPhase_ += inc;
         while (aPhase_ >= 1.0) {
-            aPhase_ -= 1.0;
-            // Compteur 24 bits + comparateur d'ÉGALITÉ (cf. mix / Hatari
-            // dmaSnd.c:361-367) : fin ≤ début → avance avec wrap en lisant la RAM
-            // (trame 2^24 si début == fin, repeat ON — « A Little Bit Insane »).
-            aAddr_ = (aAddr_ + step) & 0xFFFFFF;
-            if (aAddr_ == aEnd_) {
-                if (aRepeat_) {
-                    aAddr_ = aStart_;
-                } else {                                       // one-shot fini : YM passe sur le reste
-                    aPlaying_ = false;
+            int l, r;
+            if (!capPullLR(stereo, l, r)) {
+                if (!aPlaying_) {                              // flux drainé, DMA arrêté → YM sur le reste
+                    aHaveCur_ = false;
                     for (uint32_t j = i + 1; j < count; ++j) { st[2 * j] = ym[j]; st[2 * j + 1] = ym[j]; }
                     return;
                 }
+                // Sous-alimenté transitoire : tient l'échantillon. Dette PLAFONNÉE
+                // à 1 octet — sans le plafond, le rattrapage sauterait des octets
+                // en rafale au retour du flux (les fins de trame « mangeaient »
+                // le début du lot suivant, mesuré sur l'étalon make_dmasnd_test).
+                aPhase_ = 1.0;
+                break;
             }
-            int l, r; sampleAtLR(aAddr_, stereo, l, r);
+            aPhase_ -= 1.0;
             dmaCurL_ = fir121(lpW0L_, lpW1L_, l, lowPass);
             dmaCurR_ = fir121(lpW0R_, lpW1R_, r, lowPass);
         }
@@ -577,11 +640,13 @@ void DmaSound::mixStereo(float* st, const float* ym, uint32_t frames, uint32_t s
         uint32_t off = uint32_t(int64_t(e.cycle) * frames / frameCycles);
         if (off > frames) off = frames;
         if (off > pos) { mixSegment(st + 2 * pos, ym + pos, off - pos, sampleRate); pos = off; }
-        if (e.kind == 0) {                                    // PLAY start : (re)latche et recale l'audio
-            aPlaying_ = true; aStart_ = e.start; aEnd_ = e.end; aMode_ = e.mode; aRepeat_ = e.repeat;
-            aAddr_ = e.start; aPhase_ = 0.0; aHaveCur_ = false;
-        } else {                                              // STOP (effacement CPU du bit PLAY)
-            aPlaying_ = false;
+        if (e.kind == 0) {                                    // PLAY start (0→1) : recale la cadence
+            aPlaying_ = true; aMode_ = e.mode;
+            aPhase_ = 0.0; aHaveCur_ = false;                 // ≙ DmaInitSample : 1er octet frais
+        } else if (e.kind == 1) {                             // STOP (effacement CPU du bit PLAY) :
+            aPlaying_ = false;                                // le flux capturé résiduel se draine
+        } else {                                              // MODE : nouvelle cadence / mono-stéréo
+            aMode_ = e.mode;
         }
     }
     if (pos < frames) mixSegment(st + 2 * pos, ym + pos, frames - pos, sampleRate);

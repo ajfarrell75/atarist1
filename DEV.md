@@ -112,6 +112,11 @@ GUI), qui produit des **traces façon MAME** et des **captures PPM**.
 ./build/neost-headless <rom> --frames N --trace t.txt --regs --irq
 tail t.txt                                   # localiser la boucle d'attente (PC qui tourne)
 ./build/neost-headless <rom> --frames N --screenshot s.ppm   # sips -s format png s.ppm --out s.png
+./build/neost-headless <rom> --frames N --sound-dump s.wav   # WAV 48 kHz (YM+DMA+LMC, chaîne GUI)
+#   → A/B audio vs oracle Hatari (WAV) ou entre configs ; RMS/profil par seconde en python
+#   DMA STE : NEOST_DMASND_TRACE=1 émet chaque fetch FIFO au format « DMA snd fifo refill »
+#   d'Hatari (--trace dmasound) → diff direct des séquences adr/contenu ; étalon dédié
+#   tools/make_dmasnd_test.py (tampon modifié pendant la lecture, cas Mental Hangover)
 
 # Suite étalons (captures + régression) : tools/run_etalons.py — voir docs/TEST_SOFTWARE.md
 python3 tools/fetch_etalons.py && python3 tools/run_etalons.py --update-ref
