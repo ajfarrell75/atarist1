@@ -1,0 +1,342 @@
+# =============================================================================
+#	Common build rules & automation for all projects
+# =============================================================================
+ifndef AGTROOT
+$(error AGTROOT is not set)
+endif
+# =============================================================================
+
+# 'default'(or 'vincentcc')/'browncc'/'mikrocc'
+USE_COMPILER=default
+
+# set GCC version here
+# [4.6.4], [6.2.0], [7.1.0], [7.5.0], [10.2.0], [12.1.0]
+GCC_VERSION=4.6.4
+#GCC_VERSION=7.5.0
+#GCC_VERSION=6.2.0
+#GCC_VERSION=12.1.0
+# set=yes if GCC install is portable/install-anywhere (=no for default/vincentcc)
+GCC_PORTABLE_PACKAGE=no
+# set GCC install path for portable/install-anywhere case (browncc/mikrocc)
+#GCC_INSTALL=$(AGTROOT)/gcc/browncc-12.1
+#GCC_INSTALL=~/gnu-tools-464/m68000
+GCC_INSTALL=~/gnu-tools/m68000
+
+# reduces size of binary, custom crt but no MiNTlib under [m68k-atari-mint]
+# note: 'USE_COMPILER=browncc' requires =yes
+LINK_MINIMAL=yes
+
+# can modify default stack size here. CAUTION: need approx 12k headroom for arj7 unpacker!
+STACKSIZE=16384
+
+# =============================================================================
+
+BUILD_DIR=build
+
+# directory for runtime assets used by game
+ASSETS := ./assets
+
+# directory for intermediate data, dependency tags etc.
+CACHE := ./cache
+
+# only RMAC supported in this version
+USE_ASSEMBLER=rmac
+
+# select ultraDev support version (USE_DEBUG_CONSOLE==udev)
+USE_ULTRADEV_VERSION=0.57.b3
+
+# -----------------------------------------------------------------------------
+
+HATARI_DEBUG_DIR=.
+
+REMOTE_DISK = $(AGTROOT)/remote_share
+
+# -----------------------------------------------------------------------------
+
+OBJ_DIR=$(BUILD_DIR)
+
+# -----------------------------------------------------------------------------
+#	Configure the host build environment
+# -----------------------------------------------------------------------------
+
+HOST_STUB=$(shell $(AGTROOT)/config.sh)
+HOST_TOOL_DIR=${AGTROOT}/bin/$(HOST_STUB)
+
+
+# -----------------------------------------------------------------------------
+#	Base compiler definitions
+# -----------------------------------------------------------------------------
+
+LIBPATHS +=
+ARFLAGS +=
+
+COMPILERDEFS += \
+		-D__ATARI__ \
+		-D__M68000__ \
+		-DAGT_CONFIG_STACK=$(STACKSIZE)
+
+ifeq ($(BUILD_CFG),release)
+COMPILERDEFS += -DAGT_RELEASE_BUILD
+else
+ifeq ($(BUILD_CFG),testing)
+COMPILERDEFS += -DAGT_TESTING_BUILD
+else
+ifeq ($(BUILD_CFG),debug)
+COMPILERDEFS += -DAGT_DEBUG_BUILD
+else
+COMPILERDEFS += -DAGT_UNKNOWN_BUILD
+endif
+endif
+endif
+
+# -----------------------------------------------------------------------------
+#	AGT include paths
+# -----------------------------------------------------------------------------
+
+CCINCLUDES = \
+	-I$(AGTROOT) \
+	-I$(AGTROOT)/3rdparty \
+	-I$(AGTROOT)/agtsys
+
+# =============================================================================
+#	Configure the compiler toolchain
+# =============================================================================
+
+TARGETFLAGS = -m68000
+
+# =============================================================================
+ifeq ($(USE_COMPILER),default)
+# =============================================================================
+
+include $(AGTROOT)/makedefs.mintgcc
+
+# =============================================================================
+else
+ifeq ($(USE_COMPILER),vincentcc)
+# =============================================================================
+
+include $(AGTROOT)/makedefs.mintgcc
+
+# =============================================================================
+else
+ifeq ($(USE_COMPILER),mikrocc)
+# =============================================================================
+
+include $(AGTROOT)/makedefs.mikrocc
+
+# =============================================================================
+else
+ifeq ($(USE_COMPILER),browncc)
+# =============================================================================
+
+include $(AGTROOT)/makedefs.browncc
+
+# =============================================================================
+else
+# =============================================================================
+
+$(error unsupported compiler selected)
+
+# =============================================================================
+endif
+endif
+endif
+endif
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+#	Configure assembler & other local tools
+# -----------------------------------------------------------------------------
+
+ASMINCLUDES = \
+	-I$(AGTROOT) \
+	-I$(AGTROOT)/3rdparty \
+	-I$(AGTROOT)/3rdparty/m68k \
+	-I$(AGTROOT)/agtsys \
+	-I$(AGTROOT)/agtsys/m68k
+
+ifeq ($(USE_DEBUG_CONSOLE),udev)
+ASMINCLUDES += \
+	-I$(AGTROOT)/3rdparty/m68k/ultraDev/$(USE_ULTRADEV_VERSION)
+endif
+
+
+RMAC = $(HOST_TOOL_DIR)/rmac \
+	$(ASMINCLUDES) \
+	$(RMAC_CFG) \
+	+o0 +o1 +o2 +o3 +o4 +o7 +o8 +o9
+
+
+# -----------------------------------------------------------------------------
+#	Join objects into one list, adding any extra stuff we need
+# -----------------------------------------------------------------------------
+
+CFLAGS	= \
+	$(CODEGENFLAGS) \
+	$(COMPILERDEFS) \
+	$(CWARNINGFLAGS)
+
+CXXFLAGS = \
+	$(CODEGENFLAGS) \
+	$(COMPILERDEFS) \
+	$(CXXWARNINGFLAGS) \
+	-fno-exceptions -fno-rtti -fno-threadsafe-statics
+
+LDFLAGS += $(CODEGENFLAGS) -Wl,-Map,$(OBJ_DIR)/$*.map $(LDOPTS)
+
+
+# -----------------------------------------------------------------------------
+#	Join objects into one list, adding any extra stuff we need
+# -----------------------------------------------------------------------------
+
+AGLIB_COMMON_SRC_LIST = \
+	agtsys/os.c \
+	agtsys/system.cpp \
+	agtsys/shifter.cpp \
+	agtsys/worldmap.cpp \
+	agtsys/tileset.cpp \
+	agtsys/spritesheet.cpp \
+	agtsys/slabsheet.cpp \
+	agtsys/playfield.cpp \
+	agtsys/arena.cpp \
+	agtsys/entity.cpp \
+	agtsys/input.cpp \
+	agtsys/ealloc.cpp \
+	agtsys/compress.cpp \
+	agtsys/fileio.cpp \
+	agtsys/tinycsv_agt.c \
+	\
+	agtsys/sound/sound.cpp \
+	agtsys/sound/music.cpp \
+	\
+	agtsys/m68k/sys.s \
+	agtsys/m68k/qmem.s \
+	agtsys/m68k/ikbd.s \
+	agtsys/m68k/sound.s \
+	\
+	3rdparty/m68k/lz77.s \
+	3rdparty/m68k/lzsa.s \
+	3rdparty/m68k/pack2e.s \
+	3rdparty/m68k/arjm4.s \
+	3rdparty/m68k/arjm7.s \
+	3rdparty/m68k/zx0/unzx0.s \
+	\
+	3rdparty/tinyxml2.cpp \
+	3rdparty/vsnprint.c \
+
+AGLIB_STEONLY_SRC_LIST = \
+	\
+	agtsys/shifter_ste.cpp \
+	agtsys/pcs.cpp \
+	\
+	agtsys/m68k/ste/dispv6.s \
+	\
+	agtsys/m68k/ste/pflib.s \
+	agtsys/m68k/ste/display.s \
+	agtsys/m68k/ste/spritelib.s \
+	agtsys/m68k/ste/drawent.s \
+	\
+	3rdparty/m68k/ste/joypad.s \
+
+AGLIB_STFONLY_SRC_LIST = \
+	\
+	agtsys/shifter_stf.cpp \
+	\
+	agtsys/m68k/stf/pflib.s \
+	agtsys/m68k/stf/display.s \
+	agtsys/m68k/stf/spritelib.s \
+	agtsys/m68k/stf/drawent.s \
+
+
+# -----------------------------------------------------------------------------
+#	Hatari NATFEATS support
+# -----------------------------------------------------------------------------
+
+ifeq ($(USE_HATARI_NATFEATS),yes)
+COMPILERDEFS +=	-DAGT_CONFIG_HATARI_DEBUG
+EXTSUPPORT_SRC_LIST += \
+	3rdparty/m68k/Hatari/natfeats_.s \
+	3rdparty/natfeats.c
+endif
+
+# -----------------------------------------------------------------------------
+#	ultraDev console support
+# -----------------------------------------------------------------------------
+
+ifeq ($(USE_DEBUG_CONSOLE),udev)
+COMPILERDEFS +=	-DAGT_CONFIG_DEBUG_CONSOLE_UDEV
+EXTSUPPORT_SRC_LIST += 3rdparty/m68k/ultraDev/$(USE_ULTRADEV_VERSION)/udlib.s
+endif
+
+# -----------------------------------------------------------------------------
+#	native console support
+# -----------------------------------------------------------------------------
+
+ifeq ($(USE_DEBUG_CONSOLE),native)
+COMPILERDEFS +=	-DAGT_CONFIG_DEBUG_CONSOLE_NATIVE
+endif
+
+
+# -----------------------------------------------------------------------------
+#	Join objects into one list
+# -----------------------------------------------------------------------------
+
+AGLIB_SRC_LIST = $(AGLIB_COMMON_SRC_LIST) $(EXTSUPPORT_SRC_LIST)
+
+# -----------------------------------------------------------------------------
+
+AGLIB_STE_SRC_LIST = $(AGLIB_SRC_LIST) $(AGLIB_STEONLY_SRC_LIST)
+
+TMP00 = $(AGLIB_STE_SRC_LIST)
+TMP10 = $(TMP00:%.s=$(OBJ_DIR)/%.o)
+TMP20 = $(TMP10:%.c=$(OBJ_DIR)/%.o)
+TMP30 = $(TMP20:%.cpp=$(OBJ_DIR)/%.o)
+
+AGLIB_STE_OBJ = $(TMP30)
+
+AGLIB_STE = $(OBJ_DIR)/aglib_ste.a
+
+# -----------------------------------------------------------------------------
+
+AGLIB_STF_SRC_LIST = $(AGLIB_SRC_LIST) $(AGLIB_STFONLY_SRC_LIST)
+
+TMP01 = $(AGLIB_STF_SRC_LIST)
+TMP11 = $(TMP01:%.s=$(OBJ_DIR)/%.o)
+TMP21 = $(TMP11:%.c=$(OBJ_DIR)/%.o)
+TMP31 = $(TMP21:%.cpp=$(OBJ_DIR)/%.o)
+
+AGLIB_STF_OBJ = $(TMP31)
+
+AGLIB_STF = $(OBJ_DIR)/aglib_stf.a
+
+# -----------------------------------------------------------------------------
+
+TMP02 = $(PROJECT_SRC_LIST)
+TMP12 = $(TMP02:%.s=$(OBJ_DIR)/%.o)
+TMP22 = $(TMP12:%.c=$(OBJ_DIR)/%.o)
+TMP32 = $(TMP22:%.cpp=$(OBJ_DIR)/%.o)
+TMP42 = $(TMP32:%.ent=$(OBJ_DIR)/%.o)
+
+PROJECT_OBJ = $(TMP42)
+
+# -----------------------------------------------------------------------------
+
+TMP03 = $(CRTSEQ_S)
+TMP13 = $(TMP03:%.s=$(OBJ_DIR)/%.o)
+TMP23 = $(TMP13:%.c=$(OBJ_DIR)/%.o)
+TMP33 = $(TMP23:%.cpp=$(OBJ_DIR)/%.o)
+TMP43 = $(TMP33:%.gas=$(OBJ_DIR)/%.o)
+
+CRTSEQ_S_OBJ = $(TMP43)
+
+# -----------------------------------------------------------------------------
+
+TMP04 = $(CRTSEQ_E)
+TMP14 = $(TMP04:%.s=$(OBJ_DIR)/%.o)
+TMP24 = $(TMP14:%.c=$(OBJ_DIR)/%.o)
+TMP34 = $(TMP24:%.cpp=$(OBJ_DIR)/%.o)
+TMP44 = $(TMP34:%.gas=$(OBJ_DIR)/%.o)
+
+CRTSEQ_E_OBJ = $(TMP44)
+
+

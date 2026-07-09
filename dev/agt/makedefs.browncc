@@ -1,0 +1,187 @@
+# =============================================================================
+#	[m68k-ataribrown-elf-]
+# =============================================================================
+
+ifeq ($(LINK_MINIMAL),no)
+echo "USE_COMPILER=browncc compiler option requires LINK_MINIMAL=yes (MiNTlib is not supported)."
+error
+endif
+
+# =============================================================================
+
+# local override, if needed for this compiler install
+LOCAL_TOOLCHAIN = $(GCC_INSTALL)
+TOOLCHAIN_VER = $(GCC_VERSION)
+
+# =============================================================================
+#	Map the version to ggn's buildname
+# =============================================================================
+#
+#    6.2.0)    ataribrown		* AGT tested
+#    7.1.0)    ataribrowner		* AGT tested
+#    7.2.0)    ataribrownerer
+#    7.3.0)    ataribrownest
+#    8.1.0)    atariultrabrown
+#    8.2.0)    ataribrownart
+#    8.3.0)    atariultrabrowner
+#    9.1.0)    atarihyperbrown
+#    9.2.0)    atarihyperbrowner
+#    9.3.0)    atarihyperbrownest
+#    10.1.0)   atariextrabrown
+#    10.2.0)   atariextrabrowner	* AGT tested
+#    10.3.0)   atariextrabrownest
+#    11.1.0)   atarisuperbrown
+#    11.2.0)   atarisuperbrowner
+#    12.1.0)   atarimegabrown		* AGT tested
+
+ifeq ($(GCC_VERSION),12.1.0)
+TOOLCHAIN_NAME = m68k-atarimegabrown-elf
+else
+ifeq ($(GCC_VERSION),10.2.0)
+TOOLCHAIN_NAME = m68k-atariextrabrowner-elf
+else
+ifeq ($(GCC_VERSION),7.1.0)
+TOOLCHAIN_NAME = m68k-ataribrowner-elf
+else
+ifeq ($(GCC_VERSION),6.2.0)
+TOOLCHAIN_NAME = m68k-ataribrown-elf
+else
+# unsupported
+echo "untested browncc version - can add support for it here but YMMV!"
+error
+endif
+endif
+endif
+endif
+
+# -----------------------------------------------------------------------------
+
+TOOLCHAIN_PREFIX = $(TOOLCHAIN_NAME)-
+
+RMAC_CFG = -fe
+EXT = elf
+
+# -----------------------------------------------------------------------------
+
+ifeq ($(GCC_PORTABLE_PACKAGE),yes)
+
+#
+# newer browncc package using locally-installed directory tree (i.e. unzip anywhere builds)
+#
+
+LIBGCCPATH = \
+	$(LOCAL_TOOLCHAIN)/lib/gcc/$(TOOLCHAIN_NAME)/$(TOOLCHAIN_VER)/m68000
+CRTPATH = \
+	$(LOCAL_TOOLCHAIN)/$(TOOLCHAIN_NAME)/lib
+
+LIBPATHS = \
+	-L$(LIBGCCPATH) \
+	-L$(LOCAL_TOOLCHAIN)/$(TOOLCHAIN_NAME)/lib/m68000
+
+else
+
+#
+# older browncc package using system install paths (e.g. initial release for [6.2.0], [7.1.0])
+#
+
+LIBGCCPATH = \
+	/lib/gcc/$(TOOLCHAIN_NAME)/$(TOOLCHAIN_VER)/m68000
+CRTPATH = \
+	/usr/$(TOOLCHAIN_NAME)/lib
+
+LIBPATHS = \
+	-L$(LIBGCCPATH) \
+	-L/usr/$(TOOLCHAIN_NAME)/lib/m68000
+
+endif
+
+# -----------------------------------------------------------------------------
+
+ifeq ($(BUILD_CFG),debug)
+
+CODEOPTFLAGS = $(TARGETFLAGS) -g -Os -fomit-frame-pointer
+CODEGENFLAGS = $(CODEOPTFLAGS) -fleading-underscore
+
+else
+
+CODEOPTFLAGS = $(TARGETFLAGS) -Ofast -fomit-frame-pointer -fstrict-aliasing
+CODEGENFLAGS = $(CODEOPTFLAGS) -fleading-underscore -fcaller-saves -flto=1 -ffunction-sections -fdata-sections
+
+endif
+
+CWARNINGFLAGS = -Wall -Wno-unused-variable -Wno-multichar -Wno-narrowing
+CXXWARNINGFLAGS = -Wall -Wno-reorder -Wno-unused-variable -Wno-multichar -Wno-narrowing
+
+
+# -----------------------------------------------------------------------------
+#	With LINK_MINIMAL, we modify the linker command to use minimal LIBC
+# -----------------------------------------------------------------------------
+ifeq ($(LINK_MINIMAL),yes)
+# -----------------------------------------------------------------------------
+
+COMPILERDEFS += -DUSE_TINY_CRT -DAGT_GCC6_ELF
+
+CRTSEQ_S = \
+	agtsys/libcxx/rmac/brownboot.s \
+	agtsys/libcxx/browncrti.gas \
+	agtsys/libcxx/browncrt++.c \
+	agtsys/libcxx/zerolibc.cpp \
+	agtsys/libcxx/zerocrtfini.c
+CRTSEQ_E = \
+	agtsys/libcxx/browncrtn.gas
+
+# GCC6/ELF also needs to generate code with base address = 0 for postprocessing
+LDOPTS = -Wl,--emit-relocs -Wl,-e_start -Ttext=0
+
+LIBS =
+
+# -----------------------------------------------------------------------------
+
+LDFLAGS += -nostdlib -nostartfiles
+#-Wl,-Map,$(OBJ_DIR)/$*.map $(LDOPTS) -nostdlib -nostartfiles $(CODEGENFLAGS)
+
+# -----------------------------------------------------------------------------
+else # LINK_MINIMAL
+# -----------------------------------------------------------------------------
+
+error
+
+# -----------------------------------------------------------------------------
+endif # LINK_MINIMAL
+# -----------------------------------------------------------------------------
+
+ifeq ($(GCC_PORTABLE_PACKAGE),yes)
+
+#
+# tools invoked with their install path
+#
+
+CC = $(LOCAL_TOOLCHAIN)/bin/$(TOOLCHAIN_PREFIX)gcc -x c
+CXX = $(LOCAL_TOOLCHAIN)/bin/$(TOOLCHAIN_PREFIX)g++ -x c++ -std=c++11
+AR = $(LOCAL_TOOLCHAIN)/bin/$(TOOLCHAIN_PREFIX)ar
+AS = $(LOCAL_TOOLCHAIN)/bin/$(TOOLCHAIN_PREFIX)as -v
+NM = $(LOCAL_TOOLCHAIN)/bin/$(TOOLCHAIN_PREFIX)nm
+LINK = $(LOCAL_TOOLCHAIN)/bin/$(TOOLCHAIN_PREFIX)g++
+STRIP = $(LOCAL_TOOLCHAIN)/bin/$(TOOLCHAIN_PREFIX)strip
+STACK = $(LOCAL_TOOLCHAIN)/bin/$(TOOLCHAIN_PREFIX)stack
+FLAGS = $(LOCAL_TOOLCHAIN)/bin/$(TOOLCHAIN_PREFIX)flags
+OBJDUMP = $(LOCAL_TOOLCHAIN)/bin/$(TOOLCHAIN_PREFIX)objdump
+
+else
+
+#
+# tools must be on $PATH
+#
+
+CC = $(TOOLCHAIN_PREFIX)gcc -x c
+CXX = $(TOOLCHAIN_PREFIX)g++ -x c++ -std=c++11
+AR = $(TOOLCHAIN_PREFIX)ar
+AS = $(TOOLCHAIN_PREFIX)as -v
+NM = $(TOOLCHAIN_PREFIX)nm
+LINK = $(TOOLCHAIN_PREFIX)g++
+STRIP = $(TOOLCHAIN_PREFIX)strip
+STACK = $(TOOLCHAIN_PREFIX)stack
+FLAGS = $(TOOLCHAIN_PREFIX)flags
+OBJDUMP = $(TOOLCHAIN_PREFIX)objdump
+
+endif

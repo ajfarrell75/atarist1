@@ -1,0 +1,36 @@
+; cut all villager frames from one image
+
+; villager max frame rectangle, in common between all frames of this asset (set only once)
+; note that agtcut optimizes each frame to left-justify and store only solid pixels, so
+; don't worry if most sprites are not using the full size of the cutting rectangle.
+
+; <xsize>,<ysize>
+[size]
+31,32
+
+
+; configure row cuts with an x-step of 32 pixels between frames
+
+; <xi>,<yi> distance/separation between each frame in this cut
+; e.g. yi=0 for row cut, xi=0 for column cut
+[step]
+32,0
+
+
+; cut the first row starting x=96,y=32
+
+; <framecount>,<xstart>,<ystart>
+[cut]
+5,96,32
+
+; cut remaining rows (total of 4 rows), each below the last
+
+[cut]
+5,96,64
+
+[cut]
+5,96,96
+
+[cut]
+5,96,128
+

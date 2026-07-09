@@ -1,0 +1,193 @@
+# =============================================================================
+#	Common build rules & automation for all projects
+# =============================================================================
+
+ifndef AGTROOT
+$(error AGTROOT is not set)
+endif
+ifndef PROJECT
+$(error PROJECT is not set)
+endif
+ifndef BUILD_DIR
+$(error BUILD_DIR is not set)
+endif
+
+ifndef OBJ_DIR
+$(error OBJ_DIR is not set)
+endif
+ifndef ASSETS
+$(error ASSETS is not set)
+endif
+ifndef IMAGES
+$(error IMAGES is not set)
+endif
+ifndef CACHE
+$(error CACHE is not set)
+endif
+
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+remote: clean-remote remote_disk
+# -----------------------------------------------------------------------------
+ifeq ($(POST_REMOTE),ultradev)
+# -----------------------------------------------------------------------------
+	${AGTROOT}/scripts/post_ultra.sh $(REMOTE_BINARY) $(REMOTE_DISK)
+# -----------------------------------------------------------------------------
+endif # ultradev
+# -----------------------------------------------------------------------------
+.PHONY: remote
+
+
+# -----------------------------------------------------------------------------
+# define content of remote disk (that should be: everything)
+# -----------------------------------------------------------------------------
+
+REMOTE_BINARY = $(BUILD_DIR)/$(REMOTE_PRG)
+REMOTE_ASSETS = $(ASSETS_COMMON) $(ASSETS_S1) $(ASSETS_S2) $(ASSETS_S3) $(ASSETS_S4) $(ASSETS_S5)
+
+remote_disk: $(CACHE)/diskr.tag
+.PHONY: remote_disk
+
+clean-remote:
+	rm -rf $(REMOTE_DISK)/*
+	rm -f $(CACHE)/diskr.tag
+.PHONY: clean-remote
+
+# -----------------------------------------------------------------------------
+# rule to build remote disk
+# -----------------------------------------------------------------------------
+
+$(CACHE)/diskr.tag: $(REMOTE_BINARY) $(REMOTE_ASSETS)
+	@echo "GENERATING REMOTE DISK"
+	@mkdir -p $(CACHE)
+	@mkdir -p $(REMOTE_DISK)/auto
+	cp -r $(REMOTE_BINARY) $(REMOTE_DISK)/auto/.
+	$(if $(strip $(REMOTE_FILES)),$(AGTROOT)/scripts/copyassets.sh $(ASSETS) "$(REMOTE_FILES)" ../$(REMOTE_DISK)/)
+	@touch $(CACHE)/diskr.tag
+
+REMOTE_FILES = $(REMOTE_ASSETS:$(ASSETS)/%=%)
+
+# =============================================================================
+
+# limit recognised suffixes
+#
+.SUFFIXES:
+.SUFFIXES: .c .cpp .h .s .gas .ent .prg .tos .bmu .wav
+
+# keep compiled intermediates in build directory by default
+#
+.PRECIOUS: $(OBJ_DIR)/%.o
+
+# =============================================================================
+ifeq ($(USE_COMPILER),browncc)
+# =============================================================================
+# browncc produces ELF images and requires specific rules
+# =============================================================================
+
+include $(AGTROOT)/makerules.browncc
+
+# =============================================================================
+else
+# =============================================================================
+# all other toolchains share the mint/TOS build rules
+# =============================================================================
+
+include $(AGTROOT)/makerules.mintgcc
+
+# =============================================================================
+endif
+# =============================================================================
+
+
+# =============================================================================
+#	Common rules
+# =============================================================================
+
+clean:
+	@mkdir -p '$(OBJ_DIR)'
+	rm -f $(OBJ_DIR)/*.elf $(OBJ_DIR)/*.tos
+	rm -f $(AGLIB_STE_OBJ) $(AGLIB_STF_OBJ)
+	rm -f $(AGLIB_STE) $(AGLIB_STF)
+	find $(OBJ_DIR) -type f -name '*.o' -exec rm {} +
+	rm -rf $(OBJ_DIR)
+
+# -----------------------------------------------------------------------------
+
+$(AGLIB_STE): $(AGLIB_STE_OBJ)
+	@echo "ARCHIVING -> $@"
+	@mkdir -p '$(@D)'
+	$(AR) cr $(AGLIB_STE) $(AGLIB_STE_OBJ)
+
+$(AGLIB_STF): $(AGLIB_STF_OBJ)
+	@echo "ARCHIVING -> $@"
+	@mkdir -p '$(@D)'
+	$(AR) cr $(AGLIB_STF) $(AGLIB_STF_OBJ)
+
+# =============================================================================
+#	Build rules for shared AGT sourcefiles
+# =============================================================================
+
+# rule to compile .c files
+$(OBJ_DIR)/%.o: $(AGTROOT)/%.c
+	@echo "COMPILING $< -> $@"
+	@mkdir -p '$(@D)'
+	$(CC) $(CCINCLUDES) $(CFLAGS) -c -o $@ $<
+
+# rule to compile .cpp files
+$(OBJ_DIR)/%.o: $(AGTROOT)/%.cpp
+	echo "COMPILING $< -> $@"
+	mkdir -p '$(@D)'
+	$(CXX) $(CCINCLUDES) $(CXXFLAGS) -c -o $@ $<
+
+# rules to assemble .gas files -> .o
+$(OBJ_DIR)/%.o: $(AGTROOT)/%.gas
+	@echo "GASSING $< -> $@"
+	@mkdir -p '$(@D)'
+	$(AS) -o $@ $<
+
+# rules to assemble unspecified .s files -> .o
+$(OBJ_DIR)/%.o: $(AGTROOT)/%.s
+	@echo "RMACCING $< -> $@"
+	@mkdir -p '$(@D)'
+	$(RMAC) $(COMPILERDEFS) -o $@ $<
+
+# =============================================================================
+#	Build rules for project-local sourcefiles
+# =============================================================================
+
+# rule to compile .c files
+$(OBJ_DIR)/%.o: %.c
+	@echo "COMPILING C $< -> $@"
+	@mkdir -p '$(@D)'
+	$(CC) $(CCINCLUDES) $(CFLAGS) -c -o $@ $<
+
+# rule to compile .cpp files
+$(OBJ_DIR)/%.o: %.cpp
+	@echo "COMPILING C++ $< -> $@"
+	@mkdir -p '$(@D)'
+	$(CXX) $(CCINCLUDES) $(CXXFLAGS) -c -o $@ $<
+
+# rule to compile .ent files
+$(OBJ_DIR)/%.o: %.ent
+	@echo "COMPILING ENTITIES $< -> $@"
+	@mkdir -p '$(@D)'
+	$(CXX) $(CCINCLUDES) $(CXXFLAGS) -fno-lto -fcall-used-d2 -fcall-used-d3 -fcall-used-d4 -fcall-used-d5 -fcall-used-d6 -fcall-used-d7 -fcall-used-a2 -fcall-used-a3 -fcall-used-a4 -fcall-used-a5 -c -o $@ $<
+
+# =============================================================================
+#	Build rules for project-local sourcefiles
+# =============================================================================
+
+# rule to make .prg from .tos
+%.prg: %.tos
+	@echo "RENAMING $< -> $@"
+	@mkdir -p '$(@D)'
+	cp $< $@
+
+# =============================================================================
+
+
+
+
+
+	
