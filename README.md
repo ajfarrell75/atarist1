@@ -78,6 +78,40 @@ Clic dans l'écran ST = capture de la souris (curseur GEM) ; le clavier est rout
 l'IKBD. Le GUI ajoute un menu **Machine** (modèle, mémoire, cœur CPU) et une
 **Disk Library** (monter/éjecter à chaud).
 
+## Mode kiosk (borne / expo)
+
+Pour une borne d'exposition : plein écran **sans aucune interface** (ni menu, ni
+fenêtres), image centrée, configuration **figée** (la borne repart toujours identique).
+
+```sh
+./build/neost --kiosk           roms/tos102uk.img "disks/Jeu.stx"   # plein écran sans bordure
+./build/neost --kiosk-exclusive roms/tos102uk.img "disks/Jeu.stx"   # plein écran EXCLUSIF (recommandé)
+./build/neost --kiosk-exclusive --kiosk-monitor 1 roms/tos162fr.img  # sur le 2ᵉ écran
+```
+
+- **`--kiosk`** : fenêtre plein écran *sans bordure* (« borderless-windowed »), toujours au
+  premier plan. Simple, mais un bureau à panneaux « toujours au-dessus » (GNOME Shell…)
+  peut la recouvrir.
+- **`--kiosk-exclusive`** : vrai plein écran **exclusif** — reste au-dessus de tout, garde le
+  focus clavier. **À préférer** pour une vraie borne. (`--kiosk` est impliqué.)
+- **`--kiosk-monitor N`** : écran cible (0 = principal).
+
+En kiosk : l'image **active** (l'écran ST « de base », hors bandes overscan) est **calée sur
+la hauteur** de l'écran en gardant le ratio (barres noires latérales) ; la souris est
+capturée et le curseur masqué ; l'**émulation joystick au clavier est activée** (flèches +
+Ctrl droit = feu) pour jouer sans manette. Le fichier `neost.cfg` n'est **jamais** réécrit.
+
+| Touche             | Action                                             |
+|--------------------|----------------------------------------------------|
+| Flèches / Ctrl droit | Joystick émulé (direction / feu)                 |
+| F11                | (dés)active l'émulation joystick clavier           |
+| **Alt+F4**         | **Quitter la borne** (immédiat, le classique)      |
+| **Ctrl+Shift+Q** (~0,7 s) | Quitter la borne (chord discret)            |
+
+> Démarrage direct sur un jeu (attract) : monter un dossier GEMDOS
+> (`NEOST_GEMDOS_DIR=…`) dont le `DESKTOP.INF` (TOS 1.x) ou `NEWDESK.INF` (TOS 2.x)
+> contient une ligne d'autostart `#Z 01 C:\JEU.TOS@`.
+
 ## ROM : EmuTOS par défaut (libre)
 
 Les TOS Atari d'origine sont propriétaires et **ne sont pas redistribués** ici. NeoST

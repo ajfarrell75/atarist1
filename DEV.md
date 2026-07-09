@@ -43,6 +43,32 @@ extern/  moira/ imgui/ miniaudio/   (sous-modules)
 extern/hatari/src           SOURCE DE VÉRITÉ matérielle (lue, pas compilée)
 ```
 
+## Mode kiosk (`main.cpp`)
+
+Borne d'exposition : `--kiosk` (borderless plein écran) / `--kiosk-exclusive` (vrai
+plein écran, argument moniteur passé à `glfwCreateWindow` → reste au-dessus de tout) /
+`--kiosk-monitor N`. Piloté par le global `g_kiosk` (+ `kioskExclusive` local). Points clés :
+
+- **Parsing** : les drapeaux `--*` sont filtrés ; les arguments POSITIONNELS restants
+  donnent ROM (0) et disquette (1). Ne pas remettre d'accès `argv[1/2]` en dur.
+- **Config figée** : `saveConfig()` fait un `return` immédiat si `g_kiosk` → `neost.cfg`
+  intact (la borne repart identique). Un `--kiosk` de test n'écrase donc jamais la config.
+- **Chrome masqué** : tout le bloc ImGui (menu/toolbar/fenêtres) est sous `if (!g_kiosk)` ;
+  la trame ImGui reste créée/rendue à vide (léger, pas de refonte du flux).
+- **Rendu** : `drawStKiosk()` cale la **zone active** (`Shifter::activeWidth/Height/Top`,
+  = l'image « de base » 320×200 hors bandes overscan) sur la **hauteur** de l'écran, ratio
+  gardé, pillarbox latéral. On échantillonne les texcoords de la zone active (bordures
+  exclues) : un jeu normal remplit l'écran comme une démo, sans être rapetissé par les
+  bordures unies qu'il n'exploite pas. Les rares plein-overscan (Enchanted Land, Tali) sont
+  rognés — assumé. Fond effacé en NOIR (barres).
+- **Entrées** : souris capturée + curseur masqué d'emblée ; `g_kbdJoy` forcé ON (jeux
+  joystick jouables au clavier) ; DEL ne libère PAS la souris en kiosk. Sortie : **Alt+F4**
+  (immédiat, géré explicitement car l'exclusif ne relaie pas toujours le « close » du WM)
+  ou chord **Ctrl+Shift+Q** ~0,7 s. On ne bloque jamais `glfwWindowShouldClose` (le WM
+  reste un moyen de sortie).
+- **Attract** : autostart via `#Z` d'un `DESKTOP.INF`/`NEWDESK.INF` dans le dossier GEMDOS
+  monté (aucun code dédié — data-driven).
+
 ## Modèle d'horloge (`Machine::runFrame`)
 
 PAL basse résolution : **313 lignes × 512 cycles CPU**. `runFrame` est désormais
