@@ -37,6 +37,8 @@ Rapports terrain. TOS 1.02fr sauf mention contraire. Chemins sous `disks/st/` (`
 | **Rick Dangerous II (1989)** (Core) | SPACE, `n`, `n` : plante avec 4 bombes. | À diff'er Hatari. |
 | **Wings of Death** (`.stx`) | Après bouton : titre **corrompu** + son ralenti ; SPACE lance le jeu, qui tourne ensuite très bien. | Corruption titre (vidéo) + son chargement. |
 | **Stardust (1994)** / **Stardust Bloodhouse** (`.STX`) | Plante sur écran noir au démarrage. | À diff'er Hatari. |
+| **Spectrum 512 — palettes « foirées » sur STE** (2026-07-09) | ✅ **PAS UN BUG — comportement FIDÈLE** : l'auto-diapo scramblait les palettes sur STE/Mega STE (parfait sur ST). Diag : le viewer spec512 est calibré timing **STF** → sur STE il se désynchronise **sur vrai matériel aussi**. NeoST STE == **oracle Hatari STE byte-exact (0 px, plage f1645-1660)** → NeoST reproduit fidèlement, ce n'est pas sa faute. La vraie lacune était l'**absence de détection** (rien ne disait « fidèle » vs « bug »). | ✅ Étalon `spectrum512_diapo_ste` ajouté (épinglé à l'oracle Hatari STE `tests/reference/spectrum512_diapo_ste.png`). ⚠ `9f0d2bc` (res-tricks) écarté : ne touche que MED_OFFSET ; ST reste 0 px vs oracle. Leçon → « Système de régression » ci-dessous. |
+| **HotPot (2002)** (Reservoir Gods, notre build `build.sh --game`) | ✅ **RÉSOLU (2026-07-09)** : front-end JOUABLE (menu « DOUBLE JUGGLE », INFO/OPTIONS/PLAY/EXIT) sur STE 1 Mo/tos162fr et tos106uk 4m. Le « noir après l'intro » N'était **PAS** une divergence d'émulation (identique dans Hatari) mais un **bug toolchain** : `build.sh` ignorait les `-D` du `.PRJ`, donc `-DdGODLIB_FADE` jamais défini → `Fade_Init()` (dans `#ifdef dGODLIB_FADE` de PLATFORM.C) compilé hors → callback VBL `Fade_Vbl` jamais installé → **fade-in de palette jamais armé** (palette figée noire alors que le front-end était bien dessiné). | Fix : `build.sh` collecte les `-D` actifs du `.PRJ` (`GAME_DEFS`) → toutes les compilations `vc`. Diag : symboles DRI du `.TOS` + `--dump-at` (`$FFFF8240`, `gFade`, `mfCalls`) + oracle Hatari `--harddrive/--avirecord`. Renvoi mémoire `hotpot-jouable-divergence`. |
 
 > **Récemment résolus** (passés au CHANGELOG) : **Super Hang-On** (bruit blanc → filtre YM
 > LowPass STF ; lignes colorées → rendu raster `PAL_SNAP` ; FDC 9→10 spt) ; **Rick Dangerous**
@@ -142,9 +144,62 @@ densité HD/ED STX (NeoST plus cohérent) ; RTC en temps émulé (déterminisme 
 - **NVRAM / préférences TOS MegaSTE** (résolution / boot device) si TOS 2.x l'exige.
 - **Cartridge port** `$FA0000-$FBFFFF` générique (au-delà du système GEMDOS) — réf. `cart.c`.
 
+### Système de régression (refonte — déclenché par la casse spec512 non détectée, 2026-07-09)
+
+**Constat.** Une régression de palette spec512 (rapport terrain) n'a **PAS** été détectée : l'unique
+étalon spec512 est un slice trop étroit (1 disque auto-diapo, **borderless**, ST/tos102uk, 2 trames,
+headless). Trois trous : (a) **couverture** — GUI, images bordées/beam-racing, autres résolutions,
+res-tricks non testés ; (b) **automatisation** — la suite est manuelle (aucun hook/CI), une régression
+ne remonte que si on pense à lancer `run_etalons.py` ; (c) **provenance des réfs** — `compare` préfère
+la self-capture `.ppm` à l'oracle `.png` → une réf ré-« blessée » peut figer un bug.
+
+Refonte proposée, en **pyramide à paliers** (chaque test s'auto-verdicte → code de sortie ; les paliers
+rapides tournent en secondes et **gardent le commit**) :
+
+- ✅ **P0 — auto-tests logique pure (ms, sans boot) — FAIT (2026-07-09)** : `--spec512-selftest`
+  (`Shifter::spec512SelfTest`, headless + `run_etalons.py` type `spec512_selftest`) remplit une RAM
+  vidéo synthétique (tous pixels = index 1), injecte des écritures palette datées et **assère la
+  couleur pixel octet-exact** contre le modèle `f(kSpec512AlignCyc, géométrie)` — garde aussi la
+  constante `-25`. **Détection prouvée** : `NEOST_ALIGN_OFF=1` (dérive 1 cyc) → exit 1 ; propre → exit 0.
+  _Reste (P0+)_ : self-tests analogues whitelist bus-error, fronts GPIP, Timers.
+- ✅ **P1 — verdicts cartouche (s, déterministe, sans oracle) — FAIT (2026-07-09)** : convention série
+  **`NEOST-TEST: <nom> PASS|FAIL <détail>`** (UDR `$FFFA2F`, sink RS-232). `--serial-dump FILE` (capture
+  propre), `tools/make_selftest_cart.py` (cartouche **diagnostic** `$FA52235F`, saut `$FA0004` au reset,
+  mini-assembleur 68000 à labels ; `--break cpu|timing` pour valider les FAIL), runner
+  `tools/run_selftests.py` + `tools/selftests.json` (scanne le série, sort 0/1). Bout-en-bout vert ;
+  `--break` → exit 1. _Reste_ : migrer le verdict FPU (aujourd'hui lu à la main dans `D7`) vers le série.
+- **P1-timing — verdicts timing autoportants (sans oracle)** : ◑ sentinelle **liveness** faite (le test
+  `timing` de la cartouche vérifie que `$FF8209` n'est pas figé → anti-clock-morte). Reste le **cycle-exact** :
+  ROM qui **compte** ticks Timer C/trame, HBL/trame, latence IPL en interne et imprime PASS/FAIL contre
+  des constantes → garde-fou anti-dérive **sans Hatari** (aujourd'hui `make_cycle_bench` +
+  `trace_diff --periods` sont 100 % manuels). Puis gate `trace_diff` sur une trace-or committée + tolérance.
+- **P2 — étalons pixel épinglés oracle (`run_etalons.py`, existant) — durcir + élargir** : marquer
+  chaque réf `ref_kind: oracle|snapshot` et comparer à l'**oracle** quand `oracle` (ne plus préférer
+  silencieusement la self-capture). Élargir spec512 : image **bordée** (overscan), **autre résolution**,
+  et surtout **rejouer l'image cassée du terrain** en nouvel étalon. Mode diff **palette par ligne**
+  dans `compare_screenshot` (pointe la scanline/x de divergence → décalage vertical spec512 localisé).
+- **P3 — pont config GUI↔headless** : les bugs récurrents n'apparaissent qu'en **GUI** (config ≠
+  headless). `--from-cfg neost.cfg` : rejouer machine/TOS/disque/résolution exacts du GUI en headless →
+  « ce que l'utilisateur a lancé » devient reproductible et testable.
+- **Orchestration** : `tools/run_all.py --tier fast` (P0+P1, secondes, avant chaque commit, hook
+  pre-push opt-in) et `--tier full` (P0→P3, oracle Hatari + disques). `--verify-refs` re-contrôle que les
+  réfs `oracle` dérivent bien de Hatari.
+
+Le 20 % qui attrape 80 % : **`--spec512-selftest` (P0)** ✅ + **runner verdict série (P1)** ✅ + **`ref_kind`
+oracle strict (P2)** ← PROCHAIN. Puis P1-timing cycle-exact, P3, orchestration.
+
 ### Outillage / qualité
 - **Étalons headless** : calibrer frames + références Cuddly / Union / Troed / Hatari Test Suite ;
   rapatrier Union (planetemu manuel). Infra en place (`tools/run_etalons.py`).
+- **Samples GODLIB (chantier « faire tourner le boulot Reservoir Gods »)** : les **15 exemples**
+  `GODLIB.SPL/*` compilent (`build.sh <NOM>`) et **s'exécutent sous NeoST** (STE 1 Mo/tos162fr,
+  gemdos). Correctifs `build.sh` : détection du `.PRJ` réel (BLITTER1/CLI_TEST/SPRITE1) + pont
+  `@__v0printf` (printf vbcc, pour COOKIJAR/JAGPAD/JOY/TRUCOLOR). Assets runtime chargés depuis
+  le **cwd** (= racine C:\ à l'autostart #Z ; = dossier au double-clic GEM) : `SPRITE.PI1`,
+  `RGLOGO.PI1`, `IMAGE.GOD`, `voice.raw`/`OH_YES.wav` copiés dans `gemdos/etalon/`.
+  **HotPot** (jeu complet) : ✅ front-end JOUABLE après le fix `-D` du `.PRJ` (cf. Catalogue).
+  ⚠ `build.sh` applique désormais les `-D` actifs du `.PRJ` à toute compilation (module-enable
+  GODLIB type `dGODLIB_FADE`) — indispensable, sinon des sous-systèmes sont compilés hors.
 - **Comparaison MAME ↔ NeoST** (memory map, bus errors, FDC/MMU FIFO, blitter, SCC).
 - **Matrice de compatibilité MegaSTE** : TOS 2.05/06, EmuTOS, 1/2/4 Mo, 8/16 MHz, cache on/off,
   DD/HD, mono/couleur.
