@@ -67,6 +67,56 @@ def wsum(b): return sum(struct.unpack('>256H', bytes(b))) & 0xFFFF
 struct.pack_into('>H', boot, 0x1FE, 0)
 struct.pack_into('>H', boot, 0x1FE, (0x1234 - wsum(boot)) & 0xFFFF)
 assert wsum(boot) == 0x1234
+# --- Variante CARTOUCHE DIAGNOSTIC (magic $FA52235F, saut $FA0004 au reset) ----------
+# Les MÊMES corps de boucle, mais exécutés PRÉ-TOS depuis la cartouche → fiable en
+# headless (le secteur de boot, lui, reste bloqué derrière le poll FDC du TOS). Sert au
+# gate d'auto-régression cycle (tools/run_cyclebench.py) via NEOST_TRACE_CYC=1.
+CART_BASE = 0xFA0000
+
+
+def build_cart():
+    c = bytearray(); labs = {}; fx = []
+    def cw(*xs):
+        for x in xs: c.extend(struct.pack('>H', x & 0xFFFF))
+    def cl(x): c.extend(struct.pack('>I', x & 0xFFFFFFFF))
+    def clabel(n): labs[n] = len(c)
+    def cbr(op, n): cw(op); fx.append((len(c), n)); c.extend(b'\x00\x00')   # Bcc.w / dbra
+    c.extend(struct.pack('>I', 0xFA52235F))     # magic diagnostic (offset 0)
+    # entrée $FA0004 : même init que le secteur de boot
+    cw(0x46FC, 0x2700)                           # move.w #$2700,sr (IPL7)
+    cw(0x207C); cl(0x00020000)                   # movea.l #$00020000,a0
+    cw(0x227C); cl(0x00FFFA01)                   # movea.l #$00FFFA01,a1
+    cw(0x7000); cw(0x7200); cw(0x7402)           # moveq #0,d0 ; #0,d1 ; #2,d2
+    # KC PETIT et positif (moveq #KC, KC≤127 → pas de sign-extension) : chaque boucle
+    # finit vite → TOUS les tests tournent à chaque passe de main (≠ K=150 du secteur de
+    # boot, qui sign-étend en −106 → dbra sur 65431 itérations, une seule boucle par trame).
+    KC = 40
+    clabel('main')
+    for name, body in TESTS:
+        cw(0x7E00 | (KC & 0x7F))                 # moveq #KC,d7
+        clabel('L_' + name)
+        for word in body: cw(word)
+        cbr(0x51CF, 'L_' + name)                 # dbra d7,L_test
+    cbr(0x6000, 'main')                          # bra.w main
+    for off, n in fx:                            # disp = label - position (convention dbra)
+        struct.pack_into('>h', c, off, labs[n] - off)
+    pcs = {n: CART_BASE + labs['L_' + n] for n, _ in TESTS}
+    return bytes(c), pcs
+
+
+if '--cart' in sys.argv:
+    i = sys.argv.index('--cart')
+    out = sys.argv[i + 1] if i + 1 < len(sys.argv) else "/tmp/cyclebench_cart.bin"
+    data, pcs = build_cart()
+    open(out, 'wb').write(data)
+    import json
+    json.dump({n: f"{pc:06X}" for n, pc in pcs.items()},
+              open(out + ".labels.json", 'w'), indent=1)
+    print(f"écrit cartouche {out} ({len(data)} o) + labels {out}.labels.json")
+    for n, pc in pcs.items():
+        print(f"  L_{n:9} @ ${pc:06X}")
+    sys.exit(0)
+
 img = bytearray(1440 * 512); img[0:512] = boot
 out = sys.argv[1] if len(sys.argv) > 1 else "/tmp/cyclebench.st"
 open(out, 'wb').write(img)

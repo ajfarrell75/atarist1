@@ -377,6 +377,45 @@ bool Bus::busFault(uint32_t addr) const {
     return true;
 }
 
+bool Bus::busSelfTest() {
+    int pass = 0, fail = 0;
+    auto chk = [&](const char* n, long got, long want) {
+        if (got == want) { ++pass; }
+        else { ++fail; std::fprintf(stderr, "  FAIL %-30s got=%ld want=%ld\n", n, got, want); }
+    };
+    // Force le superviseur : sinon la branche user-mode de busFaultN fait fauter TOUT
+    // l'espace IO ($0-$7FF + $FF8000+) et masque l'invariant whitelist qu'on teste.
+    if (cpu) cpu->setSr(uint16_t(cpu->sr() | 0x2000));
+
+    // 1) RAM ($0-$3FFFFF) : jamais de faute (byte + long).
+    chk("RAM byte", busFault(0x1000) ? 1 : 0, 0);
+    chk("RAM long", busFaultN(0x1000, 4, false) ? 1 : 0, 0);
+    // 2) Sous l'espace IO ($FF0000-$FF7FFF) : faute inconditionnelle (BusErrMem_bank).
+    chk("sous-IO byte", busFault(0xFF7FFE) ? 1 : 0, 1);
+    // 3) Un accès qui DÉMARRE hors IO ne se « sauve » pas en débordant dans l'IO
+    //    (dispatch sur l'octet de départ) : long $FF7FFE faute malgré $FF8000-01 valides.
+    chk("hors-IO ne se sauve pas", busFaultN(0xFF7FFE, 4, false) ? 1 : 0, 1);
+    // 4) Palette $FF8240 whitelistée : lecture jamais fautive (byte + word).
+    chk("palette byte", busFault(0xFF8240) ? 1 : 0, 0);
+    chk("palette word", busFaultN(0xFF8240, 2, false) ? 1 : 0, 0);
+    // 5) INVARIANT WHITELIST : chercher une frontière IO (octet fautif adjacent à un
+    //    non-fautif) → un word qui la chevauche NE FAUTE PAS ; et un word tout-fautif FAUTE.
+    bool mix = false, allf = false;
+    for (uint32_t a = stmap::MMIO_BASE; a < 0xFFFFFE && !(mix && allf); a += 2) {
+        const bool f0 = busFault(a), f1 = busFault(a + 1);
+        if (f0 != f1 && !mix) { chk("word mixte ne faute pas", busFaultN(a, 2, false) ? 1 : 0, 0); mix = true; }
+        if (f0 && f1 && !allf) { chk("word tout-fautif faute", busFaultN(a, 2, false) ? 1 : 0, 1); allf = true; }
+    }
+    chk("frontière whitelist trouvée", mix ? 1 : 0, 1);
+    chk("word tout-fautif trouvé", allf ? 1 : 0, 1);
+    // 6) Écritures TOUJOURS fautives : $0-$7 (miroir vecteurs) et port cartouche (ROM).
+    chk("write $0 protégé", busFaultN(0, 2, true) ? 1 : 0, 1);
+    chk("write cartouche protégé", busFaultN(stmap::CART_BASE, 2, true) ? 1 : 0, 1);
+
+    std::fprintf(stderr, "[bus-selftest] %d OK, %d FAIL\n", pass, fail);
+    return fail == 0;
+}
+
 bool Bus::busFaultN(uint32_t addr, unsigned n, bool write) const {
     addr &= stmap::ADDR_MASK;
 

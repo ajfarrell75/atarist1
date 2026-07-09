@@ -125,9 +125,13 @@ def resolve_ref(entry: dict, ref_ppm: Path, ref_png: Path):
     # Défaut historique (absent) : .ppm sinon .png (toléré, mais un WARN invite à trancher).
     kind = entry.get("ref_kind")
     if kind == "oracle":
+        # JAMAIS la self-capture : un oracle se compare au .png Hatari, point.
         return (ref_png, "oracle") if ref_png.exists() else (None, "oracle")
     if kind == "snapshot":
-        return (ref_ppm, "snapshot") if ref_ppm.exists() else (None, "snapshot")
+        # Self-capture NeoST : .ppm de préférence, sinon .png (certaines réfs V2 archivées).
+        if ref_ppm.exists():
+            return ref_ppm, "snapshot"
+        return (ref_png, "snapshot") if ref_png.exists() else (None, "snapshot")
     if ref_ppm.exists():
         print(f"  ⚠ ref_kind absent — utilise la self-capture {ref_ppm.name} "
               f"(ajouter ref_kind: oracle|snapshot dans etalons.json)")
@@ -142,7 +146,9 @@ def run_one(entry: dict, args) -> bool:
     print(f"\n=== {eid} — {entry['name']} ===")
 
     selftest_flag = {"glue_selftest": "--glue-selftest",
-                     "spec512_selftest": "--spec512-selftest"}.get(entry.get("type"))
+                     "spec512_selftest": "--spec512-selftest",
+                     "bus_selftest": "--bus-selftest",
+                     "mfp_selftest": "--mfp-selftest"}.get(entry.get("type"))
     if selftest_flag:
         rc = run_selftest(selftest_flag, entry.get("cpu", "moira"))
         if rc != 0:
@@ -218,11 +224,15 @@ def verify_refs(entries: list[dict]) -> int:
     for e in entries:
         if e.get("type"):                 # selftests : pas de réf image
             continue
-        eid = e["id"]; kind = e.get("ref_kind")
+        eid = e["id"]; kind = e.get("ref_kind"); opt = e.get("optional")
         png = REF_DIR / f"{eid}.png"; ppm = REF_DIR / f"{eid}.ppm"
         if kind == "oracle":
             if not png.exists():
-                print(f"  ✗ {eid}: ref_kind=oracle mais {png.name} absent"); bad += 1; continue
+                if opt:
+                    print(f"  · {eid}: oracle .png absent (optionnel — fetch/oracle à la demande)")
+                else:
+                    print(f"  ✗ {eid}: ref_kind=oracle mais {png.name} absent"); bad += 1
+                continue
             dims = _png_dims(png)
             if not dims or dims[0] < 2 * BUFFER_W:
                 print(f"  ✗ {eid}: {png.name} {dims} n'a pas la taille d'un oracle Hatari "
@@ -230,10 +240,12 @@ def verify_refs(entries: list[dict]) -> int:
             else:
                 print(f"  ✓ {eid}: oracle {png.name} {dims[0]}×{dims[1]}")
         elif kind == "snapshot":
-            if not ppm.exists():
-                print(f"  ✗ {eid}: ref_kind=snapshot mais {ppm.name} absent"); bad += 1
+            if ppm.exists() or png.exists():
+                print(f"  ✓ {eid}: snapshot {(ppm if ppm.exists() else png).name}")
+            elif opt:
+                print(f"  · {eid}: snapshot absent (optionnel — fetch à la demande)")
             else:
-                print(f"  ✓ {eid}: snapshot {ppm.name}")
+                print(f"  ✗ {eid}: ref_kind=snapshot mais aucune réf ({ppm.name}/{png.name})"); bad += 1
         else:
             print(f"  ⚠ {eid}: ref_kind absent (ajouter oracle|snapshot)")
     print("\n" + ("RÉFS OK" if bad == 0 else f"{bad} réf(s) suspecte(s)"))

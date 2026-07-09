@@ -108,7 +108,10 @@ auto : **Cuddly Demos** (`disks/etalons/cuddly_demos.msa`), **No Cooper**
 
 ```sh
 ./build/neost-headless roms/tos102uk.img --glue-selftest      # machine Glue (bordures)
-./build/neost-headless roms/tos102uk.img --spec512-selftest   # re-rendu Spectrum 512 (palette/pixel)
+./build/neost-headless roms/tos102uk.img --spec512-selftest   # re-rendu Spectrum 512 (borderless + bordé)
+./build/neost-headless roms/tos102uk.img --bus-selftest       # whitelist bus error (par octet)
+./build/neost-headless roms/tos102uk.img --mfp-selftest       # GPIP forcé / fronts AER-DDR / Timer B
+python3 tools/run_cyclebench.py [--update]                    # golden du modèle de cycle 68000
 ```
 
 `--spec512-selftest` construit une RAM vidéo synthétique (tous pixels = index 1), injecte des
@@ -134,12 +137,55 @@ python3 tools/run_selftests.py --list
 ```
 
 `tools/make_selftest_cart.py` produit une **cartouche diagnostic** (magic `$FA52235F` → le TOS saute
-à `$FA0004` au reset, pré-TOS, sans disque) qui teste le cœur `cpu` (invariants arithmétiques) et
-`timing` (sentinelle : le compteur vidéo `$FF8209` n'est pas figé). `--break cpu|timing` force un FAIL
-(valide que le runner l'attrape). Le runner `tools/run_selftests.py` (manifeste `tools/selftests.json`)
-lance le headless avec `--cart` + `--serial-dump`, scanne les verdicts et sort 0/1. _À venir_ : migrer
-le verdict FPU (`make_fpu_testrom.py`, aujourd'hui lu à la main dans `D7`) vers le série ; ROM timing
-cycle-exact (Timer C/HBL par trame).
+à `$FA0004` au reset, pré-TOS, sans disque) qui teste :
+- **`cpu`** — invariants arithmétiques (garde-fou cœur 68000) ;
+- **`timing`** — sentinelle liveness : le compteur vidéo `$FF8209` n'est pas figé (anti-clock-morte) ;
+- **`frame`** — cycle-exact : installe les vecteurs HBL/VBL (`$68`/`$70`) et **compte les HBL par trame**
+  par interruptions (262 pré-TOS, déterministe) → flague une dérive grossière (50 Hz→313, 71 Hz→501) ;
+- **`ipl`** — latence d'exception : le handler HBL de la ligne 100 fait un délai puis lit `$FF8209`
+  (position faisceau = phase d'entrée IACK+prologue, 224±4 déterministe).
+
+`--break cpu|timing|frame` force le FAIL correspondant (valide que le runner l'attrape). Le verdict
+**`fpu`** vient de `make_fpu_testrom.py` (Mega STE + `--fpu`, 9 tests MC68881), qui émet désormais
+`NEOST-TEST: fpu PASS|FAIL` sur le série (en plus de `D7` pour la trace). Le runner
+`tools/run_selftests.py` (manifeste `tools/selftests.json`) lance le headless avec `--cart`/rom +
+`--serial-dump`, scanne les verdicts et sort 0/1.
+
+### Orchestration par paliers + hook pre-push
+
+```sh
+python3 tools/run_all.py --tier fast      # P0 (glue+spec512) + P1 (verdicts série) — ~0,1 s
+python3 tools/run_all.py --tier full      # fast + P2 (étalons pixel + --verify-refs)
+python3 tools/run_all.py --install-hook    # hook git pre-push (opt-in) → lance --tier fast
+python3 tools/run_all.py --uninstall-hook
+```
+
+### Provenance des références & diff par ligne (P2)
+
+Chaque étalon pixel déclare `ref_kind` dans `etalons.json` :
+- **`oracle`** → comparé à l'**oracle Hatari** `tests/reference/<id>.png` (jamais une self-capture).
+- **`snapshot`** → comparé à la self-capture NeoST `<id>.ppm` (non-régression ; repli `.png`).
+
+```sh
+python3 tools/run_etalons.py --verify-refs      # contrôle la provenance (oracle = .png ≥832px)
+python3 tools/compare_screenshot.py A.ppm B.png --crop active --report   # diff PAR SCANLINE
+```
+
+`--report` affiche le 1ᵉʳ pixel divergent (x/y) et les pires scanlines — un décalage vertical spec512
+apparaît en bande contiguë, un décalage horizontal en petit compte réparti sur beaucoup de lignes.
+`run_etalons.py` passe `--report` automatiquement (diagnostic en cas d'échec).
+
+### Pont config GUI↔headless (P3)
+
+Les bugs « seulement en GUI » viennent d'une config ≠ headless. `--from-cfg neost.cfg` rejoue la config
+EXACTE du GUI (machine/TOS/mem/cpu/disque/cart/mono/fastfdc/fpu/gemdos/acsi) ; les chemins `./../` du
+GUI sont résolus vers la racine. Les options CLI placées **après** surchargent :
+
+```sh
+# Reproduire headless ce que le GUI a lancé, capturer, diff Hatari
+./build/neost-headless --from-cfg neost.cfg --frames 1651 --screenshot s.ppm
+python3 tools/compare_screenshot.py s.ppm tests/reference/<oracle>.png --crop active --report
+```
 
 ---
 

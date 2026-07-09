@@ -16,6 +16,20 @@
    "max_diff_px": 0
   },
   {
+   "id": "bus_selftest",
+   "name": "Bus error whitelist (auto-test déterministe par octet)",
+   "subsystem": "bus/mmu",
+   "type": "bus_selftest",
+   "max_diff_px": 0
+  },
+  {
+   "id": "mfp_selftest",
+   "name": "MFP GPIP / fronts / Timer B (auto-test déterministe)",
+   "subsystem": "mfp/irq",
+   "type": "mfp_selftest",
+   "max_diff_px": 0
+  },
+  {
    "id": "etos_ste_boot",
    "name": "Boot EmuTOS STE (bureau)",
    "subsystem": "integration",
@@ -26,7 +40,8 @@
    "frames": 250,
    "frame": 240,
    "crop": "active",
-   "max_diff_px": 64
+   "max_diff_px": 64,
+   "ref_kind": "snapshot"
   },
   {
    "id": "spectrum512_diapo",
@@ -41,7 +56,8 @@
    "frames": 810,
    "frame": 800,
    "crop": "active",
-   "max_diff_px": 0
+   "max_diff_px": 0,
+   "ref_kind": "oracle"
   },
   {
    "id": "spectrum512_diapo2",
@@ -57,7 +73,8 @@
    "frame": 1650,
    "crop": "active",
    "max_diff_px": 0,
-   "oracle_fastfdc": true
+   "oracle_fastfdc": true,
+   "ref_kind": "oracle"
   },
   {
    "id": "spectrum512_diapo_ste",
@@ -74,7 +91,8 @@
    "crop": "active",
    "max_diff_px": 0,
    "oracle_fastfdc": true,
-   "note": "Le viewer spec512 est calibré timing STF → sur STE il se désynchronise et scramble les palettes SUR VRAI MATÉRIEL AUSSI. NeoST reproduit ce scramble byte-exact (0 px vs oracle Hatari STE, plage f1645-1660). Cet étalon PROUVE que le scramble STE est fidèle, pas un bug NeoST — évite de rechasser un faux bug. Référence = oracle Hatari STE (spectrum512_diapo_ste.png), PAS une self-capture."
+   "note": "Le viewer spec512 est calibré timing STF → sur STE il se désynchronise et scramble les palettes SUR VRAI MATÉRIEL AUSSI. NeoST reproduit ce scramble byte-exact (0 px vs oracle Hatari STE, plage f1645-1660). Cet étalon PROUVE que le scramble STE est fidèle, pas un bug NeoST — évite de rechasser un faux bug. Référence = oracle Hatari STE (spectrum512_diapo_ste.png), PAS une self-capture.",
+   "ref_kind": "oracle"
   },
   {
    "id": "overscan_top",
@@ -89,7 +107,8 @@
    "frames": 400,
    "frame": 380,
    "crop": "buffer",
-   "max_diff_px": 0
+   "max_diff_px": 0,
+   "ref_kind": "snapshot"
   },
   {
    "id": "trace_odd",
@@ -105,7 +124,8 @@
    "frames": 300,
    "frame": 290,
    "crop": "active",
-   "max_diff_px": 0
+   "max_diff_px": 0,
+   "ref_kind": "snapshot"
   },
   {
    "id": "cuddly_demos",
@@ -126,7 +146,8 @@
     "member": "CUDDLY_P.MSA",
     "save_as": "disks/etalons/cuddly_demos.msa"
    },
-   "optional": true
+   "optional": true,
+   "ref_kind": "snapshot"
   },
   {
    "id": "union_demo",
@@ -146,7 +167,8 @@
     "url": "https://www.planetemu.net/roms/atari-st-demos",
     "hint": "The Union Demo — rapatrier à la main si fetch auto échoue (freeware)."
    },
-   "optional": true
+   "optional": true,
+   "ref_kind": "snapshot"
   },
   {
    "id": "scroll_8265",
@@ -161,7 +183,8 @@
    "frames": 400,
    "frame": 380,
    "crop": "active",
-   "max_diff_px": 0
+   "max_diff_px": 0,
+   "ref_kind": "snapshot"
   },
   {
    "id": "scroll_8264",
@@ -176,7 +199,8 @@
    "frames": 400,
    "frame": 380,
    "crop": "active",
-   "max_diff_px": 0
+   "max_diff_px": 0,
+   "ref_kind": "snapshot"
   },
   {
    "id": "nocooper",
@@ -202,7 +226,8 @@
     "save_as": "disks/etalons/nocooper.msa"
    },
    "optional": true,
-   "note": "Étalon V2 (Video_WriteToGlueRes) : l'écran principal ouvre les bordures G/D en MED-RES (la nappe traverse bord à bord chez Hatari). Référence courante = capture NeoST (non-régression, écart V2 assumé) ; la CIBLE du chantier V2 est tests/reference/nocooper_oracle.png (oracle Hatari WS3, touche espace tenue vbl ~900, frame 6788 ↔ NeoST --frames 6800 --screenshot, Δ=-11). Écart de départ mesuré 2026-07-08 : 891 px (crop actif)."
+   "note": "Étalon V2 (Video_WriteToGlueRes) : l'écran principal ouvre les bordures G/D en MED-RES (la nappe traverse bord à bord chez Hatari). Référence courante = capture NeoST (non-régression, écart V2 assumé) ; la CIBLE du chantier V2 est tests/reference/nocooper_oracle.png (oracle Hatari WS3, touche espace tenue vbl ~900, frame 6788 ↔ NeoST --frames 6800 --screenshot, Δ=-11). Écart de départ mesuré 2026-07-08 : 891 px (crop actif).",
+   "ref_kind": "snapshot"
   },
   {
    "id": "nocooper_greetings",
@@ -246,7 +271,8 @@
     "save_as": "disks/etalons/nocooper.msa"
    },
    "optional": true,
-   "note": "V2 VALIDÉ 0 px vs oracle (2026-07-08) : chaque ligne fait hi@0/lo@12/MED@20 (LINE_LEFT_MED_CYCLE_1) + 60@376/50@384 + stab hi@444/lo@456 → page greetings med-res 4 bordures ouvertes. Écran STATIQUE → pas d'alignement de phase requis. Cible oracle archivée : tests/reference/nocooper_greetings_oracle.png."
+   "note": "V2 VALIDÉ 0 px vs oracle (2026-07-08) : chaque ligne fait hi@0/lo@12/MED@20 (LINE_LEFT_MED_CYCLE_1) + 60@376/50@384 + stab hi@444/lo@456 → page greetings med-res 4 bordures ouvertes. Écran STATIQUE → pas d'alignement de phase requis. Cible oracle archivée : tests/reference/nocooper_greetings_oracle.png.",
+   "ref_kind": "snapshot"
   }
  ]
 }
