@@ -2139,7 +2139,17 @@ uint8_t Shifter::read8(uint32_t addr) {
     // zone void → 0xFF (absent de ioMemTable_ST ; Video_LineWidth_ReadByte n'y
     // est mappé que sur STE).
     if (addr == 0xFF820F) return machineIsSte(bus_.machine) ? lineWidth : 0xFF;
-    if (addr == 0xFF8260) { syncCpuBus(); return static_cast<uint8_t>(mode); }
+    // $FF8260 (résolution GLUE+Shifter) et son alias Shifter-seul $FF8261 partagent la
+    // même lecture (Video_ResGlueShifter/ResShifter_ReadByte → Video_Res_ReadByte,
+    // video.c:5281,5300-5308) : STF/Mega ST forcent les bits inutilisés 2-7 à 1, STE/Mega
+    // STE les laissent à 0. (Le moniteur mono impose déjà mode = High = 2 en amont, comme
+    // le `if (bUseHighRes) IoMem=2` de Hatari.) Avant : $8260 rendait bits 2-7=0 sur ST
+    // (faux) et $8261 tombait en zone void → 0xFF (non géré).
+    if (addr == 0xFF8260 || addr == 0xFF8261) {
+        syncCpuBus();
+        const uint8_t r = static_cast<uint8_t>(mode) & 0x03;
+        return machineIsSte(bus_.machine) ? r : static_cast<uint8_t>(r | 0xFC);
+    }
     // Scroll fin (STE seulement — sur ST/MegaST $FF8262-7F est une zone void → 0xFF,
     // ioMemTabST.c:72). $FF8264 : Hatari n'intercepte PAS la lecture (video.c:5813,
     // Video_HorScroll_Read_8264 = wait state seul) → on renvoie la dernière valeur
