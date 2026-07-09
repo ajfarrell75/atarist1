@@ -352,11 +352,16 @@ divergence HAUTE**, les 4 correctifs sont CORRECTS. La passe remonte surtout des
   à chaque lecture statut ; borne parseur STX (chemin secteurs complet) ; pas d'`indexCheckUpdate`
   avant la commande.
 - **Son** : compteur bruit testé `>=` dans la garde 125 kHz (vs 250) ; pas de HPF sous-sonique sur
-  le canal DMA ; `mode_` non masqué `&0x8f` (relecture) ; masque adresse DMA `$3fffff` non appliqué.
+  le canal DMA ; ~~`mode_` non masqué `&0x8f` (relecture)~~ **déjà fait** (masqué à l'écriture,
+  `DmaSound.cpp:495` → relecture masquée) ; masque adresse DMA `$3fffff` non appliqué (écriture octet
+  haut, dépendant de la RAM ≤4 Mo — `DMA_MaskAddressHigh`).
 - **Blitter** : **BL-R** read8 ne rejette pas l'accès octet aux registres mot (rend la valeur vive
-  vs IoMem rance) ; **BL-MST** `$FF8A3E/3F` dé-fauté à tort sur Mega ST (void seulement sur STE).
+  vs IoMem rance) ; **BL-MST** `$FF8A3E/3F` dé-fauté à tort sur Mega ST (void seulement sur STE — carte
+  de bus-faults, non touchée).
 - **Bus** : wait-state 4 cyc des registres FDC/DMA non facturé ; `$FF860E/0F` densité routé sur STE
-  simple ; `$FF8A3E/3F`→0x00 au lieu de 0xFF ; trou MMU STF bank0=128K/bank1=2048K non émulé.
+  simple ; ~~`$FF8A3E/3F`→0x00 au lieu de 0xFF~~ ✅ **corrigé (2026-07-09)** : `Blitter::read8`/`write8`
+  traitent `$3E/3F` en void (lit 0xFF, écritures ignorées ; ioMemTabSTE.c:199) ; trou MMU STF
+  bank0=128K/bank1=2048K non émulé.
 
 ### Conclusion
 La 1ʳᵉ passe avait capté l'essentiel ; les 4 correctifs sont validés. **Corrigés à la 2ᵉ passe
