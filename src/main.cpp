@@ -152,7 +152,11 @@ static Config loadConfig(const std::string& exeDir) {
     }
     return c;
 }
+// Mode kiosk (borne/expo) : plein écran sans chrome, config figée, sortie par chord.
+// Activé par --kiosk. Déclaré ici car saveConfig doit le consulter (gel de la config).
+static bool g_kiosk = false;
 static void saveConfig(const std::string& exeDir, Config& c, Machine* machine = nullptr) {
+    if (g_kiosk) return;   // kiosk : configuration figée — la borne repart toujours identique
     if (machine) snapshotRtc(*machine, c);
     std::ofstream f(cfgPath(exeDir));
     if (!f) f.open("neost.cfg");
@@ -316,6 +320,37 @@ struct GlScreen {
         glDisable(GL_TEXTURE_2D);
     }
 };
+
+// Rendu kiosk : on cale la ZONE ACTIVE (l'image « de base » — 320×200 en basse
+// rés, hors bandes overscan haute/basse et bordures latérales) sur la HAUTEUR de
+// l'écran, ratio gardé → un jeu normal remplit l'écran autant qu'une démo, sans
+// être rapetissé par les bordures unies qu'il n'exploite pas. Barres noires
+// seulement sur les CÔTÉS (pillarbox). Les rares démos plein-overscan (Enchanted
+// Land, Tali) verraient leurs bandes rognées — cas marginal assumé.
+//   actW/actH  : dimensions de la zone active (shifter.activeWidth/Height)
+//   actL/actT  : origine de la zone active dans le buffer (bordure gauche / haute)
+void drawStKiosk(GlScreen& s, int actW, int actH, int actL, int actT, int fbw, int fbh) {
+    if (s.w <= 0 || s.h <= 0 || actW <= 0 || actH <= 0 || fbw <= 0 || fbh <= 0) return;
+    // Aspect pixel : basse rés (≤480 px de large) et 200 lignes = pixels doublés.
+    const float sx = (s.w <= 480) ? 2.f : 1.f;
+    const float sy = (s.h <= 300) ? 2.f : 1.f;
+    const float aspect = (actW * sx) / (actH * sy);   // largeur/hauteur affichées de l'ACTIF
+    int vh = fbh, vw = (int)(fbh * aspect + 0.5f);    // remplit la hauteur
+    if (vw > fbw) { vw = fbw; vh = (int)(fbw / aspect + 0.5f); }   // garde-fou : trop large → cale sur la largeur
+    glViewport((fbw - vw) / 2, (fbh - vh) / 2, vw, vh);
+    // Texcoords limités à la zone active (bordures exclues). V inversé (ligne 0 en haut).
+    const float u0 = (float)actL / s.w, u1 = (float)(actL + actW) / s.w;
+    const float v0 = (float)actT / s.h, v1 = (float)(actT + actH) / s.h;
+    glBindTexture(GL_TEXTURE_2D, s.tex);
+    glEnable(GL_TEXTURE_2D);
+    glBegin(GL_QUADS);
+        glTexCoord2f(u0, v1); glVertex2f(-1.f, -1.f);
+        glTexCoord2f(u1, v1); glVertex2f( 1.f, -1.f);
+        glTexCoord2f(u1, v0); glVertex2f( 1.f,  1.f);
+        glTexCoord2f(u0, v0); glVertex2f(-1.f,  1.f);
+    glEnd();
+    glDisable(GL_TEXTURE_2D);
+}
 
 // Traduit une touche GLFW en scancode "make" du clavier Atari ST (0 = ignorée).
 // Les scancodes ST suivent la matrice de l'IKBD, pas l'ASCII (cf. doc Atari).
@@ -880,11 +915,26 @@ int main(int argc, char** argv) {
     g_showDisk = cfg.showDisk; g_showCart = cfg.showCart; g_showHex = cfg.showHex;
     g_showCpu  = cfg.showCpu;  g_showJoy  = cfg.showJoy;
     const std::string defRom = cfg.rom.empty() ? std::string("roms/etos192us.img") : cfg.rom;
-    // Sans argument, ./neost recharge le dernier ROM (ou EmuTOS US par défaut).
-    const std::string romLogical = (argc > 1) ? std::string(argv[1]) : defRom;
+    // Ligne de commande : arguments POSITIONNELS (ROM, disque) + DRAPEAUX.
+    //   --kiosk            : borne plein écran « borderless-windowed » (cf. g_kiosk).
+    //   --kiosk-exclusive  : vrai plein écran EXCLUSIF (reste au-dessus de tout, ne
+    //                        peut pas être recouvert par une autre fenêtre) ; implique --kiosk.
+    //   --kiosk-monitor N  : moniteur cible (0 = principal ; défaut 0).
+    int  kioskMonitor = 0;
+    bool kioskExclusive = false;
+    std::vector<std::string> pos;
+    for (int i = 1; i < argc; ++i) {
+        const std::string a = argv[i] ? argv[i] : "";
+        if      (a == "--kiosk")           g_kiosk = true;
+        else if (a == "--kiosk-exclusive") { g_kiosk = true; kioskExclusive = true; }
+        else if (a == "--kiosk-monitor" && i + 1 < argc) kioskMonitor = std::atoi(argv[++i]);
+        else if (!a.empty() && a[0] != '-') pos.push_back(a);
+    }
+    // Sans argument positionnel, ./neost recharge le dernier ROM (ou EmuTOS US).
+    const std::string romLogical = !pos.empty() ? pos[0] : defRom;
     const std::string tosPath  = resolveData(romLogical, exeDir);
     const std::string defDisk  = cfg.disk.empty() ? std::string("disks/diskA.st") : cfg.disk;
-    const std::string diskPath = resolveData((argc > 2) ? argv[2] : defDisk, exeDir);
+    const std::string diskPath = resolveData(pos.size() > 1 ? pos[1] : defDisk, exeDir);
     const std::string cartPath = cfg.cart.empty() ? std::string() : resolveData(cfg.cart, exeDir);
     const std::string disksDir = resolveData("disks", exeDir);   // dossier pour la Disk Library
     const std::string cartsDir = resolveData("carts", exeDir);   // dossier pour la Cart Library
@@ -898,9 +948,51 @@ int main(int argc, char** argv) {
 
     // Pas de hint de profil → contexte legacy compatible (GL 2.1, immediate mode).
     // Fenêtre hôte large : elle héberge la fenêtre ImGui "Atari ST Screen" + le debug.
-    GLFWwindow* window = glfwCreateWindow(1280, 860, "NeoST — Atari ST", nullptr, nullptr);
+    GLFWwindow* window = nullptr;
+    if (g_kiosk) {
+        int nmon = 0; GLFWmonitor** mons = glfwGetMonitors(&nmon);
+        GLFWmonitor* mon = (mons && kioskMonitor < nmon) ? mons[kioskMonitor]
+                                                         : glfwGetPrimaryMonitor();
+        const GLFWvidmode* vm = glfwGetVideoMode(mon);
+        if (kioskExclusive) {
+            // Vrai plein écran EXCLUSIF : la fenêtre appartient au moniteur → reste
+            // au-dessus de TOUT (panneaux/dock inclus), impossible à recouvrir. Hints
+            // calés sur le mode courant → aucun changement de résolution.
+            if (vm) {
+                glfwWindowHint(GLFW_RED_BITS,     vm->redBits);
+                glfwWindowHint(GLFW_GREEN_BITS,   vm->greenBits);
+                glfwWindowHint(GLFW_BLUE_BITS,    vm->blueBits);
+                glfwWindowHint(GLFW_REFRESH_RATE, vm->refreshRate);
+            }
+            glfwWindowHint(GLFW_AUTO_ICONIFY, GLFW_FALSE);
+            window = glfwCreateWindow(vm ? vm->width : 1280, vm ? vm->height : 860,
+                                      "NeoST", mon, nullptr);
+        } else {
+            // « Borderless-windowed » : fenêtre SANS bordure à la taille du moniteur,
+            // posée dessus, toujours au premier plan. Pas de changement de mode vidéo
+            // (meilleur alt-tab / multi-écran) mais peut être masquée par un panneau
+            // override-redirect d'un bureau type GNOME Shell → préférer --kiosk-exclusive.
+            int mx = 0, my = 0; glfwGetMonitorPos(mon, &mx, &my);
+            glfwWindowHint(GLFW_DECORATED, GLFW_FALSE);
+            glfwWindowHint(GLFW_AUTO_ICONIFY, GLFW_FALSE);
+            glfwWindowHint(GLFW_FLOATING, GLFW_TRUE);
+            window = glfwCreateWindow(vm ? vm->width : 1280, vm ? vm->height : 860,
+                                      "NeoST", nullptr, nullptr);
+            if (window) glfwSetWindowPos(window, mx, my);
+        }
+    } else {
+        window = glfwCreateWindow(1280, 860, "NeoST — Atari ST", nullptr, nullptr);
+    }
     if (!window) { glfwTerminate(); return 1; }
     glfwMakeContextCurrent(window);
+    if (g_kiosk) {
+        // Curseur masqué + souris capturée d'emblée : les jeux GEM (souris) comme les
+        // jeux joystick sont jouables à la borne, sans curseur hôte visible.
+        g_mouseCaptured = true;
+        glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+        if (glfwRawMouseMotionSupported())
+            glfwSetInputMode(window, GLFW_RAW_MOUSE_MOTION, GLFW_TRUE);
+    }
     // VSync DÉSACTIVÉ : la boucle est cadencée par le bridage au temps émulé
     // (sleep_until, cf. plus bas), pas par l'écran. Avec vsync ON, swapBuffers
     // BLOQUE jusqu'au vblank suivant : sur un écran 60 Hz, le sleep à ~20 ms +
@@ -1019,9 +1111,10 @@ int main(int argc, char** argv) {
 
     // Callbacks installés AVANT ImGui : ImGui chaîne les nôtres derrière les siens.
     g_ikbd = &machine.ikbd;
-    g_kbdJoy     = false;               // émulation joystick clavier : TOUJOURS off au
-                                        // lancement (non persistée — elle avale les
-                                        // flèches, cf. F11 pour l'activer à la session)
+    // Émulation joystick clavier : off en mode normal (elle avale les flèches),
+    // mais ON d'emblée en KIOSK — une borne se joue au joystick (flèches + Ctrl
+    // droit = feu), sans menu pour l'activer. F11 la rebascule si besoin (jeu clavier).
+    g_kbdJoy     = g_kiosk;
     g_kbdJoyPort = cfg.joyport;
     g_joyDeadzone = cfg.joydeadzone;    // zone morte des sticks (mémorisée)
     glfwSetKeyCallback(window, onKey);
@@ -1102,12 +1195,14 @@ int main(int argc, char** argv) {
     auto emuNext = clock::now();   // échéance réelle de la prochaine trame émulée
 
     double lastMx = 0, lastMy = 0;
+    if (g_kiosk) glfwGetCursorPos(window, &lastMx, &lastMy);   // évite le saut au 1er delta
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();                      // les transitions de boutons → onMouseButton
 
         // Suppr (DEL) libère la souris si elle est capturée (le curseur GEM est piloté
         // tant que la capture est active). Échap, lui, reste disponible pour le ST.
-        if (g_mouseCaptured && glfwGetKey(window, GLFW_KEY_DELETE) == GLFW_PRESS) {
+        // En kiosk, la souris reste TOUJOURS capturée (borne).
+        if (!g_kiosk && g_mouseCaptured && glfwGetKey(window, GLFW_KEY_DELETE) == GLFW_PRESS) {
             g_mouseCaptured = false;
             glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
         }
@@ -1123,6 +1218,29 @@ int main(int argc, char** argv) {
                 if (g_dbgMouse) std::fprintf(stderr, "[souris] mvt dx=%d dy=%d L=%d R=%d\n", dx, dy, l, r);
                 machine.ikbd.mouseEvent(dx * MOUSE_X_SIGN, dy * MOUSE_Y_SIGN, l, r);
             }
+        }
+
+        // Sortie KIOSK. Deux moyens, toujours disponibles (sans menu ni bordure) :
+        //  · Alt+F4 : le classique, sortie IMMÉDIATE. Géré explicitement ici car en
+        //    plein écran EXCLUSIF le gestionnaire de fenêtres ne relaie pas toujours
+        //    l'événement « close » à GLFW.
+        //  · Ctrl+Shift+Q maintenu ~0,7 s : chord discret (évite les sorties accidentelles).
+        // Le WM (Alt+F4 « normal », bouton fermer) reste actif aussi : on ne bloque
+        // jamais glfwWindowShouldClose.
+        if (g_kiosk) {
+            const bool alt = glfwGetKey(window, GLFW_KEY_LEFT_ALT)  == GLFW_PRESS ||
+                             glfwGetKey(window, GLFW_KEY_RIGHT_ALT) == GLFW_PRESS;
+            if (alt && glfwGetKey(window, GLFW_KEY_F4) == GLFW_PRESS)
+                glfwSetWindowShouldClose(window, GLFW_TRUE);
+
+            const bool ctrl  = glfwGetKey(window, GLFW_KEY_LEFT_CONTROL)  == GLFW_PRESS ||
+                               glfwGetKey(window, GLFW_KEY_RIGHT_CONTROL) == GLFW_PRESS;
+            const bool shift = glfwGetKey(window, GLFW_KEY_LEFT_SHIFT)  == GLFW_PRESS ||
+                               glfwGetKey(window, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS;
+            const bool q     = glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS;
+            static int quitHold = 0;
+            quitHold = (ctrl && shift && q) ? quitHold + 1 : 0;
+            if (quitHold >= 35) glfwSetWindowShouldClose(window, GLFW_TRUE);   // ~0,7 s @ 50 Hz
         }
 
         // F11 (front montant) : bascule l'émulation joystick au clavier. Pratique
@@ -1199,7 +1317,8 @@ int main(int argc, char** argv) {
         int fbw = 0, fbh = 0;
         glfwGetFramebufferSize(window, &fbw, &fbh);
         glViewport(0, 0, fbw, fbh);
-        glClearColor(0.10f, 0.10f, 0.12f, 1.f);
+        if (g_kiosk) glClearColor(0.f, 0.f, 0.f, 1.f);   // kiosk : barres noires
+        else         glClearColor(0.10f, 0.10f, 0.12f, 1.f);
         glClear(GL_COLOR_BUFFER_BIT);
 
         bool reqReset = false, reqHardReset = false, reqRebuild = false, reqCapture = false;
@@ -1211,6 +1330,7 @@ int main(int argc, char** argv) {
         std::string reqMount; bool reqEject = false;
         std::string reqMountCart; bool reqEjectCart = false;
         std::string reqMountGemdos, reqMountAcsi; bool reqEjectGemdos = false, reqEjectAcsi = false;
+        if (!g_kiosk) {                          // KIOSK : aucun chrome ImGui (menu/toolbar/fenêtres)
         const bool color = machine.mfp.colorMonitor();
 
         // --- Menu (haut) -----------------------------------------------------
@@ -1514,7 +1634,12 @@ int main(int argc, char** argv) {
             cfg.joyport = g_kbdJoyPort; cfg.joydeadzone = g_joyDeadzone;
             saveConfig(exeDir, cfg, &machine); g_joyCfgDirty = false;
         }
+        }                                        // fin if(!g_kiosk) : chrome ImGui
         ImGui::Render();
+        if (g_kiosk) {                                // rendu plein écran (ImGui vide au-dessus)
+            const int aw = machine.shifter.activeWidth(), ah = machine.shifter.activeHeight();
+            drawStKiosk(screen, aw, ah, (screen.w - aw) / 2, machine.shifter.activeTop(), fbw, fbh);
+        }
         ImGui_ImplOpenGL2_RenderDrawData(ImGui::GetDrawData());
 
         // Disk Library : montage / éjection à chaud du lecteur A.
@@ -1573,7 +1698,10 @@ int main(int argc, char** argv) {
             reqHardReset = true;
         }
 #else
-        screen.drawFullscreen();               // repli sans ImGui
+        if (g_kiosk) {                                // kiosk : image active calée sur la hauteur
+            const int aw = machine.shifter.activeWidth(), ah = machine.shifter.activeHeight();
+            drawStKiosk(screen, aw, ah, (screen.w - aw) / 2, machine.shifter.activeTop(), fbw, fbh);
+        } else screen.drawFullscreen();               // repli sans ImGui : plein cadre étiré
 #endif
         // Changement de moniteur (couleur/mono) → hard reset pour que TOS
         // re-détecte la résolution au boot.
