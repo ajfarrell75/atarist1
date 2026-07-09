@@ -1359,15 +1359,15 @@ int main(int argc, char** argv) {
                 ImGui::EndMenu();
             }
             // Profil : préréglages machine complets (modèle + RAM + ROM + disque dur),
-            // appliqués à chaud comme un changement de modèle. Le profil Mega STE monte
-            // le HD GEMDOS (dossier gemdos/ → C:) ; les deux autres démontent tout
+            // appliqués à chaud comme un changement de modèle. Les profils STE et Mega STE
+            // montent le HD GEMDOS (dossier gemdos/ → C:) ; le profil 520 ST démonte tout
             // disque dur (GEMDOS et ACSI).
             if (ImGui::BeginMenu(ICON_FA_STAR " Profil")) {
                 struct Profil { const char* label; const char* machine; const char* mem;
                                 const char* rom; const char* gemdos; };
                 static const Profil profils[] = {
                     { "520 ST (512 Ko, TOS 1.02 US)",             "st",      "512k", "roms/tos102us.img", ""       },
-                    { "1040 STE (1 Mo, TOS 1.62 FR)",             "ste",     "1m",   "roms/tos162fr.img", ""       },
+                    { "1040 STE (1 Mo, TOS 1.62 FR, disque dur)", "ste",     "1m",   "roms/tos162fr.img", "gemdos" },
                     { "Mega STE (4 Mo, TOS 2.06 FR, disque dur)", "megaste", "4m",   "roms/tos206fr.img", "gemdos" },
                 };
                 for (const auto& p : profils) {
