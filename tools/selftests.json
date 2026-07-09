@@ -1,0 +1,16 @@
+{
+ "_comment": "Auto-tests à VERDICT SÉRIE (P1). Chaque ROM (cartouche diagnostic ou secteur de boot) écrit une ou plusieurs lignes 'NEOST-TEST: <nom> PASS|FAIL' sur le port série RS-232 ; run_selftests.py les scanne. Déterministe, sans oracle. Voir docs/TEST_SOFTWARE.md.",
+ "selftests": [
+  {
+   "id": "diag_cart",
+   "name": "Cartouche diagnostic — CPU + timing (verdict série)",
+   "rom": "roms/tos102uk.img",
+   "machine": "st",
+   "mem": "512k",
+   "frames": 40,
+   "cart": "disks/etalons/selftest_cart.bin",
+   "cart_generate": "tools/make_selftest_cart.py",
+   "expect": ["cpu", "timing"]
+  }
+ ]
+}

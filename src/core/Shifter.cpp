@@ -1915,6 +1915,110 @@ bool Shifter::glueSelfTest() {
     return fail == 0;
 }
 
+// Auto-test déterministe du re-rendu Spectrum 512 (cf. header). On construit une
+// trame STF basse rés 50 Hz où CHAQUE pixel décode l'index de palette 1, on injecte
+// des écritures palette datées sur l'index 1, on force le rendu spec512 (finishFrame)
+// et on vérifie octet-exact que la bascule de couleur tombe au pixel prédit par le
+// modèle (position = f(kSpec512AlignCyc, géométrie de trame). Aucun boot ni oracle.
+bool Shifter::spec512SelfTest() {
+    int pass = 0, fail = 0;
+    auto chk = [&](const char* name, long got, long want) {
+        if (got == want) { ++pass; }
+        else { ++fail; std::fprintf(stderr, "  FAIL %-24s got=%ld want=%ld\n", name, got, want); }
+    };
+
+    // 0. Garde-fou : la constante d'alignement calibrée à l'oracle Hatari (spec512.c).
+    //    Toute modification accidentelle décale TOUTES les frontières palette → scramble.
+    chk("kSpec512AlignCyc", kSpec512AlignCyc, -25);
+
+    // 1. Trame STF basse rés 50 Hz (512 cyc/ligne, DE 56..376, VDE_On ligne 63).
+    mode = Mode::Low; sync = 0x02;
+    videoBase = 0x20000;                 // dans la RAM (≥ 256k) ; hors vecteurs/système
+    beginFrame();                        // verrouille la géométrie + dimensionne le buffer
+    const Geometry g = geometry();
+    const int W   = activeWidth();       // 320
+    const int cpl = g.cyclesPerLine;     // 512
+    const int lst = g.lineStartCycle;    // 56
+    const int ds  = g.dispStartLine;     // 63
+
+    // 2. RAM vidéo synthétique : tous les pixels = index 1 (plan 0 = tous les bits à 1,
+    //    plans 1..3 = 0). En basse rés : 4 mots entrelacés par groupe de 16 px.
+    for (int y = 0; y < curAH_; ++y) {
+        const uint32_t rowBase = videoBase + static_cast<uint32_t>(y) * 160u;
+        for (int gx = 0; gx < W / 16; ++gx) {
+            const uint32_t a = rowBase + static_cast<uint32_t>(gx) * 8u;
+            bus_.write16(a,     0xFFFF);   // plan 0 → tous les pixels bit0=1
+            bus_.write16(a + 2, 0x0000);   // plan 1
+            bus_.write16(a + 4, 0x0000);   // plan 2
+            bus_.write16(a + 6, 0x0000);   // plan 3
+        }
+    }
+    // Compteur matérialisé : base latchée = videoBase, TOUTES les lignes committées
+    // (vcLineY_ = curAH_) → decodeLineIndices prend la voie analytique base + y·160.
+    vcFrameBase_ = videoBase; vcLineBase_ = videoBase; vcLineY_ = curAH_;
+
+    // 3. Palette de départ : index 1 = C0. Écritures datées sur l'index 1.
+    //    Cycle-pixel du pixel c de la ligne active y : (ds+y)·cpl + lst + c  (span/W=1).
+    //    Une écriture de cycle F prend effet au pixel c dès que F ≤ pixCyc(c) + 25, soit
+    //    au 1ᵉʳ pixel c ≥ F − (pixCyc(0)+25). On CHOISIT donc F pour viser un pixel exact.
+    //    Contraintes : F ≡ 2 (mod 4) → applyShifterBusAlignment est un no-op (cf. syncCpuBus,
+    //    toutes les écritures NeoST sont ≡2 mod 4), et pixCyc(0)+25 est impair → pixel ≡1 mod4.
+    const uint16_t C0 = 0x111, C1 = 0x700, C2 = 0x070, C3 = 0x007, C4 = 0x777;
+    frameStartPalette_.fill(0x000);
+    frameStartPalette_[1] = C0;
+    auto pixCyc = [&](int y, int c) {
+        return static_cast<int64_t>(ds + y) * cpl + lst + c;
+    };
+    auto cycForPixel = [&](int y, int c) {   // cycle F qui bascule la couleur PILE au pixel c
+        return static_cast<int32_t>(pixCyc(y, c) - kSpec512AlignCyc);
+    };
+    // Frontières visées (pixels ≡1 mod4 → F ≡2 mod4). Ligne 0 : C1@41, C2@101, C3@201.
+    const int b1 = 41, b2 = 101, b3 = 201;
+    // Ligne 1 : la palette roulante conserve C3 de la ligne 0 jusqu'à b4, puis C4.
+    const int b4 = 53;
+    colorWrites_.clear();
+    colorWrites_.push_back({ cycForPixel(0, b1), C1, 1, 0 });
+    colorWrites_.push_back({ cycForPixel(0, b2), C2, 1, 0 });
+    colorWrites_.push_back({ cycForPixel(0, b3), C3, 1, 0 });
+    colorWrites_.push_back({ cycForPixel(1, b4), C4, 1, 0 });
+    paletteAccesses_ = static_cast<int>(colorWrites_.size());
+    spec512Active_   = true;             // force la voie de re-rendu spec512
+
+    // Vérifie que les cycles choisis sont bien ≡2 mod4 (sinon le modèle ci-dessous,
+    // qui suppose applyShifterBusAlignment neutre, ne tiendrait pas).
+    for (const auto& w : colorWrites_) chk("write ≡2 mod4", w.frameCycle & 3, 2);
+
+    // 4. Rendu spec512 (palette roulante par cycle-pixel).
+    finishFrame();
+
+    // 5. Vérification octet-exact. Couleur attendue de l'index 1 par pixel, selon les
+    //    frontières ; on la passe par stColorToArgb (même conversion que le rendu).
+    auto pix = [&](int y, int c) -> uint32_t {
+        return frame_[static_cast<std::size_t>(activeY_ + y) * curW_ + activeX_ + c];
+    };
+    auto expect = [&](int y, int c) -> uint16_t {
+        if (y == 0) return c < b1 ? C0 : c < b2 ? C1 : c < b3 ? C2 : C3;
+        return c < b4 ? C3 : C4;               // ligne 1 : C3 hérité puis C4
+    };
+    // Échantillonne largement + précisément AUTOUR de chaque frontière (±1 px), là où
+    // un décalage d'alignement d'un seul cycle se voit.
+    int mism = 0;
+    for (int y = 0; y <= 1; ++y)
+        for (int c = 0; c < W; ++c)
+            if (pix(y, c) != stColorToArgb(expect(y, c))) ++mism;
+    chk("pixels non conformes", mism, 0);
+    // Frontières exactes (le pixel juste avant/après doit basculer).
+    chk("L0 avant b1", pix(0, b1 - 1) == stColorToArgb(C0), 1);
+    chk("L0 à b1",     pix(0, b1)     == stColorToArgb(C1), 1);
+    chk("L0 à b2",     pix(0, b2)     == stColorToArgb(C2), 1);
+    chk("L0 à b3",     pix(0, b3)     == stColorToArgb(C3), 1);
+    chk("L1 hérite C3",pix(1, b4 - 1) == stColorToArgb(C3), 1);
+    chk("L1 à b4",     pix(1, b4)     == stColorToArgb(C4), 1);
+
+    std::fprintf(stderr, "[spec512-selftest] %d OK, %d FAIL\n", pass, fail);
+    return fail == 0;
+}
+
 // Décode toute la trame d'un coup (repli / appel direct hors ordonnanceur).
 void Shifter::renderFrame() {
     beginFrame();

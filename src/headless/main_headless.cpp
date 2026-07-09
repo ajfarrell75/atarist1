@@ -55,6 +55,8 @@ void usage() {
         "  --acsi IMG        image disque dur ACSI (cible 0) : le TOS lit la table de\n"
         "                    partitions et monte C:/D:… (alias --hd ; port de hdc.c)\n"
         "  --glue-selftest   auto-test de la machine Glue (bordures) puis quitte\n"
+        "  --spec512-selftest auto-test du re-rendu Spectrum 512 (palette/pixel) puis quitte\n"
+        "  --serial-dump F   écrit les octets série RS-232 bruts dans F (verdicts NEOST-TEST)\n"
         "  --dump-at N A L F dump brut de L octets de RAM dès $A (hex) après la trame N → F\n"
         "  --screenshot PPM  dump du framebuffer final au format PPM\n"
         "  rom               image TOS (défaut roms/etos192fr.img)\n");
@@ -148,6 +150,7 @@ int main(int argc, char** argv) {
     std::string gemdosDir;                       // --gemdos DIR : disque dur GEMDOS (dossier hôte)
     std::string acsiImg;                         // --acsi IMG : image disque dur ACSI (cible 0)
     std::string soundDumpPath;                   // --sound-dump F : WAV 48 kHz de la boucle --frames
+    std::string serialDumpPath;                  // --serial-dump F : octets série RS-232 bruts (verdicts)
     bool        regs       = false;
     bool        irq        = false;
     bool        haveUntil  = false;
@@ -159,6 +162,7 @@ int main(int argc, char** argv) {
     bool        loopback   = false;   // « branche » le connecteur de bouclage RS232 (test S)
     bool        machineMono = false;
     bool        glueSelfTest = false; // auto-test déterministe de la machine Glue (bordures)
+    bool        spec512SelfTest = false; // auto-test déterministe du re-rendu Spectrum 512
     int         shotEvery   = 0;      // --shot-every N : dump une capture toutes les N trames
     std::string shotPrefix;           // --shot-every PREFIX : préfixe des captures périodiques
     int         shotFrom    = 0;      // --shot-from N : ne capture qu'à partir de la trame N
@@ -205,6 +209,7 @@ int main(int argc, char** argv) {
         };
         if      (!std::strcmp(a, "--frames"))     frames    = std::atoi(next(a));
         else if (!std::strcmp(a, "--sound-dump")) soundDumpPath = next(a);
+        else if (!std::strcmp(a, "--serial-dump")) serialDumpPath = next(a);
         else if (!std::strcmp(a, "--trace"))      tracePath = next(a);
         else if (!std::strcmp(a, "--trace-from")) traceFrom = std::atoi(next(a));
         else if (!std::strcmp(a, "--regs"))       regs      = true;
@@ -229,6 +234,7 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(a, "--loopback"))   loopback  = true;
         else if (!std::strcmp(a, "--mono"))       machineMono = true;
         else if (!std::strcmp(a, "--glue-selftest")) glueSelfTest = true;
+        else if (!std::strcmp(a, "--spec512-selftest")) spec512SelfTest = true;
         else if (!std::strcmp(a, "--shot-every"))  { shotEvery = std::atoi(next(a)); shotPrefix = next(a); }
         else if (!std::strcmp(a, "--shot-from"))   shotFrom = std::atoi(next(a));
         else if (!std::strcmp(a, "--keys-at"))     { const int f = std::atoi(next(a)); keysAtList.emplace_back(f, next(a)); }
@@ -262,6 +268,7 @@ int main(int argc, char** argv) {
     // Auto-test de la machine Glue (bordures) : pas besoin de ROM/boot, on teste
     // directement la logique du Shifter contre les valeurs documentées d'Hatari.
     if (glueSelfTest) return machine.shifter.glueSelfTest() ? 0 : 1;
+    if (spec512SelfTest) return machine.shifter.spec512SelfTest() ? 0 : 1;
     std::fprintf(stderr, "[headless] cœur CPU : %s | machine : %s | RAM : %s\n",
                  Cpu68k::coreName(machine.cpu.core()), machineName(machType), ramLabel(ramBytes));
     if (!machine.loadTos(romPath)) {
@@ -570,6 +577,17 @@ int main(int argc, char** argv) {
     if (!serialOut.empty())
         std::fprintf(stderr, "[headless] port série RS-232 (%zu octets) :\n%s\n",
                      serialOut.size(), serialOut.c_str());
+    // --serial-dump FILE : écrit les octets série bruts dans FILE (capture propre pour
+    // les runners de verdict, ex. tools/run_selftests.py qui y cherche NEOST-TEST: … PASS).
+    if (!serialDumpPath.empty()) {
+        if (FILE* sf = std::fopen(serialDumpPath.c_str(), "wb")) {
+            std::fwrite(serialOut.data(), 1, serialOut.size(), sf);
+            std::fclose(sf);
+        } else {
+            std::fprintf(stderr, "[headless] impossible d'écrire le dump série %s\n",
+                         serialDumpPath.c_str());
+        }
+    }
 
     tracer.close();
     return 0;

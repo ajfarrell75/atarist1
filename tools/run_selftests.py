@@ -1,0 +1,143 @@
+#!/usr/bin/env python3
+# =============================================================================
+#  run_selftests.py — Suite d'auto-tests à VERDICT SÉRIE (P1).
+#
+#  Chaque entrée de tools/selftests.json désigne une ROM (cartouche diagnostic
+#  $FA52235F ou secteur de boot) qui écrit sur le port série RS-232 des lignes :
+#      NEOST-TEST: <nom> PASS
+#      NEOST-TEST: <nom> FAIL <détail>
+#  On lance neost-headless, on capture le série (--serial-dump), et on vérifie que
+#  CHAQUE <nom> attendu est présent avec PASS. Déterministe, sans oracle, en secondes.
+#
+#  Usage :
+#    python3 tools/run_selftests.py            # tous
+#    python3 tools/run_selftests.py --list
+#    python3 tools/run_selftests.py --only diag_cart
+#
+#  (c) 2026 VERHILLE Arnaud — projet NeoST.
+# =============================================================================
+import argparse
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+MANIFEST = Path(__file__).resolve().parent / "selftests.json"
+HEADLESS = ROOT / "build" / "neost-headless"
+OUT_DIR = ROOT / "tests" / "out"
+
+VERDICT_RE = re.compile(r"NEOST-TEST:[ \t]*(\S+)[ \t]+(PASS|FAIL)\b[ \t]*(.*)")
+
+
+def parse_verdicts(serial: str) -> dict:
+    # Une ligne par verdict : on scanne ligne à ligne (splitlines gère \r\n) pour
+    # éviter qu'un '.*' gourmand n'avale la ligne suivante.
+    out = {}
+    for line in serial.splitlines():
+        m = VERDICT_RE.search(line)
+        if m:
+            out[m.group(1)] = (m.group(2), m.group(3).strip())
+    return out
+
+
+def load_manifest():
+    import json
+    return json.loads(MANIFEST.read_text(encoding="utf-8"))["selftests"]
+
+
+def ensure_rom_asset(entry) -> bool:
+    # Génère la cartouche/disque de test si un générateur est fourni et le fichier absent.
+    for key, gen_key in (("cart", "cart_generate"), ("disk", "disk_generate")):
+        path = entry.get(key)
+        gen = entry.get(gen_key)
+        if not path:
+            continue
+        full = ROOT / path
+        if full.exists():
+            continue
+        if not gen:
+            print(f"  asset manquant : {path}", file=sys.stderr)
+            return False
+        full.parent.mkdir(parents=True, exist_ok=True)
+        print(f"  [gen] {gen} → {path}")
+        subprocess.run([sys.executable, str(ROOT / gen), str(full)], cwd=ROOT, check=True)
+    return True
+
+
+def run_one(entry, args) -> bool:
+    eid = entry["id"]
+    print(f"\n=== {eid} — {entry['name']} ===")
+    if not ensure_rom_asset(entry):
+        return False
+
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    serial_path = OUT_DIR / f"{eid}_serial.txt"
+    cmd = [str(HEADLESS), str(ROOT / entry.get("rom", "roms/tos102uk.img")),
+           "--machine", entry.get("machine", "st"),
+           "--mem", entry.get("mem", "512k"),
+           "--frames", str(entry.get("frames", 40)),
+           "--serial-dump", str(serial_path)]
+    if entry.get("cart"):
+        cmd += ["--cart", str(ROOT / entry["cart"])]
+    if entry.get("disk"):
+        cmd += ["--disk", str(ROOT / entry["disk"])]
+    if entry.get("fastfdc"):
+        cmd.append("--fastfdc")
+    print("  $", " ".join(cmd))
+    subprocess.run(cmd, cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    serial = serial_path.read_text(encoding="latin-1") if serial_path.exists() else ""
+    verdicts = parse_verdicts(serial)
+
+    ok = True
+    expect = entry.get("expect", [])
+    for name in expect:
+        if name not in verdicts:
+            print(f"  MANQUANT : verdict '{name}' absent du série")
+            ok = False
+        elif verdicts[name][0] != "PASS":
+            print(f"  FAIL : {name} → {verdicts[name][0]} {verdicts[name][1]}")
+            ok = False
+        else:
+            print(f"  OK : {name} PASS")
+    # Verdicts inattendus en FAIL = échec aussi (attrape les tests non listés).
+    for name, (res, detail) in verdicts.items():
+        if name not in expect and res == "FAIL":
+            print(f"  FAIL (non listé) : {name} {detail}")
+            ok = False
+    if not verdicts:
+        print("  AUCUN verdict série capturé — la ROM n'a-t-elle pas démarré ?")
+        ok = False
+    return ok
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description="Auto-tests à verdict série NeoST")
+    ap.add_argument("--list", action="store_true")
+    ap.add_argument("--only", help="IDs séparés par des virgules")
+    args = ap.parse_args()
+
+    if not HEADLESS.exists():
+        print(f"Build requis : cmake --build build  ({HEADLESS} absent)", file=sys.stderr)
+        return 2
+
+    entries = load_manifest()
+    if args.list:
+        for e in entries:
+            print(f"  {e['id']:16} {e['name']}  (attend: {', '.join(e.get('expect', []))})")
+        return 0
+
+    want = set(args.only.split(",")) if args.only else None
+    ok = True
+    for entry in entries:
+        if want and entry["id"] not in want:
+            continue
+        if not run_one(entry, args):
+            ok = False
+    print("\n" + ("TOUS OK" if ok else "ÉCHECS — voir ci-dessus"))
+    return 0 if ok else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
