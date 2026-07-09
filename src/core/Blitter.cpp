@@ -83,7 +83,13 @@ void Blitter::stallCpu(int busAccesses, int arbCycles) {
     if (busAccesses > 0 && bus_.cpu) bus_.cpu->addBusWaitCycles(cycles);
 }
 
-uint8_t Blitter::read8(uint32_t addr) { return reg_[addr & 0x3F]; }
+uint8_t Blitter::read8(uint32_t addr) {
+    const uint32_t off = addr & 0x3F;
+    // $FF8A3E/$FF8A3F : zone void du blitter (Hatari ioMemTabSTE.c:199 = IoMem_VoidRead,
+    // « No bus error here ») → lit 0xFF, pas la case reg_ (qui valait 0x00).
+    if (off >= 0x3E) return 0xFF;
+    return reg_[off];
+}
 
 void Blitter::write8(uint32_t addr, uint8_t v) {
     const uint32_t off = addr & 0x3F;
@@ -91,8 +97,9 @@ void Blitter::write8(uint32_t addr, uint8_t v) {
     // skew ($FF8A3A-$FF8A3D) ; un accès octet à un registre MOT (halftone RAM,
     // adresses, incréments, endmasks, compteurs : $FF8A00-$FF8A39) est IGNORÉ,
     // comme sur le vrai blitter (cf. Hatari Blitter_CheckAccess_Byte). Les
-    // écritures mot/long, elles, passent par write16/write32 (Bus).
-    if (off < 0x3A) return;
+    // écritures mot/long, elles, passent par write16/write32 (Bus). $FF8A3E/3F = void
+    // (IoMem_VoidWrite) → ignorées aussi.
+    if (off < 0x3A || off >= 0x3E) return;
     reg_[off] = v & regWriteMask(off);   // bits non câblés masqués À L'ÉCRITURE (cf. regWriteMask)
     if (off == 0x3C) {
         // Écriture du registre contrôle ($FF8A3C) : BUSY (bit7) à 1 → démarre ou
