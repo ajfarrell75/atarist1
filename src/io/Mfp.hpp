@@ -105,6 +105,14 @@ public:
     uint8_t read8(uint32_t addr);
     void    write8(uint32_t addr, uint8_t v);
 
+    // Auto-test DÉTERMINISTE du MFP : (a) bits d'ENTRÉE GPIP forcés à la lecture
+    // (moniteur bit7, FDC bit5, ACIA bit4 en wire-OR) ; (b) détection de FRONT
+    // (gpipSetLine lève le canal seulement sur le front sélectionné par l'AER, ligne en
+    // ENTRÉE) ; (c) Timer B event-count fin/début de ligne selon AER bit3. Sans boot ni
+    // ordonnanceur temps réel. Renvoie true si OK ; détaille sur stderr. Appelé par
+    // neost-headless --mfp-selftest.
+    bool mfpSelfTest();
+
     // Lignes d'interruption des DEUX ACIA (clavier ET MIDI), câblées en WIRE-OR
     // sur la MÊME entrée GPIP4 (active BAS). Cf. Hatari MFP_Main_Compute_GPIP_LINE_ACIA
     // (acia.c : « the 2 ACIA's IRQ pins are connected to the same MFP input »).

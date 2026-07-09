@@ -48,7 +48,8 @@ def load_manifest():
 
 def ensure_rom_asset(entry) -> bool:
     # Génère la cartouche/disque de test si un générateur est fourni et le fichier absent.
-    for key, gen_key in (("cart", "cart_generate"), ("disk", "disk_generate")):
+    for key, gen_key in (("cart", "cart_generate"), ("disk", "disk_generate"),
+                         ("rom", "rom_generate")):
         path = entry.get(key)
         gen = entry.get(gen_key)
         if not path:
@@ -84,6 +85,8 @@ def run_one(entry, args) -> bool:
         cmd += ["--disk", str(ROOT / entry["disk"])]
     if entry.get("fastfdc"):
         cmd.append("--fastfdc")
+    if entry.get("fpu"):
+        cmd.append("--fpu")
     print("  $", " ".join(cmd))
     subprocess.run(cmd, cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 

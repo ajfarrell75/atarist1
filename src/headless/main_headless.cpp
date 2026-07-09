@@ -18,6 +18,7 @@
 #include <cstring>
 #include <cmath>
 #include <string>
+#include <fstream>
 
 #include "core/Machine.hpp"
 #include "core/Tracer.hpp"
@@ -56,7 +57,10 @@ void usage() {
         "                    partitions et monte C:/D:… (alias --hd ; port de hdc.c)\n"
         "  --glue-selftest   auto-test de la machine Glue (bordures) puis quitte\n"
         "  --spec512-selftest auto-test du re-rendu Spectrum 512 (palette/pixel) puis quitte\n"
+        "  --bus-selftest    auto-test du modèle de bus error (whitelist) puis quitte\n"
+        "  --mfp-selftest    auto-test du MFP (GPIP/fronts/Timer B) puis quitte\n"
         "  --serial-dump F   écrit les octets série RS-232 bruts dans F (verdicts NEOST-TEST)\n"
+        "  --from-cfg F      rejoue la config GUI (neost.cfg) ; les options suivantes surchargent\n"
         "  --dump-at N A L F dump brut de L octets de RAM dès $A (hex) après la trame N → F\n"
         "  --screenshot PPM  dump du framebuffer final au format PPM\n"
         "  rom               image TOS (défaut roms/etos192fr.img)\n");
@@ -163,6 +167,8 @@ int main(int argc, char** argv) {
     bool        machineMono = false;
     bool        glueSelfTest = false; // auto-test déterministe de la machine Glue (bordures)
     bool        spec512SelfTest = false; // auto-test déterministe du re-rendu Spectrum 512
+    bool        busSelfTest  = false;  // auto-test déterministe du modèle de bus error
+    bool        mfpSelfTest  = false;  // auto-test déterministe du MFP (GPIP/fronts/Timer B)
     int         shotEvery   = 0;      // --shot-every N : dump une capture toutes les N trames
     std::string shotPrefix;           // --shot-every PREFIX : préfixe des captures périodiques
     int         shotFrom    = 0;      // --shot-from N : ne capture qu'à partir de la trame N
@@ -235,6 +241,8 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(a, "--mono"))       machineMono = true;
         else if (!std::strcmp(a, "--glue-selftest")) glueSelfTest = true;
         else if (!std::strcmp(a, "--spec512-selftest")) spec512SelfTest = true;
+        else if (!std::strcmp(a, "--bus-selftest")) busSelfTest = true;
+        else if (!std::strcmp(a, "--mfp-selftest")) mfpSelfTest = true;
         else if (!std::strcmp(a, "--shot-every"))  { shotEvery = std::atoi(next(a)); shotPrefix = next(a); }
         else if (!std::strcmp(a, "--shot-from"))   shotFrom = std::atoi(next(a));
         else if (!std::strcmp(a, "--keys-at"))     { const int f = std::atoi(next(a)); keysAtList.emplace_back(f, next(a)); }
@@ -247,6 +255,43 @@ int main(int argc, char** argv) {
                                                      dumpAddr = (uint32_t)std::strtoul(next(a), nullptr, 16);
                                                      dumpLen  = (uint32_t)std::strtoul(next(a), nullptr, 0);
                                                      dumpPath = next(a); }
+        else if (!std::strcmp(a, "--from-cfg")) {
+            // P3 — pont GUI↔headless : rejoue la config exacte de neost.cfg (machine,
+            // TOS, mem, cpu, disque, cartouche, mono, fastfdc, fpu, gemdos, acsi). Les
+            // options CLI placées APRÈS --from-cfg surchargent (le cfg sert de base).
+            const char* p = next(a);
+            std::ifstream cf(p);
+            if (!cf) { std::fprintf(stderr, "[headless] --from-cfg : %s introuvable\n", p); return 2; }
+            // Les chemins de neost.cfg sont relatifs à exeDir (= <racine>/build) : le GUI
+            // les écrit préfixés « ./../ » (build → racine). On résout relativement au
+            // DOSSIER du cfg après avoir collapsé ce préfixe, pour retomber sur la racine.
+            const std::string cfgp = p;
+            const std::size_t slash = cfgp.find_last_of('/');
+            const std::string cfgDir = (slash == std::string::npos) ? "" : cfgp.substr(0, slash);
+            auto resolve = [&](std::string s) -> std::string {
+                if (s.empty() || s[0] == '/') return s;
+                while (s.rfind("./", 0) == 0) s = s.substr(2);     // ./ répétés
+                if (s.rfind("../", 0) == 0)   s = s.substr(3);     // build → racine
+                return cfgDir.empty() ? s : cfgDir + "/" + s;
+            };
+            std::string ln;
+            auto v = [](const std::string& s, std::size_t n) { return s.substr(n); };
+            while (std::getline(cf, ln)) {
+                if (!ln.empty() && ln.back() == '\r') ln.pop_back();
+                if      (ln.rfind("rom=", 0) == 0)     { if (ln.size() > 4) romPath   = resolve(v(ln, 4)); }
+                else if (ln.rfind("disk=", 0) == 0)    { if (ln.size() > 5) diskPath  = resolve(v(ln, 5)); }
+                else if (ln.rfind("cart=", 0) == 0)    { if (ln.size() > 5) cartPath  = resolve(v(ln, 5)); }
+                else if (ln.rfind("gemdos=", 0) == 0)  { if (ln.size() > 7) gemdosDir = resolve(v(ln, 7)); }
+                else if (ln.rfind("acsi=", 0) == 0)    { if (ln.size() > 5) acsiImg   = resolve(v(ln, 5)); }
+                else if (ln.rfind("machine=", 0) == 0) machType   = parseMachine(v(ln, 8).c_str());
+                else if (ln.rfind("mem=", 0) == 0)     ramBytes   = parseRamBytes(v(ln, 4).c_str());
+                else if (ln.rfind("cpu=", 0) == 0)     cpuCore    = Cpu68k::parseCore(v(ln, 4).c_str());
+                else if (ln.rfind("mono=", 0) == 0)    machineMono = (v(ln, 5) == "1");
+                else if (ln.rfind("fastfdc=", 0) == 0) fastFdc    = (v(ln, 8) == "1");
+                else if (ln.rfind("fpu=", 0) == 0)     fpuPresent = (v(ln, 4) == "1");
+            }
+            std::fprintf(stderr, "[headless] config reprise de %s\n", p);
+        }
         else if (!std::strcmp(a, "--cpu"))        cpuCore   = Cpu68k::parseCore(next(a));
         else if (!std::strcmp(a, "--machine"))    machType  = parseMachine(next(a));
         else if (!std::strcmp(a, "--fpu"))        fpuPresent = true;
@@ -269,6 +314,8 @@ int main(int argc, char** argv) {
     // directement la logique du Shifter contre les valeurs documentées d'Hatari.
     if (glueSelfTest) return machine.shifter.glueSelfTest() ? 0 : 1;
     if (spec512SelfTest) return machine.shifter.spec512SelfTest() ? 0 : 1;
+    if (busSelfTest) return machine.bus.busSelfTest() ? 0 : 1;
+    if (mfpSelfTest) return machine.mfp.mfpSelfTest() ? 0 : 1;
     std::fprintf(stderr, "[headless] cœur CPU : %s | machine : %s | RAM : %s\n",
                  Cpu68k::coreName(machine.cpu.core()), machineName(machType), ramLabel(ramBytes));
     if (!machine.loadTos(romPath)) {

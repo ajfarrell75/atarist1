@@ -10,7 +10,18 @@
    "frames": 40,
    "cart": "disks/etalons/selftest_cart.bin",
    "cart_generate": "tools/make_selftest_cart.py",
-   "expect": ["cpu", "timing"]
+   "expect": ["cpu", "timing", "frame", "ipl"]
+  },
+  {
+   "id": "fpu_cir",
+   "name": "MC68881 CIR (Mega STE) — 9 tests FPU (verdict série)",
+   "rom": "disks/etalons/fpu_testrom.img",
+   "rom_generate": "tools/make_fpu_testrom.py",
+   "machine": "megaste",
+   "mem": "512k",
+   "fpu": true,
+   "frames": 30,
+   "expect": ["fpu"]
   }
  ]
 }

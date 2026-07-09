@@ -2015,6 +2015,38 @@ bool Shifter::spec512SelfTest() {
     chk("L1 hérite C3",pix(1, b4 - 1) == stColorToArgb(C3), 1);
     chk("L1 à b4",     pix(1, b4)     == stColorToArgb(C4), 1);
 
+    // 6. Chemin FENÊTRÉ (spec512 BORDÉ) : ouvre les bordures G+D sur toutes les lignes
+    //    actives et vérifie que le re-rendu fenêtré (renderGlueFrame) applique bien la
+    //    palette roulante spec512 — c'est le chemin d'une image spec512 à bordures
+    //    ouvertes (≠ chemin borderless testé ci-dessus). Smoke test : la voie est armée
+    //    (bordersTrick_) et les couleurs injectées apparaissent (palette non figée).
+    beginFrame();                         // réinitialise colorWrites_/syncWrites_/glue
+    vcFrameBase_ = videoBase; vcLineBase_ = videoBase; vcLineY_ = curAH_;
+    frameStartPalette_.fill(0x000); frameStartPalette_[1] = C0;
+    colorWrites_.clear();
+    colorWrites_.push_back({ cycForPixel(0, b2), C2, 1, 0 });
+    colorWrites_.push_back({ cycForPixel(1, b4), C4, 1, 0 });
+    paletteAccesses_ = 2; spec512Active_ = true;
+    // Bordures G (hi@2 / lo@8) + D (60 Hz@374 / 50 Hz@380) sur chaque ligne active —
+    // mêmes stimuli validés que glueSelfTest (tombent dans les fenêtres STF WS3 / STE).
+    syncWrites_.clear();
+    for (int L = ds; L < ds + curAH_; ++L) {
+        const int32_t bc = static_cast<int32_t>(L) * cpl;
+        syncWrites_.push_back({ bc + 2,   0x02, true  });   // hi-res → LEFT_OFF
+        syncWrites_.push_back({ bc + 8,   0x00, true  });   // retour lo-res
+        syncWrites_.push_back({ bc + 374, 0x00, false });   // 60 Hz → RIGHT_OFF
+        syncWrites_.push_back({ bc + 380, 0x02, false });   // retour 50 Hz
+    }
+    finishFrame();                        // → replayGlue (bordersTrick_) → renderGlueFrame
+    chk("bordé : voie fenêtrée armée", bordersTrick_ ? 1 : 0, 1);
+    auto hasColor = [&](uint16_t c) {
+        const uint32_t argb = stColorToArgb(c);
+        for (uint32_t px : frame_) if (px == argb) return true;
+        return false;
+    };
+    chk("bordé : C2 présent (palette roulante)",      hasColor(C2) ? 1 : 0, 1);
+    chk("bordé : C4 présent (curseur inter-lignes)",  hasColor(C4) ? 1 : 0, 1);
+
     std::fprintf(stderr, "[spec512-selftest] %d OK, %d FAIL\n", pass, fail);
     return fail == 0;
 }

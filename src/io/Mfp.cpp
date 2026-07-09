@@ -470,6 +470,63 @@ void Mfp::setXsintLine(bool a) {
 
 // Octet des 8 lignes d'ENTRÉE du GPIP (actives BAS), tel que le voit le détecteur de
 // front. Identique au calcul de read8($FFFA01) avant application du DDR.
+bool Mfp::mfpSelfTest() {
+    int pass = 0, fail = 0;
+    auto chk = [&](const char* n, long got, long want) {
+        if (got == want) { ++pass; }
+        else { ++fail; std::fprintf(stderr, "  FAIL %-30s got=%ld want=%ld\n", n, got, want); }
+    };
+
+    // --- (a) Bits d'ENTRÉE GPIP forcés à la lecture (ddr=0 → read8 $01 = gpipInput) --
+    hasDmaSound_ = false;                 // isole bit7 = colorMonitor_ (pas de XOR XSINT)
+    ddr = 0;                              // toutes les lignes en ENTRÉE
+    riLine_ = fdcLine_ = aciaLineKbd_ = aciaLineMidi_ = false;
+    gpuLine_ = ctsLine_ = dcdLine_ = busyLine_ = false;   // toutes désassertées
+    colorMonitor_ = true;
+    chk("bit7 couleur (gpipInput)", (gpipInput() & 0x80) ? 1 : 0, 1);
+    chk("bit7 couleur (read8 $01)", (read8(0x01) & 0x80) ? 1 : 0, 1);
+    colorMonitor_ = false;
+    chk("bit7 mono", (gpipInput() & 0x80) ? 1 : 0, 0);
+    colorMonitor_ = true;
+    fdcLine_ = true;  chk("bit5 FDC asserté→0", (gpipInput() & 0x20) ? 1 : 0, 0);
+    fdcLine_ = false; chk("bit5 FDC repos→1",   (gpipInput() & 0x20) ? 1 : 0, 1);
+    aciaLineKbd_ = true;  chk("bit4 ACIA kbd→0", (gpipInput() & 0x10) ? 1 : 0, 0);
+    aciaLineKbd_ = false; aciaLineMidi_ = true;
+    chk("bit4 ACIA midi→0 (wire-OR)", (gpipInput() & 0x10) ? 1 : 0, 0);
+    aciaLineMidi_ = false; chk("bit4 ACIA repos→1", (gpipInput() & 0x10) ? 1 : 0, 1);
+    // Une ligne en SORTIE (ddr=1) renvoie le latch gpip, PAS l'entrée calculée.
+    ddr = 0x20; gpip = 0x20; fdcLine_ = true;   // fdc asserté, mais bit5 en sortie=1
+    chk("bit5 en sortie = latch", (read8(0x01) & 0x20) ? 1 : 0, 1);
+    ddr = 0; fdcLine_ = false;
+
+    // --- (b) Détection de FRONT GPIP (canal 7 = FDC, bit5 ; IERB l'active) -----------
+    ierb = 0xFF;
+    aer = 0x00;                           // AER bit5=0 → front ACTIF = 1→0
+    iprb = 0; fdcLine_ = false;
+    gpipSetLine(fdcLine_, true);          // 1→0 : actif → lève IPRB bit7
+    chk("AER0 front 1→0 actif", (iprb & 0x80) ? 1 : 0, 1);
+    iprb = 0; gpipSetLine(fdcLine_, false); // 0→1 : inactif
+    chk("AER0 front 0→1 inactif", (iprb & 0x80) ? 1 : 0, 0);
+    aer = 0x20;                           // AER bit5=1 → front ACTIF = 0→1
+    iprb = 0; fdcLine_ = false;
+    gpipSetLine(fdcLine_, true);          // 1→0 : inactif
+    chk("AER1 front 1→0 inactif", (iprb & 0x80) ? 1 : 0, 0);
+    iprb = 0; gpipSetLine(fdcLine_, false); // 0→1 : actif
+    chk("AER1 front 0→1 actif", (iprb & 0x80) ? 1 : 0, 1);
+    // Ligne en SORTIE (ddr bit5=1) : aucun front ne lève le canal.
+    ddr = 0x20; aer = 0x00; iprb = 0; fdcLine_ = false;
+    gpipSetLine(fdcLine_, true);
+    chk("ligne en sortie : pas de front", (iprb & 0x80) ? 1 : 0, 0);
+    ddr = 0;
+
+    // --- (c) Timer B event-count : fin/début de ligne selon AER bit3 ----------------
+    aer = 0x00; chk("TimerB fin de ligne (AER3=0)",   timerBStartOfLine() ? 1 : 0, 0);
+    aer = 0x08; chk("TimerB début de ligne (AER3=1)", timerBStartOfLine() ? 1 : 0, 1);
+
+    std::fprintf(stderr, "[mfp-selftest] %d OK, %d FAIL\n", pass, fail);
+    return fail == 0;
+}
+
 uint8_t Mfp::gpipInput() const {
     uint8_t v = 0xFF;                            // bits au repos (haut)
     bool bit7 = colorMonitor_;                   // moniteur : couleur=1, mono=0

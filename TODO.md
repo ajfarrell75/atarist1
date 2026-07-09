@@ -28,13 +28,13 @@ Rapports terrain. TOS 1.02fr sauf mention contraire. Chemins sous `disks/st/` (`
 | Jeu | Symptôme | Piste / renvoi |
 |-----|----------|----------------|
 | **Arkanoid (1987)** (Imagine) | Atteint l'écran-titre mais ne franchit pas la partie (boucle `$31736`/`$26E7`). | Gel FDC `$31736` **résolu** (modèle rotationnel) ; reste une cause distincte (protection ? 2ᵉ chargement ? IRQ ?). 🎯 étalon FDC/protection. |
-| **Captain Blood (1988)** (ERE) | Arrive au jeu puis plante sur une erreur clavier et redémarre. | ACIA/IKBD ou timing. |
+| **Captain Blood (1988)** (ERE) | ✅ **JOUABLE en TOS US.** Reste un cas TOS **FR** : « keyboard error » (le jeu fait de la détection AZERTY → branche clavier). À trancher : diff Hatari en TOS FR — si Hatari donne AUSSI l'erreur, c'est fidèle (jeu US-only côté layout) ; sinon écart IKBD/layout FR à corriger. | ACIA/IKBD ou détection layout FR. |
 | **Enchanted Land (1990)** (Thalion) | ✅✅✅ **RÉSOLU (5ᵉ passe 2026-07-02) : moteur fullscreen verrouillé 100 %** (12402/12402 écritures freq à la position Hatari-exacte). Le dernier verrou n'était PAS la reconnaissance IPL mais un **double comptage du saut STOP** dans la comptabilité de quantum → `sched.now()`/datation vidéo en avance de δ∈{4..26} sur l'horloge CPU (quand δ≡2 mod 4, le calibrateur $8209 déverrouillait). Micro-sauts éliminés. **Son Thalion OK** (confirmé GUI 2026-07-02 — réparé par la même passe). Jeu complet. | Fix = rebase `quantumStartBus_` au saut STOP (`Cpu68k::run`) → `docs/MOIRA_WINUAE_CONVERGENCE.md` (5ᵉ passe). Les 3 mystères (lock, commit-VBL↔loader, IPLFETCH↔loader) avaient cette même cause. |
 | **Lethal Xcess** (`.STX`, TOS 1.62) | ✅ titre stable (churn 0,00 %) + **in-game parfait** (confirmé GUI 2026-07-02). ◑ L'utilisateur rapporte un titre « buggé à ~8 % » en GUI — NON reproduit en headless (ST/tos102fr, trame 3000 : diff Hatari 1,5 % diffuse = phases d'anim, aucune ligne franche) → dépend de la config GUI (machine/TOS/moment), à préciser. | Reproduire avec la config GUI exacte puis diff Hatari. |
 | **Beyond the Ice Palace** (D-BUG) | Rapport GUI : écran scramblé en jeu. **NON reproduit en headless** : gameplay PROPRE (ST et STE, 1 Mo, boot AUTO). ⚠ Le PRG exige > 512 Ko (BSS dépack 384 Ko → TPA ~471 Ko) : en 512 Ko le TOS skippe l'AUTO — comportement CORRECT (pas un bug). Le chemin GUI = double-clic bureau GEM (Pexec sous AES) ≠ AUTO — à reproduire avec la config GUI exacte. | Recette headless : copier le disque + `mmd ::AUTO` + `mcopy` ; `--mem 1m --keys-at 4000 "n" --keys-at 6200 " " --keys-at 9600 " " --keys-at 12000 "y" --keys-at 14500 "s" --keys-at 16000 " " --keys-at 19600 "y"` → jeu ≈ trame 21000. |
 | **The Cuddly Demos** (TCB) | ✅ **menu robot RÉSOLU (2026-07-03, commit `125388b`)** : clignotement vertical 10-47 % → **0** (250/250 trames verrouillées, mur régulier = Hatari). 1ʳᵉ page OK. | Cause : datations lecture (`−14`) / écriture (`−6`) du compteur vidéo co-calibrées autour d'une « origine −8 » devenue artefact après le fix STOP — ramenées ENSEMBLE aux valeurs fidèles §8 (**read −6, write +2**). Le synchroniseur (pc=f264, sortie sur octet bas `$8209` > `$40` SIGNÉ) lisait 4-6 octets de moins qu'Hatari au même instant → sortie L34→L36 → paire 60/50 une ligne trop tard. ⚠ Ne bouger ces offsets que PAR PAIRE (read seul casse EL). Repro : `--fastfdc --keys-at 3000 " "`, ≈ trame 6000. → `docs/MOIRA_WINUAE_CONVERGENCE.md`. |
 | **Shadow Warriors** (2Hot2Handle) | Après SPACE : titre + musique OK ; le bouton joystick ne lance pas le jeu. (Castle Warrior, lui, fonctionne.) | À diff'er Hatari. |
-| **Rick Dangerous II (1989)** (Core) | SPACE, `n`, `n` : plante avec 4 bombes. | À diff'er Hatari. |
+| **Rick Dangerous II (1989)** (Core) | ✅ **JOUABLE** (résolu ; l'ancien plantage « 4 bombes » ne se reproduit plus). | — |
 | **Wings of Death** (`.stx`) | Après bouton : titre **corrompu** + son ralenti ; SPACE lance le jeu, qui tourne ensuite très bien. | Corruption titre (vidéo) + son chargement. |
 | **Stardust (1994)** / **Stardust Bloodhouse** (`.STX`) | Plante sur écran noir au démarrage. | À diff'er Hatari. |
 | **Spectrum 512 — palettes « foirées » sur STE** (2026-07-09) | ✅ **PAS UN BUG — comportement FIDÈLE** : l'auto-diapo scramblait les palettes sur STE/Mega STE (parfait sur ST). Diag : le viewer spec512 est calibré timing **STF** → sur STE il se désynchronise **sur vrai matériel aussi**. NeoST STE == **oracle Hatari STE byte-exact (0 px, plage f1645-1660)** → NeoST reproduit fidèlement, ce n'est pas sa faute. La vraie lacune était l'**absence de détection** (rien ne disait « fidèle » vs « bug »). | ✅ Étalon `spectrum512_diapo_ste` ajouté (épinglé à l'oracle Hatari STE `tests/reference/spectrum512_diapo_ste.png`). ⚠ `9f0d2bc` (res-tricks) écarté : ne touche que MED_OFFSET ; ST reste 0 px vs oracle. Leçon → « Système de régression » ci-dessous. |
@@ -161,32 +161,56 @@ rapides tournent en secondes et **gardent le commit**) :
   vidéo synthétique (tous pixels = index 1), injecte des écritures palette datées et **assère la
   couleur pixel octet-exact** contre le modèle `f(kSpec512AlignCyc, géométrie)` — garde aussi la
   constante `-25`. **Détection prouvée** : `NEOST_ALIGN_OFF=1` (dérive 1 cyc) → exit 1 ; propre → exit 0.
-  _Reste (P0+)_ : self-tests analogues whitelist bus-error, fronts GPIP, Timers.
+  ✅ **P0+ FAIT (2026-07-09)** : `--bus-selftest` (`Bus::busSelfTest` : whitelist bus-error — RAM/ROM/cart
+  ne fautent pas, $FF0000-$FF7FFF faute, INVARIANT « word ne faute que si TOUS ses octets fautent » sur une
+  frontière IO trouvée dynamiquement ; force le superviseur) et `--mfp-selftest` (`Mfp::mfpSelfTest` :
+  bits GPIP forcés bit7/5/4, **détection de FRONT** AER/DDR, Timer B event-count fin/début de ligne). Types
+  `bus_selftest`/`mfp_selftest` dans `etalons.json` ; dans le palier fast.
 - ✅ **P1 — verdicts cartouche (s, déterministe, sans oracle) — FAIT (2026-07-09)** : convention série
   **`NEOST-TEST: <nom> PASS|FAIL <détail>`** (UDR `$FFFA2F`, sink RS-232). `--serial-dump FILE` (capture
   propre), `tools/make_selftest_cart.py` (cartouche **diagnostic** `$FA52235F`, saut `$FA0004` au reset,
   mini-assembleur 68000 à labels ; `--break cpu|timing` pour valider les FAIL), runner
   `tools/run_selftests.py` + `tools/selftests.json` (scanne le série, sort 0/1). Bout-en-bout vert ;
-  `--break` → exit 1. _Reste_ : migrer le verdict FPU (aujourd'hui lu à la main dans `D7`) vers le série.
-- **P1-timing — verdicts timing autoportants (sans oracle)** : ◑ sentinelle **liveness** faite (le test
-  `timing` de la cartouche vérifie que `$FF8209` n'est pas figé → anti-clock-morte). Reste le **cycle-exact** :
-  ROM qui **compte** ticks Timer C/trame, HBL/trame, latence IPL en interne et imprime PASS/FAIL contre
-  des constantes → garde-fou anti-dérive **sans Hatari** (aujourd'hui `make_cycle_bench` +
-  `trace_diff --periods` sont 100 % manuels). Puis gate `trace_diff` sur une trace-or committée + tolérance.
-- **P2 — étalons pixel épinglés oracle (`run_etalons.py`, existant) — durcir + élargir** : marquer
-  chaque réf `ref_kind: oracle|snapshot` et comparer à l'**oracle** quand `oracle` (ne plus préférer
-  silencieusement la self-capture). Élargir spec512 : image **bordée** (overscan), **autre résolution**,
-  et surtout **rejouer l'image cassée du terrain** en nouvel étalon. Mode diff **palette par ligne**
-  dans `compare_screenshot` (pointe la scanline/x de divergence → décalage vertical spec512 localisé).
-- **P3 — pont config GUI↔headless** : les bugs récurrents n'apparaissent qu'en **GUI** (config ≠
-  headless). `--from-cfg neost.cfg` : rejouer machine/TOS/disque/résolution exacts du GUI en headless →
-  « ce que l'utilisateur a lancé » devient reproductible et testable.
-- **Orchestration** : `tools/run_all.py --tier fast` (P0+P1, secondes, avant chaque commit, hook
-  pre-push opt-in) et `--tier full` (P0→P3, oracle Hatari + disques). `--verify-refs` re-contrôle que les
-  réfs `oracle` dérivent bien de Hatari.
+  `--break` → exit 1. ✅ **Verdict FPU migré vers le série** (2026-07-09) : `make_fpu_testrom.py` émet
+  `NEOST-TEST: fpu PASS|FAIL` (UDR $FFFA2F) en plus de `D7` (compat trace) ; entrée `fpu_cir` (megaste+fpu).
+- ✅ **P1-timing — FAIT (2026-07-09)** : (a) sentinelle **liveness** (`$FF8209` non figé → anti-clock-morte) ;
+  (b) **cycle-exact `frame`** : la cartouche diagnostic installe les vecteurs HBL/VBL ($68/$70), **compte les
+  HBL par trame** par interruptions et vérifie la bande (262 pré-TOS, déterministe ST/STE/tous TOS) → flague
+  une dérive grossière (50 Hz→313, 71 Hz→501, horloge morte→0). `--break frame` valide le FAIL.
+  ✅ **latence IPL interne FAIT (2026-07-09)** : test `ipl` — le handler HBL de la ligne 100 fait un délai
+  puis capture `$FF8209` (position faisceau = phase d'entrée d'exception, IACK+prologue) → bande calibrée
+  224±4, déterministe. `--break ipl` valide le FAIL. ✅ **gate cycle-bench FAIT** : `make_cycle_bench.py
+  --cart` (14 corps d'instructions en cartouche, K petit) + `tools/run_cyclebench.py` extrait les périodes
+  de boucle (NEOST_TRACE_CYC) et compare au golden `tests/reference/cyclebench.json` (auto-régression du
+  modèle de cycle 68000, tolérance 0 ; dérive → exit 1). Dans le palier fast.
+- ✅ **P2 — étalons pixel épinglés oracle — durci + élargi (2026-07-09)** : `ref_kind: oracle|snapshot`
+  dans `etalons.json` ; `run_etalons.py` compare à l'**oracle `.png`** quand `oracle` (fini la préférence
+  silencieuse pour la self-capture `.ppm`), snapshot = self-capture (`.ppm`, repli `.png`).
+  `--verify-refs` contrôle la provenance (oracle = `.png` ≥832px, sinon suspect). `compare_screenshot
+  --report` = **diff palette PAR LIGNE** (1ᵉʳ écart x/y + pires scanlines → localise un décalage spec512 ;
+  utilisé auto en cas d'échec). Élargi : `spectrum512_diapo_ste` (STE) ajouté. ✅ **spec512 bordé couvert**
+  (2026-07-09) : `spec512SelfTest` teste aussi le **chemin fenêtré** `renderGlueFrame` (bordures G+D
+  ouvertes + palette roulante spec512) — smoke test sans contenu externe (voie armée + couleurs présentes).
+  ✅ **Étalon pixel spec512 ST + STE FAIT** : depuis `spectrum_512_auto_diapo.st`, oracle Hatari 832×552 au
+  frame 1650 (le plus exigeant) → `spectrum512_diapo2` (ST, puma) + `spectrum512_diapo_ste` (STE, scramble
+  FIDÈLE). ⚠ Vérifié : ce disque n'a **aucune** image spec512 à bordures ouvertes (scan ST+STE frames
+  100-2500 ; les seules frames « fullscreen » ~300-400 = fond de chargement gris uni, IDENTIQUE Hatari).
+- ✅ **P3 — pont config GUI↔headless — FAIT (2026-07-09)** : `--from-cfg neost.cfg` rejoue en headless la
+  config EXACTE du GUI (rom/machine/mem/cpu/disque/cart/mono/fastfdc/fpu/gemdos/acsi ; chemins `./../`
+  du GUI résolus vers la racine ; les options CLI placées après surchargent). Reproduit « ce que
+  l'utilisateur a lancé » → `--from-cfg neost.cfg --frames N --screenshot s.ppm` puis diff Hatari.
+- ✅ **Orchestration — FAIT (2026-07-09)** : `tools/run_all.py --tier fast` (P0+P1, ~0,1 s → garde de commit)
+  et `--tier full` (fast + P2 étalons pixel + `--verify-refs`). `--install-hook` / `--uninstall-hook`
+  posent un **hook git pre-push** (opt-in) lançant `--tier fast`.
 
-Le 20 % qui attrape 80 % : **`--spec512-selftest` (P0)** ✅ + **runner verdict série (P1)** ✅ + **`ref_kind`
-oracle strict (P2)** ← PROCHAIN. Puis P1-timing cycle-exact, P3, orchestration.
+**Pyramide de test COMPLÈTE (2026-07-09)** : **P0** `--spec512-selftest` (borderless + bordé) +
+`--bus-selftest` + `--mfp-selftest` · **P1** verdicts série cartouche (cpu/timing/frame/ipl/fpu) +
+`run_selftests.py` · **cycle-bench** (`run_cyclebench.py`, golden 68000) · **P2** `ref_kind` oracle + diff
+par ligne + `--verify-refs` · **P3** `--from-cfg` · **orchestration** `run_all.py --tier fast|full` + hook
+pre-push. Palier fast complet en ~0,3 s. **Reste (faible priorité)** : gate `trace_diff --periods` vs oracle
+Hatari (le cycle-bench actuel est une auto-régression NeoST) ; self-tests P0 supplémentaires (autres Timers,
+ACIA) ; si une vraie démo spec512 **overscan** (bordures ouvertes) est rapatriée un jour → l'ajouter en
+étalon oracle (l'auto_diapo, lui, est 100 % borderless).
 
 ### Outillage / qualité
 - **Étalons headless** : calibrer frames + références Cuddly / Union / Troed / Hatari Test Suite ;

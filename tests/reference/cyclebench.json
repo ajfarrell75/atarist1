@@ -1,0 +1,16 @@
+{
+ "nop": 14,
+ "mov_rr": 14,
+ "mov_ramR": 20,
+ "mov_ramW": 20,
+ "mov_ramL": 24,
+ "mov_mmio": 22,
+ "add_rr": 14,
+ "addq": 14,
+ "addi": 18,
+ "lsl4": 24,
+ "lsr_r": 20,
+ "tst": 14,
+ "clr_ram": 24,
+ "cmp_imm": 18
+}

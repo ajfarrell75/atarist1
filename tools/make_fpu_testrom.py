@@ -62,6 +62,35 @@ def cmpiw_dn(imm, dn):                  # cmpi.w #imm,Dn
     w16(0x0C40 | dn); w16(imm)
 
 
+# --- branches/adresses par LABEL (verdict série) ------------------------------
+addr_fixups = []   # (offset de l'immédiat 32 bits, label) → adresse absolue ROM
+
+
+def label(name):
+    labels[name] = len(code)
+
+
+def _branch(op, name):                  # Bcc.w name (disp résolu en 2ᵉ passe)
+    w16(op); fixups.append((len(code), name, len(code))); w16(0)
+
+
+def bra_to(name): _branch(0x6000, name)
+def bsr_to(name): _branch(0x6100, name)
+def beq_to(name): _branch(0x6700, name)
+
+
+def movel_label_a3(name):               # move.l #(adresse absolue du label),a3
+    w16(0x267C); addr_fixups.append((len(code), name)); w32(0)
+
+
+def emit_string(name, text):            # chaîne 0-terminée, alignée mot
+    label(name)
+    b = text.encode("ascii") + b"\x00"
+    if len(b) % 2:
+        b += b"\x00"
+    code.extend(b)
+
+
 def bne_to(label):                      # bne.w label (fixup différé)
     w16(0x6600)
     fixups.append((len(code), label, len(code)))
@@ -158,18 +187,37 @@ movew_absl_dn(RESP, 0)
 cmpiw_dn(0x7032, 0)                      # take-pre-instruction-exc, vecteur DZ $32
 bne_to("fail9")
 
-# PASS : D7 = 42, boucle stable.
+# PASS : D7 = 42 (compat trace) + verdict série « fpu PASS », boucle stable.
 w16(0x7E2A)                              # moveq #42,d7
-w16(0x60FE)                              # bra.s *
+movel_label_a3("pass_str")              # move.l #pass_str,a3
+bsr_to("emit")
+w16(0x60FE)                             # bra.s *
 
-for n in range(1, 10):                   # FAILn : D7 = -n, boucle stable
+for n in range(1, 10):                   # FAILn : D7 = -n (compat trace) → verdict commun
     labels[f"fail{n}"] = len(code)
     w16(0x7E00 | ((-n) & 0xFF))          # moveq #-n,d7
-    w16(0x60FE)                          # bra.s *
+    bra_to("fail_common")
+label("fail_common")                     # verdict série « fpu FAIL », boucle stable
+movel_label_a3("fail_str")
+bsr_to("emit")
+w16(0x60FE)                             # bra.s *
 
-for off, label, base in fixups:          # résoudre les bne.w
-    disp = labels[label] - base
+# Sous-routine emit : a3 = chaîne 0-terminée → écrit chaque octet dans l'UDR $FFFA2F.
+label("emit")
+w16(0x121B)                              # move.b (a3)+,d1
+beq_to("emit_ret")                       # beq.w emit_ret
+w16(0x13C1); w32(0x00FFFA2F)             # move.b d1,$FFFA2F.l
+bra_to("emit")
+label("emit_ret")
+w16(0x4E75)                              # rts
+emit_string("pass_str", "NEOST-TEST: fpu PASS\r\n")
+emit_string("fail_str", "NEOST-TEST: fpu FAIL\r\n")
+
+for off, lname, base in fixups:          # résoudre les bne.w / bra / bsr / beq
+    disp = labels[lname] - base
     code[off:off + 2] = struct.pack(">h", disp)
+for off, lname in addr_fixups:           # résoudre les adresses absolues de chaînes
+    code[off:off + 4] = struct.pack(">I", ROM_BASE + 8 + labels[lname])
 
 # ---- image ROM ----------------------------------------------------------------
 rom = bytearray(b"\xFF" * ROM_SIZE)

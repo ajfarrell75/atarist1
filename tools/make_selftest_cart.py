@@ -28,6 +28,21 @@ CART_BASE = 0xFA0000
 UDR       = 0x00FFFA2F      # MFP USART data register (émission série)
 VIDLO     = 0x00FF8209      # compteur d'adresse vidéo, octet bas (avance avec le faisceau)
 
+# Bande attendue de HBL par trame (test frame). La cartouche diagnostic tourne PRÉ-TOS
+# (état vidéo par défaut du reset) : NeoST y prend 262 HBL/trame — DÉTERMINISTE et stable
+# (ST/STE, tous TOS, tous budgets de trames, mesuré 2026-07-09 via --dump-at $1004). Bande
+# serrée autour → flague une dérive GROSSIÈRE de trame (50 Hz→313, 71 Hz mono→501, horloge
+# morte→0, ×2→~131/524) sans flakiness. ⚠ Re-calibrer si le modèle de trame HBL change.
+FRAME_HBL_LO = 256
+FRAME_HBL_HI = 268
+
+# Position du compteur vidéo ($FF8209, octet bas) lue par le handler HBL de la LIGNE 100
+# après un court délai (→ lecture en plein Display-Enable). Elle encode la PHASE D'ENTRÉE
+# d'exception (latence IACK + prologue) au cycle près → sentinelle de la latence IPL.
+# Calibrée sur NeoST (déterministe). ⚠ Re-calibrer si le modèle d'exception/E-clock change.
+IPL_POS_LO = 220        # mesuré 224 (déterministe ST/STE/tous TOS, 2026-07-09) ; bande ±4
+IPL_POS_HI = 228
+
 
 def build(break_test: str | None) -> bytes:
     # --- Mini-assembleur 2 passes (labels + branches/immédiats résolus) ---------
@@ -39,6 +54,8 @@ def build(break_test: str | None) -> bytes:
     def br(op, name): items.append(('br', op, name))
     def imm_addr(prefix, name):  # move.l #(CART_BASE+label),An : prefix + 32-bit adresse
         items.append(('immL', [prefix], name))
+    def vec(handler, addr):      # move.l #(CART_BASE+handler),addr.l : installe un vecteur
+        items.append(('vec', handler, addr))
 
     # move.l #imm32,An : opword 0x2N7C (N = 8+reg pour An en champ dest) — on passe l'opword.
     A3 = 0x267C  # a3
@@ -88,12 +105,81 @@ def build(break_test: str | None) -> bytes:
     raw(0xB802)                             # cmp.b d2,d4
     br(0x6600, 'tim_pass')                  # bne tim_pass
     imm_addr(A3, 'tim_failstr'); br(0x6100, 'emit')
-    br(0x6000, 'done')
+    br(0x6000, 'frame')                     # échec timing → poursuit quand même le test frame
     lbl('tim_pass')
     imm_addr(A3, 'tim_passstr'); br(0x6100, 'emit')
+    # (tim_pass tombe dans le test frame ; tim_fail y saute aussi via 'frame')
+
+    # -- test frame : compte les HBL par trame via interruptions (cycle-exact) ---
+    # Compteurs en RAM : $1000 hbl courant, $1004 hbl/trame latché, $1008 nb VBL.
+    HBLC, LASTHBL, VBLC = 0x00001000, 0x00001004, 0x00001008
+    lbl('frame')
+    vec('hbl_handler', 0x68)                # move.l #hbl_handler,$68  (HBL autovect. niv2)
+    vec('vbl_handler', 0x70)                # move.l #vbl_handler,$70  (VBL autovect. niv4)
+    raw(0x42B9, HBLC >> 16, HBLC & 0xFFFF)  # clr.l $1000
+    raw(0x42B9, LASTHBL >> 16, LASTHBL & 0xFFFF)  # clr.l $1004
+    raw(0x42B9, VBLC >> 16, VBLC & 0xFFFF)  # clr.l $1008
+    raw(0x46FC, 0x2000)                     # move.w #$2000,sr  (autorise IPL → IRQ)
+    lbl('fwait')
+    raw(0x2A39, VBLC >> 16, VBLC & 0xFFFF)  # move.l $1008,d5
+    raw(0x0C85, 0x0000, 0x0003)             # cmpi.l #3,d5
+    br(0x6500, 'fwait')                     # bcs fwait  (d5 < 3 → attend 3 trames)
+    raw(0x46FC, 0x2700)                     # move.w #$2700,sr  (remasque)
+    raw(0x2C39, LASTHBL >> 16, LASTHBL & 0xFFFF)  # move.l $1004,d6  (HBL de la dernière trame)
+    # Bande attendue [LO,HI] (calibrée sur l'oracle NeoST ; large = anti-dérive grossière).
+    lo, hi = (0, 0xFFFFFF) if break_test == 'frame' else (FRAME_HBL_LO, FRAME_HBL_HI)
+    # break frame : on impose une bande IMPOSSIBLE ($10000+) → toujours FAIL.
+    if break_test == 'frame':
+        lo, hi = 0x100000, 0x100000
+    raw(0x0C86, lo >> 16, lo & 0xFFFF)      # cmpi.l #LO,d6
+    br(0x6500, 'frame_fail')                # bcs frame_fail  (d6 < LO)
+    raw(0x0C86, hi >> 16, hi & 0xFFFF)      # cmpi.l #HI,d6
+    br(0x6200, 'frame_fail')                # bhi frame_fail  (d6 > HI)
+    imm_addr(A3, 'frm_passstr'); br(0x6100, 'emit')
+    br(0x6000, 'ipl')
+    lbl('frame_fail')
+    imm_addr(A3, 'frm_failstr'); br(0x6100, 'emit')
+
+    # -- test ipl : phase d'entrée d'exception HBL (latence IPL) ------------------
+    # Le handler HBL de la ligne 100 a stocké $FF8209 (après délai → Display-Enable) en
+    # $100C. On vérifie que cette position tombe dans la bande calibrée.
+    IPLPOS = 0x0000100C
+    lbl('ipl')
+    raw(0x3039, IPLPOS >> 16, IPLPOS & 0xFFFF)   # move.w $100C,d0
+    ilo, ihi = (IPL_POS_LO, IPL_POS_HI)
+    if break_test == 'ipl':
+        ilo, ihi = 0x7FFE, 0x7FFF               # bande impossible → FAIL
+    raw(0x0C40, ilo)                        # cmpi.w #ILO,d0
+    br(0x6500, 'ipl_fail')                  # bcs ipl_fail
+    raw(0x0C40, ihi)                        # cmpi.w #IHI,d0
+    br(0x6200, 'ipl_fail')                  # bhi ipl_fail
+    imm_addr(A3, 'ipl_passstr'); br(0x6100, 'emit')
+    br(0x6000, 'done')
+    lbl('ipl_fail')
+    imm_addr(A3, 'ipl_failstr'); br(0x6100, 'emit')
 
     lbl('done')
     raw(0x4E72, 0x2700)                     # stop #$2700
+
+    # -- handlers d'interruption -------------------------------------------------
+    # HBL : incrémente hblCount ; à la 100ᵉ HBL, petit délai (→ Display-Enable) puis
+    # capture $FF8209 (position faisceau = phase d'entrée d'exception) en $100C.
+    lbl('hbl_handler')
+    raw(0x52B9, HBLC >> 16, HBLC & 0xFFFF)  # addq.l #1,$1000
+    raw(0x0CB9, 0x0000, 0x0064, HBLC >> 16, HBLC & 0xFFFF)  # cmpi.l #100,$1000
+    br(0x6600, 'hbl_ret')                   # bne hbl_ret
+    raw(0x303C, 0x001E)                     # move.w #30,d0
+    lbl('hbl_dly'); br(0x51C8, 'hbl_dly')   # dbra d0,hbl_dly  (~254 cyc → plein DE)
+    raw(0x1239, 0x00FF, 0x8209)             # move.b $FF8209,d1
+    raw(0x0241, 0x00FF)                     # andi.w #$00FF,d1
+    raw(0x33C1, IPLPOS >> 16, IPLPOS & 0xFFFF)  # move.w d1,$100C
+    lbl('hbl_ret')
+    raw(0x4E73)                             # rte
+    lbl('vbl_handler')
+    raw(0x23F9, HBLC >> 16, HBLC & 0xFFFF, LASTHBL >> 16, LASTHBL & 0xFFFF)  # move.l $1000,$1004
+    raw(0x42B9, HBLC >> 16, HBLC & 0xFFFF)  # clr.l $1000
+    raw(0x52B9, VBLC >> 16, VBLC & 0xFFFF)  # addq.l #1,$1008
+    raw(0x4E73)                             # rte
 
     # -- sous-routine emit : a3 = chaîne (0-terminée), écrit sur UDR (a4) --------
     lbl('emit')
@@ -115,6 +201,10 @@ def build(break_test: str | None) -> bytes:
     stritem('cpu_failstr', 'NEOST-TEST: cpu FAIL\r\n')
     stritem('tim_passstr', 'NEOST-TEST: timing PASS\r\n')
     stritem('tim_failstr', 'NEOST-TEST: timing FAIL\r\n')
+    stritem('frm_passstr', 'NEOST-TEST: frame PASS\r\n')
+    stritem('frm_failstr', 'NEOST-TEST: frame FAIL\r\n')
+    stritem('ipl_passstr', 'NEOST-TEST: ipl PASS\r\n')
+    stritem('ipl_failstr', 'NEOST-TEST: ipl FAIL\r\n')
 
     # --- passe 1 : offsets (le code commence à l'offset 4, après le magic) ------
     off = 4
@@ -125,6 +215,8 @@ def build(break_test: str | None) -> bytes:
             off += 2 * len(it[1])
         elif it[0] == 'immL':
             off += 2 * len(it[1]) + 4        # prefix + adresse 32 bits
+        elif it[0] == 'vec':
+            off += 2 + 4 + 4                 # move.l #handler,addr : op + handler + vecteur
         elif it[0] == 'br':
             off += 4                         # opword + disp16
 
@@ -140,6 +232,10 @@ def build(break_test: str | None) -> bytes:
             words += it[1]; off += 2 * len(it[1])
             addr = CART_BASE + labels[it[2]]
             words += [(addr >> 16) & 0xFFFF, addr & 0xFFFF]; off += 4
+        elif it[0] == 'vec':
+            handler = CART_BASE + labels[it[1]]; vaddr = it[2]
+            words += [0x23FC, (handler >> 16) & 0xFFFF, handler & 0xFFFF,
+                      (vaddr >> 16) & 0xFFFF, vaddr & 0xFFFF]; off += 10
         elif it[0] == 'br':
             op = it[1]
             disp = labels[it[2]] - (off + 2)
@@ -156,7 +252,7 @@ def build(break_test: str | None) -> bytes:
 def main() -> int:
     ap = argparse.ArgumentParser(description="Cartouche diagnostic auto-test NeoST (verdict série)")
     ap.add_argument("out", help="fichier .bin de sortie")
-    ap.add_argument("--break", dest="brk", choices=("cpu", "timing"),
+    ap.add_argument("--break", dest="brk", choices=("cpu", "timing", "frame", "ipl"),
                     help="force ce test à ÉCHOUER (validation du runner)")
     args = ap.parse_args()
     data = build(args.brk)
