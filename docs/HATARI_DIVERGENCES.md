@@ -152,8 +152,12 @@ byte-compatible, `.MSA`/`.DIM` : **conformes** (vérifiés ligne à ligne).
 - **[basse]** Bornes parseur STX (`StxImage.cpp:90-200`) : rejette une image tronquée que Hatari
   monterait ; **OOB latent** sur chemin « simple » tronqué (`Fdc.cpp:907`) — à corriger.
 - **[basse]** `pData==NULL` sans RNF → secteur lu 512×`0x00` + statut OK (image de bord, `StxImage.cpp:161`).
-- **[basse]** INTRQ : `raise(SRC_FDC)` **en plus** de la ligne GPIP5 (`Fdc.cpp:638-645`) — court-circuite
-  l'edge GPIP du MFP (cf. M1) ; à vérifier qu'il n'y a pas double déclenchement.
+- **[basse] ✅ vérifié SANS bug (2026-07-09)** — INTRQ : **pas de double déclenchement**. Le
+  `raise(SRC_FDC)` doublé a été retiré à la refonte M1 (`bc15a67`) ; entrée périmée (les anciennes
+  lignes 638-645 = aujourd'hui `applyFastFdc`). Chemin unique : `fdcSetIrq` (edge-gardé `if(!was)`)
+  → `setIntrqLine` → `Mfp::setFdcLine` → `gpipSetLine` (`if(line==active) return` + front AER,
+  `Mfp.hpp:311`). Une INTRQ maintenue ne regénère aucune IRQ ; aucun `raise` manuel ni chemin
+  contournant `gpipSetLine` (grep arbre entier).
 - **[basse]** Signal DC (Disk Change)→GPIP4 (TT-only chez Hatari) non émulé ; modèle WPRT distinct.
 - **[basse]** Hot-swap : 1 phase (eject) vs 2 (eject+insert) chez Hatari (`floppy.c:438-514`).
 
