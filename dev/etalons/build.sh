@@ -171,6 +171,19 @@ if [ "$GAME_MODE" = 1 ]; then
         < <(find "$BUILD/$SAMPLE" -type d)
 fi
 
+# Defines -D du .PRJ (modules à activer : dGODLIB_FADE, etc.). En Pure C, une ligne
+# `.C [ -DdX ]` s'applique à tous les .C listés ENSUITE — donc de facto globale ; on
+# les passe à TOUTES les compilations. SANS ça, les blocs `#ifdef dGODLIB_FADE` (p.ex.
+# l'appel `Fade_Init()` dans PLATFORM.C, qui installe le fade VBL) sont compilés hors :
+# HotPot rendait alors le front-end avec une palette figée à NOIR (fade-in jamais armé).
+# Les lignes commentées (`;`) du .PRJ sont ignorées (defines désactivés à dessein).
+GAME_DEFS=()
+if [ -n "${PRJ:-}" ] && [ -f "$PRJ" ]; then
+    while IFS= read -r d; do GAME_DEFS+=("$d"); done \
+        < <(grep -vE '^[[:space:]]*;' "$PRJ" | grep -oE '\-D[A-Za-z0-9_]+' | sort -u)
+    [ ${#GAME_DEFS[@]} -gt 0 ] && echo "   defines .PRJ : ${GAME_DEFS[*]}"
+fi
+
 # Shim _main → @main : le startup vbcc (ABI pile) appelle _main ; le main de
 # GODLIB est compilé -fastcall (@main, argc en d0 / argv en a0).
 # Ponts ABI fastcall (@X, args en REGISTRES) → libc/libm vbcc (ABI PILE, _X mappé
@@ -285,7 +298,7 @@ for src in "${SRCS[@]}"; do
     obj="$OBJDIR/$(echo "${path#$BUILD/}" | sed 's#[/.]#_#g').o"
     if [[ "$src" == *.C ]]; then
         echo "CC $src"
-        vc "+$TARGET/vc.config" "${CC_FLAGS[@]}" -I"$BUILD" -I"$BUILD/sysinc" ${GAME_INCS[@]+"${GAME_INCS[@]}"} "$path" -o "$obj"
+        vc "+$TARGET/vc.config" "${CC_FLAGS[@]}" ${GAME_DEFS[@]+"${GAME_DEFS[@]}"} -I"$BUILD" -I"$BUILD/sysinc" ${GAME_INCS[@]+"${GAME_INCS[@]}"} "$path" -o "$obj"
         C_OBJS+=("$obj")
     else
         echo "AS $src"
@@ -355,7 +368,7 @@ for essai in 1 2 3 4 5 6 7 8; do
                 break
             fi
             echo "CC +${c#$BUILD/}  (résout $sym)"
-            vc "+$TARGET/vc.config" "${CC_FLAGS[@]}" -I"$BUILD" -I"$BUILD/sysinc" ${GAME_INCS[@]+"${GAME_INCS[@]}"} "$c" -o "$obj"
+            vc "+$TARGET/vc.config" "${CC_FLAGS[@]}" ${GAME_DEFS[@]+"${GAME_DEFS[@]}"} -I"$BUILD" -I"$BUILD/sysinc" ${GAME_INCS[@]+"${GAME_INCS[@]}"} "$c" -o "$obj"
             C_OBJS+=("$obj"); added=1
             break
         done < <(grep -rlE "(^|[^A-Za-z0-9_])$sym[[:space:]]*\(" "$BUILD/GODLIB" "$BUILD/$SAMPLE" --include='*.H' 2>/dev/null)
@@ -366,7 +379,7 @@ for essai in 1 2 3 4 5 6 7 8; do
             obj="$OBJDIR/$(echo "${c#$BUILD/}" | sed 's#[/.]#_#g').o"
             [ -f "$obj" ] && continue
             echo "CC +${c#$BUILD/}  (résout var $sym)"
-            vc "+$TARGET/vc.config" "${CC_FLAGS[@]}" -I"$BUILD" -I"$BUILD/sysinc" ${GAME_INCS[@]+"${GAME_INCS[@]}"} "$c" -o "$obj"
+            vc "+$TARGET/vc.config" "${CC_FLAGS[@]}" ${GAME_DEFS[@]+"${GAME_DEFS[@]}"} -I"$BUILD" -I"$BUILD/sysinc" ${GAME_INCS[@]+"${GAME_INCS[@]}"} "$c" -o "$obj"
             C_OBJS+=("$obj"); added=1
             break
         done < <(grep -rlE "^[A-Za-z_][A-Za-z0-9_ \*]*[^A-Za-z0-9_]$sym[[:space:]]*(\[[^]]*\])?[[:space:]]*(=|;)" "$BUILD/GODLIB" "$BUILD/$SAMPLE" --include='*.C' 2>/dev/null)
