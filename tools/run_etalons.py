@@ -31,6 +31,7 @@ REF_DIR = ROOT / "tests" / "reference"
 HEADLESS = ROOT / "build" / "neost-headless"
 COMPARE = ROOT / "tools" / "compare_screenshot.py"
 HATARI_ORACLE = ROOT / "tools" / "hatari_oracle.sh"
+BUFFER_W = 416   # largeur du buffer NeoST (overscan) ; un oracle Hatari est en 2× (≥832)
 
 
 def load_manifest() -> list[dict]:
@@ -55,8 +56,11 @@ def ensure_disk(entry: dict) -> bool:
     return False
 
 
-def run_glue_selftest(cpu: str) -> int:
-    cmd = [str(HEADLESS), "roms/etos256us.img", "--glue-selftest", "--cpu", cpu]
+def run_selftest(flag: str, cpu: str) -> int:
+    # Auto-tests logique pure (P0) : pas de boot, pas d'oracle. La ROM sert juste à
+    # construire la machine (RAM) ; --glue-selftest/--spec512-selftest court-circuitent
+    # le boot et renvoient le verdict via le code de sortie.
+    cmd = [str(HEADLESS), "roms/etos256us.img", flag, "--cpu", cpu]
     print("  $", " ".join(cmd))
     return subprocess.run(cmd, cwd=ROOT).returncode
 
@@ -109,21 +113,42 @@ def compare_shots(neost: Path, ref: Path, entry: dict) -> int:
     crop = entry.get("crop", "active")
     mx = entry.get("max_diff_px", 0)
     cmd = [sys.executable, str(COMPARE), str(neost), str(ref),
-           "--crop", crop, "--max", str(mx)]
+           "--crop", crop, "--max", str(mx), "--report"]
     print("  $", " ".join(cmd))
     return subprocess.run(cmd, cwd=ROOT).returncode
+
+
+def resolve_ref(entry: dict, ref_ppm: Path, ref_png: Path):
+    # Provenance EXPLICITE de la référence (P2) :
+    #   ref_kind: "oracle"   → compare à l'oracle Hatari .png (jamais la self-capture).
+    #   ref_kind: "snapshot" → compare à la self-capture NeoST .ppm (non-régression).
+    # Défaut historique (absent) : .ppm sinon .png (toléré, mais un WARN invite à trancher).
+    kind = entry.get("ref_kind")
+    if kind == "oracle":
+        return (ref_png, "oracle") if ref_png.exists() else (None, "oracle")
+    if kind == "snapshot":
+        return (ref_ppm, "snapshot") if ref_ppm.exists() else (None, "snapshot")
+    if ref_ppm.exists():
+        print(f"  ⚠ ref_kind absent — utilise la self-capture {ref_ppm.name} "
+              f"(ajouter ref_kind: oracle|snapshot dans etalons.json)")
+        return ref_ppm, "?"
+    if ref_png.exists():
+        return ref_png, "?"
+    return None, kind or "?"
 
 
 def run_one(entry: dict, args) -> bool:
     eid = entry["id"]
     print(f"\n=== {eid} — {entry['name']} ===")
 
-    if entry.get("type") == "glue_selftest":
-        rc = run_glue_selftest(entry.get("cpu", "moira"))
+    selftest_flag = {"glue_selftest": "--glue-selftest",
+                     "spec512_selftest": "--spec512-selftest"}.get(entry.get("type"))
+    if selftest_flag:
+        rc = run_selftest(selftest_flag, entry.get("cpu", "moira"))
         if rc != 0:
-            print(f"  ÉCHEC glue_selftest (exit {rc})")
+            print(f"  ÉCHEC {entry['type']} (exit {rc})")
             return False
-        print("  OK glue_selftest")
+        print(f"  OK {entry['type']}")
         return True
 
     if entry.get("disk") and not ensure_disk(entry):
@@ -162,16 +187,57 @@ def run_one(entry: dict, args) -> bool:
     if args.no_compare:
         return True
 
-    ref = ref_ppm if ref_ppm.exists() else (ref_png if ref_png.exists() else None)
+    ref, kind = resolve_ref(entry, ref_ppm, ref_png)
     if not ref:
-        print(f"  SKIP diff : pas de référence ({ref_ppm.name}) — lancer --update-ref")
+        want = ".png (oracle)" if kind == "oracle" else ref_ppm.name
+        print(f"  SKIP diff : pas de référence {want} (ref_kind={kind}) — "
+              f"lancer {'--oracle' if kind == 'oracle' else '--update-ref'}")
         return entry.get("optional", False)
+    print(f"  référence : {ref.name} (ref_kind={kind})")
 
     if compare_shots(neost_ppm, ref, entry) != 0:
         print(f"  ÉCHEC diff {eid}")
         return False
     print(f"  OK {eid}")
     return True
+
+
+def _png_dims(path: Path):
+    import struct
+    d = path.read_bytes()[:24]
+    if d[:8] != b"\x89PNG\r\n\x1a\n":
+        return None
+    return struct.unpack(">II", d[16:24])
+
+
+def verify_refs(entries: list[dict]) -> int:
+    # Contrôle de provenance (P2) : chaque entrée ref_kind=oracle doit avoir un .png
+    # aux dimensions d'un oracle Hatari (2× le buffer NeoST, ex. 832×552) — sinon c'est
+    # une self-capture renommée (piège : figerait un bug). Les snapshot doivent avoir un .ppm.
+    bad = 0
+    for e in entries:
+        if e.get("type"):                 # selftests : pas de réf image
+            continue
+        eid = e["id"]; kind = e.get("ref_kind")
+        png = REF_DIR / f"{eid}.png"; ppm = REF_DIR / f"{eid}.ppm"
+        if kind == "oracle":
+            if not png.exists():
+                print(f"  ✗ {eid}: ref_kind=oracle mais {png.name} absent"); bad += 1; continue
+            dims = _png_dims(png)
+            if not dims or dims[0] < 2 * BUFFER_W:
+                print(f"  ✗ {eid}: {png.name} {dims} n'a pas la taille d'un oracle Hatari "
+                      f"(≥ {2*BUFFER_W}px de large) — self-capture renommée ?"); bad += 1
+            else:
+                print(f"  ✓ {eid}: oracle {png.name} {dims[0]}×{dims[1]}")
+        elif kind == "snapshot":
+            if not ppm.exists():
+                print(f"  ✗ {eid}: ref_kind=snapshot mais {ppm.name} absent"); bad += 1
+            else:
+                print(f"  ✓ {eid}: snapshot {ppm.name}")
+        else:
+            print(f"  ⚠ {eid}: ref_kind absent (ajouter oracle|snapshot)")
+    print("\n" + ("RÉFS OK" if bad == 0 else f"{bad} réf(s) suspecte(s)"))
+    return 0 if bad == 0 else 1
 
 
 def main() -> int:
@@ -181,14 +247,19 @@ def main() -> int:
     ap.add_argument("--fetch", action="store_true", help="fetch_etalons.py d'abord")
     ap.add_argument("--update-ref", action="store_true", help="sauve la capture NeoST en référence")
     ap.add_argument("--oracle", action="store_true", help="capture Hatari comme référence PNG")
+    ap.add_argument("--verify-refs", action="store_true",
+                    help="contrôle la provenance des références (oracle vs snapshot)")
     ap.add_argument("--no-compare", action="store_true")
     args = ap.parse_args()
 
-    if not HEADLESS.exists():
+    if not HEADLESS.exists() and not args.verify_refs:
         print(f"Build requis : cmake --build build  ({HEADLESS} absent)", file=sys.stderr)
         return 2
 
     entries = load_manifest()
+    if args.verify_refs:
+        return verify_refs([e for e in entries
+                            if not args.only or e["id"] in args.only.split(",")])
     if args.list:
         for e in entries:
             opt = " [opt]" if e.get("optional") else ""

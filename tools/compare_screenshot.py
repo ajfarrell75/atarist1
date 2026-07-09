@@ -118,7 +118,8 @@ def _region(crop: str) -> tuple[int, int, int, int]:
     raise ValueError(f"crop inconnu : {crop}")
 
 
-def compare(a_path: Path, b_path: Path, crop: str = "active") -> tuple[int, int]:
+def compare(a_path: Path, b_path: Path, crop: str = "active",
+            report: bool = False) -> tuple[int, int, dict]:
     aw, ah, apx = _load_image(a_path)
     bw, bh, bpx = _load_image(b_path)
     aw, ah, apx = _align_buffer(aw, ah, apx)
@@ -141,8 +142,40 @@ def compare(a_path: Path, b_path: Path, crop: str = "active") -> tuple[int, int]
 
     a = _crop(apx, aw, ah, x + ax, y + ay, cw, ch)
     b = _crop(bpx, bw, bh, x + bx, y + by, cw, ch)
-    diff = sum(1 for i in range(0, len(a), 3) if a[i : i + 3] != b[i : i + 3])
-    return diff, cw * ch
+    diff = 0
+    info = {"rows": [], "first": None, "w": cw, "h": ch}   # diagnostic par ligne
+    for row in range(ch):
+        rc = 0
+        for col in range(cw):
+            i = (row * cw + col) * 3
+            if a[i : i + 3] != b[i : i + 3]:
+                diff += 1
+                rc += 1
+                if report and info["first"] is None:
+                    info["first"] = (col, row, tuple(a[i:i+3]), tuple(b[i:i+3]))
+        if report and rc:
+            info["rows"].append((row, rc))
+    return diff, cw * ch, info
+
+
+def _print_report(info: dict) -> None:
+    # Diagnostic « palette par ligne » : quelles scanlines divergent, et de combien.
+    # Un décalage vertical spec512 se voit comme une bande de lignes contiguës ; un
+    # décalage horizontal comme un petit compte constant sur beaucoup de lignes.
+    rows = info["rows"]
+    if not rows:
+        return
+    if info["first"]:
+        col, row, va, vb = info["first"]
+        print(f"  1ᵉʳ écart : (x={col}, y={row})  A={_rgb(va)}  B={_rgb(vb)}", file=sys.stderr)
+    print(f"  {len(rows)} scanline(s) divergentes (sur {info['h']}), pires lignes :",
+          file=sys.stderr)
+    for row, rc in sorted(rows, key=lambda r: -r[1])[:12]:
+        print(f"    y={row:3d} : {rc:4d}/{info['w']} px", file=sys.stderr)
+
+
+def _rgb(t) -> str:
+    return f"#{t[0]:02X}{t[1]:02X}{t[2]:02X}"
 
 
 def main() -> int:
@@ -151,10 +184,14 @@ def main() -> int:
     ap.add_argument("b")
     ap.add_argument("--crop", choices=("active", "buffer", "full"), default="active")
     ap.add_argument("--max", type=int, default=None, help="seuil max (exit 1 si dépassé)")
+    ap.add_argument("--report", action="store_true",
+                    help="diagnostic par scanline (localise un décalage spec512)")
     args = ap.parse_args()
-    diff, total = compare(Path(args.a), Path(args.b), args.crop)
+    diff, total, info = compare(Path(args.a), Path(args.b), args.crop, report=args.report)
     pct = 100.0 * diff / total if total else 0.0
     print(f"diff_px={diff} / {total} ({pct:.2f} %)")
+    if args.report and diff:
+        _print_report(info)
     if args.max is not None and diff > args.max:
         print(f"ÉCHEC : {diff} > {args.max}", file=sys.stderr)
         return 1

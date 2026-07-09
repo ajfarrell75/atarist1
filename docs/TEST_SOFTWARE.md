@@ -98,10 +98,48 @@ python3 tools/run_etalons.py --only spectrum512_diapo --oracle
 python3 tools/compare_screenshot.py tests/out/foo_neost.ppm tests/reference/foo.png --crop active
 ```
 
-Étalons intégrés aujourd'hui : **glue_selftest**, **EmuTOS STE boot**, **Spectrum 512 diapo**,
-**overscan_top**, **nocooper** (V2, réf. oracle archivée) ; fetch auto : **Cuddly Demos**
-(`disks/etalons/cuddly_demos.msa`), **No Cooper** (`disks/etalons/nocooper.msa`). Union Demo
-et Troed : à rapatrier / calibrer (frames `etalons.json`).
+Étalons intégrés aujourd'hui : **glue_selftest**, **spec512_selftest** (P0, logique pure),
+**EmuTOS STE boot**, **Spectrum 512 diapo** (ST) + **spectrum512_diapo_ste** (STE, scramble
+FIDÈLE == oracle Hatari STE), **overscan_top**, **nocooper** (V2, réf. oracle archivée) ; fetch
+auto : **Cuddly Demos** (`disks/etalons/cuddly_demos.msa`), **No Cooper**
+(`disks/etalons/nocooper.msa`). Union Demo et Troed : à rapatrier / calibrer (frames `etalons.json`).
+
+### Auto-tests logique pure (P0 — ms, sans boot ni oracle)
+
+```sh
+./build/neost-headless roms/tos102uk.img --glue-selftest      # machine Glue (bordures)
+./build/neost-headless roms/tos102uk.img --spec512-selftest   # re-rendu Spectrum 512 (palette/pixel)
+```
+
+`--spec512-selftest` construit une RAM vidéo synthétique (tous pixels = index 1), injecte des
+écritures palette datées et vérifie **octet-exact** la couleur de chaque pixel contre le modèle
+`f(kSpec512AlignCyc, géométrie)`. Toute dérive d'alignement palette↔pixel (la cause du « scramble
+spec512 ») décale les frontières → exit 1. (Test de détection : `NEOST_ALIGN_OFF=1 … --spec512-selftest`
+doit échouer.) Intégré à la suite via `run_etalons.py` (type `spec512_selftest`).
+
+### Auto-tests à verdict série (P1 — s, déterministe, sans oracle)
+
+Convention : une ROM écrit sur le port série RS-232 (UDR `$FFFA2F`, capturé par
+`--serial-dump FILE`) une ligne par test :
+
+```
+NEOST-TEST: <nom> PASS
+NEOST-TEST: <nom> FAIL <détail>
+```
+
+```sh
+python3 tools/make_selftest_cart.py disks/etalons/selftest_cart.bin   # cartouche diagnostic $FA52235F
+python3 tools/run_selftests.py                                        # génère si absent, lance, scanne, exit 0/1
+python3 tools/run_selftests.py --list
+```
+
+`tools/make_selftest_cart.py` produit une **cartouche diagnostic** (magic `$FA52235F` → le TOS saute
+à `$FA0004` au reset, pré-TOS, sans disque) qui teste le cœur `cpu` (invariants arithmétiques) et
+`timing` (sentinelle : le compteur vidéo `$FF8209` n'est pas figé). `--break cpu|timing` force un FAIL
+(valide que le runner l'attrape). Le runner `tools/run_selftests.py` (manifeste `tools/selftests.json`)
+lance le headless avec `--cart` + `--serial-dump`, scanne les verdicts et sort 0/1. _À venir_ : migrer
+le verdict FPU (`make_fpu_testrom.py`, aujourd'hui lu à la main dans `D7`) vers le série ; ROM timing
+cycle-exact (Timer C/HBL par trame).
 
 ---
 

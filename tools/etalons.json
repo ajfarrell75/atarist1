@@ -9,6 +9,13 @@
    "max_diff_px": 0
   },
   {
+   "id": "spec512_selftest",
+   "name": "Spectrum 512 re-rendu (auto-test déterministe palette-par-pixel)",
+   "subsystem": "shifter/spec512",
+   "type": "spec512_selftest",
+   "max_diff_px": 0
+  },
+  {
    "id": "etos_ste_boot",
    "name": "Boot EmuTOS STE (bureau)",
    "subsystem": "integration",
@@ -51,6 +58,23 @@
    "crop": "active",
    "max_diff_px": 0,
    "oracle_fastfdc": true
+  },
+  {
+   "id": "spectrum512_diapo_ste",
+   "name": "Spectrum 512 auto diapo sur STE (scramble FIDÈLE — viewer ST-only, == Hatari STE)",
+   "subsystem": "shifter/spec512",
+   "rom": "roms/tos162us.img",
+   "disk": "disks/etalons/spectrum_512_auto_diapo.st",
+   "machine": "ste",
+   "mem": "512k",
+   "cpu": "moira",
+   "fastfdc": true,
+   "frames": 1651,
+   "frame": 1650,
+   "crop": "active",
+   "max_diff_px": 0,
+   "oracle_fastfdc": true,
+   "note": "Le viewer spec512 est calibré timing STF → sur STE il se désynchronise et scramble les palettes SUR VRAI MATÉRIEL AUSSI. NeoST reproduit ce scramble byte-exact (0 px vs oracle Hatari STE, plage f1645-1660). Cet étalon PROUVE que le scramble STE est fidèle, pas un bug NeoST — évite de rechasser un faux bug. Référence = oracle Hatari STE (spectrum512_diapo_ste.png), PAS une self-capture."
   },
   {
    "id": "overscan_top",

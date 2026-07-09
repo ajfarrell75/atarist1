@@ -64,6 +64,16 @@ public:
     // détaille les échecs sur stderr. Appelé par neost-headless --glue-selftest.
     bool glueSelfTest();
 
+    // Auto-test DÉTERMINISTE du re-rendu Spectrum 512 (palette intra-ligne). Sans
+    // boot ni oracle : remplit une RAM vidéo synthétique (tous pixels = index 1),
+    // injecte des écritures palette DATÉES au cycle sur l'index 1, force le rendu
+    // spec512 (finishFrame) et vérifie OCTET-EXACT la couleur de chaque pixel contre
+    // le modèle attendu (position de bascule = f(kSpec512AlignCyc, géométrie)). Toute
+    // dérive de l'alignement palette↔pixel (la cause classique du « scramble spec512 »)
+    // décale les frontières et fait échouer le test. Renvoie true si OK ; détaille les
+    // échecs sur stderr. Appelé par neost-headless --spec512-selftest.
+    bool spec512SelfTest();
+
     // Horloge « live » = cycle EXACT dans la trame (delta intra-quantum CPU inclus)
     // au moment d'une écriture palette. Indispensable au spec512 : plusieurs
     // écritures par ligne doivent être datées au cycle près, pas au quantum.
