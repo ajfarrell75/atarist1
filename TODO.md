@@ -110,9 +110,21 @@ densité HD/ED STX (NeoST plus cohérent) ; RTC en temps émulé (déterminisme 
   fidèle complet) et « IPLFETCH casse le loader ». + broche MFP exacte portée (`NEOST_MFP_EXACT`,
   anti-datation Timer B event-count + prise à la frontière, fidèle Hatari, non nécessaire au lock).
   → `docs/MOIRA_WINUAE_CONVERGENCE.md` (5ᵉ passe).
-- ◑ **Reste beam-sync** : re-fermer les bancs poll contre un oracle Hatari FRAIS (les anciens
-  AVI ne sont plus alignables) ; re-mesurer le flicker bordure haute EL (fenêtre d'origine
-  inconnue — l'étalon `overscan_top` byte-exact couvre la mécanique).
+- ✅ **Flicker bordure haute EL RE-MESURÉ + diff `$8209` d'entrée à l'oracle (2026-07-09) = CONVERGÉ,
+  transitoire inclus.** Régime établi : re-arm write cyc **441±3 (spread 8)** BAT Hatari ~444±8,
+  retrait haut **249/249**. Transitoire d'entrée : le stabilisateur EL spin-poll `$FF8209` (pc
+  `$ee78/$ee80`) ; DE-start détecté **byte-identique** NeoST↔Hatari (ligne 63, X 60-68, val 2-6,
+  ~7965 lectures). Le transitoire (freq ligne 63 → lock ligne 32) existe **des DEUX côtés, durée
+  comparable ~17-26 frames** = convergence propre au stabilisateur d'EL, pas une divergence NeoST.
+  ⚠ Deux verdicts intermédiaires (« Hatari lock en 1 frame ») étaient des artefacts de segmentation ;
+  seul le diff `$8209` a tranché. Détails → `docs/MOIRA_WINUAE_CONVERGENCE.md` (bloc 2026-07-09 d).
+- ✅ **Bancs poll RE-FERMÉS contre oracle frais (2026-07-09).** `make_poll_test` NeoST↔Hatari
+  (fastfdc des deux côtés, alignement de trame exact, périodicité E-clock 5 trames confirmée) :
+  **aire active BYTE-EXACTE** → phase CPU↔faisceau validée. Seul résidu = le latch couleur bordure
+  gauche (1 ligne, cf. § Vidéo/Shifter ci-dessous). Banc ENTRY (`make_poll_entry_test`, lecture en
+  pleine DE) : ~4440 px actifs de diff = la micro-structure latence d'exception / reconnaissance
+  IPL, RAFFINEMENT dé-priorisé (n'affecte ni jeux ni screenshot). Recette : `--shot-from/-every`
+  côté NeoST + AVI png `--avirecord` côté Hatari, diff PIL (downscale ×2 nearest).
 - Acquis (cf. CYCLE_ACCURACY §3) : phases 0-6, latch palette Spec512, alignement bus shifter +
   wait states PSG/MFP/ACIA, machine Glue live, VDE_On live, Spec512 pixel-perfect, bordures H/B/G/D.
 
@@ -128,6 +140,19 @@ densité HD/ED STX (NeoST plus cohérent) ; RTC en temps émulé (déterminisme 
   changement de résolution (V2 hi/med/lo, overscan med-res), géométrie mid-trame (V3), rendu live
   du retrait **bas** (scroller Cuddly) + lignes EMPTY/BLANK/NO_DE, mode 336 px STE
   (`bSteBorderFlag`), wakeup-state WS3 (sous-pixel).
+- ✅ **Latch couleur bordure GAUCHE (registre 0) par-ligne — CORRIGÉ 2026-07-09.**
+  `Shifter.cpp:585-593` : bord gauche[N] = palette[0] de la ligne N−1 (`leftBorderPal0_`, réamorcé
+  au registre 0 de début de trame), bord droit[N] = courant. Raison HW : les pixels du bord gauche
+  sortent cyc ~0-56, AVANT l'écriture palette du handler HBL (cyc 508 « pour la ligne suivante ») →
+  latché en fin de ligne précédente ; `renderLine` est appelé 1×/scanline en ordre croissant
+  (`Machine::onRender`, cyc 376) → un membre « ligne précédente » suffit (renderFrame est mort, le
+  re-rendu spec512 ne touche que l'aire active). Validé à l'oracle frais (poll-bench **10680→1330 px,
+  −88 %**), **étalons 19/19 intacts** (comparés `--crop active`).
+  ◑ **Résidu (finer, non corrigé)** : 16 px (cols 45-60) = la **position horizontale exacte** où
+  l'écriture palette prend effet (Hatari bascule ~16 px APRÈS le début nominal de l'aire active =
+  latence pipeline ; NeoST bascule pile à `activeX_`). Le poll-test à aire active unie ne le
+  contraint pas plus ; nécessiterait de modéliser le cycle d'effet de l'écriture registre 0 vs
+  DE-start par ligne. Invisible aux étalons. _Valeur très basse._
 
 ### Son DMA STE
 - **FIFO 8 octets + avance HBL** (`DmaSnd_FIFO_*`, S2) + **compteur d'adresse live**

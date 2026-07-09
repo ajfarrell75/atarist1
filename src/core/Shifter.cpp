@@ -378,6 +378,9 @@ void Shifter::beginFrame() {
         const uint32_t bg = stColorToArgb(palette[0]);
         std::fill(frame_.begin(), frame_.end(), bg);
     }
+    // Base du latch bord gauche : la 1ʳᵉ ligne active prend le registre 0 de début de
+    // trame (aucune ligne active « précédente » encore). Réamorcé à chaque trame.
+    leftBorderPal0_ = palette[0];
     // Machine Glue LIVE : prépare l'état par-ligne de la nouvelle trame. Mêmes
     // structures que replayGlue — qui ré-écrase TOUT en fin de trame à partir des
     // mêmes syncWrites_, donc live et replay donnent le même résultat ; entre-temps
@@ -582,12 +585,19 @@ void Shifter::renderLine(int y) {
             dst[c] = stColorToArgb(palette[idx[c + scroll]]);
     }
 
-    // Bordures latérales de CETTE ligne = couleur registre 0 courante (Phase 1).
+    // Bordures latérales de CETTE ligne. Le registre 0 (couleur de bordure) est écrit
+    // par le handler HBL vers cyc 508 (fin de ligne), pour la ligne SUIVANTE. Or les
+    // pixels du bord GAUCHE sortent en tout début de ligne (cyc ~0-56), AVANT cette
+    // écriture → ils gardent le registre 0 latché en FIN de ligne précédente (mesuré à
+    // l'oracle Hatari : bord gauche[N] == active[N−1]). Le bord DROIT sort après l'aire
+    // active (cyc ~376+) → registre 0 COURANT (bord droit[N] == active[N], déjà fidèle).
     if (bordered()) {
-        const uint32_t bg = stColorToArgb(palette[0]);
+        const uint32_t bgLeft  = stColorToArgb(leftBorderPal0_);   // ligne précédente
+        const uint32_t bgRight = stColorToArgb(palette[0]);        // courant
         uint32_t* row = frame_.data() + static_cast<std::size_t>(activeY_ + y) * curW_;
-        for (int x = 0; x < activeX_; ++x)         row[x] = bg;
-        for (int x = activeX_ + W; x < curW_; ++x) row[x] = bg;
+        for (int x = 0; x < activeX_; ++x)         row[x] = bgLeft;
+        for (int x = activeX_ + W; x < curW_; ++x) row[x] = bgRight;
+        leftBorderPal0_ = palette[0];   // pour le bord gauche de la ligne suivante
     }
 
 }

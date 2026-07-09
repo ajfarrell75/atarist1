@@ -390,6 +390,10 @@ private:
     struct ColorWrite { int32_t frameCycle; uint16_t colour; uint8_t index; uint32_t pc; };
     std::vector<ColorWrite>  colorWrites_;          // écritures palette de la trame (ordre d'exécution)
     std::array<uint16_t, 16> frameStartPalette_{};  // palette au début de trame (base du replay)
+    uint16_t leftBorderPal0_ = 0;                   // registre 0 de la ligne PRÉCÉDENTE (couleur du
+                                                    // bord GAUCHE : sorti cyc ~0-56 AVANT l'écriture
+                                                    // palette du handler HBL → latché en fin de ligne
+                                                    // précédente ; le bord DROIT sort après = courant)
     int  paletteAccesses_ = 0;                      // nb d'écritures palette dans la trame
     bool spec512Active_   = false;                  // seuil franchi → image spec512
     std::function<int64_t()> liveFrameClock_;       // cycle live dans la trame (cf. setLiveFrameClock)
