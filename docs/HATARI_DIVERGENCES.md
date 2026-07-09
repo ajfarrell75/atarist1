@@ -341,9 +341,13 @@ divergence HAUTE**, les 4 correctifs sont CORRECTS. La passe remonte surtout des
   bouclage « M MIDI » reste fonctionnel (file vide au reset du diagnostic).
 
 ### 🟡 Nouveaux — BASSES (cas-limites/cosmétiques)
-- **Vidéo** : filtre « écriture redondante » absent (freq/res rejouées même inchangées) ; `$FF8260`
-  bits 2-7 non forcés à 1 sur ST ; alias shifter `$FF8261` non géré ; attribution ligne à longueur
-  FIXE (`fc/cpl`) vs accumulée ; chemin `PrevSize` partiel ; quirks démos `$FF8205/07/09` (E605/Tekila).
+- **Vidéo** : filtre « écriture redondante » absent (freq/res rejouées même inchangées) ;
+  ~~`$FF8260` bits 2-7 non forcés à 1 sur ST~~ ✅ **corrigé (2026-07-09)** + ~~alias shifter `$FF8261`
+  non géré~~ ✅ **corrigé** (lecture) : `$FF8260`/`$FF8261` = port de `Video_Res_ReadByte`
+  (video.c:5281) — STF/Mega ST forcent bits 2-7 à 1, STE à 0 ; `$8261` renvoyait 0xFF (void) → mode
+  (`Shifter.cpp` read8). L'écriture `$8261` (Shifter-res seul, sans GLUE) reste NON portée (touche le
+  chemin V2 res-switch byte-exact, sans étalon) ; attribution ligne à longueur FIXE (`fc/cpl`) vs
+  accumulée ; chemin `PrevSize` partiel ; quirks démos `$FF8205/07/09` (E605/Tekila).
 - **FDC** : `dmaResetFifo` ne remet pas `bufPos_`/`dmaBytesToTransfer_` ; recalcul densité superflu
   à chaque lecture statut ; borne parseur STX (chemin secteurs complet) ; pas d'`indexCheckUpdate`
   avant la commande.
