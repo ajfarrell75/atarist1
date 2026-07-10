@@ -75,9 +75,15 @@ namespace stmap {
     constexpr uint32_t ADDR_MASK      = 0x00FFFFFF; // 24 bits utiles
 }
 
+class StateArchive;
+
 class Bus {
 public:
     explicit Bus(std::size_t ramBytes = 512u * 1024u);
+
+    // Save-state : pour l'instant la RAM (le gros bloc). ROM/cartouche NON sérialisées
+    // (rechargées depuis leurs fichiers). L'état MMIO complet du Bus viendra ensuite.
+    void serialize(StateArchive& ar);
 
     // Charge une image TOS ; positionne romBase selon la taille (192/256 Ko).
     bool loadTos(const std::string& path);

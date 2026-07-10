@@ -14,6 +14,7 @@
 class Bus;
 class Tracer;
 class Scheduler;
+class StateArchive;
 
 // NeoST n'a plus qu'UN SEUL cœur 68000 : Moira (cœur de vAmiga, MIT, cycle-exact,
 // timing inter-instructions). L'ancien cœur Musashi — rapide mais NON cycle-exact —
@@ -189,6 +190,10 @@ public:
     // octets. Utilisé par le Tracer et le mode --disasm du headless. Le désassembleur
     // de Moira reproduit la syntaxe Musashi (cf. setDasmSyntax) → format inchangé.
     int disassemble(char* str, uint32_t addr) const;
+
+    // Save-state : état interne du cœur Moira (registres, prefetch, horloge, IPL, flags)
+    // + les compteurs de timing du wrapper. Symétrique save/load (cf. StateArchive).
+    void serialize(StateArchive& ar);
 
     // --- Débogueur : breakpoints PC (réutilise le conteneur Guards de Moira) --------
     // Sémantique « break-before » : l'exécution s'arrête AVANT d'exécuter l'instruction

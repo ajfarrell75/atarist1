@@ -18,6 +18,7 @@
 #include <array>
 #include <cstdint>
 #include <functional>
+#include "core/StateArchive.hpp"
 
 class Scheduler {
 public:
@@ -189,6 +190,10 @@ public:
     // nombre de préemptions du timeslice CPU déclenchées. Lus par le headless.
     int64_t timerMaxLate = 0;
     long    preemptions  = 0;
+
+    // Save-state : échéances par source + horloges. Les callbacks (cb_), la liveClock_
+    // et l'endSlice_ sont re-liés à la construction de Machine → PAS sérialisés.
+    void serialize(StateArchive& ar) { ar(due_); ar(now_); ar(nextDue_); ar(runTarget_); }
 
 private:
     static bool isMfpTimer(int s) {              // sources dont le retard dépend de la préemption

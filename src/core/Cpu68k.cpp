@@ -12,6 +12,7 @@
 #include "core/Blitter.hpp"
 #include "core/Bus.hpp"
 #include "core/Scheduler.hpp"
+#include "core/StateArchive.hpp"
 #include "core/Tracer.hpp"
 #include "io/Mfp.hpp"
 #include "io/GemdosHd.hpp"
@@ -305,6 +306,14 @@ public:
     // (adresse DONNÉE) et on préempte → le run() rend la main APRÈS l'instruction fautive.
     void didReachWatchpoint(moira::u32 addr) override {
         g_bpHit = true; g_bpAddr = addr & 0xFFFFFFu; g_bpWatch = true; g_endSlice = true;
+    }
+
+    // Save-state : tout l'état d'exécution du cœur (les membres protégés de Moira sont
+    // accessibles ici). reg/queue/StatusRegister sont des PODs → transférés en bloc.
+    void serializeState(StateArchive& ar) {
+        ar(clock); ar(reg); ar(queue); ar(ipl); ar(iplPrev);
+        ar(iplChangeClock); ar(iplChangeClockPrev); ar(iplDelay4); ar(iplDelay2);
+        ar(fcl); ar(readBuffer); ar(flags);
     }
 
     // Lecture du vecteur de reset (SSP/PC) via l'overlay ROM : jamais de bus error.
@@ -772,6 +781,14 @@ bool Cpu68k::watchpointByIndex(int nr, uint32_t& outAddr) const {
     if (!a) return false;
     outAddr = *a & 0xFFFFFFu;
     return true;
+}
+
+// Save-state : état du cœur Moira + timing du wrapper + vitesse Mega STE (g_cpuMul).
+void Cpu68k::serialize(StateArchive& ar) {
+    g_moira->serializeState(ar);
+    ar(g_cpuMul);
+    ar(quantumStartClock_); ar(quantumStartBus_);
+    ar(instrStartClock_); ar(psgPrevInstrClock_); ar(aciaPrevInstrClock_);
 }
 
 // Cycles BUS écoulés depuis le début de l'instruction courante (cf. en-tête).

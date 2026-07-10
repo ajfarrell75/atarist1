@@ -11,9 +11,11 @@
 //  (c) 2026 VERHILLE Arnaud — projet NeoST.
 // =============================================================================
 #include "core/Machine.hpp"
+#include "core/StateArchive.hpp"
 #include <cstdio>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <fstream>
 
 // Modèle de dispatch BLOC = DÉFAUT (le sync-driven mid-instruction est RÉFUTÉ : il
@@ -531,4 +533,40 @@ void Machine::stepInstruction() {
     cpu.clearBreakpointHit();   // arme le skip-once du PC courant → exécute même si BP ici
     cpu.run(1);                 // run(1) = une instruction (toute instr ≥ 4 cyc > 1)
     if (cpu.busClockNow() >= frameEnd_) { finalizeFrame_(); frameInProgress_ = false; }
+}
+
+// --- Save-states (increment 1) : CPU + RAM + ordonnanceur + état de trame ----------
+// Méthode SYMÉTRIQUE (StateArchive gère save ET load) → l'ordre ne peut pas diverger.
+void Machine::serializeState(StateArchive& ar) {
+    uint32_t magic   = 0x4E535453u;   // 'NSTS'
+    uint16_t version = 1;
+    ar(magic); ar(version);
+    // État de trame / géométrie (recalculable depuis les puces, mais on le fige pour un
+    // save/load à une frontière de trame — les puces suivront à l'increment 2).
+    ar(frameStart_); ar(frameStartInit_); ar(frameEnd_); ar(frameInProgress_);
+    ar(renderLine_); ar(tbLine_); ar(hblLine_);
+    ar(lineCarry_); ar(v2ShortLine_); ar(v2_);
+    ar(lineLenOn_); ar(curLineLen_);
+    ar(cpl_); ar(lpf_); ar(disp_); ar(deEnd_); ar(dispStart_);
+    // Composants.
+    bus.serialize(ar);
+    cpu.serialize(ar);
+    sched.serialize(ar);
+}
+
+void Machine::saveState(std::vector<uint8_t>& out) {
+    out.clear();
+    StateArchive ar = StateArchive::saver(out);
+    serializeState(ar);
+}
+
+bool Machine::loadState(const uint8_t* data, std::size_t n) {
+    // Valide l'en-tête (magic + version) AVANT de restaurer quoi que ce soit.
+    if (n < 6) return false;
+    uint32_t magic;   std::memcpy(&magic, data, 4);
+    uint16_t version; std::memcpy(&version, data + 4, 2);
+    if (magic != 0x4E535453u || version != 1) return false;
+    StateArchive ar = StateArchive::loader(data, n);
+    serializeState(ar);   // relit magic/version (déjà validés) puis restaure le reste
+    return ar.ok();
 }
