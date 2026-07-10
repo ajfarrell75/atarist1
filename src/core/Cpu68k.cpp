@@ -44,6 +44,10 @@ namespace {
     // l'ordonnanceur, en plein milieu d'une instruction), testé après chaque
     // instruction dans la boucle run() pour rendre la main à l'horloge.
     bool    g_endSlice = false;
+    // ---- Débogueur : breakpoints PC (cf. Cpu68k § Débogueur) --------------------
+    bool     g_bpHit    = false;        // un breakpoint a stoppé le dernier run()
+    uint32_t g_bpAddr   = 0;            // adresse atteinte (PC)
+    uint32_t g_bpSkipPc = 0xFFFFFFFFu;  // adresse à ignorer UNE fois (reprise propre)
     // ---- Bascule 8/16 MHz du Mega STE ($FF8E21 bit1, cf. Cpu68k::setMegaSteSpeed) --
     // L'ordonnanceur et toutes les puces vivent en cycles BUS (8 MHz) ; le cœur
     // CPU, lui, compte ses propres cycles. À 16 MHz : 1 cycle bus = 2 cycles CPU.
@@ -598,6 +602,17 @@ int Cpu68k::run(int cycles) {
             if (!g_htArmed && htPc == g_htPc) { if (g_htSkip > 0) --g_htSkip; else { g_htArmed = true; g_htPrev = busClockNow(); } }
             if (g_htArmed && g_htN > 0) { disassemble(htDis, htPc); htEmit = true; }
         }
+        // Débogueur : breakpoint « break-before » — stoppe AVANT d'exécuter l'instruction
+        // ciblée (le run() rend la main, PC dessus). Le skip-once évite de re-déclencher à
+        // la reprise (on est encore SUR le breakpoint). elements()==0 → coût nul.
+        if (g_moira->debugger.breakpoints.elements() != 0) {
+            const uint32_t pc = g_moira->getPC() & 0xFFFFFFu;
+            if (pc == g_bpSkipPc) {
+                g_bpSkipPc = 0xFFFFFFFFu;                 // laissé passer une fois
+            } else if (g_moira->debugger.breakpoints.isSetAt(pc)) {
+                g_bpHit = true; g_bpAddr = pc; g_endSlice = true; break;
+            }
+        }
         g_moira->execute();                          // une instruction (sync() dispatche les events échus)
         if (g_tracer) g_tracer->onInstruction(g_moira->getPC0());
         if (htEmit) {
@@ -692,6 +707,35 @@ int64_t Cpu68k::cyclesRunInQuantum() const {
 
 void Cpu68k::endTimeslice() {
     g_endSlice = true;   // testé après l'instruction courante (cf. run)
+}
+
+// --- Débogueur : breakpoints PC (délègue au conteneur Guards de Moira) ------------
+void Cpu68k::setBreakpoint(uint32_t addr) {
+    g_moira->debugger.breakpoints.setAt(addr & 0xFFFFFFu);
+}
+void Cpu68k::clearBreakpoint(uint32_t addr) {
+    g_moira->debugger.breakpoints.removeAt(addr & 0xFFFFFFu);
+}
+void Cpu68k::clearAllBreakpoints() {
+    g_moira->debugger.breakpoints.removeAll();
+}
+bool Cpu68k::hasBreakpoint(uint32_t addr) const {
+    return g_moira->debugger.breakpoints.isSetAt(addr & 0xFFFFFFu);
+}
+int Cpu68k::breakpointCount() const {
+    return static_cast<int>(g_moira->debugger.breakpoints.elements());
+}
+bool Cpu68k::breakpointByIndex(int nr, uint32_t& outAddr) const {
+    const auto a = g_moira->debugger.breakpoints.guardAddr(nr);
+    if (!a) return false;
+    outAddr = *a & 0xFFFFFFu;
+    return true;
+}
+bool     Cpu68k::breakpointHit() const     { return g_bpHit; }
+uint32_t Cpu68k::breakpointHitAddr() const { return g_bpAddr; }
+void Cpu68k::clearBreakpointHit() {
+    g_bpSkipPc = g_bpAddr;   // à la reprise, laisser passer l'instruction du breakpoint une fois
+    g_bpHit = false;
 }
 
 // Cycles BUS écoulés depuis le début de l'instruction courante (cf. en-tête).

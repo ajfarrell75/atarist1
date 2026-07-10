@@ -190,6 +190,26 @@ public:
     // de Moira reproduit la syntaxe Musashi (cf. setDasmSyntax) → format inchangé.
     int disassemble(char* str, uint32_t addr) const;
 
+    // --- Débogueur : breakpoints PC (réutilise le conteneur Guards de Moira) --------
+    // Sémantique « break-before » : l'exécution s'arrête AVANT d'exécuter l'instruction
+    // à l'adresse pointée (le run() en cours rend la main, PC positionné dessus). À la
+    // REPRISE, l'adresse courante est ignorée UNE fois (clearBreakpointHit) pour ne pas
+    // re-déclencher sur place. Adresses masquées sur 24 bits (bus ST).
+    void setBreakpoint(uint32_t addr);      // ajoute (idempotent)
+    void clearBreakpoint(uint32_t addr);    // retire s'il existe
+    void clearAllBreakpoints();
+    bool hasBreakpoint(uint32_t addr) const;
+    int  breakpointCount() const;
+    // Récupère l'adresse du nᵉ breakpoint (0..count-1) → true si valide.
+    bool breakpointByIndex(int nr, uint32_t& outAddr) const;
+
+    // Un breakpoint a-t-il stoppé le dernier run() ? (à consulter par la boucle de trame
+    // et le frontend pour passer en pause.) breakpointHitAddr() = l'adresse atteinte.
+    bool     breakpointHit() const;
+    uint32_t breakpointHitAddr() const;
+    // Efface l'état « hit » ET arme le skip-once de l'adresse atteinte (reprise propre).
+    void     clearBreakpointHit();
+
 private:
     void initCore();   // (ré)initialise le cœur Moira
 
