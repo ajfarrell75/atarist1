@@ -490,11 +490,13 @@ void Machine::runFrame() {
             const int ran = cpu.run(static_cast<int>(want > 0 ? want : 1));
             sched.endRun();
             sched.runTo(sched.now() + ran);
+            if (cpu.breakpointHit()) break;   // débogueur : gel de la trame au breakpoint
         }
     } else {
         while (cpu.busClockNow() < frameEnd) {
             const int64_t want = frameEnd - cpu.busClockNow();
             cpu.run(static_cast<int>(want > 0 ? want : 1));
+            if (cpu.breakpointHit()) break;   // débogueur : gel de la trame au breakpoint
         }
     }
     // Filet : si le CPU n'a PAS conduit l'horloge jusqu'au bout (CPU halté → run()
