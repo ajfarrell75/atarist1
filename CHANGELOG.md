@@ -1364,6 +1364,17 @@ fidèles à Hatari, pas des bugs.
   (MAKE puis BREAK différé de ~4 trames) injectée au jeu qui tourne dessous. Navigation
   manette/clavier à **répétition temporelle** (400 ms puis 150 ms, indépendante du framerate
   à vide). Sorties : Alt+F4 ou Ctrl+Shift+Q (~0,7 s).
+- **Menu kiosk — anglais, icônes FA, dossiers ROM & défilement rapide (2026-07-10)** :
+  libellés du menu in-game passés en **anglais** (borne) + pictogrammes Font Awesome
+  (gamepad, disque, clavier, dossier…). Nouvelle action **ROM FOLDERS** : gérer des dossiers
+  de jeux/disques **additionnels** (scannés en plus de `disks/`), via un **navigateur piloté
+  à la manette** parcourant tout le FS (chemin ABSOLU → « .. » remonte jusqu'à `/`) avec
+  **raccourcis** racine / Home / **volumes montés** (portable : `/Volumes` macOS,
+  `/run/media`·`/media`·`/mnt` Linux, filtrés par `is_directory`). Chaque dossier se retire
+  d'une **croix ×** et est **auto-purgé** s'il n'existe plus ; liste **persistée** même en
+  kiosk (`kiosk_romdir=` multiples, `saveConfig(force)`). **L1/R1** (ou Page↑/↓) = saut de
+  page dans la liste des jeux. Footer « Roms found: N » (réserve calée sur le contenu, sans
+  espace vide). Navigation manette/clavier à répétition temporelle sur toutes les pages.
 - **Étalon V2 « nocooper » rapatrié et intégré (2026-07-08)** : No Cooper (1984, freeware —
   archive Fujiology) dans `disks/etalons/nocooper.msa`, entrée `etalons.json` avec fetch auto
   (ZIP membre) et **pilotage daté** (`keys_at` : espace tenue vbl 900 — support ajouté à

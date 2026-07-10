@@ -97,6 +97,7 @@ struct Config { std::string rom; std::string disk; std::string cart; bool mono =
                 bool showJoy = false;
                 bool crt = false;              // effets CRT actifs (façade moniteur)
                 neost::CrtParams crtParams;    // réglages CRT (cf. gui/CrtParams.h)
+                std::vector<std::string> romDirs;   // kiosk : dossiers ROM/disques additionnels (en plus de disks/)
                 std::string rtc; std::time_t rtcSaved = 0; };
 static std::string cfgPath(const std::string& exeDir) { return exeDir + "/../neost.cfg"; }
 
@@ -154,6 +155,7 @@ static Config loadConfig(const std::string& exeDir) {
         else if (line.rfind("showJoy=", 0) == 0) c.showJoy = (line.substr(8) == "1");
         else if (line.rfind("rtc_saved=", 0) == 0) c.rtcSaved = std::strtoll(line.substr(10).c_str(), nullptr, 10);
         else if (line.rfind("rtc=", 0) == 0) c.rtc = line.substr(4);
+        else if (line.rfind("kiosk_romdir=", 0) == 0) { const std::string d = line.substr(13); if (!d.empty()) c.romDirs.push_back(d); }
         // Effets CRT (cf. gui/CrtParams.h). Un preset (--crt-preset / applyCrtPreset)
         // n'est qu'un raccourci qui écrit ces mêmes clés numériques.
         else if (line.rfind("crt=", 0) == 0) c.crt = (line.substr(4) == "1");
@@ -188,7 +190,8 @@ static bool g_kioskAdaptive = true;
 //   · QUITTER NeoST (Y) = avec confirmation (page QUIT).
 // Déclaré ici (hors garde ImGui) car onKey doit consulter g_kioskDiskMenu pour ne
 // pas transmettre les touches de navigation au ST pendant le menu.
-enum { KIOSK_PAGE_LIST = 0, KIOSK_PAGE_KEYS = 1, KIOSK_PAGE_QUIT = 2 };
+enum { KIOSK_PAGE_LIST = 0, KIOSK_PAGE_KEYS = 1, KIOSK_PAGE_QUIT = 2,
+       KIOSK_PAGE_BROWSE = 3, KIOSK_PAGE_ROMDIRS = 4 };
 static bool g_kioskDiskMenu = false;          // menu ouvert
 static int  g_kioskPage     = KIOSK_PAGE_LIST;
 static int  g_kioskDiskSel  = 0;              // index disquette sélectionnée (menu INTÉRIEUR)
@@ -208,8 +211,29 @@ static int  g_kioskKeyRelease   = -1;         // scancode ST à relâcher (sinon
 static bool g_kioskMouseRelL    = false;      // clic gauche à relâcher
 static bool g_kioskMouseRelR    = false;      // clic droit à relâcher
 static int  g_kioskInjectHold   = 0;          // trames restantes avant relâche
-static void saveConfig(const std::string& exeDir, Config& c, Machine* machine = nullptr) {
-    if (g_kiosk) return;   // kiosk : configuration figée — la borne repart toujours identique
+// Dossier ROM/disques ADDITIONNEL (choisi via l'action « ADD ROM FOLDER » du menu) :
+// scanné en PLUS de disks/ pour la liste des jeux, affiché en bas du menu, persisté
+// dans neost.cfg (kiosk_romdir=). Vide = disks/ seul.
+static std::vector<std::string> g_kioskRomDirs;
+// Page « ROM FOLDERS » (gestion : ajoute/retire les dossiers ci-dessus). Entrée 0 =
+// « + ADD A FOLDER » (ouvre le navigateur), entrées 1..N = dossiers configurés, chacun
+// avec une croix ❌ (FEU = retirer). g_romDirSel = ligne sélectionnée.
+static int g_romDirSel = 0;
+// Page « SELECT ROM FOLDER » (navigateur de répertoires piloté à la manette, plein
+// écran) : g_browseDir = dossier courant (ABSOLU → « .. » remonte jusqu'à /) ;
+// g_browseSubdirs = ses sous-dossiers triés. Raccourcis (racine /, home, volumes
+// montés) calculés à l'ouverture. g_browseSel indexe, dans l'ordre :
+//   [0] valider ce dossier · [1] .. parent · [2..2+S) raccourcis · [2+S..] sous-dossiers.
+static std::string g_browseDir;
+static std::vector<std::string> g_browseSubdirs;
+static std::vector<std::string> g_browseShortcutPaths;   // cibles des raccourcis
+static std::vector<std::string> g_browseShortcutLabels;  // libellés (icône FA + nom)
+static int g_browseSel = 0;
+// force=true : écrit la config MÊME en kiosk (normalement figé). Utilisé pour le seul
+// réglage que la borne a le droit de persister : le dossier ROM additionnel choisi via
+// le menu in-game (le reste de la config kiosk reste identique à ce qui a été chargé).
+static void saveConfig(const std::string& exeDir, Config& c, Machine* machine = nullptr, bool force = false) {
+    if (g_kiosk && !force) return;   // kiosk : configuration figée — la borne repart toujours identique
     if (machine) snapshotRtc(*machine, c);
     std::ofstream f(cfgPath(exeDir));
     if (!f) f.open("neost.cfg");
@@ -241,6 +265,8 @@ static void saveConfig(const std::string& exeDir, Config& c, Machine* machine = 
              << "\ncrt_center=" << c.crtParams.centerLighting
              << "\ncrt_gamma=" << c.crtParams.phosphorGamma
              << "\nrtc=" << c.rtc << "\nrtc_saved=" << c.rtcSaved << "\n";
+    // Dossiers ROM additionnels (0..N) : une ligne kiosk_romdir= par dossier.
+    if (f) for (const auto& d : c.romDirs) f << "kiosk_romdir=" << d << "\n";
 }
 
 #if defined(NEOST_WITH_IMGUI)
@@ -274,6 +300,8 @@ static void saveConfig(const std::string& exeDir, Config& c, Machine* machine = 
 #define ICON_FA_COMPACT_DISC  "\xef\x94\x9f"
 #define ICON_FA_MEMORY        "\xef\x94\xb8"
 #define ICON_FA_PALETTE       "\xef\x94\xbf"
+#define ICON_FA_TIMES         "\xef\x80\x8d"
+#define ICON_FA_PLUS          "\xef\x81\xa7"
 
 // Bouton à ICÔNE SEULE (le texte est superflu quand le pictogramme est explicite) :
 // l'infobulle au survol rappelle l'action. Renvoie true au clic.
@@ -984,16 +1012,24 @@ static bool kioskAreSiblings(const std::string& a, const std::string& b) {
 // remontent ainsi en tête. Appelé à l'ouverture de l'overlay kiosk.
 static void kioskScanDisks(const std::string& disksDir, const std::string& mounted) {
     g_kioskDisks.clear();
-    std::error_code ec;
-    if (!fs::is_directory(disksDir, ec)) return;
-    const fs::path base(disksDir);
-    for (const auto& e : fs::recursive_directory_iterator(base, ec)) {
-        if (!e.is_regular_file()) continue;
-        std::string ext = e.path().extension().string();
-        for (auto& c : ext) c = (char)std::tolower((unsigned char)c);
-        if (ext == ".st" || ext == ".msa" || ext == ".dim" || ext == ".stx")
-            g_kioskDisks.push_back(e.path().string());
-    }
+    // Scanne récursivement un dossier → images montables, avec dédup (le dossier ROM
+    // additionnel peut recouvrir disks/). Appelé pour disks/ PUIS pour g_kioskRomDir.
+    auto scanInto = [&](const std::string& dir) {
+        std::error_code e2;
+        if (dir.empty() || !fs::is_directory(dir, e2)) return;
+        for (const auto& e : fs::recursive_directory_iterator(dir, e2)) {
+            if (!e.is_regular_file()) continue;
+            std::string ext = e.path().extension().string();
+            for (auto& c : ext) c = (char)std::tolower((unsigned char)c);
+            if (ext == ".st" || ext == ".msa" || ext == ".dim" || ext == ".stx") {
+                const std::string p = e.path().string();
+                if (std::find(g_kioskDisks.begin(), g_kioskDisks.end(), p) == g_kioskDisks.end())
+                    g_kioskDisks.push_back(p);
+            }
+        }
+    };
+    scanInto(disksDir);
+    for (const auto& d : g_kioskRomDirs) scanInto(d);
     auto lower = [](std::string s) { for (auto& c : s) c = (char)std::tolower((unsigned char)c); return s; };
     const std::string mref = lower(fs::path(mounted).filename().string());
     std::sort(g_kioskDisks.begin(), g_kioskDisks.end(),
@@ -1013,6 +1049,79 @@ static void kioskScanDisks(const std::string& disksDir, const std::string& mount
               });
 }
 
+// Recense les SOUS-DOSSIERS immédiats de `dir` (triés, insensible à la casse) →
+// g_browseSubdirs, et remet la sélection en tête. Pour le navigateur « SELECT ROM
+// FOLDER » piloté à la manette.
+static void kioskScanBrowse(const std::string& dir) {
+    g_browseSubdirs.clear();
+    g_browseSel = 0;
+    std::error_code ec;
+    if (!fs::is_directory(dir, ec)) return;
+    for (const auto& e : fs::directory_iterator(dir, ec)) {
+        std::error_code e2;
+        if (e.is_directory(e2)) g_browseSubdirs.push_back(e.path().string());
+    }
+    std::sort(g_browseSubdirs.begin(), g_browseSubdirs.end(),
+              [](const std::string& a, const std::string& b) {
+                  auto low = [](std::string s) { for (auto& c : s) c = (char)std::tolower((unsigned char)c); return s; };
+                  return low(fs::path(a).filename().string()) < low(fs::path(b).filename().string());
+              });
+}
+
+// Retire de g_kioskRomDirs les dossiers qui n'existent plus (mal détectés / débranchés).
+// Renvoie true si la liste a changé → l'appelant re-sauve la config.
+static bool kioskPruneRomDirs() {
+    bool changed = false;
+    for (size_t i = 0; i < g_kioskRomDirs.size(); ) {
+        std::error_code ec;
+        if (!fs::is_directory(g_kioskRomDirs[i], ec)) {
+            g_kioskRomDirs.erase(g_kioskRomDirs.begin() + (long)i);
+            changed = true;
+        } else ++i;
+    }
+    return changed;
+}
+
+// Calcule les raccourcis du navigateur : racine /, home, puis chaque VOLUME MONTÉ
+// (par son nom) sous /run/media/$USER, /media/$USER, /media, /mnt. Chaque libellé
+// embarque une icône FA. Appelé à l'ouverture du navigateur.
+static void kioskComputeShortcuts() {
+    g_browseShortcutPaths.clear();
+    g_browseShortcutLabels.clear();
+    auto add = [&](const std::string& path, const std::string& label) {
+        std::error_code ec;
+        if (!fs::is_directory(path, ec)) return;
+        if (std::find(g_browseShortcutPaths.begin(), g_browseShortcutPaths.end(), path)
+                != g_browseShortcutPaths.end()) return;   // dédup
+        g_browseShortcutPaths.push_back(path);
+        g_browseShortcutLabels.push_back(label);
+    };
+    add("/", std::string(ICON_FA_SERVER) + " / (filesystem root)");
+    if (const char* home = std::getenv("HOME"))
+        add(home, std::string(ICON_FA_FOLDER_OPEN) + " Home  (" + home + ")");
+    // Emplacements de montage (portable : le garde is_directory ci-dessous fait que
+    // chaque OS n'expose que ceux qui existent, pas besoin de #ifdef) :
+    //   · macOS  : /Volumes (tous les volumes montés, par nom)
+    //   · Linux  : /run/media/$USER (udisks2), /media/$USER (classique), /mnt (manuel)
+    // On évite le /media NU (il listerait des noms d'utilisateurs) — « / » y donne accès.
+    const char* user = std::getenv("USER");
+    std::vector<std::string> roots;
+    roots.push_back("/Volumes");                                  // macOS
+    if (user) { roots.push_back(std::string("/run/media/") + user);
+                roots.push_back(std::string("/media/") + user); }
+    roots.push_back("/mnt");
+    for (const auto& r : roots) {
+        std::error_code ec;
+        if (!fs::is_directory(r, ec)) continue;
+        for (const auto& e : fs::directory_iterator(r, ec)) {
+            std::error_code e2;
+            if (e.is_directory(e2))
+                add(e.path().string(),
+                    std::string(ICON_FA_HDD) + " " + e.path().filename().string());
+        }
+    }
+}
+
 // Table de la page « Clavier & souris » du menu kiosk. kind : 0 = touche ST
 // (scancode), 1 = clic gauche souris, 2 = clic droit. Disposée en 3 rangées
 // (F1-F8, chiffres 1-0, Espace + clics) — cf. KIOSK_KEY_ROWS pour la navigation.
@@ -1022,9 +1131,9 @@ static const KioskKey KIOSK_KEYS[] = {
     {"F5",0x3F,0},{"F6",0x40,0},{"F7",0x41,0},{"F8",0x42,0},          // rangée 0 (8)
     {"1",0x02,0},{"2",0x03,0},{"3",0x04,0},{"4",0x05,0},{"5",0x06,0},
     {"6",0x07,0},{"7",0x08,0},{"8",0x09,0},{"9",0x0A,0},{"0",0x0B,0}, // rangée 1 (10)
-    {"ESPACE",0x39,0},{"RETURN",0x1C,0},{"ESCAPE",0x01,0},
+    {"SPACE",0x39,0},{"RETURN",0x1C,0},{"ESCAPE",0x01,0},
     {"T",0x14,0},{"Y",0x15,0},{"N",0x31,0},
-    {"CLIC G",0,1},{"CLIC D",0,2},                                    // rangée 2 (8)
+    {"CLICK L",0,1},{"CLICK R",0,2},                                  // rangée 2 (8)
 };
 static const int KIOSK_KEY_COUNT = (int)(sizeof(KIOSK_KEYS) / sizeof(KIOSK_KEYS[0]));
 // Bornes de rangées (indices de début) : [0,8) [8,18) [18,26).
@@ -1037,7 +1146,7 @@ static const int KIOSK_KEY_ROWN = 3;
 void drawKioskDiskMenu(const std::string& disksDir, const std::string& mounted) {
     const ImGuiIO& io = ImGui::GetIO();
     auto lower = [](std::string s) { for (auto& c : s) c = (char)std::tolower((unsigned char)c); return s; };
-    const std::string mname = mounted.empty() ? std::string("(aucune)")
+    const std::string mname = mounted.empty() ? std::string("(none)")
                                               : fs::path(mounted).filename().string();
     const ImVec4 kGreen (0.30f, 1.0f, 0.40f, 1.0f);
     const ImVec4 kYellow(1.0f, 0.9f, 0.3f, 1.0f);
@@ -1088,21 +1197,31 @@ void drawKioskDiskMenu(const std::string& disksDir, const std::string& mounted) 
         const bool zAct  = (g_kioskZone == KIOSK_ZONE_ACTIONS);
         const ImVec4 kDim(0.5f, 0.5f, 0.5f, 1.0f);   // item sélectionné du menu NON focalisé
         ImGui::SetWindowFontScale(3.0f);
-        ImGui::TextColored(kYellow, "MENU");
+        ImGui::TextColored(kYellow, ICON_FA_GAMEPAD " MENU");
         ImGui::SameLine(); ImGui::SetWindowFontScale(1.5f);
-        ImGui::TextDisabled("  \xe2\x97\x80\xe2\x96\xb6 changer de menu   \xc2\xb7   haut/bas choisir"
-                            "   \xc2\xb7   FEU valider   \xc2\xb7   (B) reprendre");
+        ImGui::TextDisabled("  \xe2\x97\x80\xe2\x96\xb6 switch menu   \xc2\xb7   up/down select"
+                            "   \xc2\xb7   L1/R1 fast   \xc2\xb7   FIRE confirm   \xc2\xb7   (B) resume");
         ImGui::Separator();
 
         // --- Menu INTÉRIEUR : liste des jeux (valider = INSÉRER à chaud) -------
         const std::string mrefL = lower(mname);
-        const float footer = io.DisplaySize.y * 0.30f;   // place pour le menu extérieur
+        // Réserve pour le 2ᵉ menu (4 actions @2.3 + « Roms found » @1.3) calée sur son
+        // CONTENU réel → aucun espace vide en bas : la liste des jeux prend tout le reste,
+        // le 2ᵉ menu vient flush contre le bas de la fenêtre.
+        ImGui::SetWindowFontScale(1.0f);
+        const float sp = ImGui::GetStyle().ItemSpacing.y;
+        const float bf = ImGui::GetFontSize();               // taille de police de base
+        const float footer = 4.0f * (bf * 2.3f + sp)         // 4 rangées d'action @2.3
+                           + (bf * 1.3f + sp)                // ligne « Roms found » @1.3
+                           + (sp + 6.0f);                    // séparateur + petite marge
         ImGui::SetWindowFontScale(1.6f);
-        ImGui::TextColored(zList ? kYellow : kDim, zList ? "\xe2\x96\xb6 JEUX" : "  JEUX");
+        ImGui::TextColored(zList ? kYellow : kDim,
+                           zList ? "\xe2\x96\xb6 " ICON_FA_COMPACT_DISC " GAMES"
+                                 : "  " ICON_FA_COMPACT_DISC " GAMES");
         ImGui::BeginChild("##kdlist", ImVec2(0, ImGui::GetContentRegionAvail().y - footer), true);
         ImGui::SetWindowFontScale(2.7f);   // noms de fichiers TRÈS gros
         if (g_kioskDisks.empty())
-            ImGui::TextDisabled("(aucune image dans %s/)", disksDir.c_str());
+            ImGui::TextDisabled("(no image in %s/)", disksDir.c_str());
         for (int i = 0; i < nd; ++i) {
             const bool sel = (i == g_kioskDiskSel);
             const bool cur = (g_kioskDisks[i] == mounted);
@@ -1111,7 +1230,7 @@ void drawKioskDiskMenu(const std::string& disksDir, const std::string& mounted) 
             // Cursor vert seulement si le menu JEUX a le focus ; sinon item courant estompé.
             if (sel)          ImGui::PushStyleColor(ImGuiCol_Text, zList ? kGreen : kDim);
             else if (sibling) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.95f, 0.6f, 1.0f));
-            ImGui::Text("%s %s%s", (sel && zList) ? "\xe2\x96\xb6" : "   ", cur ? "\xe2\x97\x8f " : "", fn.c_str());
+            ImGui::Text("%s %s%s", (sel && zList) ? "\xe2\x96\xb6" : "   ", cur ? ICON_FA_COMPACT_DISC " " : "", fn.c_str());
             if (sel || sibling) ImGui::PopStyleColor();
             if (sel && zList) ImGui::SetScrollHereY(0.5f);
         }
@@ -1126,9 +1245,16 @@ void drawKioskDiskMenu(const std::string& disksDir, const std::string& mounted) 
             ImGui::Text("%s %s", (sel && zAct) ? "\xe2\x96\xb6" : "  ", label);
             ImGui::PopStyleColor();
         };
-        actionRow(0, kOrange,                          "REDEMARRER LA MACHINE");
-        actionRow(1, ImVec4(0.55f, 0.8f, 1.0f, 1.0f),  "CLAVIER & SOURIS");
-        actionRow(2, ImVec4(1.0f, 0.5f, 0.4f, 1.0f),   "QUITTER NEOST");
+        actionRow(0, kOrange,                          ICON_FA_REDO " RESTART MACHINE");
+        actionRow(1, ImVec4(0.55f, 0.8f, 1.0f, 1.0f),  ICON_FA_KEYBOARD " KEYBOARD & MOUSE");
+        actionRow(2, ImVec4(0.6f, 0.95f, 0.6f, 1.0f),  ICON_FA_FOLDER_OPEN " ROM FOLDERS");
+        actionRow(3, ImVec4(1.0f, 0.5f, 0.4f, 1.0f),   ICON_FA_SIGN_OUT_ALT " QUIT NEOST");
+        ImGui::SetWindowFontScale(1.0f);
+
+        // Bas de fenêtre : nombre de ROMs trouvées (les DOSSIERS se voient dans « ROM FOLDERS »).
+        ImGui::Separator();
+        ImGui::SetWindowFontScale(1.3f);
+        ImGui::TextColored(kYellow, ICON_FA_COMPACT_DISC " Roms found: %d", (int)g_kioskDisks.size());
         ImGui::SetWindowFontScale(1.0f);
     }
 
@@ -1136,9 +1262,9 @@ void drawKioskDiskMenu(const std::string& disksDir, const std::string& mounted) 
     // Jeu NON en pause : la touche/clic est envoyée au jeu qui tourne dessous.
     else if (g_kioskPage == KIOSK_PAGE_KEYS) {
         ImGui::SetWindowFontScale(1.5f);
-        ImGui::TextColored(kYellow, "CLAVIER & SOURIS");
+        ImGui::TextColored(kYellow, ICON_FA_KEYBOARD " KEYBOARD & MOUSE");
         ImGui::SameLine();
-        ImGui::TextDisabled(" (A) appuyer  \xc2\xb7  (B) fermer");
+        ImGui::TextDisabled(" (A) press  \xc2\xb7  (B) close");
         ImGui::Separator();
 
         for (int r = 0; r < KIOSK_KEY_ROWN; ++r) {
@@ -1160,17 +1286,90 @@ void drawKioskDiskMenu(const std::string& disksDir, const std::string& mounted) 
     // ================= PAGE 3 : confirmation de sortie =======================
     else if (g_kioskPage == KIOSK_PAGE_QUIT) {
         ImGui::SetWindowFontScale(3.1f);
-        ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.4f, 1.0f), "QUITTER NEOST ?");
+        ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.4f, 1.0f), ICON_FA_SIGN_OUT_ALT " QUIT NEOST?");
         ImGui::Separator();
         ImGui::Dummy(ImVec2(0, 40));
         ImGui::SetWindowFontScale(2.4f);
-        ImGui::TextDisabled("La borne va se fermer.");
+        ImGui::TextDisabled("The kiosk will close.");
         ImGui::Dummy(ImVec2(0, 40));
         ImGui::Separator();
         ImGui::SetWindowFontScale(2.0f);
-        ImGui::TextColored(kGreen, "(A) Oui, quitter");
+        ImGui::TextColored(kGreen, ICON_FA_POWER_OFF " (A) Yes, quit");
         ImGui::SetWindowFontScale(1.8f);
-        ImGui::TextDisabled("(B) Non, revenir au menu");
+        ImGui::TextDisabled("(B) No, back to menu");
+        ImGui::SetWindowFontScale(1.0f);
+    }
+
+    // ============ PAGE 4 : navigateur « SELECT ROM FOLDER » (plein écran) ======
+    // Liste : [0] valider CE dossier, [1] .. (parent), [2..] sous-dossiers. La
+    // navigation/validation est gérée dans la boucle ; ici on AFFICHE.
+    else if (g_kioskPage == KIOSK_PAGE_BROWSE) {
+        ImGui::SetWindowFontScale(2.6f);
+        ImGui::TextColored(kYellow, ICON_FA_FOLDER_OPEN " SELECT ROM FOLDER");
+        ImGui::SetWindowFontScale(1.4f);
+        ImGui::TextDisabled("up/down move   \xc2\xb7   (A) enter / select   \xc2\xb7   (B) cancel");
+        ImGui::Separator();
+        ImGui::SetWindowFontScale(1.6f);
+        ImGui::TextColored(ImVec4(0.7f, 0.85f, 1.0f, 1.0f), "%s", g_browseDir.c_str());
+        ImGui::Separator();
+        ImGui::BeginChild("##kbrowse", ImVec2(0, 0), true);
+        ImGui::SetWindowFontScale(2.2f);
+        // Ordre des lignes : [0] valider · [1] .. · [2..2+S) raccourcis · [reste] sous-dossiers.
+        const int nShort = (int)g_browseShortcutPaths.size();
+        const int total  = 2 + nShort + (int)g_browseSubdirs.size();
+        for (int i = 0; i < total; ++i) {
+            const bool sel = (i == g_browseSel);
+            const char* cur = sel ? "\xe2\x96\xb6" : "   ";
+            if (sel) ImGui::PushStyleColor(ImGuiCol_Text, kGreen);
+            if (i == 0)
+                ImGui::Text("%s " ICON_FA_STAR " [ USE THIS FOLDER ]", cur);
+            else if (i == 1)
+                ImGui::Text("%s " ICON_FA_FOLDER_OPEN " ..", cur);
+            else if (i < 2 + nShort)
+                ImGui::Text("%s %s", cur, g_browseShortcutLabels[i - 2].c_str());
+            else
+                ImGui::Text("%s " ICON_FA_FOLDER_OPEN " %s", cur,
+                            fs::path(g_browseSubdirs[i - 2 - nShort]).filename().string().c_str());
+            if (sel) { ImGui::PopStyleColor(); ImGui::SetScrollHereY(0.5f); }
+        }
+        ImGui::EndChild();
+        ImGui::SetWindowFontScale(1.0f);
+    }
+
+    // ============ PAGE 5 : gestion des dossiers ROM (ajouter / retirer) ========
+    // [0] « + ADD A FOLDER » (→ navigateur) ; [1..N] dossiers configurés, chacun avec
+    // une croix rouge (FEU = retirer). Auto-prune des dossiers disparus fait à l'ouverture.
+    else if (g_kioskPage == KIOSK_PAGE_ROMDIRS) {
+        ImGui::SetWindowFontScale(2.6f);
+        ImGui::TextColored(kYellow, ICON_FA_FOLDER_OPEN " ROM FOLDERS");
+        ImGui::SetWindowFontScale(1.4f);
+        ImGui::TextDisabled("up/down move   \xc2\xb7   (A) add / remove   \xc2\xb7   (B) back");
+        ImGui::Separator();
+        ImGui::BeginChild("##kromdirs", ImVec2(0, 0), true);
+        ImGui::SetWindowFontScale(2.2f);
+        const int total = 1 + (int)g_kioskRomDirs.size();
+        for (int i = 0; i < total; ++i) {
+            const bool sel = (i == g_romDirSel);
+            const char* cur = sel ? "\xe2\x96\xb6" : "   ";
+            if (i == 0) {
+                if (sel) ImGui::PushStyleColor(ImGuiCol_Text, kGreen);
+                ImGui::Text("%s " ICON_FA_PLUS " [ ADD A FOLDER ]", cur);
+                if (sel) ImGui::PopStyleColor();
+            } else {
+                ImGui::Text("%s", cur); ImGui::SameLine(0.0f, 0.0f);
+                ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.30f, 1.0f), " " ICON_FA_TIMES " ");
+                ImGui::SameLine(0.0f, 0.0f);
+                if (sel) ImGui::PushStyleColor(ImGuiCol_Text, kGreen);
+                ImGui::Text("%s", g_kioskRomDirs[i - 1].c_str());
+                if (sel) ImGui::PopStyleColor();
+            }
+            if (sel) ImGui::SetScrollHereY(0.5f);
+        }
+        if (g_kioskRomDirs.empty()) {
+            ImGui::SetWindowFontScale(1.3f);
+            ImGui::TextDisabled("   (no extra folder \xe2\x80\x94 only disks/ is scanned)");
+        }
+        ImGui::EndChild();
         ImGui::SetWindowFontScale(1.0f);
     }
 
@@ -1352,6 +1551,7 @@ int main(int argc, char** argv) {
     g_showDisk = cfg.showDisk; g_showCart = cfg.showCart; g_showHex = cfg.showHex;
     g_showCpu  = cfg.showCpu;  g_showJoy  = cfg.showJoy;
     g_crtOn    = cfg.crt;      g_crtParams = cfg.crtParams;   // effets CRT (figés en kiosk)
+    g_kioskRomDirs = cfg.romDirs;   // dossiers ROM additionnels du menu kiosk (persistés)
     const std::string defRom = cfg.rom.empty() ? std::string("roms/etos192us.img") : cfg.rom;
     // Ligne de commande : arguments POSITIONNELS (ROM, disque) + DRAPEAUX.
     //   --kiosk            : borne plein écran « borderless-windowed » (cf. g_kiosk).
@@ -2188,6 +2388,8 @@ int main(int argc, char** argv) {
                 g_kioskActSel = 0;
                 if (g_kioskDiskMenu) {
                     const std::string m = machine.fdc.mountedPath();
+                    // Auto-prune : un dossier ROM disparu (débranché) est retiré + persisté.
+                    if (kioskPruneRomDirs()) { cfg.romDirs = g_kioskRomDirs; saveConfig(exeDir, cfg, &machine, true); }
                     kioskScanDisks(disksDir, m);
                     g_kioskDiskSel = 0;
                     for (int i = 0; i < (int)g_kioskDisks.size(); ++i)
@@ -2231,6 +2433,12 @@ int main(int argc, char** argv) {
                                    glfwGetKey(window, GLFW_KEY_LEFT)  == GLFW_PRESS || padAxisX() < -0.5f;
                 const bool right = padBtn(GLFW_GAMEPAD_BUTTON_DPAD_RIGHT) ||
                                    glfwGetKey(window, GLFW_KEY_RIGHT) == GLFW_PRESS || padAxisX() >  0.5f;
+                // L1 / R1 (gâchettes hautes) ou Page↑/Page↓ : saut de PAGE dans la liste des
+                // jeux (défilement rapide). Traités comme des directions (même répétition).
+                const bool pgUp = padBtn(GLFW_GAMEPAD_BUTTON_LEFT_BUMPER)  ||
+                                  glfwGetKey(window, GLFW_KEY_PAGE_UP)   == GLFW_PRESS;
+                const bool pgDn = padBtn(GLFW_GAMEPAD_BUTTON_RIGHT_BUMPER) ||
+                                  glfwGetKey(window, GLFW_KEY_PAGE_DOWN) == GLFW_PRESS;
                 // Répétition TEMPORELLE (pas au nombre d'itérations) : la boucle tourne
                 // sans vsync et à vide quand le jeu est en pause → un compteur de trames
                 // défilerait à des centaines de pas/s (impossible de viser un item). On
@@ -2238,7 +2446,7 @@ int main(int argc, char** argv) {
                 // puis un pas toutes les ~150 ms tant que la direction est maintenue.
                 static bool navHeld = false;
                 static clock::time_point navNext{};
-                const bool nav = up || down || left || right;
+                const bool nav = up || down || left || right || pgUp || pgDn;
                 const auto navNow = clock::now();
                 bool step = false;
                 if (nav) {
@@ -2293,6 +2501,72 @@ int main(int argc, char** argv) {
                     }
                     if (caNow && !pCancel) g_kioskDiskMenu = false;   // (B) ferme → reprise du jeu
 
+                } else if (g_kioskPage == KIOSK_PAGE_BROWSE) {
+                    // Navigateur : [0] valider · [1] .. · [2..2+S) raccourcis · [reste] sous-dossiers.
+                    const int nShort = (int)g_browseShortcutPaths.size();
+                    const int total  = 2 + nShort + (int)g_browseSubdirs.size();
+                    if (step && (up || down)) {
+                        g_browseSel += down ? 1 : -1;
+                        g_browseSel = (g_browseSel % total + total) % total;
+                    }
+                    if (okNow && !pOk) {
+                        if (g_browseSel == 0) {                    // valider CE dossier → l'ajoute
+                            if (std::find(g_kioskRomDirs.begin(), g_kioskRomDirs.end(), g_browseDir)
+                                    == g_kioskRomDirs.end())
+                                g_kioskRomDirs.push_back(g_browseDir);
+                            cfg.romDirs = g_kioskRomDirs;
+                            saveConfig(exeDir, cfg, &machine, true);   // persiste MÊME en kiosk
+                            kioskScanDisks(disksDir, machine.fdc.mountedPath());
+                            g_kioskDiskSel = 0; g_romDirSel = 0;
+                            g_kioskPage = KIOSK_PAGE_ROMDIRS;          // retour au gestionnaire
+                        } else if (g_browseSel == 1) {             // .. parent
+                            const fs::path p(g_browseDir);
+                            if (p.has_parent_path() && p.parent_path() != p)
+                                g_browseDir = p.parent_path().string();
+                            kioskScanBrowse(g_browseDir);
+                        } else if (g_browseSel < 2 + nShort) {     // raccourci (racine / volume monté)
+                            g_browseDir = g_browseShortcutPaths[g_browseSel - 2];
+                            kioskScanBrowse(g_browseDir);
+                        } else {                                   // descendre dans un sous-dossier
+                            g_browseDir = g_browseSubdirs[g_browseSel - 2 - nShort];
+                            kioskScanBrowse(g_browseDir);
+                        }
+                    }
+                    if (caNow && !pCancel) g_kioskPage = KIOSK_PAGE_ROMDIRS;   // (B) annuler
+
+                } else if (g_kioskPage == KIOSK_PAGE_ROMDIRS) {
+                    // Gestion : [0] « + ADD » (→ navigateur), [1..N] dossiers (FEU = retirer).
+                    const int total = 1 + (int)g_kioskRomDirs.size();
+                    if (step && (up || down)) {
+                        g_romDirSel += down ? 1 : -1;
+                        g_romDirSel = (g_romDirSel % total + total) % total;
+                    }
+                    if (okNow && !pOk) {
+                        if (g_romDirSel == 0) {                    // + ADD A FOLDER → navigateur
+                            std::error_code ec2;
+                            fs::path start = (!g_kioskRomDirs.empty() &&
+                                              fs::is_directory(g_kioskRomDirs.back(), ec2))
+                                                 ? fs::path(g_kioskRomDirs.back()) : fs::path(disksDir);
+                            fs::path abs = fs::absolute(start, ec2);   // absolu → « .. » remonte jusqu'à /
+                            g_browseDir = (ec2 ? start : abs).lexically_normal().string();
+                            kioskComputeShortcuts();
+                            kioskScanBrowse(g_browseDir);
+                            g_kioskPage = KIOSK_PAGE_BROWSE;
+                        } else {                                   // retirer ce dossier (croix ❌)
+                            const int idx = g_romDirSel - 1;
+                            if (idx >= 0 && idx < (int)g_kioskRomDirs.size())
+                                g_kioskRomDirs.erase(g_kioskRomDirs.begin() + idx);
+                            cfg.romDirs = g_kioskRomDirs;
+                            saveConfig(exeDir, cfg, &machine, true);
+                            kioskScanDisks(disksDir, machine.fdc.mountedPath());
+                            g_kioskDiskSel = 0;
+                            if (g_romDirSel > (int)g_kioskRomDirs.size())
+                                g_romDirSel = (int)g_kioskRomDirs.size();
+                        }
+                    }
+                    // (B) revient à la liste, focus sur les actions (d'où l'on venait).
+                    if (caNow && !pCancel) { g_kioskPage = KIOSK_PAGE_LIST; g_kioskZone = KIOSK_ZONE_ACTIONS; }
+
                 } else {   // KIOSK_PAGE_LIST — deux menus (intérieur / extérieur)
                     const int nd = (int)g_kioskDisks.size();
                     // GAUCHE/DROITE : bascule d'un menu à l'autre (front, non répété).
@@ -2303,15 +2577,27 @@ int main(int argc, char** argv) {
                                                                        : KIOSK_ZONE_LIST;
                     pSwap = swapNow;
                     // HAUT/BAS : navigue DANS le menu focalisé (chacun boucle sur lui-même).
-                    if (step && (up || down)) {
+                    // L1/R1 (pgUp/pgDn) : saut de PAGE dans la liste des jeux (défilement rapide).
+                    if (step) {
                         if (g_kioskZone == KIOSK_ZONE_LIST) {
                             if (nd > 0) {
-                                g_kioskDiskSel += down ? 1 : -1;
-                                g_kioskDiskSel = (g_kioskDiskSel % nd + nd) % nd;
+                                const int kPage = 10;   // taille du saut rapide L1/R1
+                                int delta = 0;
+                                if      (down) delta =  1;
+                                else if (up)   delta = -1;
+                                else if (pgDn) delta =  kPage;
+                                else if (pgUp) delta = -kPage;
+                                if (delta != 0) {
+                                    g_kioskDiskSel += delta;
+                                    if (delta == 1 || delta == -1)   // pas-à-pas : boucle
+                                        g_kioskDiskSel = (g_kioskDiskSel % nd + nd) % nd;
+                                    else                             // saut de page : butée
+                                        g_kioskDiskSel = std::max(0, std::min(nd - 1, g_kioskDiskSel));
+                                }
                             }
-                        } else {
+                        } else if (up || down) {
                             g_kioskActSel += down ? 1 : -1;
-                            g_kioskActSel = (g_kioskActSel % 3 + 3) % 3;
+                            g_kioskActSel = (g_kioskActSel % 4 + 4) % 4;
                         }
                     }
                     // FEU (A/Entrée) : déclenche l'item surligné du menu focalisé.
@@ -2324,7 +2610,15 @@ int main(int argc, char** argv) {
                                         g_kioskDiskMenu = false; break;
                                 case 1: g_kioskPage = KIOSK_PAGE_KEYS;    // Clavier & souris
                                         g_kioskKeySel = 0; break;
-                                case 2: g_kioskPage = KIOSK_PAGE_QUIT; break;  // Quitter
+                                case 2:                                   // Dossiers ROM (gestion)
+                                    if (kioskPruneRomDirs()) {           // retire les disparus + persiste
+                                        cfg.romDirs = g_kioskRomDirs;
+                                        saveConfig(exeDir, cfg, &machine, true);
+                                        kioskScanDisks(disksDir, machine.fdc.mountedPath());
+                                    }
+                                    g_romDirSel = 0;
+                                    g_kioskPage = KIOSK_PAGE_ROMDIRS; break;
+                                case 3: g_kioskPage = KIOSK_PAGE_QUIT; break;  // Quitter
                             }
                         }
                     }

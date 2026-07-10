@@ -110,21 +110,30 @@ n'exploite pas (barres noires latérales seulement). Dès qu'une démo **ouvre l
 entier** (hystérésis anti-clignotement). F10 fige au contraire le cadre complet en permanence.
 
 **Menu in-game** (**START** manette ou **F9**) : plein écran, le jeu est **mis en pause**.
-Deux colonnes que l'on bascule gauche/droite — la **liste des jeux** (triée par proximité :
-les phases B/C/D du jeu en cours remontent en tête) et les **actions** (Redémarrer / Clavier
-& souris / Quitter). Le FEU (A / Entrée) valide. Insérer un jeu **échange la disquette à
+Libellés en **anglais** (borne). Deux colonnes que l'on bascule gauche/droite — la **liste des
+jeux** (triée par proximité : les phases B/C/D du jeu en cours remontent en tête, **L1/R1** =
+défilement rapide par page) et les **actions** (*Restart machine* / *Keyboard & mouse* /
+*ROM folders* / *Quit*). Le FEU (A / Entrée) valide. Insérer un jeu **échange la disquette à
 chaud, sans reboot** (comme glisser une disquette : le jeu en cours continue) ; seul
-« Redémarrer » relance la machine.
+« Restart » relance la machine.
 
 **Clavier & souris** (**SELECT** manette ou **K**, même en cours de jeu) : un bandeau en bas
 sans mettre le jeu en pause — on envoie une frappe brève (touches F1-F8, chiffres, Espace/
 Return/Escape, clics souris) au jeu qui tourne dessous.
+
+**Dossiers ROM** (action *ROM folders*) : ajouter d'autres dossiers de jeux/disques, scannés
+**en plus** de `disks/`. Un **navigateur piloté à la manette** parcourt tout le système de
+fichiers (chemin absolu → remontée jusqu'à `/`) avec des **raccourcis** vers la racine, le
+*Home* et les **volumes montés** (`/Volumes` sur macOS, `/run/media`·`/media`·`/mnt` sur
+Linux). *USE THIS FOLDER* ajoute ; chaque dossier se retire d'une **croix ×** (et est
+auto-supprimé s'il n'existe plus). La liste est **persistée** dans `neost.cfg` (`kiosk_romdir=`).
 
 | Touche / bouton          | Action                                             |
 |--------------------------|----------------------------------------------------|
 | Flèches / Ctrl droit     | Joystick émulé (direction / feu)                   |
 | **F9** / START           | Ouvre/ferme le menu in-game (jeu en pause)         |
 | **K** / SELECT           | Ouvre/ferme le bandeau Clavier & souris            |
+| **L1 / R1** (Page↑/↓)    | Défilement rapide par page dans la liste des jeux  |
 | **F10**                  | (dés)active le zoom adaptatif (cadre complet fixe) |
 | **F11**                  | (dés)active l'émulation joystick clavier           |
 | A·B / Entrée·Échap       | Valider / revenir (dans le menu)                   |
