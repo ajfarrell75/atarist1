@@ -458,20 +458,12 @@ void Machine::runFrame() {
     // (≙ Hatari : la VBL est posée depuis le dernier HBL, la somme des longueurs
     // de lignes réelles fait la trame). Hors LINELEN, lineCarry_ vaut 0 ici (V2
     // seul le touche, opt-in) → comportement inchangé.
-    if (frameStartInit_) frameStart_ += static_cast<int64_t>(lpf_) * cpl_ - (lineLenOn_ ? lineCarry_ : 0);
-    else { frameStart_ = sched.now(); frameStartInit_ = true; }
-    // DIAG (NEOST_FRAME_DIAG) : phase absolue de l'ancre de trame — sur le vrai
-    // matériel la vidéo et les créneaux bus dérivent de la MÊME horloge, donc
-    // frameStart mod 4 doit être INVARIANT. Toute bascule = bug de géométrie.
-    static const bool frameDiag = std::getenv("NEOST_FRAME_DIAG") != nullptr;
-    if (frameDiag)
-        std::fprintf(stderr, "[FRM] start=%lld mod4=%d lpf=%d cpl=%d\n",
-                     (long long)frameStart_, (int)(frameStart_ & 3), lpf_, cpl_);
-    // Le RTC avance désormais en PARESSEUX à la lecture (cf. Rtc::catchUp), piloté
-    // par l'horloge émulée — rien à cadencer ici.
-    scheduleFrameEvents();
-
-    const int64_t frameEnd = frameStart_ + static_cast<int64_t>(lpf_) * cpl_;
+    // Trame RÉSUMABLE (débogueur) : l'ancre + la programmation des événements (le FIX1
+    // ci-dessus) sont faites par beginFrame_(), UNIQUEMENT au début d'une trame. Après un
+    // breakpoint (frameInProgress_ resté vrai) on SAUTE l'amorce et on REPREND la même
+    // trame — pas de ré-ancrage → aucune dérive d'horloge CPU↔vidéo.
+    if (!frameInProgress_) beginFrame_();
+    const int64_t frameEnd = frameEnd_;
     // ORDONNANCEUR PILOTÉ PAR L'HORLOGE (modèle `do_cycles` WinUAE/Hatari) : le CPU
     // tourne jusqu'à la fin de trame, et c'est NeostMoira::sync() qui dispatche les
     // événements (HBL, Timer-B, VBL, RENDER, timers MFP) AU FIL de l'exécution, au
@@ -490,29 +482,53 @@ void Machine::runFrame() {
             const int ran = cpu.run(static_cast<int>(want > 0 ? want : 1));
             sched.endRun();
             sched.runTo(sched.now() + ran);
-            if (cpu.breakpointHit()) break;   // débogueur : gel de la trame au breakpoint
+            if (cpu.breakpointHit()) return;  // débogueur : rend la main SANS finaliser (résumable)
         }
     } else {
         while (cpu.busClockNow() < frameEnd) {
             const int64_t want = frameEnd - cpu.busClockNow();
             cpu.run(static_cast<int>(want > 0 ? want : 1));
-            if (cpu.breakpointHit()) break;   // débogueur : gel de la trame au breakpoint
+            if (cpu.breakpointHit()) return;  // débogueur : rend la main SANS finaliser (résumable)
         }
     }
-    // Filet : si le CPU n'a PAS conduit l'horloge jusqu'au bout (CPU halté → run()
-    // avance l'horloge par setClock sans passer par sync()), on dispatche quand même
-    // les événements vidéo restants pour décoder la trame (écran figé, comme l'ancien
-    // modèle). Sans effet en marche normale (sync() a déjà porté now_ ≥ frameEnd).
-    if (sched.now() < frameEnd) sched.syncTo(frameEnd);
+    // Fin de trame atteinte (pas de breakpoint) → on finalise et on rouvre une trame neuve.
+    finalizeFrame_();
+    frameInProgress_ = false;
+}
 
-    // Lignes restantes : en haute-rés mono (400 lignes), le cadre PAL 313 lignes
-    // ne fournit pas un créneau par ligne → on finit le décodage ici. En couleur
-    // (≤ 200 lignes) tout a déjà été décodé au fil de la trame : rien à faire.
+// Amorce d'une trame (FIX1 beam-sync, cf. commentaire de runFrame) : ancre frameStart_
+// au VBL THÉORIQUE, programme la grille d'événements (qui remet renderLine_=0), fixe
+// frameEnd_. Appelée UNE fois par trame (runFrame et stepInstruction, guardés par
+// frameInProgress_).
+void Machine::beginFrame_() {
+    if (frameStartInit_) frameStart_ += static_cast<int64_t>(lpf_) * cpl_ - (lineLenOn_ ? lineCarry_ : 0);
+    else { frameStart_ = sched.now(); frameStartInit_ = true; }
+    static const bool frameDiag = std::getenv("NEOST_FRAME_DIAG") != nullptr;
+    if (frameDiag)
+        std::fprintf(stderr, "[FRM] start=%lld mod4=%d lpf=%d cpl=%d\n",
+                     (long long)frameStart_, (int)(frameStart_ & 3), lpf_, cpl_);
+    scheduleFrameEvents();
+    frameEnd_ = frameStart_ + static_cast<int64_t>(lpf_) * cpl_;
+    frameInProgress_ = true;
+}
+
+// Finalisation d'une trame : rattrape les événements restants (CPU halté), décode les
+// lignes non encore rendues, puis re-rend spec512 si détecté. Idempotence : appelée une
+// fois quand frameEnd_ est atteint (ou à la fin d'un pas qui franchit la frontière).
+void Machine::finalizeFrame_() {
+    if (sched.now() < frameEnd_) sched.syncTo(frameEnd_);
     const int h = shifter.activeHeight();          // lignes ACTIVES (≠ buffer overscan)
     while (renderLine_ < h) shifter.renderLine(renderLine_++);
-
-    // Trame complète décodée : si une image Spectrum 512 a été détectée (palette
-    // réécrite intra-ligne), re-rend les lignes avec la palette datée au cycle
-    // (jusqu'à 512 couleurs). No-op sinon → rendu ligne-à-ligne inchangé.
     shifter.finishFrame();
+}
+
+// Débogueur : pas-à-pas INSTRUCTION. Avance d'exactement UNE instruction 68000 en gardant
+// l'ordonnanceur EN LOCKSTEP (sync() dispatche les événements au cycle pendant cpu.run) —
+// pas de finalisation prématurée ni de dérive d'horloge. Si le pas franchit frameEnd_, la
+// trame est finalisée ; la prochaine amorcera une trame neuve.
+void Machine::stepInstruction() {
+    if (!frameInProgress_) beginFrame_();
+    cpu.clearBreakpointHit();   // arme le skip-once du PC courant → exécute même si BP ici
+    cpu.run(1);                 // run(1) = une instruction (toute instr ≥ 4 cyc > 1)
+    if (cpu.busClockNow() >= frameEnd_) { finalizeFrame_(); frameInProgress_ = false; }
 }
