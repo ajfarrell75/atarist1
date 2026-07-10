@@ -302,6 +302,10 @@ static void saveConfig(const std::string& exeDir, Config& c, Machine* machine = 
 #define ICON_FA_PALETTE       "\xef\x94\xbf"
 #define ICON_FA_TIMES         "\xef\x80\x8d"
 #define ICON_FA_PLUS          "\xef\x81\xa7"
+#define ICON_FA_BUG           "\xef\x86\x88"
+#define ICON_FA_PLAY          "\xef\x81\x8b"
+#define ICON_FA_PAUSE         "\xef\x81\x8c"
+#define ICON_FA_STEP_FORWARD  "\xef\x81\x91"
 
 // Bouton à ICÔNE SEULE (le texte est superflu quand le pictogramme est explicite) :
 // l'infobulle au survol rappelle l'action. Renvoie true au clic.
@@ -366,6 +370,10 @@ static neost::CrtParams      g_crtParams;
 static bool g_crtOn   = false;         // effets CRT activés
 static bool g_crtInit = false;         // initialize() déjà tenté (une seule fois)
 static bool g_showCrt = false;         // fenêtre de réglages CRT visible (fenêtré)
+// --- Débogueur (fenêtré) : breakpoints PC + pause/continue/step-frame -------------
+static bool g_showDbg     = false;     // fenêtre « Débogueur » visible
+static bool g_dbgPaused   = false;     // émulation gelée (breakpoint atteint ou pause manuelle)
+static bool g_dbgStepFrame = false;    // requête « avancer d'une trame » (traitée dans la boucle)
 bool  g_joyCfgDirty = false;           // un réglage joystick a changé → resauver neost.cfg
 // Champs de saisie du menu Machine → Disque dur (dossier HD GEMDOS / image ACSI).
 // Globaux (et non statiques du menu) pour que le sous-menu Profils puisse les
@@ -976,6 +984,93 @@ void drawCrtSettings(bool& changed) {
     ImGui::EndDisabled();
 
     if (ch) changed = true;
+    ImGui::End();
+}
+
+// Fenêtre « Débogueur » (fenêtré) : breakpoints PC + pause/continue/step-frame +
+// désassemblage autour du PC. Le moteur de breakpoints vit dans Cpu68k (conteneur
+// Guards de Moira) ; ici on ne fait qu'AFFICHER/piloter. Le gel effectif de
+// l'émulation (g_dbgPaused) et le pas-à-pas trame (g_dbgStepFrame) sont traités
+// dans la boucle principale. Les registres/mémoire ont déjà leurs propres fenêtres.
+void drawDebugger(Machine& machine) {
+    Cpu68k& cpu = machine.cpu;
+    ImGui::SetNextWindowSize(ImVec2(460, 520), ImGuiCond_FirstUseEver);
+    ImGui::Begin(ICON_FA_BUG " Débogueur", &g_showDbg);
+
+    // --- État + transport -----------------------------------------------------
+    if (g_dbgPaused) {
+        ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f),
+                           ICON_FA_PAUSE " EN PAUSE  \xe2\x80\x94  PC=$%06X", cpu.pc());
+        if (ImGui::Button(ICON_FA_PLAY " Continuer")) {
+            cpu.clearBreakpointHit();   // arme le skip-once de l'adresse courante
+            g_dbgPaused = false;
+        }
+        ImGui::SameLine();
+        if (ImGui::Button(ICON_FA_STEP_FORWARD " Pas (1 trame)")) g_dbgStepFrame = true;
+    } else {
+        ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.5f, 1.0f), ICON_FA_PLAY " En cours");
+        if (ImGui::Button(ICON_FA_PAUSE " Pause")) g_dbgPaused = true;
+    }
+    ImGui::Separator();
+
+    // --- Breakpoints : ajout + liste ------------------------------------------
+    ImGui::Text("Breakpoints (%d)", cpu.breakpointCount());
+    static char bpBuf[16] = "";
+    ImGui::SetNextItemWidth(120.0f);
+    const bool entered = ImGui::InputText("##bpaddr", bpBuf, sizeof bpBuf,
+                                          ImGuiInputTextFlags_CharsHexadecimal |
+                                          ImGuiInputTextFlags_EnterReturnsTrue);
+    ImGui::SameLine();
+    if ((ImGui::Button("Ajouter") || entered) && bpBuf[0]) {
+        cpu.setBreakpoint((uint32_t)std::strtoul(bpBuf, nullptr, 16));
+        bpBuf[0] = '\0';
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Tout effacer")) cpu.clearAllBreakpoints();
+
+    if (ImGui::BeginChild("##bplist", ImVec2(0, 120), true)) {
+        for (int i = 0; i < cpu.breakpointCount(); ++i) {
+            uint32_t a = 0;
+            if (!cpu.breakpointByIndex(i, a)) continue;
+            ImGui::PushID(i);
+            if (ImGui::SmallButton(ICON_FA_TIMES)) {   // retirer (les indices bougent → on sort)
+                cpu.clearBreakpoint(a);
+                ImGui::PopID();
+                break;
+            }
+            ImGui::SameLine();
+            char dis[256]; cpu.disassemble(dis, a);
+            ImGui::Text("$%06X  %s", a, dis);
+            ImGui::PopID();
+        }
+    }
+    ImGui::EndChild();
+    ImGui::Separator();
+
+    // --- Désassemblage autour du PC (clic sur une ligne = toggle breakpoint) ---
+    ImGui::TextDisabled("Désassemblage (clic = poser/retirer un breakpoint)");
+    if (ImGui::BeginChild("##disasm", ImVec2(0, 0), true)) {
+        const uint32_t pc = cpu.pc();
+        uint32_t addr = pc;
+        for (int i = 0; i < 24; ++i) {
+            char dis[256];
+            int len = cpu.disassemble(dis, addr);
+            if (len <= 0) len = 2;
+            const bool isPc  = (addr == pc);
+            const bool hasBp = cpu.hasBreakpoint(addr);
+            char line[300];
+            std::snprintf(line, sizeof line, "%s %s $%06X  %s",
+                          hasBp ? ICON_FA_TIMES : "  ", isPc ? ">" : " ", addr, dis);
+            if (hasBp) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.5f, 0.4f, 1.0f));
+            else if (isPc) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.4f, 1.0f, 0.5f, 1.0f));
+            if (ImGui::Selectable(line, isPc)) {
+                if (hasBp) cpu.clearBreakpoint(addr); else cpu.setBreakpoint(addr);
+            }
+            if (hasBp || isPc) ImGui::PopStyleColor();
+            addr += (uint32_t)len;
+        }
+    }
+    ImGui::EndChild();
     ImGui::End();
 }
 
@@ -1978,8 +2073,16 @@ int main(int argc, char** argv) {
         // jeu pour qu'il reçoive les touches envoyées) → on gèle l'émulation. À la
         // reprise on recale l'échéance sur maintenant (aucun rattrapage en rafale).
         const bool kioskPaused = g_kiosk && g_kioskDiskMenu && g_kioskPage != KIOSK_PAGE_KEYS;
-        if (kioskPaused) {
+        if (kioskPaused || g_dbgPaused) {
             emuNext = clock::now();
+            // Débogueur en pause : pas-à-pas TRAME (avance une trame puis reste pausé).
+            // clearBreakpointHit arme le skip-once → l'instruction du breakpoint passe.
+            if (g_dbgPaused && g_dbgStepFrame) {
+                g_dbgStepFrame = false;
+                machine.cpu.clearBreakpointHit();
+                machine.runFrame();
+                audio.produceFrame(machine.frameCycles());
+            }
         } else {
             // 6 trames max ≈ 120 ms de retard résorbable d'un coup : un stall GUI
             // ponctuel (drag de fenêtre, rafale disque) plus court que ça se rattrape
@@ -1991,6 +2094,7 @@ int main(int argc, char** argv) {
                 emuNext += std::chrono::nanoseconds(
                     static_cast<int64_t>(double(machine.frameCycles()) * 1e9 / kCpuHz));
                 ++ran;
+                if (machine.cpu.breakpointHit()) { g_dbgPaused = true; break; }   // débogueur : auto-pause
             }
             if (ran == 6 && clock::now() > emuNext) emuNext = clock::now();  // pause longue : resync
         }
@@ -2291,6 +2395,7 @@ int main(int argc, char** argv) {
                 ImGui::MenuItem(ICON_FA_MEMORY " Mémoire (hex)", nullptr, &g_showHex);
                 ImGui::MenuItem(ICON_FA_MICROCHIP " CPU 68000",     nullptr, &g_showCpu);
                 ImGui::MenuItem(ICON_FA_GAMEPAD " Joystick",      nullptr, &g_showJoy);
+                ImGui::MenuItem(ICON_FA_BUG " Débogueur",         nullptr, &g_showDbg);
                 ImGui::MenuItem(ICON_FA_DESKTOP " Effets CRT",     nullptr, &g_showCrt);
                 ImGui::EndMenu();
             }
@@ -2331,6 +2436,7 @@ int main(int argc, char** argv) {
         if (g_showHex)  drawHexViewer(machine.bus);
         if (g_showCpu)  drawCpuState(machine.cpu, reqReset);
         if (g_showJoy)  drawJoystickWindow(window, g_lastJoy0, g_lastJoy1);
+        if (g_showDbg)  drawDebugger(machine);
         if (g_showCrt) {                     // fenêtre de réglages CRT
             bool crtChanged = false;
             drawCrtSettings(crtChanged);
