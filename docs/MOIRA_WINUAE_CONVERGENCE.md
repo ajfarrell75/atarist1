@@ -153,6 +153,40 @@ Cuddly, Super Hang-On). Décision utilisateur (2026-06-16) : **garder le sync-dr
       FRAIS (les fenêtres des anciens AVI ne sont plus reconstructibles) ; re-mesurer le
       flicker bordure haute EL avec la fenêtre de mesure d'origine (l'étalon
       `overscan_top` byte-exact couvre déjà la mécanique).
+      * 🎯🎯 **RE-MESURE FLICKER EL + DIFF `$8209` D'ENTRÉE À L'ORACLE = FAITS (2026-07-09).
+        VERDICT FINAL : beam-sync EL CONVERGÉ, transitoire d'entrée INCLUS — aucun résidu NeoST.**
+        (⚠ Deux verdicts intermédiaires FAUX en chemin, tous deux des artefacts de segmentation ;
+        seul le diff `$8209` cycle-exact ci-dessous a tranché — le noter pour ne pas rejouer.)
+        Repro NeoST `NEOST_VC_TRACE=1 NEOST_GLUE_STAT=1 … tos102fr … --keys-at 3500 " " --frames
+        4200` (SANS `--fastfdc`). Oracle Hatari : `--cmd-fifo` + SPACE tenu (scancode 57,
+        keydown/keyup) à l'intro (~70 s temps réel), `--trace video_addr,video_sync,video_border_v`.
+        Scripts scratchpad : `el_oracle.sh`, `el_oracle_vc.sh`, `parse_el*.py`.
+        - **(a) Datation re-arm write** (VERROU racine, `freq val=00 line=33 pc=0036ee`) : cyc
+          **438/442/446 (mean 441.2, sd 3.0, spread 8)**, histo {438:99, 442:100, 446:50} ≈ 2:2:1
+          (quantif E-clock). **BAT la cible Hatari** (~444 ±8) ; l'ancien tueur était 432-508
+          sd≈18 spread 76. **Régime établi : retrait haut `start=34` sur 249/249 frames.**
+        - **(b) DIFF `$8209` D'ENTRÉE = BYTE-IDENTIQUE.** Le stabilisateur EL spin-poll `$FF8209`
+          à `pc=$ee78/$ee80` (~7965 lectures/frame) en attendant que le compteur commence à
+          avancer (078000→078006 = détection DE-start). NeoST et Hatari détectent le DE-start au
+          **MÊME point** : **ligne 63, X≈60-68, val 2-6, ~7965 lectures** des DEUX côtés (parseurs
+          `parse_el_vc.py` sur les deux traces). ⇒ **la datation read `$8209` est fidèle en
+          transitoire aussi** (rien à corriger).
+        - **(c) LE TRANSITOIRE D'ENTRÉE EXISTE DES DEUX CÔTÉS, DURÉE COMPARABLE.** EL calibre son
+          overscan à l'entrée : freq toggle à la ligne **63 (VDE_On nominale)** pendant ~17-26
+          frames, PUIS bascule ligne **32** (retrait haut) et verrouille. NeoST : ~19 frames à
+          la ligne 63 (`start=63`) puis lock. Hatari (séquence brute des 60 Hz-open, chrono) :
+          `33 33 | 63 71 79…223 (sweep de calibration) | 63 64 63 64 ×~26 | 32 33 35 36…` — soit
+          ~17-26 frames ligne 63/64 avant lock ligne 32 (run VC : 17 frames poll consécutives
+          TOUTES DE-start ligne 63, pas encore verrouillé). **⇒ NeoST reproduit fidèlement le
+          transitoire de convergence propre au stabilisateur d'EL ; ce n'est PAS une divergence.**
+        - **(d) ⚠ ARTEFACTS RÉFUTÉS (ne pas rejouer).** (1) « transitoire = propriété démo, Hatari
+          settle pareil » — juste par chance au 1ᵉʳ tour mais non prouvé. (2) « NeoST rate 17
+          frames vs Hatari 1 » — **FAUX** : la segmentation par `detect remove top` + wrap `nHBL`
+          des écritures sync FUSIONNE les frames transitoires de Hatari (leurs écritures restent
+          à nHBL 63-64, jamais >150 → aucun wrap détecté → tout le transitoire compté comme 1
+          « frame de 819 écritures »). La segmentation FIABLE = via les lectures poll `video_addr`
+          (balayent nHBL 0→312/frame). Leçon : pour compter des frames en transitoire beam-sync,
+          segmenter sur le POLL (couvre toute la trame), jamais sur les écritures (clusterisées).
       ⚠ Les diagnostics de cette passe restent branchés (gated) : `NEOST_FRAME_DIAG`
       (phase de l'ancre de trame), `NEOST_BUS_DIAG=<page-pc-hex>` (séquence bus + mod 4
       par accès), champ `into=` dans `NEOST_VC_TRACE`.
