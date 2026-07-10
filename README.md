@@ -35,9 +35,12 @@ montage de disquettes, bascule couleur/mono, et **upload** de votre propre `.st`
   option `--fpu` / menu Modèle — chose qu'Hatari n'émule pas).
 - ⚙️ **Cœur 68000 cycle-exact** — [Moira](https://github.com/dirkwhoffmann/Moira)
   (timing inter-instructions, IPL échantillonné au cycle, contention de bus).
-- 🐞 **Débogueur intégré** — visualiseur hexa de la RAM et registres 68000 en direct
-  (Dear ImGui), plus un **mode headless déterministe** qui produit des traces façon
-  MAME (l'arme secrète pour diagnostiquer un jeu qui bloque).
+- 🐞 **Débogueur intégré** — **breakpoints** PC et **watchpoints** mémoire, **pas-à-pas
+  instruction** (au cycle, sans dérive), **symboles** (`.sym` nm-style ou DRI/GST d'un
+  exécutable TOS) avec désassemblage annoté, plus le visualiseur hexa RAM + registres
+  68000 en direct (Dear ImGui). Aussi en **headless déterministe** (`--break`, `--watch`,
+  `--symbols`/`--break-sym`) qui produit des traces façon MAME — l'arme secrète pour
+  diagnostiquer un jeu qui bloque.
 - 🔊 **Son complet** — YM2149 (3 voies + bruit + enveloppe), son DMA STE, filtres
   Microwire/LMC1992, et même les **bruits mécaniques du lecteur** de disquette.
 - 🌐 **Multi-plateforme** — macOS Silicon, Linux, et WebAssembly. Une seule base de code.

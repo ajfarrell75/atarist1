@@ -1333,6 +1333,21 @@ les **2 cœurs**, avec un vrai TOS. Restes (« Hard error »/VME/FPU) = périph�
 fidèles à Hatari, pas des bugs.
 
 ## Frontend & outillage
+- **Débogueur interactif — breakpoints, watchpoints, pas-à-pas, symboles (2026-07-11)** :
+  réutilise le `Debugger` intégré de Moira (conteneur `Guards`). **Breakpoints PC**
+  « break-before » (pré-check dans `Cpu68k::run`, coût nul si aucun ; skip-once à la
+  reprise). **Watchpoints mémoire** lecture/écriture « break-after » (via la couche
+  dataflow de Moira ; patch vendorisé masquant l'adresse au bus 24 bits pour matcher un
+  accès I/O en court absolu — cf. `NEOST_VENDOR.md`). **Pas-à-pas instruction** :
+  `runFrame` rendu RÉSUMABLE mi-trame (`beginFrame_`/`finalizeFrame_`, garde
+  `frameInProgress_`) → au breakpoint on rend la main sans finaliser, la reprise/le pas
+  continue la MÊME trame en **lockstep** (aucune dérive d'horloge CPU↔vidéo). **Symboles**
+  (`SymbolTable`, cœur) : `.sym` nm-style OU symboles DRI + noms étendus GST d'un
+  exécutable TOS `$601A`, décalés d'une base ; `lookup` + `nameFor` (« nom+offset »).
+  GUI (fenêtre Débogueur) : pause/continue/step, listes breakpoints & watchpoints,
+  désasm cliquable annoté, chargement de symboles + BP par nom. Headless : `--break`,
+  `--watch`, `--symbols`/`--symbols-base`/`--break-sym`. Non-régression : self-tests P1,
+  glue-selftest 31/31, étalons byte-exact (le refactor `runFrame` ne change pas le rendu).
 - **Effets CRT (façade moniteur) — passe shader opt-in (2026-07-10)** : pile d'effets
   portée de POM2 (`src/gui/CrtEffectStack`, `OpenGLShader`, `CrtParams`). Une passe FBO
   applique par-dessus l'écran ST rendu la « façade verre » d'un CRT : distorsion de baril,
