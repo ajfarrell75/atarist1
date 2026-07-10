@@ -153,6 +153,20 @@ taguées (0.1.x). Le restant est dans [`TODO.md`](TODO.md).
   d'etos192 sur MegaSTE (SCU non programmé). Pour le STE/Mega STE : EmuTOS 256 Ko ou TOS 1.62/2.06.
 
 ## Vidéo (Shifter)
+- **Latch couleur de bordure GAUCHE = registre 0 de la ligne PRÉCÉDENTE (2026-07-09)** :
+  résidu du beam-sync EL — la bordure gauche de la ligne N prend la couleur `palette[0]`
+  telle qu'elle était en fin de ligne N−1 (la droite garde la couleur courante). Aligné
+  sur le matériel (le Shifter latche la couleur de fond au bord gauche avant le 1er accès
+  vidéo de la ligne). Invisible aux étalons croppés sur l'aire active ; validé contre oracle
+  frais (`make_poll_test` aire active byte-exacte des deux côtés). Complète le beam-sync EL
+  (poll `$8209` byte-identique NeoST↔Hatari).
+- **Ports de LECTURE résolution `$FF8260/$FF8261` fidèles (2026-07-09)** : port
+  `Video_Res_ReadByte` (video.c) — `$FF8260` relit les bits de résolution corrects (pas la
+  valeur brute écrite), `$FF8261` est l'alias attendu. Les jeux/démos qui relisent le
+  registre de résolution voient la même chose que sur matériel.
+- **Espace registres blitter `$FF8A3E/$FF8A3F` = zone void (2026-07-09)** : lit 0xFF,
+  écritures ignorées (fin de la carte des registres du BLiTTER — port du comportement
+  Hatari). Un accès parasite dans ce trou ne fait plus rien d'anormal.
 - **V2 — tricks par changement de RÉSOLUTION portés (2026-07-08)** : `updateGlueRes`
   (post-traitement de chaque écriture $FF8260 après la machine Glue commune) = port de
   `Video_WriteToGlueRes` (video.c:1637-1753). Détections : **overscan MED-RES** — retrait
@@ -779,6 +793,15 @@ taguées (0.1.x). Le restant est dans [`TODO.md`](TODO.md).
   `fsfirst_match`, port Hatari) : à la racine d'un lecteur GEMDOS les `.*` restent ignorés, mais
   dans un sous-dossier `.`/`..` sont retournés comme sur TOS réel → gestionnaires de fichiers /
   archiveurs récursifs corrects.
+- **`DESKTOP.INF` / `NEWDESK.INF` par défaut → `.TOS` lançable au bureau (2026-07-09)** :
+  TOS 1.x (192/256 Ko) n'enregistre les `*.TOS` comme exécutables que si un `DESKTOP.INF`
+  les déclare (`#F 03 04 *.TOS@`) ; TOS 2.x utilise `NEWDESK.INF`. Sans INF, double-cliquer
+  un `.TOS` propose « imprimer ou voir » — comportement FIDÈLE (Hatari n'injecte l'INF que
+  sur `--auto`/`--tos-resolution`). NeoST livre donc `gemdos/DESKTOP.INF` (TOS 1.x) et
+  `gemdos/NEWDESK.INF` (TOS 2.x), templates Hatari, libellés FR, format exact (CRLF, `\032`
+  de DESKTOP absent de NEWDESK). Vérifié : 1.62 lance un `.TOS` au double-clic ; 2.06
+  applique l'INF et lance (autostart `#Z` en headless). Une ligne `#Z 01 C:\JEU.TOS@`
+  démarre un jeu directement (attract / kiosk).
 - **Résolution de chemin — passe « caractères invalides » (`only_invalid`)** (`addPathComponent`,
   port `add_path_component`/`Str_Filename_Invalid_Char`) : la conversion nom GEMDOS → chemin hôte
   fait désormais DEUX passes de masque séparées comme Hatari — d'abord la **troncature** 8+3
@@ -1310,6 +1333,37 @@ les **2 cœurs**, avec un vrai TOS. Restes (« Hard error »/VME/FPU) = périph�
 fidèles à Hatari, pas des bugs.
 
 ## Frontend & outillage
+- **Effets CRT (façade moniteur) — passe shader opt-in (2026-07-10)** : pile d'effets
+  portée de POM2 (`src/gui/CrtEffectStack`, `OpenGLShader`, `CrtParams`). Une passe FBO
+  applique par-dessus l'écran ST rendu la « façade verre » d'un CRT : distorsion de baril,
+  scanlines (faisceau doux anti-aliasé analytiquement via `fwidth`), shadow mask
+  (triade / grille d'ouverture / points, préservant la luma moyenne — modèle Lottes),
+  rémanence phosphore (ping-pong), luminosité/contraste/saturation/teinte (rotation chroma
+  YUV BT.601), vignette, gain de luminance et courbe gamma. **Sûreté = échec gracieux** :
+  points d'entrée GL 3.x chargés paresseusement par `glfwGetProcAddress` (autonome, sans
+  GLEW/GLAD) ; si le shader ne compile pas (contexte compat 2.1 macOS) `available()` reste
+  faux et `process()` est un no-op → l'appelant présente la texture brute. **Coexistence
+  immediate-mode** : `process()` sauve/restaure tout l'état GL (FBO, viewport, blend/depth/
+  cull, filtres de la texture source) et — CRUCIAL vs POM2 core-profile — revient au programme
+  0 et **débinde le VBO** (`GL_ARRAY_BUFFER=0`), sinon `imgui_impl_opengl2` (tableaux côté
+  client) interpréterait ses pointeurs comme des offsets → UI vide. Réglages : menu
+  **Affichage → Effets CRT** (panneau live), CLI `--crt` / `--crt-preset off|leger|arcade|
+  phosphor`, persistance dans `neost.cfg` (13 clés `crt_*`). Figé en kiosk.
+- **Mode kiosk (borne / expo) — plein écran + menu in-game (2026-07-10)** : `--kiosk`
+  (borderless-windowed, toujours au 1er plan), `--kiosk-exclusive` (plein écran exclusif,
+  garde le focus), `--kiosk-monitor N`. Config **figée** (`neost.cfg` jamais réécrit),
+  souris capturée, joystick clavier activé. **Zoom adaptatif** (défaut, bascule F10) : cale
+  la ZONE ACTIVE (rectangle matériel `activeTop`/`activeHeight`, jamais au pixel → zéro
+  saccade) sur la hauteur écran ; quand la Glue signale une **bordure ouverte**
+  (`Shifter::bordersOpen()` = `bordersTrick_` ou overscan V) on montre le buffer entier
+  (hystérésis ~0,6 s anti-clignotement). **Menu in-game** (START/F9, jeu en PAUSE) : deux
+  menus basculés G/D — liste des jeux triée par proximité (les phases B/C/D du jeu monté en
+  tête via `kioskAreSiblings`, préfixe+suffixe commun) et actions (Redémarrer / Clavier &
+  souris / Quitter). Insérer une disquette = **échange à chaud SANS reboot** ; seul
+  « Redémarrer » relance. **Page Clavier & souris** (SELECT/K, sans pause) : frappe brève
+  (MAKE puis BREAK différé de ~4 trames) injectée au jeu qui tourne dessous. Navigation
+  manette/clavier à **répétition temporelle** (400 ms puis 150 ms, indépendante du framerate
+  à vide). Sorties : Alt+F4 ou Ctrl+Shift+Q (~0,7 s).
 - **Étalon V2 « nocooper » rapatrié et intégré (2026-07-08)** : No Cooper (1984, freeware —
   archive Fujiology) dans `disks/etalons/nocooper.msa`, entrée `etalons.json` avec fetch auto
   (ZIP membre) et **pilotage daté** (`keys_at` : espace tenue vbl 900 — support ajouté à

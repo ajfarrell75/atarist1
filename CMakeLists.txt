@@ -205,7 +205,9 @@ endif()
 add_executable(neost
     src/main.cpp
     src/audio/Audio.cpp
-    src/audio/DriveSound.cpp)
+    src/audio/DriveSound.cpp
+    src/gui/OpenGLShader.cpp
+    src/gui/CrtEffectStack.cpp)
 target_link_libraries(neost PRIVATE neost_core glfw OpenGL::GL Threads::Threads)
 set_source_files_properties(src/main.cpp src/audio/DriveSound.cpp
     PROPERTIES COMPILE_OPTIONS "${NEOST_STRICT_OPTS}")
