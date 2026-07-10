@@ -168,6 +168,7 @@ int main(int argc, char** argv) {
     uint32_t    untilPc    = 0;
     std::vector<uint32_t> breakAddrs;            // --break HEX : breakpoints PC (répétable)
     std::vector<uint32_t> watchAddrs;            // --watch HEX : watchpoints mémoire (répétable)
+    bool        saveStateTest = false;            // --save-state-test : run N → save → modif → load → re-save == save
     std::vector<std::string> breakSyms;          // --break-sym NAME : breakpoints par symbole
     std::string symbolsPath;                     // --symbols FILE (.sym nm-style ou exécutable TOS)
     uint32_t    symBase = 0;                      // --symbols-base HEX (relocation d'un exécutable TOS)
@@ -312,6 +313,7 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(a, "--until-pc"))   { untilPc = (uint32_t)std::strtoul(next(a), nullptr, 16); haveUntil = true; }
         else if (!std::strcmp(a, "--break"))      breakAddrs.push_back((uint32_t)std::strtoul(next(a), nullptr, 16));
         else if (!std::strcmp(a, "--watch"))      watchAddrs.push_back((uint32_t)std::strtoul(next(a), nullptr, 16));
+        else if (!std::strcmp(a, "--save-state-test")) saveStateTest = true;
         else if (!std::strcmp(a, "--break-sym"))  breakSyms.emplace_back(next(a));
         else if (!std::strcmp(a, "--symbols"))    symbolsPath = next(a);
         else if (!std::strcmp(a, "--symbols-base")) symBase = (uint32_t)std::strtoul(next(a), nullptr, 16);
@@ -457,6 +459,22 @@ int main(int argc, char** argv) {
                          symbols.count(), symbolsPath.c_str());
         else
             std::fprintf(stderr, "[headless] symboles : échec de chargement de %s\n", symbolsPath.c_str());
+    }
+    // Save-state (increment 1) : run N trames → save A → modifie (60 trames) → load A →
+    // re-save B → A doit == B (les champs sérialisés sont correctement save ET load).
+    if (saveStateTest) {
+        for (int i = 0; i < frames; ++i) machine.runFrame();
+        std::vector<uint8_t> A; machine.saveState(A);
+        for (int i = 0; i < 60; ++i) machine.runFrame();          // modifie l'état
+        if (!machine.loadState(A.data(), A.size())) {
+            std::fprintf(stderr, "[save-state-test] FAIL : loadState a échoué\n");
+            return 1;
+        }
+        std::vector<uint8_t> B; machine.saveState(B);
+        const bool eq = (A == B);
+        std::fprintf(stderr, "[save-state-test] taille=%zu o \xe2\x80\x94 restauration %s\n",
+                     A.size(), eq ? "OK (A==B)" : "FAIL (A!=B)");
+        return eq ? 0 : 1;
     }
     for (uint32_t a : breakAddrs) machine.cpu.setBreakpoint(a);   // débogueur : breakpoints PC
     for (uint32_t a : watchAddrs) machine.cpu.setWatchpoint(a);   // débogueur : watchpoints mémoire

@@ -10,8 +10,10 @@
 // =============================================================================
 #pragma once
 #include <cstddef>
+#include <cstdint>
 #include <cstdio>
 #include <string>
+#include <vector>
 
 #include "core/Bus.hpp"
 #include "core/Cpu68k.hpp"
@@ -153,6 +155,12 @@ public:
     // suivant. S'appuie sur la trame RÉSUMABLE (cf. frameInProgress_).
     void stepInstruction();
 
+    // Save-states (increment 1 : CPU + RAM + ordonnanceur + état de trame). À prendre/
+    // restaurer à une FRONTIÈRE de trame (entre deux runFrame). loadState renvoie false
+    // si le buffer est tronqué ou l'en-tête invalide. Puces (Shifter/MFP/PSG…) à venir.
+    void saveState(std::vector<uint8_t>& out);
+    bool loadState(const uint8_t* data, std::size_t n);
+
     // Accès direct aux composants (frontend, débogueur, headless).
     Bus       bus;
     Shifter   shifter{bus};
@@ -179,6 +187,7 @@ private:
     void scheduleFrameEvents();
     void beginFrame_();     // amorce une trame (ancre + événements) — cf. runFrame/stepInstruction
     void finalizeFrame_();  // finalise une trame (rattrapage + décodage lignes + spec512)
+    void serializeState(StateArchive& ar);   // save-state : état trame + composants (symétrique)
     // Handlers des événements datés vidéo (positions au cycle dans la ligne).
     // Les Timers A/C/D (mode délai) sont datés par le MFP lui-même.
     void onRender();        // décode la scanline (≈ fin Display-Enable, cycle 376)

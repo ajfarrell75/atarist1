@@ -4,6 +4,7 @@
 //  (c) 2026 VERHILLE Arnaud — projet NeoST.
 // =============================================================================
 #include "core/Bus.hpp"
+#include "core/StateArchive.hpp"
 #include "core/Shifter.hpp"
 #include "core/YM2149.hpp"
 #include "core/Glue.hpp"
@@ -24,6 +25,13 @@
 
 Bus::Bus(std::size_t ramBytes) {
     ram.assign(ramBytes, 0);
+}
+
+// Save-state (increment 1) : la RAM. La taille est préfixée (vec) → un load restaure
+// aussi la bonne taille de RAM. L'état MMIO du Bus (config mémoire, overlay, latch db,
+// registres STE/MegaSTE…) sera ajouté à l'increment suivant.
+void Bus::serialize(StateArchive& ar) {
+    ar.vec(ram);
 }
 
 bool Bus::loadTos(const std::string& path) {
