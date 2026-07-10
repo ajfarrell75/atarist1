@@ -374,6 +374,7 @@ static bool g_showCrt = false;         // fenêtre de réglages CRT visible (fen
 static bool g_showDbg     = false;     // fenêtre « Débogueur » visible
 static bool g_dbgPaused   = false;     // émulation gelée (breakpoint atteint ou pause manuelle)
 static bool g_dbgStepFrame = false;    // requête « avancer d'une trame » (traitée dans la boucle)
+static bool g_dbgStepInstr = false;    // requête « avancer d'une instruction » (idem)
 bool  g_joyCfgDirty = false;           // un réglage joystick a changé → resauver neost.cfg
 // Champs de saisie du menu Machine → Disque dur (dossier HD GEMDOS / image ACSI).
 // Globaux (et non statiques du menu) pour que le sous-menu Profils puisse les
@@ -1005,6 +1006,8 @@ void drawDebugger(Machine& machine) {
             cpu.clearBreakpointHit();   // arme le skip-once de l'adresse courante
             g_dbgPaused = false;
         }
+        ImGui::SameLine();
+        if (ImGui::Button(ICON_FA_STEP_FORWARD " Pas (1 instr)")) g_dbgStepInstr = true;
         ImGui::SameLine();
         if (ImGui::Button(ICON_FA_STEP_FORWARD " Pas (1 trame)")) g_dbgStepFrame = true;
     } else {
@@ -2082,6 +2085,12 @@ int main(int argc, char** argv) {
                 machine.cpu.clearBreakpointHit();
                 machine.runFrame();
                 audio.produceFrame(machine.frameCycles());
+            }
+            // Pas-à-pas INSTRUCTION : une seule instruction, ordonnanceur en lockstep
+            // (pas de produceFrame — trop court, le son reste muet en pas-à-pas).
+            if (g_dbgPaused && g_dbgStepInstr) {
+                g_dbgStepInstr = false;
+                machine.stepInstruction();
             }
         } else {
             // 6 trames max ≈ 120 ms de retard résorbable d'un coup : un stall GUI

@@ -95,6 +95,7 @@ public:
         bus.seedResetVectors();    // vecteurs SSP/PC $0-$7 : miroir ROM en RAM (stMemory.c)
         cpu.reset();
         frameStartInit_ = false;   // FIX1 : ré-ancre frameStart_ sur sched.now() à la 1re trame post-reset
+        frameInProgress_ = false;  // débogueur : un reset repart sur une trame neuve
     }
     // Reset à FROID (power-cycle) : efface toute la ST-RAM, ce qui invalide le
     // « memvalid » de TOS — il refait alors un boot COMPLET (re-détection mémoire,
@@ -112,6 +113,7 @@ public:
         bus.seedResetVectors();    // vecteurs SSP/PC $0-$7 (après l'effacement RAM !)
         cpu.reset();
         frameStartInit_ = false;   // FIX1 : ré-ancre frameStart_ sur sched.now() à la 1re trame post-reset
+        frameInProgress_ = false;  // débogueur : un reset repart sur une trame neuve
     }
 
     // Reconfigure la machine À CHAUD sans recréer l'objet (son adresse reste
@@ -145,6 +147,12 @@ public:
     //  la ligne (512 cycles) → timing IDENTIQUE au modèle « par blocs » d'avant.
     void runFrame();
 
+    // Débogueur : avance d'UNE instruction 68000 en gardant l'ordonnanceur EN LOCKSTEP
+    // (sync() dispatche les événements au cycle) — pas de ré-ancrage de trame. Si le pas
+    // franchit la fin de trame, la trame est finalisée et une nouvelle démarre au pas
+    // suivant. S'appuie sur la trame RÉSUMABLE (cf. frameInProgress_).
+    void stepInstruction();
+
     // Accès direct aux composants (frontend, débogueur, headless).
     Bus       bus;
     Shifter   shifter{bus};
@@ -169,6 +177,8 @@ private:
     void installSchedulerCallbacks();
     // Arme le premier événement de chaque source pour la trame courante.
     void scheduleFrameEvents();
+    void beginFrame_();     // amorce une trame (ancre + événements) — cf. runFrame/stepInstruction
+    void finalizeFrame_();  // finalise une trame (rattrapage + décodage lignes + spec512)
     // Handlers des événements datés vidéo (positions au cycle dans la ligne).
     // Les Timers A/C/D (mode délai) sont datés par le MFP lui-même.
     void onRender();        // décode la scanline (≈ fin Display-Enable, cycle 376)
@@ -186,6 +196,11 @@ private:
     int64_t frameStart_ = 0;  // cycle (horloge continue) du début de la trame courante
     bool    frameStartInit_ = false;  // FIX1 : frameStart_ ancré au VBL THÉORIQUE (avance de
                                       // lpf_*cpl_) après la 1re trame, au lieu de sched.now()
+    // Trame RÉSUMABLE (débogueur) : au breakpoint on rend la main SANS finaliser la trame
+    // (frameInProgress_ reste vrai) → la reprise/le pas continue la MÊME trame, sans
+    // ré-ancrer ni dériver l'horloge. frameEnd_ = cible de fin de trame courante.
+    int64_t frameEnd_        = 0;
+    bool    frameInProgress_ = false;
     int renderLine_  = 0;     // prochaine scanline à décoder
     int tbLine_      = 0;     // prochaine ligne pour le tic Timer B
     int hblLine_     = 0;     // prochaine ligne pour le HBL niveau 2
