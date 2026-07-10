@@ -112,9 +112,14 @@ public:
     // Machine itère sur activeHeight() ; renderLine(y) place la ligne active y à
     // l'offset bordure-haut dans le buffer (cf. activeY_).
     int activeHeight() const { return curAH_; }
-    // Zone ACTIVE (image « de base », hors bordures overscan) — pour le rendu kiosk.
-    int activeWidth() const { return curW_ - (bordered() ? (kBorderLeftPx + kBorderRightPx) : 0); }
-    int activeTop()   const { return bordered() ? kBorderTopLines : 0; }   // bande overscan haute
+    // Offset de l'écran actif dans le buffer (bordures overscan tout autour).
+    int activeLeft() const { return activeX_; }
+    int activeTop()  const { return activeY_; }
+    // La trame COURANTE retire-t-elle une bordure (overscan démo : haut/bas via
+    // glueVOverscan_, gauche/droite via bordersTrick_) ? Signal MATÉRIEL de la Glue,
+    // STABLE — PAS une détection au pixel. Le zoom kiosk s'en sert : cadre FIXE sur la
+    // zone active par défaut, élargi au buffer entier uniquement quand ceci est vrai.
+    bool bordersOpen() const { return bordersTrick_ || glueVOverscan_ != 0; }
 
     // Fréquence de rafraîchissement COURANTE (mono = 71 Hz, sinon $FF820A bit1 :
     // 50 Hz PAL / 60 Hz NTSC). Pour l'affichage / le débogage (la trame est cadencée
@@ -433,7 +438,8 @@ private:
     static constexpr int kBorderBotLines = 47;    // MAX_OVERSCAN_BOTTOM
     static constexpr bool kBordersEnabled = true;
     bool bordered() const { return frameMode_ == Mode::Low && kBordersEnabled; }
-    // activeWidth()/activeTop() : déplacés en section publique (rendu kiosk), cf. plus haut.
+    // Largeur de l'écran ACTIF (sans les bordures) : 320 (low) / 640 (med/mono).
+    int activeWidth() const { return curW_ - (bordered() ? (kBorderLeftPx + kBorderRightPx) : 0); }
 
     Bus&          bus_;
     int           curW_ = 0, curH_ = 0;     // dimensions du buffer (overscan inclus)

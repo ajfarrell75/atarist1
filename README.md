@@ -80,8 +80,10 @@ l'IKBD. Le GUI ajoute un menu **Machine** (modèle, mémoire, cœur CPU) et une
 
 ## Mode kiosk (borne / expo)
 
-Pour une borne d'exposition : plein écran **sans aucune interface** (ni menu, ni
-fenêtres), image centrée, configuration **figée** (la borne repart toujours identique).
+Pour une borne d'exposition : plein écran **sans le chrome de bureau** (ni barre de
+menu, ni fenêtres ImGui), image centrée, configuration **figée** (la borne repart
+toujours identique) — mais avec un **menu in-game** manette/clavier pour changer de
+jeu, envoyer des touches ou redémarrer, sans jamais quitter le plein écran.
 
 ```sh
 ./build/neost --kiosk           roms/tos102uk.img "disks/Jeu.stx"   # plein écran sans bordure
@@ -96,21 +98,61 @@ fenêtres), image centrée, configuration **figée** (la borne repart toujours i
   focus clavier. **À préférer** pour une vraie borne. (`--kiosk` est impliqué.)
 - **`--kiosk-monitor N`** : écran cible (0 = principal).
 
-En kiosk : l'image **active** (l'écran ST « de base », hors bandes overscan) est **calée sur
-la hauteur** de l'écran en gardant le ratio (barres noires latérales) ; la souris est
-capturée et le curseur masqué ; l'**émulation joystick au clavier est activée** (flèches +
-Ctrl droit = feu) pour jouer sans manette. Le fichier `neost.cfg` n'est **jamais** réécrit.
+En kiosk : la souris est capturée et le curseur masqué ; l'**émulation joystick au
+clavier est activée** (flèches + Ctrl droit = feu) pour jouer sans manette ; le fichier
+`neost.cfg` n'est **jamais** réécrit.
 
-| Touche             | Action                                             |
-|--------------------|----------------------------------------------------|
-| Flèches / Ctrl droit | Joystick émulé (direction / feu)                 |
-| F11                | (dés)active l'émulation joystick clavier           |
-| **Alt+F4**         | **Quitter la borne** (immédiat, le classique)      |
-| **Ctrl+Shift+Q** (~0,7 s) | Quitter la borne (chord discret)            |
+**Zoom adaptatif** (défaut, bascule **F10**) : la **zone active** (l'écran ST « de base »,
+hors bandes overscan) est calée sur la hauteur en gardant le ratio pixel — un jeu normal
+remplit l'écran autant qu'une démo, sans être rapetissé par des bordures unies qu'il
+n'exploite pas (barres noires latérales seulement). Dès qu'une démo **ouvre les bordures**
+(overscan — Enchanted Land, Lethal Xcess…), la Glue le signale et NeoST montre le **buffer
+entier** (hystérésis anti-clignotement). F10 fige au contraire le cadre complet en permanence.
+
+**Menu in-game** (**START** manette ou **F9**) : plein écran, le jeu est **mis en pause**.
+Deux colonnes que l'on bascule gauche/droite — la **liste des jeux** (triée par proximité :
+les phases B/C/D du jeu en cours remontent en tête) et les **actions** (Redémarrer / Clavier
+& souris / Quitter). Le FEU (A / Entrée) valide. Insérer un jeu **échange la disquette à
+chaud, sans reboot** (comme glisser une disquette : le jeu en cours continue) ; seul
+« Redémarrer » relance la machine.
+
+**Clavier & souris** (**SELECT** manette ou **K**, même en cours de jeu) : un bandeau en bas
+sans mettre le jeu en pause — on envoie une frappe brève (touches F1-F8, chiffres, Espace/
+Return/Escape, clics souris) au jeu qui tourne dessous.
+
+| Touche / bouton          | Action                                             |
+|--------------------------|----------------------------------------------------|
+| Flèches / Ctrl droit     | Joystick émulé (direction / feu)                   |
+| **F9** / START           | Ouvre/ferme le menu in-game (jeu en pause)         |
+| **K** / SELECT           | Ouvre/ferme le bandeau Clavier & souris            |
+| **F10**                  | (dés)active le zoom adaptatif (cadre complet fixe) |
+| **F11**                  | (dés)active l'émulation joystick clavier           |
+| A·B / Entrée·Échap       | Valider / revenir (dans le menu)                   |
+| **Alt+F4**               | **Quitter la borne** (immédiat, le classique)      |
+| **Ctrl+Shift+Q** (~0,7 s)| Quitter la borne (chord discret)                   |
 
 > Démarrage direct sur un jeu (attract) : monter un dossier GEMDOS
 > (`NEOST_GEMDOS_DIR=…`) dont le `DESKTOP.INF` (TOS 1.x) ou `NEWDESK.INF` (TOS 2.x)
 > contient une ligne d'autostart `#Z 01 C:\JEU.TOS@`.
+
+## Effets CRT (façade moniteur)
+
+Option **opt-in** : une passe shader (FBO) applique par-dessus l'écran ST la « façade
+verre » d'un vieux moniteur cathodique — géométrie de baril, scanlines, shadow mask,
+rémanence phosphore, luminosité/contraste/saturation/teinte, vignette et courbe gamma.
+Sans surprise : à échec gracieux (si le shader ne compile pas — ex. contexte GL 2.1 sur
+un vieux macOS — l'écran est présenté **brut**, passthrough).
+
+```sh
+./build/neost --crt                         # active les effets (réglages du neost.cfg)
+./build/neost --crt-preset arcade           # preset : off | leger | arcade | phosphor
+./build/neost --kiosk --crt-preset phosphor roms/tos162fr.img "disks/Jeu.stx"
+```
+
+En **fenêtré**, le menu **Affichage → Effets CRT** ouvre un panneau de réglages en direct
+(chaque curseur est persisté dans `neost.cfg`). Un preset n'est qu'un point de départ : on
+peut ensuite tout ajuster. En **kiosk**, la config est figée → les effets viennent du
+`neost.cfg` (ou de `--crt` / `--crt-preset`).
 
 ## ROM : EmuTOS par défaut (libre)
 

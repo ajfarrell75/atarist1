@@ -154,6 +154,27 @@ densité HD/ED STX (NeoST plus cohérent) ; RTC en temps émulé (déterminisme 
   contraint pas plus ; nécessiterait de modéliser le cycle d'effet de l'écriture registre 0 vs
   DE-start par ligne. Invisible aux étalons. _Valeur très basse._
 
+### Interface — kiosk & effets CRT (revue 2026-07-10)
+Fonctionnalités **livrées et fonctionnelles** (build OK options strictes, auto-tests cœur
+verts) — voir `CHANGELOG.md § Frontend`. Points mineurs relevés à la relecture (aucun
+bloquant, cœur émulation intact) :
+- **CRT — ordre `edgeMask` vs persistance** (`gui/CrtEffectStack.cpp`, `kFragmentShader`) :
+  `rgb *= edgeMask` puis `rgb = max(rgb, prev*persist)` — la rémanence (`prev`, non masquée)
+  transparaît hors du cadre courbé (baril fort) → léger « bavement » aux bords. Correctif :
+  masquer `prev` aussi, ou appliquer `edgeMask` en tout dernier (`fragColor = vec4(rgb*edgeMask,1)`).
+- **CRT — clamp défensif `centerLighting`** : le shader fait `1.0/uCenterLighting` ; l'UI borne
+  à 0.5..1.0 mais un `neost.cfg` chargeant `crt_center=0` donnerait `1/0`. Clamp à la lecture
+  ou `max(uCenterLighting, 0.01)` dans le shader.
+- **Kiosk — page Clavier, touche « collée » en frappe rapide** (`main.cpp`) : re-valider (A)
+  une touche/clic avant l'expiration de `g_kioskInjectHold` (~4 trames) écrase
+  `g_kioskKeyRelease` → le MAKE précédent n'a jamais son BREAK. Correctif : ignorer une
+  validation tant que `g_kioskInjectHold > 0` (ou relâcher l'attente avant le nouveau MAKE).
+- **Cosmétique** : membres `srcW_`/`srcH_` morts dans `CrtEffectStack` ; destructeur `= default`
+  (fuite GL seulement si l'objet cessait d'être un singleton process-lifetime) ; répétition de
+  navigation kiosk : tenir gauche/droite (swap one-shot) bloque la répétition haut/bas.
+- **CRT v1 assumé** : en kiosk, baril/vignette encadrent le buffer ST ENTIER (bords courbés
+  rognés hors écran en zoom fort) ; contexte GL 2.1 (vieux macOS) → passthrough (pas d'effets).
+
 ### Son DMA STE
 - **FIFO 8 octets + avance HBL** (`DmaSnd_FIFO_*`, S2) + **compteur d'adresse live**
   (`$FF8909/0B/0D` au cycle) — refinement sous-perceptuel (la timeline horodatée capte déjà les

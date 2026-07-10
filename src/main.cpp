@@ -17,6 +17,8 @@
 #else
 #include <GL/gl.h>
 #endif
+#include "gui/CrtEffectStack.h"   // passe d'effets CRT (opt-in, façade moniteur)
+#include <cfloat>                 // FLT_MAX (contrainte de ratio fenêtre écran)
 #include <cstdint>
 #include <cstdio>
 #include <ctime>
@@ -28,6 +30,7 @@
 #include <fstream>
 #include <filesystem>
 #include <algorithm>
+#include <cmath>
 #include <vector>
 #include <sys/stat.h>
 
@@ -92,6 +95,8 @@ struct Config { std::string rom; std::string disk; std::string cart; bool mono =
                 float volume = 1.0f;   // volume maître de la sortie audio (0..1, barre de menu)
                 bool showDisk = true, showCart = true, showHex = true, showCpu = true;
                 bool showJoy = false;
+                bool crt = false;              // effets CRT actifs (façade moniteur)
+                neost::CrtParams crtParams;    // réglages CRT (cf. gui/CrtParams.h)
                 std::string rtc; std::time_t rtcSaved = 0; };
 static std::string cfgPath(const std::string& exeDir) { return exeDir + "/../neost.cfg"; }
 
@@ -149,12 +154,60 @@ static Config loadConfig(const std::string& exeDir) {
         else if (line.rfind("showJoy=", 0) == 0) c.showJoy = (line.substr(8) == "1");
         else if (line.rfind("rtc_saved=", 0) == 0) c.rtcSaved = std::strtoll(line.substr(10).c_str(), nullptr, 10);
         else if (line.rfind("rtc=", 0) == 0) c.rtc = line.substr(4);
+        // Effets CRT (cf. gui/CrtParams.h). Un preset (--crt-preset / applyCrtPreset)
+        // n'est qu'un raccourci qui écrit ces mêmes clés numériques.
+        else if (line.rfind("crt=", 0) == 0) c.crt = (line.substr(4) == "1");
+        else if (line.rfind("crt_bright=", 0)  == 0) c.crtParams.brightness  = std::strtof(line.substr(11).c_str(), nullptr);
+        else if (line.rfind("crt_contrast=", 0) == 0) c.crtParams.contrast   = std::strtof(line.substr(13).c_str(), nullptr);
+        else if (line.rfind("crt_sat=", 0)     == 0) c.crtParams.saturation  = std::strtof(line.substr(8).c_str(), nullptr);
+        else if (line.rfind("crt_hue=", 0)     == 0) c.crtParams.hue         = std::strtof(line.substr(8).c_str(), nullptr);
+        else if (line.rfind("crt_sharp=", 0)   == 0) c.crtParams.sharpness   = std::strtof(line.substr(10).c_str(), nullptr);
+        else if (line.rfind("crt_persist=", 0) == 0) c.crtParams.persistence = std::strtof(line.substr(12).c_str(), nullptr);
+        else if (line.rfind("crt_scanlines=", 0) == 0) c.crtParams.scanlines = std::strtof(line.substr(14).c_str(), nullptr);
+        else if (line.rfind("crt_barrel=", 0)  == 0) c.crtParams.barrel      = std::strtof(line.substr(11).c_str(), nullptr);
+        else if (line.rfind("crt_mask=", 0)    == 0) c.crtParams.shadowMask  = static_cast<neost::CrtParams::ShadowMask>(std::atoi(line.substr(9).c_str()));
+        else if (line.rfind("crt_maskstr=", 0) == 0) c.crtParams.shadowMaskStrength = std::strtof(line.substr(12).c_str(), nullptr);
+        else if (line.rfind("crt_lumgain=", 0) == 0) c.crtParams.luminanceGain = std::strtof(line.substr(12).c_str(), nullptr);
+        else if (line.rfind("crt_center=", 0)  == 0) c.crtParams.centerLighting = std::strtof(line.substr(11).c_str(), nullptr);
+        else if (line.rfind("crt_gamma=", 0)   == 0) c.crtParams.phosphorGamma  = std::strtof(line.substr(10).c_str(), nullptr);
     }
     return c;
 }
 // Mode kiosk (borne/expo) : plein écran sans chrome, config figée, sortie par chord.
 // Activé par --kiosk. Déclaré ici car saveConfig doit le consulter (gel de la config).
 static bool g_kiosk = false;
+// Zoom kiosk adaptatif (cale le contenu réel sur la hauteur) : ON par défaut,
+// basculable à chaud par F10. OFF = cadre complet fixe (pillarbox, rien ne déborde).
+static bool g_kioskAdaptive = true;
+// Menu kiosk plein écran (START manette ou F9). Le jeu est MIS EN PAUSE tant que le
+// menu est ouvert (cf. boucle d'émulation). Modèle « comme une vraie machine » :
+//   · INSÉRER une disquette (A) = on échange le contenu du lecteur — JAMAIS de reboot
+//     (exactement comme glisser une disquette : le jeu en cours continue).
+//   · REDÉMARRER la machine (X) = bouton reset explicite → la machine reboote sur la
+//     disquette actuellement insérée. C'est le SEUL moyen de relancer.
+//   · QUITTER NeoST (Y) = avec confirmation (page QUIT).
+// Déclaré ici (hors garde ImGui) car onKey doit consulter g_kioskDiskMenu pour ne
+// pas transmettre les touches de navigation au ST pendant le menu.
+enum { KIOSK_PAGE_LIST = 0, KIOSK_PAGE_KEYS = 1, KIOSK_PAGE_QUIT = 2 };
+static bool g_kioskDiskMenu = false;          // menu ouvert
+static int  g_kioskPage     = KIOSK_PAGE_LIST;
+static int  g_kioskDiskSel  = 0;              // index disquette sélectionnée (menu INTÉRIEUR)
+// Page liste = DEUX menus qu'on bascule avec gauche/droite : INTÉRIEUR (liste des
+// jeux) et EXTÉRIEUR (Redémarrer / Clavier / Quitter). g_kioskZone = quel menu a le
+// focus ; le FEU valide l'item surligné du menu focalisé.
+enum { KIOSK_ZONE_LIST = 0, KIOSK_ZONE_ACTIONS = 1 };
+static int  g_kioskZone   = KIOSK_ZONE_LIST;
+static int  g_kioskActSel = 0;                // index action (menu EXTÉRIEUR, 0..2)
+static int  g_kioskKeySel   = 0;              // page clavier : touche/clic sélectionné
+static std::vector<std::string> g_kioskDisks; // chemins listés à l'ouverture
+// Page « Clavier & souris » : un appui (A) envoie la touche/clic au ST puis la
+// relâche après quelques trames (frappe brève). Injection différée gérée dans la
+// boucle. -1 / false = rien à relâcher. La page CLAVIER ne met PAS le jeu en pause
+// (sinon la touche envoyée ne serait jamais traitée par le jeu).
+static int  g_kioskKeyRelease   = -1;         // scancode ST à relâcher (sinon -1)
+static bool g_kioskMouseRelL    = false;      // clic gauche à relâcher
+static bool g_kioskMouseRelR    = false;      // clic droit à relâcher
+static int  g_kioskInjectHold   = 0;          // trames restantes avant relâche
 static void saveConfig(const std::string& exeDir, Config& c, Machine* machine = nullptr) {
     if (g_kiosk) return;   // kiosk : configuration figée — la borne repart toujours identique
     if (machine) snapshotRtc(*machine, c);
@@ -173,6 +226,20 @@ static void saveConfig(const std::string& exeDir, Config& c, Machine* machine = 
              << "\nshowHex=" << (c.showHex ? 1 : 0)
              << "\nshowCpu=" << (c.showCpu ? 1 : 0)
              << "\nshowJoy=" << (c.showJoy ? 1 : 0)
+             << "\ncrt=" << (c.crt ? 1 : 0)
+             << "\ncrt_bright=" << c.crtParams.brightness
+             << "\ncrt_contrast=" << c.crtParams.contrast
+             << "\ncrt_sat=" << c.crtParams.saturation
+             << "\ncrt_hue=" << c.crtParams.hue
+             << "\ncrt_sharp=" << c.crtParams.sharpness
+             << "\ncrt_persist=" << c.crtParams.persistence
+             << "\ncrt_scanlines=" << c.crtParams.scanlines
+             << "\ncrt_barrel=" << c.crtParams.barrel
+             << "\ncrt_mask=" << static_cast<int>(c.crtParams.shadowMask)
+             << "\ncrt_maskstr=" << c.crtParams.shadowMaskStrength
+             << "\ncrt_lumgain=" << c.crtParams.luminanceGain
+             << "\ncrt_center=" << c.crtParams.centerLighting
+             << "\ncrt_gamma=" << c.crtParams.phosphorGamma
              << "\nrtc=" << c.rtc << "\nrtc_saved=" << c.rtcSaved << "\n";
 }
 
@@ -262,6 +329,15 @@ float g_joyDeadzone = 0.30f;           // zone morte centrale des sticks analogi
 uint8_t g_lastJoy0 = 0, g_lastJoy1 = 0; // dernier octet composé posé sur l'IKBD (fenêtre Joystick)
 bool  g_showDisk = true, g_showCart = true, g_showHex = true, g_showCpu = true;  // fenêtres masquables
 bool  g_showJoy = false;               // fenêtre joystick (visualisation live)
+
+// --- Effets CRT (façade moniteur) : passe FBO shader appliquée à l'écran ST.
+// Opt-in, à échec gracieux (cf. gui/CrtEffectStack). En kiosk la config est
+// figée → g_crtOn / g_crtParams viennent du neost.cfg (ou de --crt/--crt-preset).
+static neost::CrtEffectStack g_crt;
+static neost::CrtParams      g_crtParams;
+static bool g_crtOn   = false;         // effets CRT activés
+static bool g_crtInit = false;         // initialize() déjà tenté (une seule fois)
+static bool g_showCrt = false;         // fenêtre de réglages CRT visible (fenêtré)
 bool  g_joyCfgDirty = false;           // un réglage joystick a changé → resauver neost.cfg
 // Champs de saisie du menu Machine → Disque dur (dossier HD GEMDOS / image ACSI).
 // Globaux (et non statiques du menu) pour que le sous-menu Profils puisse les
@@ -308,8 +384,12 @@ struct GlScreen {
                             GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, px);
         }
     }
-    void drawFullscreen() {                 // repli sans ImGui (V inversé : ligne 0 en haut)
-        glBindTexture(GL_TEXTURE_2D, tex);
+    void drawFullscreen() { blitTexFullscreen(tex); }   // repli sans ImGui
+
+    // Quad plein écran d'une texture arbitraire (V inversé : ligne 0 en haut).
+    // Static pour être partagé par le blit brut et le blit post-CRT.
+    static void blitTexFullscreen(GLuint t) {
+        glBindTexture(GL_TEXTURE_2D, t);
         glEnable(GL_TEXTURE_2D);
         glBegin(GL_QUADS);
             glTexCoord2f(0.f, 1.f); glVertex2f(-1.f, -1.f);
@@ -321,35 +401,72 @@ struct GlScreen {
     }
 };
 
-// Rendu kiosk : on cale la ZONE ACTIVE (l'image « de base » — 320×200 en basse
-// rés, hors bandes overscan haute/basse et bordures latérales) sur la HAUTEUR de
-// l'écran, ratio gardé → un jeu normal remplit l'écran autant qu'une démo, sans
-// être rapetissé par les bordures unies qu'il n'exploite pas. Barres noires
-// seulement sur les CÔTÉS (pillarbox). Les rares démos plein-overscan (Enchanted
-// Land, Tali) verraient leurs bandes rognées — cas marginal assumé.
-//   actW/actH  : dimensions de la zone active (shifter.activeWidth/Height)
-//   actL/actT  : origine de la zone active dans le buffer (bordure gauche / haute)
-void drawStKiosk(GlScreen& s, int actW, int actH, int actL, int actT, int fbw, int fbh) {
-    if (s.w <= 0 || s.h <= 0 || actW <= 0 || actH <= 0 || fbw <= 0 || fbh <= 0) return;
+// Applique la passe d'effets CRT si activée. Renvoie la texture à afficher :
+// l'écran ST brut (s.tex) si les effets sont off, indisponibles (échec shader /
+// contexte 2.1 macOS) ou si process() échoue — passthrough sans surprise.
+// dstW×dstH = taille écran cible (pilote l'anti-alias analytique scanline/masque).
+static GLuint crtApply(const GlScreen& s, int dstW, int dstH) {
+    if (!g_crtOn || s.tex == 0) return s.tex;
+    if (!g_crt.available()) {
+        if (g_crtInit) return s.tex;        // déjà tenté et échoué → brut
+        g_crtInit = true;
+        if (!g_crt.initialize()) return s.tex;
+    }
+    g_crt.setParams(g_crtParams);
+    const GLuint out = g_crt.process(s.tex, s.w, s.h, dstW, dstH);
+    return out ? out : s.tex;
+}
+
+// Presets CRT nommés (kiosk / --crt-preset / neost.cfg). Renseigne `p` et `on`.
+// Un preset n'est qu'un point de départ : le panneau de réglage peut ensuite
+// tout ajuster, et les valeurs numériques figées écrasent le nom au save.
+// Renvoie false si le nom est inconnu (params laissés intacts).
+static bool applyCrtPreset(const std::string& name, neost::CrtParams& p, bool& on) {
+    using SM = neost::CrtParams::ShadowMask;
+    if (name == "off") { on = false; return true; }
+    neost::CrtParams q{};   // défauts neutres
+    if (name == "leger" || name == "light") {
+        q.scanlines = 0.18f; q.barrel = 0.03f; q.persistence = 0.20f;
+        q.luminanceGain = 1.10f; q.centerLighting = 0.96f;
+    } else if (name == "arcade") {
+        q.scanlines = 0.45f; q.barrel = 0.12f; q.persistence = 0.35f;
+        q.shadowMask = SM::Triad; q.shadowMaskStrength = 0.60f;
+        q.luminanceGain = 1.50f; q.centerLighting = 0.82f; q.phosphorGamma = 1.30f;
+    } else if (name == "phosphor" || name == "phosphore") {
+        q.scanlines = 0.30f; q.barrel = 0.08f; q.persistence = 0.60f;
+        q.shadowMask = SM::Aperture; q.shadowMaskStrength = 0.40f;
+        q.luminanceGain = 1.35f; q.centerLighting = 0.88f; q.phosphorGamma = 1.50f;
+    } else {
+        return false;   // nom inconnu
+    }
+    p = q; on = true;
+    return true;
+}
+
+// Rendu kiosk ADAPTATIF : on cale la région de contenu [cTop, cTop+cH) sur la
+// HAUTEUR de l'écran (ratio pixel gardé). Contenu court → gros zoom, les bordures
+// inutilisées débordent hors écran (rognées) → l'image remplit l'écran, peu de
+// bandes noires. Contenu plein-cadre/overscan → tient entier (pillarbox latéral).
+void drawStKiosk(GlScreen& s, int fbw, int fbh, int cTop, int cH) {
+    if (s.w <= 0 || s.h <= 0 || fbw <= 0 || fbh <= 0 || cH <= 0) return;
+    // Effets CRT « cadre complet » (v1) : la passe traite tout le buffer ST à la
+    // résolution écran (fbw×fbh, bornée), puis le zoom kiosk (viewport ci-dessous)
+    // cadre/rogne le résultat comme pour la texture brute. Le cadrage du quad
+    // reposant sur les UV (0..1 = cadre entier), la taille FBO ne change PAS le
+    // cadrage — juste la finesse d'anti-alias. Baril/vignette encadrent donc tout
+    // le cadre ST (bords courbés rognés hors écran en zoom fort — assumé v1).
+    const GLuint t = crtApply(s, fbw, fbh);
     // Aspect pixel : basse rés (≤480 px de large) et 200 lignes = pixels doublés.
     const float sx = (s.w <= 480) ? 2.f : 1.f;
     const float sy = (s.h <= 300) ? 2.f : 1.f;
-    const float aspect = (actW * sx) / (actH * sy);   // largeur/hauteur affichées de l'ACTIF
-    int vh = fbh, vw = (int)(fbh * aspect + 0.5f);    // remplit la hauteur
-    if (vw > fbw) { vw = fbw; vh = (int)(fbw / aspect + 0.5f); }   // garde-fou : trop large → cale sur la largeur
-    glViewport((fbw - vw) / 2, (fbh - vh) / 2, vw, vh);
-    // Texcoords limités à la zone active (bordures exclues). V inversé (ligne 0 en haut).
-    const float u0 = (float)actL / s.w, u1 = (float)(actL + actW) / s.w;
-    const float v0 = (float)actT / s.h, v1 = (float)(actT + actH) / s.h;
-    glBindTexture(GL_TEXTURE_2D, s.tex);
-    glEnable(GL_TEXTURE_2D);
-    glBegin(GL_QUADS);
-        glTexCoord2f(u0, v1); glVertex2f(-1.f, -1.f);
-        glTexCoord2f(u1, v1); glVertex2f( 1.f, -1.f);
-        glTexCoord2f(u1, v0); glVertex2f( 1.f,  1.f);
-        glTexCoord2f(u0, v0); glVertex2f(-1.f,  1.f);
-    glEnd();
-    glDisable(GL_TEXTURE_2D);
+    const float scale = (float)fbh / (cH * sy);        // px écran par px ST logique (vertical)
+    const float vw = s.w * sx * scale, vh = s.h * sy * scale;   // cadre COMPLET à cette échelle
+    const float cc = cTop + cH / 2.0f;                 // ligne ST au centre du contenu
+    const float vy = fbh / 2.0f - vh * (1.0f - cc / s.h);       // centre le contenu à l'écran
+    const float vx = (fbw - vw) / 2.0f;
+    glViewport((int)std::lround(vx), (int)std::lround(vy),
+               (int)std::lround(vw), (int)std::lround(vh));
+    GlScreen::blitTexFullscreen(t);                    // le buffer déborde → GL rogne les bordures
 }
 
 // Traduit une touche GLFW en scancode "make" du clavier Atari ST (0 = ignorée).
@@ -610,6 +727,10 @@ void onKey(GLFWwindow*, int key, int scancode, int action, int /*mods*/) {
     // droit) pilotent la manette et NE sont PAS transmises au clavier ST (sinon
     // double effet) ; elles sont scrutées par trame dans la boucle (cf. stjoy::compose).
     if (g_kbdJoy && stjoy::kbdBit(key)) return;
+    // Overlay kiosk de choix de disquette ouvert : le clavier pilote l'overlay
+    // (flèches/Entrée/Échap), on ne transmet PAS le MAKE au ST. Les BREAK des
+    // touches déjà tenues sont gérés plus haut → pas de touche « collée ».
+    if (g_kioskDiskMenu) return;
     stHeld[sc & 0x7F] = true;
     g_ikbd->keyEvent(sc, true);
 }
@@ -767,6 +888,295 @@ void drawJoystickWindow(GLFWwindow* win, uint8_t lastJoy0, uint8_t lastJoy1) {
     ImGui::End();
 }
 
+// Fenêtre de réglages des effets CRT (façade moniteur). Modifie g_crtOn /
+// g_crtParams ; pose `changed`=true si l'utilisateur a touché quelque chose
+// (l'appelant recopie alors dans neost.cfg et resauve). Les presets écrivent
+// les mêmes champs numériques → une fois figés ils survivent au save.
+void drawCrtSettings(bool& changed) {
+    ImGui::SetNextWindowSize(ImVec2(360, 0), ImGuiCond_FirstUseEver);
+    ImGui::Begin("Effets CRT", &g_showCrt);
+
+    if (ImGui::Checkbox("Activer les effets CRT", &g_crtOn)) {
+        changed = true;
+        if (g_crtOn && !g_crt.available() && !g_crtInit) { g_crtInit = true; g_crt.initialize(); }
+    }
+    // Diagnostic : shader indisponible (ex. contexte GL 2.1 sur macOS legacy).
+    if (g_crtOn && g_crtInit && !g_crt.available()) {
+        ImGui::TextColored(ImVec4(1, 0.5f, 0.3f, 1), "Shader indisponible :");
+        ImGui::TextWrapped("%s", g_crt.lastError().c_str());
+        ImGui::TextDisabled("→ écran ST présenté brut (passthrough).");
+    }
+
+    ImGui::TextDisabled("Presets :");
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Léger"))    { applyCrtPreset("leger",    g_crtParams, g_crtOn); changed = true; }
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Arcade"))   { applyCrtPreset("arcade",   g_crtParams, g_crtOn); changed = true; }
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Phosphore")){ applyCrtPreset("phosphor", g_crtParams, g_crtOn); changed = true; }
+
+    ImGui::Separator();
+    ImGui::BeginDisabled(!g_crtOn);
+    neost::CrtParams& p = g_crtParams;
+    bool ch = false;
+    ch |= ImGui::SliderFloat("Luminosité",  &p.brightness, -0.5f, 0.5f);
+    ch |= ImGui::SliderFloat("Contraste",   &p.contrast,    0.5f, 1.5f);
+    ch |= ImGui::SliderFloat("Saturation",  &p.saturation,  0.0f, 2.0f);
+    ch |= ImGui::SliderFloat("Teinte",      &p.hue,        -0.5f, 0.5f);
+    ImGui::Separator();
+    ch |= ImGui::SliderFloat("Netteté",     &p.sharpness,   0.0f, 1.0f);
+    ch |= ImGui::SliderFloat("Rémanence",   &p.persistence, 0.0f, 0.98f);
+    ImGui::Separator();
+    ch |= ImGui::SliderFloat("Scanlines",   &p.scanlines,   0.0f, 1.0f);
+    ch |= ImGui::SliderFloat("Baril",       &p.barrel,      0.0f, 0.30f);
+
+    ImGui::Separator();
+    static const char* kMaskNames[] = {
+        "Off", "Triade (3 bandes)", "Grille d'ouverture (Trinitron)", "Points (triades décalées)"
+    };
+    int maskIdx = static_cast<int>(p.shadowMask);
+    if (ImGui::Combo("Shadow mask", &maskIdx, kMaskNames, IM_ARRAYSIZE(kMaskNames))) {
+        p.shadowMask = static_cast<neost::CrtParams::ShadowMask>(maskIdx);
+        ch = true;
+    }
+    ImGui::BeginDisabled(p.shadowMask == neost::CrtParams::ShadowMask::Off);
+    ch |= ImGui::SliderFloat("Force du masque", &p.shadowMaskStrength, 0.0f, 1.0f);
+    ImGui::EndDisabled();
+    ch |= ImGui::SliderFloat("Gain de luminance", &p.luminanceGain, 1.0f, 2.0f);
+    ch |= ImGui::SliderFloat("Vignette",          &p.centerLighting, 0.5f, 1.0f);
+    ch |= ImGui::SliderFloat("Gamma phosphore",   &p.phosphorGamma, 0.6f, 2.6f);
+    ImGui::EndDisabled();
+
+    if (ch) changed = true;
+    ImGui::End();
+}
+
+// Longueur du préfixe commun (insensible à la casse) entre deux noms de fichier.
+// Sert à mesurer la « proximité » : les disquettes d'un même jeu (« Jeu (Disk A) »,
+// « Jeu (Disk B) »…) partagent un long préfixe et ne diffèrent qu'au marqueur B/C/D.
+static size_t commonPrefixLenCI(const std::string& a, const std::string& b) {
+    const size_t n = std::min(a.size(), b.size());
+    size_t i = 0;
+    while (i < n && std::tolower((unsigned char)a[i]) == std::tolower((unsigned char)b[i])) ++i;
+    return i;
+}
+
+// Deux noms de fichier sont-ils des SUITES du même jeu (face A/B, partie 1/2/3,
+// Disk 1 of 2 / Disk 2 of 2…) ? Vrai si les noms sont identiques SAUF un court
+// jeton central : long préfixe commun + long suffixe commun, écart au milieu
+// borné. Rejette « Space Harrier » / « Space Crusade » (préfixe commun mais
+// suffixes/milieux tout différents). `a`, `b` supposés déjà en minuscules.
+static bool kioskAreSiblings(const std::string& a, const std::string& b) {
+    if (a == b) return true;
+    const size_t p = commonPrefixLenCI(a, b);
+    if (p < 3) return false;
+    size_t s = 0;
+    const size_t maxS = std::min(a.size(), b.size()) - p;   // ne pas empiéter sur le préfixe
+    while (s < maxS && a[a.size() - 1 - s] == b[b.size() - 1 - s]) ++s;
+    const size_t gapA = a.size() - p - s, gapB = b.size() - p - s;
+    if (gapA > 12 || gapB > 12) return false;               // le morceau qui diffère doit être court
+    return (p + s) * 2 >= std::min(a.size(), b.size());      // préfixe+suffixe couvrent l'essentiel
+}
+
+// Recense les images montables (.st/.msa/.dim/.stx) sous disks/ (récursif) →
+// g_kioskDisks, TRIÉES par proximité au disque courant `mounted` (préfixe commun
+// décroissant, puis alphabétique). Les « suites » du jeu en cours (phases B/C/D)
+// remontent ainsi en tête. Appelé à l'ouverture de l'overlay kiosk.
+static void kioskScanDisks(const std::string& disksDir, const std::string& mounted) {
+    g_kioskDisks.clear();
+    std::error_code ec;
+    if (!fs::is_directory(disksDir, ec)) return;
+    const fs::path base(disksDir);
+    for (const auto& e : fs::recursive_directory_iterator(base, ec)) {
+        if (!e.is_regular_file()) continue;
+        std::string ext = e.path().extension().string();
+        for (auto& c : ext) c = (char)std::tolower((unsigned char)c);
+        if (ext == ".st" || ext == ".msa" || ext == ".dim" || ext == ".stx")
+            g_kioskDisks.push_back(e.path().string());
+    }
+    auto lower = [](std::string s) { for (auto& c : s) c = (char)std::tolower((unsigned char)c); return s; };
+    const std::string mref = lower(fs::path(mounted).filename().string());
+    std::sort(g_kioskDisks.begin(), g_kioskDisks.end(),
+              [&](const std::string& a, const std::string& b) {
+                  const std::string an = lower(fs::path(a).filename().string());
+                  const std::string bn = lower(fs::path(b).filename().string());
+                  // 1) les VRAIES suites du jeu monté (face A/B, partie 1/2/3) en tête
+                  if (!mref.empty()) {
+                      const bool sa = kioskAreSiblings(an, mref), sb = kioskAreSiblings(bn, mref);
+                      if (sa != sb) return sa;
+                  }
+                  // 2) puis par proximité de nom (préfixe commun), 3) alphabétique
+                  const size_t pa = commonPrefixLenCI(an, mref);
+                  const size_t pb = commonPrefixLenCI(bn, mref);
+                  if (pa != pb) return pa > pb;
+                  return an < bn;
+              });
+}
+
+// Table de la page « Clavier & souris » du menu kiosk. kind : 0 = touche ST
+// (scancode), 1 = clic gauche souris, 2 = clic droit. Disposée en 3 rangées
+// (F1-F8, chiffres 1-0, Espace + clics) — cf. KIOSK_KEY_ROWS pour la navigation.
+struct KioskKey { const char* label; uint8_t scancode; int kind; };
+static const KioskKey KIOSK_KEYS[] = {
+    {"F1",0x3B,0},{"F2",0x3C,0},{"F3",0x3D,0},{"F4",0x3E,0},
+    {"F5",0x3F,0},{"F6",0x40,0},{"F7",0x41,0},{"F8",0x42,0},          // rangée 0 (8)
+    {"1",0x02,0},{"2",0x03,0},{"3",0x04,0},{"4",0x05,0},{"5",0x06,0},
+    {"6",0x07,0},{"7",0x08,0},{"8",0x09,0},{"9",0x0A,0},{"0",0x0B,0}, // rangée 1 (10)
+    {"ESPACE",0x39,0},{"RETURN",0x1C,0},{"ESCAPE",0x01,0},
+    {"T",0x14,0},{"Y",0x15,0},{"N",0x31,0},
+    {"CLIC G",0,1},{"CLIC D",0,2},                                    // rangée 2 (8)
+};
+static const int KIOSK_KEY_COUNT = (int)(sizeof(KIOSK_KEYS) / sizeof(KIOSK_KEYS[0]));
+// Bornes de rangées (indices de début) : [0,8) [8,18) [18,26).
+static const int KIOSK_KEY_ROWS[][2] = { {0, 8}, {8, 18}, {18, 26} };
+static const int KIOSK_KEY_ROWN = 3;
+
+// Menu kiosk PLEIN ÉCRAN (rendu par-dessus l'écran ST). Pages selon g_kioskPage.
+// La navigation (clavier/manette) est gérée dans la boucle ; ici on AFFICHE.
+// `mounted` = chemin monté (marqué « ● »).
+void drawKioskDiskMenu(const std::string& disksDir, const std::string& mounted) {
+    const ImGuiIO& io = ImGui::GetIO();
+    auto lower = [](std::string s) { for (auto& c : s) c = (char)std::tolower((unsigned char)c); return s; };
+    const std::string mname = mounted.empty() ? std::string("(aucune)")
+                                              : fs::path(mounted).filename().string();
+    const ImVec4 kGreen (0.30f, 1.0f, 0.40f, 1.0f);
+    const ImVec4 kYellow(1.0f, 0.9f, 0.3f, 1.0f);
+    const ImVec4 kOrange(1.0f, 0.60f, 0.15f, 1.0f);
+    const bool keysPage = (g_kioskPage == KIOSK_PAGE_KEYS);
+
+    // Voile sombre plein écran — UNIQUEMENT pour les pages plein écran (liste,
+    // quitter). La page Clavier est un petit bandeau translucide : on VOIT le jeu
+    // tourner dessous (et donc qu'on a avancé) quand on lui envoie une touche.
+    if (!keysPage) {
+        ImGui::SetNextWindowPos(ImVec2(0, 0));
+        ImGui::SetNextWindowSize(io.DisplaySize);
+        ImGui::SetNextWindowBgAlpha(0.85f);
+        ImGui::Begin("##kioskveil", nullptr,
+                     ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+                     ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoSavedSettings |
+                     ImGuiWindowFlags_NoBringToFrontOnFocus);
+        ImGui::End();
+    }
+
+    // Géométrie selon la page : plein cadre centré pour la liste/quitter, petit
+    // bandeau ancré EN BAS (translucide) pour le clavier.
+    const ImVec2 fullSz(io.DisplaySize.x * 0.72f, io.DisplaySize.y * 0.82f);
+    if (keysPage) {
+        const ImVec2 ksz(io.DisplaySize.x * 0.60f, io.DisplaySize.y * 0.30f);
+        ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.98f),
+                                ImGuiCond_Always, ImVec2(0.5f, 1.0f));   // ancré en bas
+        ImGui::SetNextWindowSize(ksz, ImGuiCond_Always);
+        ImGui::SetNextWindowBgAlpha(0.72f);
+    } else {
+        ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f),
+                                ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+        ImGui::SetNextWindowSize(fullSz, ImGuiCond_Always);
+    }
+    ImGui::Begin("##kioskmenu", nullptr,
+                 ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+                 ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar |
+                 ImGuiWindowFlags_NoSavedSettings);
+
+    // ================= PAGE 1 : DEUX menus (intérieur / extérieur) ============
+    // Menu INTÉRIEUR = liste des jeux ; menu EXTÉRIEUR = Redémarrer / Clavier /
+    // Quitter. On BASCULE de l'un à l'autre avec GAUCHE/DROITE ; haut/bas navigue
+    // dans le menu focalisé ; le FEU valide son item surligné. Le menu qui a le focus
+    // est vif (cursor vert ▶), l'autre est estompé.
+    if (g_kioskPage == KIOSK_PAGE_LIST) {
+        const int nd = (int)g_kioskDisks.size();
+        const bool zList = (g_kioskZone == KIOSK_ZONE_LIST);
+        const bool zAct  = (g_kioskZone == KIOSK_ZONE_ACTIONS);
+        const ImVec4 kDim(0.5f, 0.5f, 0.5f, 1.0f);   // item sélectionné du menu NON focalisé
+        ImGui::SetWindowFontScale(3.0f);
+        ImGui::TextColored(kYellow, "MENU");
+        ImGui::SameLine(); ImGui::SetWindowFontScale(1.5f);
+        ImGui::TextDisabled("  \xe2\x97\x80\xe2\x96\xb6 changer de menu   \xc2\xb7   haut/bas choisir"
+                            "   \xc2\xb7   FEU valider   \xc2\xb7   (B) reprendre");
+        ImGui::Separator();
+
+        // --- Menu INTÉRIEUR : liste des jeux (valider = INSÉRER à chaud) -------
+        const std::string mrefL = lower(mname);
+        const float footer = io.DisplaySize.y * 0.30f;   // place pour le menu extérieur
+        ImGui::SetWindowFontScale(1.6f);
+        ImGui::TextColored(zList ? kYellow : kDim, zList ? "\xe2\x96\xb6 JEUX" : "  JEUX");
+        ImGui::BeginChild("##kdlist", ImVec2(0, ImGui::GetContentRegionAvail().y - footer), true);
+        ImGui::SetWindowFontScale(2.7f);   // noms de fichiers TRÈS gros
+        if (g_kioskDisks.empty())
+            ImGui::TextDisabled("(aucune image dans %s/)", disksDir.c_str());
+        for (int i = 0; i < nd; ++i) {
+            const bool sel = (i == g_kioskDiskSel);
+            const bool cur = (g_kioskDisks[i] == mounted);
+            const std::string fn = fs::path(g_kioskDisks[i]).filename().string();
+            const bool sibling = !mrefL.empty() && !cur && kioskAreSiblings(lower(fn), mrefL);
+            // Cursor vert seulement si le menu JEUX a le focus ; sinon item courant estompé.
+            if (sel)          ImGui::PushStyleColor(ImGuiCol_Text, zList ? kGreen : kDim);
+            else if (sibling) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.95f, 0.6f, 1.0f));
+            ImGui::Text("%s %s%s", (sel && zList) ? "\xe2\x96\xb6" : "   ", cur ? "\xe2\x97\x8f " : "", fn.c_str());
+            if (sel || sibling) ImGui::PopStyleColor();
+            if (sel && zList) ImGui::SetScrollHereY(0.5f);
+        }
+        ImGui::EndChild();
+
+        // --- Menu EXTÉRIEUR : boutons d'action --------------------------------
+        ImGui::SetWindowFontScale(2.3f);
+        auto actionRow = [&](int idx, const ImVec4& col, const char* label) {
+            const bool sel = (g_kioskActSel == idx);
+            // Vif + cursor vert si le menu ACTIONS a le focus et cet item est choisi.
+            ImGui::PushStyleColor(ImGuiCol_Text, (sel && zAct) ? kGreen : (zAct ? col : kDim));
+            ImGui::Text("%s %s", (sel && zAct) ? "\xe2\x96\xb6" : "  ", label);
+            ImGui::PopStyleColor();
+        };
+        actionRow(0, kOrange,                          "REDEMARRER LA MACHINE");
+        actionRow(1, ImVec4(0.55f, 0.8f, 1.0f, 1.0f),  "CLAVIER & SOURIS");
+        actionRow(2, ImVec4(1.0f, 0.5f, 0.4f, 1.0f),   "QUITTER NEOST");
+        ImGui::SetWindowFontScale(1.0f);
+    }
+
+    // ================= PAGE 2 : Clavier & souris (petit bandeau) ==============
+    // Jeu NON en pause : la touche/clic est envoyée au jeu qui tourne dessous.
+    else if (g_kioskPage == KIOSK_PAGE_KEYS) {
+        ImGui::SetWindowFontScale(1.5f);
+        ImGui::TextColored(kYellow, "CLAVIER & SOURIS");
+        ImGui::SameLine();
+        ImGui::TextDisabled(" (A) appuyer  \xc2\xb7  (B) fermer");
+        ImGui::Separator();
+
+        for (int r = 0; r < KIOSK_KEY_ROWN; ++r) {
+            ImGui::SetWindowFontScale(2.4f);
+            for (int i = KIOSK_KEY_ROWS[r][0]; i < KIOSK_KEY_ROWS[r][1]; ++i) {
+                const bool sel = (i == g_kioskKeySel);
+                if (i > KIOSK_KEY_ROWS[r][0]) ImGui::SameLine();
+                if (sel) ImGui::PushStyleColor(ImGuiCol_Text, kGreen);
+                char cell[24];
+                std::snprintf(cell, sizeof cell, sel ? "[%s]" : " %s ", KIOSK_KEYS[i].label);
+                ImGui::TextUnformatted(cell);
+                if (sel) ImGui::PopStyleColor();
+            }
+            ImGui::Dummy(ImVec2(0, 4));
+        }
+        ImGui::SetWindowFontScale(1.0f);
+    }
+
+    // ================= PAGE 3 : confirmation de sortie =======================
+    else if (g_kioskPage == KIOSK_PAGE_QUIT) {
+        ImGui::SetWindowFontScale(3.1f);
+        ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.4f, 1.0f), "QUITTER NEOST ?");
+        ImGui::Separator();
+        ImGui::Dummy(ImVec2(0, 40));
+        ImGui::SetWindowFontScale(2.4f);
+        ImGui::TextDisabled("La borne va se fermer.");
+        ImGui::Dummy(ImVec2(0, 40));
+        ImGui::Separator();
+        ImGui::SetWindowFontScale(2.0f);
+        ImGui::TextColored(kGreen, "(A) Oui, quitter");
+        ImGui::SetWindowFontScale(1.8f);
+        ImGui::TextDisabled("(B) Non, revenir au menu");
+        ImGui::SetWindowFontScale(1.0f);
+    }
+
+    ImGui::End();
+}
+
 // Fenêtre de l'écran ST : fenêtre de BASE (toujours là, jamais au premier plan).
 // Placée sous les barres au 1er lancement, puis DÉPLAÇABLE par glissé de sa barre de
 // titre (ImGui mémorise sa position). La taille d'affichage suit la résolution
@@ -778,8 +1188,29 @@ void drawStScreen(const GlScreen& s, bool captured, bool& reqCapture, float topO
     // FirstUseEver (et non Always) : on ne fixe la position qu'au tout 1er affichage,
     // sinon la fenêtre serait re-ancrée à chaque trame et impossible à déplacer.
     ImGui::SetNextWindowPos(ImVec2(0.0f, topOffset), ImGuiCond_FirstUseEver);
+    // Aspect pixel ST : la basse rés a des pixels 2× plus larges/hauts que la mono
+    // (320×200 et 640×400 couvrent la même surface écran). On dérive l'échelle des
+    // dimensions du buffer (overscan inclus) : largeur ×2 si ≤ 480 px (classe basse
+    // rés), hauteur ×2 si ≤ 300 lignes (classe 200 lignes).
+    const float sx = (s.w <= 480) ? 2.0f : 1.0f;
+    const float sy = (s.h <= 300) ? 2.0f : 1.0f;
+    const float nativeW = s.w * sx, nativeH = s.h * sy;   // taille « moniteur » corrigée
+    const float aspect  = (nativeH > 0.f) ? nativeW / nativeH : 4.f / 3.f;
+    // Taille par défaut = native (au 1er affichage) ; ensuite LIBREMENT redimensionnable.
+    ImGui::SetNextWindowSize(ImVec2(nativeW, nativeH + 34.f), ImGuiCond_FirstUseEver);
+    // Contrainte de ratio : la FENÊTRE garde l'aspect ST (l'image remplit alors sans
+    // bandes). ImGui appelle ce callback pendant le redimensionnement.
+    static float s_aspect = aspect;   // capté pour le callback (mono/couleur → maj)
+    s_aspect = aspect;
+    ImGui::SetNextWindowSizeConstraints(
+        ImVec2(160.f, 120.f), ImVec2(FLT_MAX, FLT_MAX),
+        [](ImGuiSizeCallbackData* d) {
+            const float extra = 34.f;   // barre de titre + ligne d'aide (approx.)
+            const float a = *static_cast<float*>(d->UserData);
+            d->DesiredSize.y = (d->DesiredSize.x / a) + extra;
+        }, &s_aspect);
     ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse |
-                 ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_AlwaysAutoResize |
+                 ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse |
                  ImGuiWindowFlags_NoBringToFrontOnFocus;
     // Souris capturée → tout le mouvement va au ST (curseur verrouillé) : on FIGE la
     // fenêtre (pas de glissé). Une fois libérée (DEL), elle redevient déplaçable.
@@ -787,14 +1218,20 @@ void drawStScreen(const GlScreen& s, bool captured, bool& reqCapture, float topO
     ImGui::Begin("Atari ST Screen", nullptr, flags);
     ImGui::TextDisabled(captured ? "Souris capturée — Suppr (DEL) pour la libérer"
                                  : "Clic dans l'écran pour capturer la souris (curseur GEM)");
-    const ImTextureID id = (ImTextureID)(intptr_t)s.tex;
-    // Aspect pixel ST : la basse rés a des pixels 2× plus larges/hauts que la mono
-    // (320×200 et 640×400 couvrent la même surface écran). On dérive l'échelle des
-    // dimensions du buffer (overscan inclus) : largeur ×2 si ≤ 480 px (classe basse
-    // rés), hauteur ×2 si ≤ 300 lignes (classe 200 lignes).
-    const float sx = (s.w <= 480) ? 2.0f : 1.0f;
-    const float sy = (s.h <= 300) ? 2.0f : 1.0f;
-    ImGui::Image(id, ImVec2(s.w * sx, s.h * sy));
+    // On AJUSTE l'image à la zone dispo en gardant le ratio ST (letterbox centré) :
+    // la fenêtre est libre, l'image suit sans jamais se déformer.
+    const ImVec2 avail = ImGui::GetContentRegionAvail();
+    float dw = avail.x, dh = dw / aspect;
+    if (dh > avail.y) { dh = avail.y; dw = dh * aspect; }   // limité par la hauteur
+    dw = std::max(1.f, dw); dh = std::max(1.f, dh);
+    // Centre l'image dans la zone dispo (bandes égales si la fenêtre n'a pas le ratio).
+    const ImVec2 cur = ImGui::GetCursorPos();
+    ImGui::SetCursorPos(ImVec2(cur.x + (avail.x - dw) * 0.5f,
+                               cur.y + (avail.y - dh) * 0.5f));
+    // Passe CRT (ou texture brute si off/indispo), rendue à la taille affichée (arrondie).
+    const int dstW = (int)std::lround(dw), dstH = (int)std::lround(dh);
+    const ImTextureID id = (ImTextureID)(intptr_t)crtApply(s, dstW, dstH);
+    ImGui::Image(id, ImVec2((float)dstW, (float)dstH));
     if (!captured && ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
         reqCapture = true;
     ImGui::End();
@@ -914,6 +1351,7 @@ int main(int argc, char** argv) {
     Config cfg = loadConfig(exeDir);
     g_showDisk = cfg.showDisk; g_showCart = cfg.showCart; g_showHex = cfg.showHex;
     g_showCpu  = cfg.showCpu;  g_showJoy  = cfg.showJoy;
+    g_crtOn    = cfg.crt;      g_crtParams = cfg.crtParams;   // effets CRT (figés en kiosk)
     const std::string defRom = cfg.rom.empty() ? std::string("roms/etos192us.img") : cfg.rom;
     // Ligne de commande : arguments POSITIONNELS (ROM, disque) + DRAPEAUX.
     //   --kiosk            : borne plein écran « borderless-windowed » (cf. g_kiosk).
@@ -928,8 +1366,20 @@ int main(int argc, char** argv) {
         if      (a == "--kiosk")           g_kiosk = true;
         else if (a == "--kiosk-exclusive") { g_kiosk = true; kioskExclusive = true; }
         else if (a == "--kiosk-monitor" && i + 1 < argc) kioskMonitor = std::atoi(argv[++i]);
+        //   --crt              : active les effets CRT (façade moniteur).
+        //   --crt-preset NAME  : preset (off|leger|arcade|phosphor) ; implique --crt.
+        else if (a == "--crt")             g_crtOn = true;
+        else if (a == "--crt-preset" && i + 1 < argc) {
+            const std::string name = argv[++i];
+            if (!applyCrtPreset(name, g_crtParams, g_crtOn))
+                std::fprintf(stderr, "[main] preset CRT inconnu : '%s' "
+                             "(off|leger|arcade|phosphor)\n", name.c_str());
+        }
         else if (!a.empty() && a[0] != '-') pos.push_back(a);
     }
+    // Les overrides CLI priment sur le cfg (et resteront cohérents si le panneau
+    // déclenche un save ultérieur en mode fenêtré).
+    cfg.crt = g_crtOn; cfg.crtParams = g_crtParams;
     // Sans argument positionnel, ./neost recharge le dernier ROM (ou EmuTOS US).
     const std::string romLogical = !pos.empty() ? pos[0] : defRom;
     const std::string tosPath  = resolveData(romLogical, exeDir);
@@ -1241,6 +1691,15 @@ int main(int argc, char** argv) {
             static int quitHold = 0;
             quitHold = (ctrl && shift && q) ? quitHold + 1 : 0;
             if (quitHold >= 35) glfwSetWindowShouldClose(window, GLFW_TRUE);   // ~0,7 s @ 50 Hz
+
+            // F10 (front montant) : (dés)active le zoom adaptatif → cadre complet fixe.
+            static bool f10Prev = false;
+            const bool f10 = glfwGetKey(window, GLFW_KEY_F10) == GLFW_PRESS;
+            if (f10 && !f10Prev) {
+                g_kioskAdaptive = !g_kioskAdaptive;
+                std::fprintf(stderr, "[kiosk] zoom adaptatif %s\n", g_kioskAdaptive ? "ON" : "OFF");
+            }
+            f10Prev = f10;
         }
 
         // F11 (front montant) : bascule l'émulation joystick au clavier. Pratique
@@ -1266,6 +1725,9 @@ int main(int argc, char** argv) {
 #endif
             uint8_t joy0 = 0, joy1 = 0;
             stjoy::compose(window, kbd, g_kbdJoyPort, g_joyDeadzone, joy0, joy1);
+            // Overlay kiosk ouvert : la manette pilote l'overlay → on n'envoie
+            // rien au ST (sinon le jeu bougerait pendant la navigation).
+            if (g_kioskDiskMenu) { joy0 = 0; joy1 = 0; }
             machine.ikbd.setJoystick(joy0, joy1);
             machine.bus.stePads.setJoystick(joy0, joy1);   // joypads STE ($FF9200/02) — même état
             // Paddles / axes analogiques STE ($FF9211-17) : axes BRUTS de la
@@ -1286,6 +1748,20 @@ int main(int argc, char** argv) {
 
         machine.cpu.updateIpl();               // entrées reçues → réévalue l'IPL
 
+        // Relâche différée de la touche/clic envoyé depuis la page Clavier du menu :
+        // l'appui (MAKE) a été posé quand l'utilisateur a validé ; on relâche (BREAK)
+        // quelques trames plus tard → frappe brève que le jeu voit passer.
+        if (g_kioskInjectHold > 0 && --g_kioskInjectHold == 0) {
+            if (g_kioskKeyRelease >= 0) {
+                machine.ikbd.keyEvent((uint8_t)g_kioskKeyRelease, false);
+                g_kioskKeyRelease = -1;
+            }
+            if (g_kioskMouseRelL || g_kioskMouseRelR) {
+                machine.ikbd.mouseEvent(0, 0, false, false);
+                g_kioskMouseRelL = g_kioskMouseRelR = false;
+            }
+        }
+
         // RATTRAPAGE : on émule autant de trames que le temps réel l'exige depuis la
         // dernière itération (pattern émulateur classique). Une itération GUI coûte
         // ce qu'elle coûte (ImGui + GL + granularité de sleep macOS ≈ 22-25 ms,
@@ -1298,7 +1774,13 @@ int main(int argc, char** argv) {
         // repousse de SA durée émulée (géométrie 50/60/71 Hz). Garde-fou : après une
         // longue pause (drag de fenêtre…), on abandonne le retard au-delà de 4 trames
         // au lieu de spiraler.
-        {
+        // PAUSE KIOSK : menu ouvert (hors page Clavier, qui doit laisser tourner le
+        // jeu pour qu'il reçoive les touches envoyées) → on gèle l'émulation. À la
+        // reprise on recale l'échéance sur maintenant (aucun rattrapage en rafale).
+        const bool kioskPaused = g_kiosk && g_kioskDiskMenu && g_kioskPage != KIOSK_PAGE_KEYS;
+        if (kioskPaused) {
+            emuNext = clock::now();
+        } else {
             // 6 trames max ≈ 120 ms de retard résorbable d'un coup : un stall GUI
             // ponctuel (drag de fenêtre, rafale disque) plus court que ça se rattrape
             // SANS trou audible (le coussin de l'anneau fait ~85 ms).
@@ -1320,6 +1802,25 @@ int main(int argc, char** argv) {
         if (g_kiosk) glClearColor(0.f, 0.f, 0.f, 1.f);   // kiosk : barres noires
         else         glClearColor(0.10f, 0.10f, 0.12f, 1.f);
         glClear(GL_COLOR_BUFFER_BIT);
+
+        // Zoom kiosk : DEUX cadrages francs, jamais au pixel (→ zéro saccade).
+        //  · Défaut (99 % des jeux) : cadre FIXE sur la ZONE ACTIVE (rectangle net
+        //    donné par le matériel — activeTop/activeHeight), qui ne bouge JAMAIS.
+        //    Un champ d'étoiles, un fond noir : rien ne fait « respirer » le zoom.
+        //  · Overscan (démos, ouvertures de bordures — Enchanted Land, Lethal Xcess) :
+        //    quand la Glue signale une bordure retirée, on montre le BUFFER ENTIER.
+        //    Hystérésis (latch) pour ne pas basculer sur un retrait d'une seule trame.
+        // F10 (g_kioskAdaptive OFF) force le cadre complet en permanence.
+        int kTop = 0, kH = machine.shifter.height();
+        if (g_kiosk && g_kioskAdaptive) {
+            static int overscanLatch = 0;
+            if (machine.shifter.bordersOpen()) overscanLatch = 30;   // ~0,6 s de maintien
+            else if (overscanLatch > 0)        --overscanLatch;
+            if (overscanLatch == 0) {           // zone active fixe (cas normal)
+                kTop = machine.shifter.activeTop();
+                kH   = machine.shifter.activeHeight();
+            }                                    // sinon : kTop=0, kH=hauteur (buffer entier)
+        }
 
         bool reqReset = false, reqHardReset = false, reqRebuild = false, reqCapture = false;
         int  reqMonitor = -1;
@@ -1590,6 +2091,7 @@ int main(int argc, char** argv) {
                 ImGui::MenuItem(ICON_FA_MEMORY " Mémoire (hex)", nullptr, &g_showHex);
                 ImGui::MenuItem(ICON_FA_MICROCHIP " CPU 68000",     nullptr, &g_showCpu);
                 ImGui::MenuItem(ICON_FA_GAMEPAD " Joystick",      nullptr, &g_showJoy);
+                ImGui::MenuItem(ICON_FA_DESKTOP " Effets CRT",     nullptr, &g_showCrt);
                 ImGui::EndMenu();
             }
             ImGui::EndMainMenuBar();
@@ -1629,17 +2131,214 @@ int main(int argc, char** argv) {
         if (g_showHex)  drawHexViewer(machine.bus);
         if (g_showCpu)  drawCpuState(machine.cpu, reqReset);
         if (g_showJoy)  drawJoystickWindow(window, g_lastJoy0, g_lastJoy1);
+        if (g_showCrt) {                     // fenêtre de réglages CRT
+            bool crtChanged = false;
+            drawCrtSettings(crtChanged);
+            if (crtChanged) {                // recopie dans le cfg + resauve (no-op en kiosk)
+                cfg.crt = g_crtOn; cfg.crtParams = g_crtParams;
+                saveConfig(exeDir, cfg, &machine);
+            }
+        }
         // Un réglage joystick a changé dans la fenêtre → resauve neost.cfg.
         if (g_joyCfgDirty) {
             cfg.joyport = g_kbdJoyPort; cfg.joydeadzone = g_joyDeadzone;
             saveConfig(exeDir, cfg, &machine); g_joyCfgDirty = false;
         }
         }                                        // fin if(!g_kiosk) : chrome ImGui
-        ImGui::Render();
-        if (g_kiosk) {                                // rendu plein écran (ImGui vide au-dessus)
-            const int aw = machine.shifter.activeWidth(), ah = machine.shifter.activeHeight();
-            drawStKiosk(screen, aw, ah, (screen.w - aw) / 2, machine.shifter.activeTop(), fbw, fbh);
+
+        // --- Kiosk : menu in-game (START manette ou F9), jeu en PAUSE ------------
+        // Modèle « vraie machine » : (A) INSÈRE la disquette choisie SANS jamais
+        // rebooter (le jeu en cours continue) ; (X) REDÉMARRE la machine (bouton
+        // reset) → reboot sur la disquette insérée ; (Y) quitte avec confirmation.
+        if (g_kiosk) {
+            auto padBtn = [&](int b) {
+                for (int j = GLFW_JOYSTICK_1; j <= GLFW_JOYSTICK_LAST; ++j) {
+                    GLFWgamepadstate gs;
+                    if (glfwJoystickPresent(j) && glfwGetGamepadState(j, &gs) && gs.buttons[b])
+                        return true;
+                }
+                return false;
+            };
+            auto padAxisY = [&]() {
+                for (int j = GLFW_JOYSTICK_1; j <= GLFW_JOYSTICK_LAST; ++j) {
+                    GLFWgamepadstate gs;
+                    if (glfwJoystickPresent(j) && glfwGetGamepadState(j, &gs))
+                        return gs.axes[GLFW_GAMEPAD_AXIS_LEFT_Y];
+                }
+                return 0.0f;
+            };
+            auto padAxisX = [&]() {
+                for (int j = GLFW_JOYSTICK_1; j <= GLFW_JOYSTICK_LAST; ++j) {
+                    GLFWgamepadstate gs;
+                    if (glfwJoystickPresent(j) && glfwGetGamepadState(j, &gs))
+                        return gs.axes[GLFW_GAMEPAD_AXIS_LEFT_X];
+                }
+                return 0.0f;
+            };
+            // Ouvrir / fermer : START manette ou F9 clavier (front montant). La liste
+            // est triée par PROXIMITÉ au disque courant → les phases B/C/D du jeu en
+            // cours arrivent en tête, et la sélection démarre sur le disque monté.
+            static bool pOpen = false;
+            const bool openNow = padBtn(GLFW_GAMEPAD_BUTTON_START) ||
+                                 glfwGetKey(window, GLFW_KEY_F9) == GLFW_PRESS;
+            if (openNow && !pOpen) {
+                g_kioskDiskMenu = !g_kioskDiskMenu;
+                g_kioskPage = KIOSK_PAGE_LIST;   // ré-ouverture : toujours sur la liste
+                g_kioskZone = KIOSK_ZONE_LIST;   // focus par défaut : menu des jeux
+                g_kioskActSel = 0;
+                if (g_kioskDiskMenu) {
+                    const std::string m = machine.fdc.mountedPath();
+                    kioskScanDisks(disksDir, m);
+                    g_kioskDiskSel = 0;
+                    for (int i = 0; i < (int)g_kioskDisks.size(); ++i)
+                        if (g_kioskDisks[i] == m) { g_kioskDiskSel = i; break; }
+                }
+            }
+            pOpen = openNow;
+
+            // SELECT (Back manette) ou K : ouvre/ferme DIRECTEMENT le bandeau Clavier &
+            // souris, même en cours de jeu (sans passer par la liste). Le jeu tourne
+            // dessous → la touche envoyée agit tout de suite.
+            static bool pSelect = false;
+            const bool selNow = padBtn(GLFW_GAMEPAD_BUTTON_BACK) ||
+                                glfwGetKey(window, GLFW_KEY_K) == GLFW_PRESS;
+            if (selNow && !pSelect) {
+                if (g_kioskDiskMenu && g_kioskPage == KIOSK_PAGE_KEYS) {
+                    g_kioskDiskMenu = false;               // referme le clavier → reprise
+                } else {
+                    g_kioskDiskMenu = true;
+                    g_kioskPage = KIOSK_PAGE_KEYS;         // ouvre direct le clavier
+                    g_kioskKeySel = 0;
+                }
+            }
+            pSelect = selNow;
+
+            if (g_kioskDiskMenu) {
+                // Fronts partagés (A / B) : lus une fois, réutilisés selon la page.
+                static bool pOk = false, pCancel = false;
+                const bool okNow = padBtn(GLFW_GAMEPAD_BUTTON_A) ||
+                                   glfwGetKey(window, GLFW_KEY_ENTER) == GLFW_PRESS;
+                const bool caNow = padBtn(GLFW_GAMEPAD_BUTTON_B) ||
+                                   glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS;
+
+                // Directions (D-pad / stick / flèches) avec répétition sur maintien,
+                // partagées par toutes les pages (la liste n'utilise que haut/bas).
+                const bool up    = padBtn(GLFW_GAMEPAD_BUTTON_DPAD_UP)    ||
+                                   glfwGetKey(window, GLFW_KEY_UP)    == GLFW_PRESS || padAxisY() < -0.5f;
+                const bool down  = padBtn(GLFW_GAMEPAD_BUTTON_DPAD_DOWN)  ||
+                                   glfwGetKey(window, GLFW_KEY_DOWN)  == GLFW_PRESS || padAxisY() >  0.5f;
+                const bool left  = padBtn(GLFW_GAMEPAD_BUTTON_DPAD_LEFT)  ||
+                                   glfwGetKey(window, GLFW_KEY_LEFT)  == GLFW_PRESS || padAxisX() < -0.5f;
+                const bool right = padBtn(GLFW_GAMEPAD_BUTTON_DPAD_RIGHT) ||
+                                   glfwGetKey(window, GLFW_KEY_RIGHT) == GLFW_PRESS || padAxisX() >  0.5f;
+                // Répétition TEMPORELLE (pas au nombre d'itérations) : la boucle tourne
+                // sans vsync et à vide quand le jeu est en pause → un compteur de trames
+                // défilerait à des centaines de pas/s (impossible de viser un item). On
+                // se cale donc sur l'horloge : 1 pas au front, puis délai avant répétition,
+                // puis un pas toutes les ~150 ms tant que la direction est maintenue.
+                static bool navHeld = false;
+                static clock::time_point navNext{};
+                const bool nav = up || down || left || right;
+                const auto navNow = clock::now();
+                bool step = false;
+                if (nav) {
+                    if (!navHeld) { step = true; navHeld = true;
+                                    navNext = navNow + std::chrono::milliseconds(400); }  // pause avant répét.
+                    else if (navNow >= navNext) { step = true;
+                                    navNext = navNow + std::chrono::milliseconds(150); }   // cadence de répét.
+                } else {
+                    navHeld = false;
+                }
+
+                if (g_kioskPage == KIOSK_PAGE_QUIT) {
+                    // « Quitter ? » : A/Entrée confirme, B/Échap revient à la liste.
+                    if (okNow && !pOk) glfwSetWindowShouldClose(window, GLFW_TRUE);
+                    if (caNow && !pCancel) g_kioskPage = KIOSK_PAGE_LIST;
+
+                } else if (g_kioskPage == KIOSK_PAGE_KEYS) {
+                    // Grille de touches : navigation 2D. (A) envoie une frappe brève au
+                    // ST (le jeu tourne derrière), (B) revient au menu.
+                    if (step) {
+                        int row = 0;
+                        for (int r = 0; r < KIOSK_KEY_ROWN; ++r)
+                            if (g_kioskKeySel >= KIOSK_KEY_ROWS[r][0] && g_kioskKeySel < KIOSK_KEY_ROWS[r][1]) row = r;
+                        int col = g_kioskKeySel - KIOSK_KEY_ROWS[row][0];
+                        if (up || down) {
+                            row = (row + (down ? 1 : -1) + KIOSK_KEY_ROWN) % KIOSK_KEY_ROWN;
+                            const int len = KIOSK_KEY_ROWS[row][1] - KIOSK_KEY_ROWS[row][0];
+                            if (col >= len) col = len - 1;
+                        } else {   // gauche/droite : dans la rangée, avec butée
+                            const int len = KIOSK_KEY_ROWS[row][1] - KIOSK_KEY_ROWS[row][0];
+                            col += right ? 1 : -1;
+                            if (col < 0) col = 0;
+                            if (col >= len) col = len - 1;
+                        }
+                        g_kioskKeySel = KIOSK_KEY_ROWS[row][0] + col;
+                    }
+                    // On ne pose une nouvelle frappe QUE si la précédente a fini son
+                    // maintien (g_kioskInjectHold == 0) : sinon un 2ᵉ appui < 4 trames
+                    // écraserait g_kioskKeyRelease → le MAKE précédent n'aurait jamais
+                    // son BREAK (touche « collée » côté ST).
+                    if (okNow && !pOk && g_kioskInjectHold == 0) {
+                        const KioskKey& k = KIOSK_KEYS[g_kioskKeySel];
+                        if (k.kind == 0) {                       // touche clavier ST
+                            machine.ikbd.keyEvent(k.scancode, true);
+                            g_kioskKeyRelease = k.scancode;
+                        } else {                                 // clic souris (G/D)
+                            const bool L = (k.kind == 1), R = (k.kind == 2);
+                            machine.ikbd.mouseEvent(0, 0, L, R);
+                            g_kioskMouseRelL = L; g_kioskMouseRelR = R;
+                        }
+                        g_kioskInjectHold = 4;                   // ~4 trames de maintien
+                    }
+                    if (caNow && !pCancel) g_kioskDiskMenu = false;   // (B) ferme → reprise du jeu
+
+                } else {   // KIOSK_PAGE_LIST — deux menus (intérieur / extérieur)
+                    const int nd = (int)g_kioskDisks.size();
+                    // GAUCHE/DROITE : bascule d'un menu à l'autre (front, non répété).
+                    static bool pSwap = false;
+                    const bool swapNow = left || right;
+                    if (swapNow && !pSwap)
+                        g_kioskZone = (g_kioskZone == KIOSK_ZONE_LIST) ? KIOSK_ZONE_ACTIONS
+                                                                       : KIOSK_ZONE_LIST;
+                    pSwap = swapNow;
+                    // HAUT/BAS : navigue DANS le menu focalisé (chacun boucle sur lui-même).
+                    if (step && (up || down)) {
+                        if (g_kioskZone == KIOSK_ZONE_LIST) {
+                            if (nd > 0) {
+                                g_kioskDiskSel += down ? 1 : -1;
+                                g_kioskDiskSel = (g_kioskDiskSel % nd + nd) % nd;
+                            }
+                        } else {
+                            g_kioskActSel += down ? 1 : -1;
+                            g_kioskActSel = (g_kioskActSel % 3 + 3) % 3;
+                        }
+                    }
+                    // FEU (A/Entrée) : déclenche l'item surligné du menu focalisé.
+                    if (okNow && !pOk) {
+                        if (g_kioskZone == KIOSK_ZONE_LIST) {
+                            if (nd > 0) reqMount = g_kioskDisks[g_kioskDiskSel];  // INSÉRER à chaud
+                        } else {
+                            switch (g_kioskActSel) {
+                                case 0: reqHardReset = true;              // Redémarrer
+                                        g_kioskDiskMenu = false; break;
+                                case 1: g_kioskPage = KIOSK_PAGE_KEYS;    // Clavier & souris
+                                        g_kioskKeySel = 0; break;
+                                case 2: g_kioskPage = KIOSK_PAGE_QUIT; break;  // Quitter
+                            }
+                        }
+                    }
+                    // (B) reprendre le jeu : ferme le menu.
+                    if (caNow && !pCancel) g_kioskDiskMenu = false;
+                }
+                pOk = okNow; pCancel = caNow;
+
+                drawKioskDiskMenu(disksDir, machine.fdc.mountedPath());
+            }
         }
+
+        ImGui::Render();
+        if (g_kiosk) drawStKiosk(screen, fbw, fbh, kTop, kH);   // rendu adaptatif (ImGui vide au-dessus)
         ImGui_ImplOpenGL2_RenderDrawData(ImGui::GetDrawData());
 
         // Disk Library : montage / éjection à chaud du lecteur A.
@@ -1698,10 +2397,8 @@ int main(int argc, char** argv) {
             reqHardReset = true;
         }
 #else
-        if (g_kiosk) {                                // kiosk : image active calée sur la hauteur
-            const int aw = machine.shifter.activeWidth(), ah = machine.shifter.activeHeight();
-            drawStKiosk(screen, aw, ah, (screen.w - aw) / 2, machine.shifter.activeTop(), fbw, fbh);
-        } else screen.drawFullscreen();               // repli sans ImGui : plein cadre étiré
+        if (g_kiosk) drawStKiosk(screen, fbw, fbh, kTop, kH);   // kiosk : zoom adaptatif
+        else GlScreen::blitTexFullscreen(crtApply(screen, fbw, fbh));  // repli sans ImGui + CRT
 #endif
         // Changement de moniteur (couleur/mono) → hard reset pour que TOS
         // re-détecte la résolution au boot.
