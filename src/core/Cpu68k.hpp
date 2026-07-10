@@ -203,11 +203,24 @@ public:
     // Récupère l'adresse du nᵉ breakpoint (0..count-1) → true si valide.
     bool breakpointByIndex(int nr, uint32_t& outAddr) const;
 
-    // Un breakpoint a-t-il stoppé le dernier run() ? (à consulter par la boucle de trame
-    // et le frontend pour passer en pause.) breakpointHitAddr() = l'adresse atteinte.
+    // --- Débogueur : watchpoints mémoire (arrêt à l'accès lecture OU écriture) -------
+    // Sémantique « break-after-access » : l'exécution s'arrête APRÈS l'instruction qui a
+    // accédé à l'adresse. Testés par la couche dataflow de Moira (pas de coût côté Bus).
+    void setWatchpoint(uint32_t addr);
+    void clearWatchpoint(uint32_t addr);
+    void clearAllWatchpoints();
+    bool hasWatchpoint(uint32_t addr) const;
+    int  watchpointCount() const;
+    bool watchpointByIndex(int nr, uint32_t& outAddr) const;
+
+    // Un breakpoint OU watchpoint a-t-il stoppé le dernier run() ? (à consulter par la
+    // boucle de trame et le frontend pour passer en pause.) breakpointHitAddr() = adresse
+    // atteinte (PC du breakpoint, ou adresse DONNÉE du watchpoint) ; breakpointHitIsWatch()
+    // distingue les deux.
     bool     breakpointHit() const;
     uint32_t breakpointHitAddr() const;
-    // Efface l'état « hit » ET arme le skip-once de l'adresse atteinte (reprise propre).
+    bool     breakpointHitIsWatch() const;
+    // Efface l'état « hit » ET arme le skip-once (reprise propre, breakpoints PC only).
     void     clearBreakpointHit();
 
 private:

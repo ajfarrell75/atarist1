@@ -41,6 +41,7 @@ void usage() {
         "  --symbols FILE    table de symboles (.sym nm-style OU exécutable TOS $601A)\n"
         "  --symbols-base HEX  base de relocation ajoutée aux symboles d'un exécutable TOS\n"
         "  --break-sym NAME  breakpoint sur un symbole (nécessite --symbols ; répétable)\n"
+        "  --watch HEX       watchpoint mémoire (accès lecture/écriture ; break-after ; répétable)\n"
         "  --cpu CORE        cœur 68000 : moira (seul disponible, cycle-exact)\n"
         "  --machine TYPE    profil : st, megast, ste (défaut), megaste\n"
         "  --fpu             peuple le socket MC68881 du Mega STE ($FFFA40, émulation\n"
@@ -166,6 +167,7 @@ int main(int argc, char** argv) {
     bool        haveUntil  = false;
     uint32_t    untilPc    = 0;
     std::vector<uint32_t> breakAddrs;            // --break HEX : breakpoints PC (répétable)
+    std::vector<uint32_t> watchAddrs;            // --watch HEX : watchpoints mémoire (répétable)
     std::vector<std::string> breakSyms;          // --break-sym NAME : breakpoints par symbole
     std::string symbolsPath;                     // --symbols FILE (.sym nm-style ou exécutable TOS)
     uint32_t    symBase = 0;                      // --symbols-base HEX (relocation d'un exécutable TOS)
@@ -309,6 +311,7 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(a, "--mem"))        ramBytes  = parseRamBytes(next(a));
         else if (!std::strcmp(a, "--until-pc"))   { untilPc = (uint32_t)std::strtoul(next(a), nullptr, 16); haveUntil = true; }
         else if (!std::strcmp(a, "--break"))      breakAddrs.push_back((uint32_t)std::strtoul(next(a), nullptr, 16));
+        else if (!std::strcmp(a, "--watch"))      watchAddrs.push_back((uint32_t)std::strtoul(next(a), nullptr, 16));
         else if (!std::strcmp(a, "--break-sym"))  breakSyms.emplace_back(next(a));
         else if (!std::strcmp(a, "--symbols"))    symbolsPath = next(a);
         else if (!std::strcmp(a, "--symbols-base")) symBase = (uint32_t)std::strtoul(next(a), nullptr, 16);
@@ -456,6 +459,7 @@ int main(int argc, char** argv) {
             std::fprintf(stderr, "[headless] symboles : échec de chargement de %s\n", symbolsPath.c_str());
     }
     for (uint32_t a : breakAddrs) machine.cpu.setBreakpoint(a);   // débogueur : breakpoints PC
+    for (uint32_t a : watchAddrs) machine.cpu.setWatchpoint(a);   // débogueur : watchpoints mémoire
     for (const std::string& s : breakSyms) {
         uint32_t a = 0;
         if (symbols.lookup(s, a)) { machine.cpu.setBreakpoint(a);
@@ -552,14 +556,19 @@ int main(int argc, char** argv) {
         machine.runFrame();
         if (machine.cpu.breakpointHit()) {
             const uint32_t bpa = machine.cpu.breakpointHitAddr();
-            char dis[256]; machine.cpu.disassemble(dis, bpa);
+            const bool     isW = machine.cpu.breakpointHitIsWatch();
+            const uint32_t pc  = machine.cpu.pc();
+            char dis[256]; machine.cpu.disassemble(dis, pc);   // toujours l'instruction au PC
             uint32_t off = 0;
             const std::string sym = symbols.nameFor(bpa, &off);
             char label[128] = "";
             if (!sym.empty()) std::snprintf(label, sizeof label, " <%s+%u>", sym.c_str(), off);
-            std::fprintf(stderr, "[headless] BREAK $%06X%s (trame %d) : %s\n",
-                         bpa, label, frame, dis);
-            std::fprintf(stderr, "  PC=%06X SR=%04X\n", machine.cpu.pc(), machine.cpu.sr());
+            if (isW)   // break-after : bpa = adresse DONNÉE accédée, PC = instruction suivante
+                std::fprintf(stderr, "[headless] WATCH accès $%06X%s (trame %d) \xe2\x80\x94 PC=$%06X : %s\n",
+                             bpa, label, frame, pc, dis);
+            else
+                std::fprintf(stderr, "[headless] BREAK $%06X%s (trame %d) : %s\n", bpa, label, frame, dis);
+            std::fprintf(stderr, "  PC=%06X SR=%04X\n", pc, machine.cpu.sr());
             for (int r = 0; r < 8; ++r) std::fprintf(stderr, "  D%d=%08X A%d=%08X\n",
                                                      r, machine.cpu.reg(r), r, machine.cpu.reg(8 + r));
             break;
