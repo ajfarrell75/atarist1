@@ -65,4 +65,16 @@ double faute au reset = **HALT** (cpu_halt(CPU_HALT_DOUBLE_FAULT) chez
 WinUAE/Hatari). Fix : `Moira::reset<C>()` (Moira.cpp) enveloppe les
 `read16OnReset` + prefetch dans un try → `halt()`. Étalons 19/19 re-validés.
 
+## Patch local : watchpoints masqués au bus 24 bits (2026-07-11)
+
+Le débogueur NeoST pose des watchpoints mémoire via `debugger.watchpoints`. Moira
+teste l'accès dans `peekM`/`pokeM` (`MoiraDataflow_cpp.h`) avec l'adresse EA **non
+masquée**, alors que l'accès réel juste en dessous utilise `addr & addrMask<C>()`
+(24 bits). Un accès I/O en adressage court absolu (`$8001.w` → EA `$FFFF8001`) ne
+matchait donc jamais un watchpoint posé sur `$FF8001`. Fix : masquer l'`addr` par
+`addrMask<C>()` **avant** `watchpointMatches`/`didReachWatchpoint` (les 2 sites, lecture
+et écriture). Court-circuité hors watchpoints (`flags & CHECK_WP &&`) → zéro impact en
+marche normale. Vérifié : `--watch FF8001` (via `$8001.w`) et `--watch 10` (RAM directe)
+se déclenchent ; self-tests + glue-selftest 31/31 intacts.
+
 Toute modif future d'un fichier `Moira/` se commit **normalement** dans NeoST.

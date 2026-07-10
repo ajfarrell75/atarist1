@@ -374,8 +374,11 @@ Moira::read(u32 addr)
     }
 
     // Check if a watchpoint has been reached
-    if ((flags & State::CHECK_WP) && debugger.watchpointMatches(addr, S)) {
-        didReachWatchpoint(addr);
+    // NEOST : on masque l'adresse au BUS 24 bits (addrMask, comme l'accès réel plus bas)
+    // AVANT le test — sinon un accès I/O en court absolu ($8001.w → EA $FFFF8001) ne
+    // matcherait jamais un watchpoint posé sur $FF8001. Cohérent avec le décodage du Bus.
+    if ((flags & State::CHECK_WP) && debugger.watchpointMatches(addr & addrMask<C>(), S)) {
+        didReachWatchpoint(addr & addrMask<C>());
     }
 
     if constexpr (S == Byte) {
@@ -427,8 +430,9 @@ Moira::write(u32 addr, u32 val)
     }
 
     // Check if a watchpoint has been reached
-    if ((flags & State::CHECK_WP) && debugger.watchpointMatches(addr, S)) {
-        didReachWatchpoint(addr);
+    // NEOST : adresse masquée au bus 24 bits avant le test (cf. peekM ci-dessus).
+    if ((flags & State::CHECK_WP) && debugger.watchpointMatches(addr & addrMask<C>(), S)) {
+        didReachWatchpoint(addr & addrMask<C>());
     }
 
     if constexpr (S == Byte) {

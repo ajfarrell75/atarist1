@@ -45,9 +45,10 @@ namespace {
     // instruction dans la boucle run() pour rendre la main à l'horloge.
     bool    g_endSlice = false;
     // ---- Débogueur : breakpoints PC (cf. Cpu68k § Débogueur) --------------------
-    bool     g_bpHit    = false;        // un breakpoint a stoppé le dernier run()
-    uint32_t g_bpAddr   = 0;            // adresse atteinte (PC)
-    uint32_t g_bpSkipPc = 0xFFFFFFFFu;  // adresse à ignorer UNE fois (reprise propre)
+    bool     g_bpHit    = false;        // un breakpoint/watchpoint a stoppé le dernier run()
+    uint32_t g_bpAddr   = 0;            // adresse atteinte (PC du breakpoint, ou adresse DONNÉE du watchpoint)
+    bool     g_bpWatch  = false;        // true = c'était un WATCHPOINT (accès mémoire) et non un breakpoint PC
+    uint32_t g_bpSkipPc = 0xFFFFFFFFu;  // adresse à ignorer UNE fois (reprise propre, breakpoints PC only)
     // ---- Bascule 8/16 MHz du Mega STE ($FF8E21 bit1, cf. Cpu68k::setMegaSteSpeed) --
     // L'ordonnanceur et toutes les puces vivent en cycles BUS (8 MHz) ; le cœur
     // CPU, lui, compte ses propres cycles. À 16 MHz : 1 cycle bus = 2 cycles CPU.
@@ -299,6 +300,13 @@ public:
     moira::u16 read16(moira::u32 a) const override { if (g_bus->blitterWinEnd >= 0 || g_bus->blitterCountCpu) noteBlitterPreStart(); if (g_bus->busFaultN(a, 2, false) && faultOrHalt(a, false)) return 0; moira::u16 v; if (g_cpuMul == 2) v = readMste16Mhz(a, 2); else { chipWait8(a); busDiag('R', a, getClock()); v = g_bus->read16(a); } latchDb(v); return v; }
     void write8 (moira::u32 a, moira::u8  v) const override { if (g_bus->blitterWinEnd >= 0 || g_bus->blitterCountCpu) noteBlitterPreStart(); if (g_bus->busFaultN(a, 1, true)) { if (faultOrHalt(a, true)) return; } latchDb8(v); if (g_cpuMul == 2) { writeMste16Mhz(a, 1, v); return; } chipWait8(a); g_bus->write8(a, v); }
     void write16(moira::u32 a, moira::u16 v) const override { if (g_bus->blitterWinEnd >= 0 || g_bus->blitterCountCpu) noteBlitterPreStart(); if (g_bus->busFaultN(a, 2, true)) { if (faultOrHalt(a, true)) return; } latchDb(v); if (g_cpuMul == 2) { writeMste16Mhz(a, 2, v); return; } chipWait8(a); g_bus->write16(a, v); }
+    // Débogueur : watchpoint mémoire atteint (appelé par la couche dataflow de Moira
+    // PENDANT l'accès, si CHECK_WP). Sémantique « break-after-access » : on note le hit
+    // (adresse DONNÉE) et on préempte → le run() rend la main APRÈS l'instruction fautive.
+    void didReachWatchpoint(moira::u32 addr) override {
+        g_bpHit = true; g_bpAddr = addr & 0xFFFFFFu; g_bpWatch = true; g_endSlice = true;
+    }
+
     // Lecture du vecteur de reset (SSP/PC) via l'overlay ROM : jamais de bus error.
     moira::u16 read16OnReset(moira::u32 a) const override { const moira::u16 v = g_bus->read16(a); latchDb(v); return v; }
     // Lecture pour le désassembleur : pas d'effet de bord MMIO ni de bus error
@@ -731,11 +739,39 @@ bool Cpu68k::breakpointByIndex(int nr, uint32_t& outAddr) const {
     outAddr = *a & 0xFFFFFFu;
     return true;
 }
-bool     Cpu68k::breakpointHit() const     { return g_bpHit; }
-uint32_t Cpu68k::breakpointHitAddr() const { return g_bpAddr; }
+bool     Cpu68k::breakpointHit() const       { return g_bpHit; }
+uint32_t Cpu68k::breakpointHitAddr() const   { return g_bpAddr; }
+bool     Cpu68k::breakpointHitIsWatch() const{ return g_bpWatch; }
 void Cpu68k::clearBreakpointHit() {
-    g_bpSkipPc = g_bpAddr;   // à la reprise, laisser passer l'instruction du breakpoint une fois
-    g_bpHit = false;
+    // Skip-once UNIQUEMENT pour un breakpoint PC (le watchpoint est « break-after »,
+    // le PC a déjà avancé au-delà de l'instruction fautive → rien à ignorer).
+    if (!g_bpWatch) g_bpSkipPc = g_bpAddr;
+    g_bpHit = false; g_bpWatch = false;
+}
+
+// --- Débogueur : watchpoints mémoire (accès lecture/écriture d'une adresse) ------
+// Délègue au conteneur Guards de Moira (debugger.watchpoints) ; la couche dataflow de
+// Moira teste l'accès et appelle NeostMoira::didReachWatchpoint. setAt arme CHECK_WP.
+void Cpu68k::setWatchpoint(uint32_t addr) {
+    g_moira->debugger.watchpoints.setAt(addr & 0xFFFFFFu);
+}
+void Cpu68k::clearWatchpoint(uint32_t addr) {
+    g_moira->debugger.watchpoints.removeAt(addr & 0xFFFFFFu);
+}
+void Cpu68k::clearAllWatchpoints() {
+    g_moira->debugger.watchpoints.removeAll();
+}
+bool Cpu68k::hasWatchpoint(uint32_t addr) const {
+    return g_moira->debugger.watchpoints.isSetAt(addr & 0xFFFFFFu);
+}
+int Cpu68k::watchpointCount() const {
+    return static_cast<int>(g_moira->debugger.watchpoints.elements());
+}
+bool Cpu68k::watchpointByIndex(int nr, uint32_t& outAddr) const {
+    const auto a = g_moira->debugger.watchpoints.guardAddr(nr);
+    if (!a) return false;
+    outAddr = *a & 0xFFFFFFu;
+    return true;
 }
 
 // Cycles BUS écoulés depuis le début de l'instruction courante (cf. en-tête).

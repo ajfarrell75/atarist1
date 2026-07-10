@@ -1013,6 +1013,9 @@ void drawDebugger(Machine& machine) {
         ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f),
                            ICON_FA_PAUSE " EN PAUSE  \xe2\x80\x94  PC=$%06X%s",
                            cpu.pc(), symLabel(cpu.pc()).c_str());
+        if (cpu.breakpointHit() && cpu.breakpointHitIsWatch())
+            ImGui::TextColored(ImVec4(0.55f, 0.85f, 1.0f, 1.0f), "  watchpoint : accès $%06X%s",
+                               cpu.breakpointHitAddr(), symLabel(cpu.breakpointHitAddr()).c_str());
         if (ImGui::Button(ICON_FA_PLAY " Continuer")) {
             cpu.clearBreakpointHit();   // arme le skip-once de l'adresse courante
             g_dbgPaused = false;
@@ -1082,6 +1085,34 @@ void drawDebugger(Machine& machine) {
             ImGui::SameLine();
             char dis[256]; cpu.disassemble(dis, a);
             ImGui::Text("$%06X%s  %s", a, symLabel(a).c_str(), dis);
+            ImGui::PopID();
+        }
+    }
+    ImGui::EndChild();
+    ImGui::Separator();
+
+    // --- Watchpoints mémoire : arrêt à l'accès (lecture OU écriture) d'une adresse
+    ImGui::Text("Watchpoints (%d)", cpu.watchpointCount());
+    static char wpBuf[16] = "";
+    ImGui::SetNextItemWidth(120.0f);
+    const bool wpEnter = ImGui::InputTextWithHint("##wpaddr", "adresse hex", wpBuf, sizeof wpBuf,
+                                                  ImGuiInputTextFlags_CharsHexadecimal |
+                                                  ImGuiInputTextFlags_EnterReturnsTrue);
+    ImGui::SameLine();
+    if ((ImGui::Button("Ajouter##wp") || wpEnter) && wpBuf[0]) {
+        cpu.setWatchpoint((uint32_t)std::strtoul(wpBuf, nullptr, 16));
+        wpBuf[0] = '\0';
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Tout effacer##wp")) cpu.clearAllWatchpoints();
+    if (ImGui::BeginChild("##wplist", ImVec2(0, 80), true)) {
+        for (int i = 0; i < cpu.watchpointCount(); ++i) {
+            uint32_t a = 0;
+            if (!cpu.watchpointByIndex(i, a)) continue;
+            ImGui::PushID(1000 + i);
+            if (ImGui::SmallButton(ICON_FA_TIMES)) { cpu.clearWatchpoint(a); ImGui::PopID(); break; }
+            ImGui::SameLine();
+            ImGui::Text("$%06X%s", a, symLabel(a).c_str());
             ImGui::PopID();
         }
     }
