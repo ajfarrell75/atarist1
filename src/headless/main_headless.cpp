@@ -22,6 +22,7 @@
 
 #include "core/Machine.hpp"
 #include "core/Tracer.hpp"
+#include "core/Symbols.hpp"
 
 namespace {
 void usage() {
@@ -37,6 +38,9 @@ void usage() {
         "  --until-pc HEX    arrête dès que PC atteint cette adresse (hex)\n"
         "  --break HEX       breakpoint PC (instruction-exact, répétable) : stoppe AVANT\n"
         "                    d'exécuter l'instruction, dump les registres, sort\n"
+        "  --symbols FILE    table de symboles (.sym nm-style OU exécutable TOS $601A)\n"
+        "  --symbols-base HEX  base de relocation ajoutée aux symboles d'un exécutable TOS\n"
+        "  --break-sym NAME  breakpoint sur un symbole (nécessite --symbols ; répétable)\n"
         "  --cpu CORE        cœur 68000 : moira (seul disponible, cycle-exact)\n"
         "  --machine TYPE    profil : st, megast, ste (défaut), megaste\n"
         "  --fpu             peuple le socket MC68881 du Mega STE ($FFFA40, émulation\n"
@@ -162,6 +166,10 @@ int main(int argc, char** argv) {
     bool        haveUntil  = false;
     uint32_t    untilPc    = 0;
     std::vector<uint32_t> breakAddrs;            // --break HEX : breakpoints PC (répétable)
+    std::vector<std::string> breakSyms;          // --break-sym NAME : breakpoints par symbole
+    std::string symbolsPath;                     // --symbols FILE (.sym nm-style ou exécutable TOS)
+    uint32_t    symBase = 0;                      // --symbols-base HEX (relocation d'un exécutable TOS)
+    SymbolTable symbols;
     bool        walkMouse  = false;
     std::string keys;                 // touches à injecter après le boot (ex. "Z\n")
     bool        haveJoy    = false;   // --joy : maintient un état joystick pendant le run
@@ -301,6 +309,9 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(a, "--mem"))        ramBytes  = parseRamBytes(next(a));
         else if (!std::strcmp(a, "--until-pc"))   { untilPc = (uint32_t)std::strtoul(next(a), nullptr, 16); haveUntil = true; }
         else if (!std::strcmp(a, "--break"))      breakAddrs.push_back((uint32_t)std::strtoul(next(a), nullptr, 16));
+        else if (!std::strcmp(a, "--break-sym"))  breakSyms.emplace_back(next(a));
+        else if (!std::strcmp(a, "--symbols"))    symbolsPath = next(a);
+        else if (!std::strcmp(a, "--symbols-base")) symBase = (uint32_t)std::strtoul(next(a), nullptr, 16);
         else if (!std::strcmp(a, "-h") || !std::strcmp(a, "--help")) { usage(); return 0; }
         else if (a[0] == '-')                     { std::fprintf(stderr, "option inconnue: %s\n", a); usage(); return 2; }
         else                                      romPath   = a;
@@ -436,7 +447,21 @@ int main(int argc, char** argv) {
     // Exécution déterministe : nombre fixe de trames (pas de Date/random/sleep).
     // Note : --until-pc s'évalue par trame (granularité d'une trame), suffisant
     // pour borner une capture autour d'un point d'intérêt.
+    // Symboles (débogueur) : charge la table puis résout les breakpoints par nom.
+    if (!symbolsPath.empty()) {
+        if (symbols.load(symbolsPath, symBase))
+            std::fprintf(stderr, "[headless] symboles : %zu chargés depuis %s\n",
+                         symbols.count(), symbolsPath.c_str());
+        else
+            std::fprintf(stderr, "[headless] symboles : échec de chargement de %s\n", symbolsPath.c_str());
+    }
     for (uint32_t a : breakAddrs) machine.cpu.setBreakpoint(a);   // débogueur : breakpoints PC
+    for (const std::string& s : breakSyms) {
+        uint32_t a = 0;
+        if (symbols.lookup(s, a)) { machine.cpu.setBreakpoint(a);
+            std::fprintf(stderr, "[headless] breakpoint symbole '%s' → $%06X\n", s.c_str(), a); }
+        else std::fprintf(stderr, "[headless] symbole inconnu : '%s'\n", s.c_str());
+    }
     for (int frame = 0; frame < frames; ++frame) {
         // Trace fenêtrée (--trace-from N) : branche le hook d'instruction à la trame N.
         if (traceFrom > 0 && frame == traceFrom && !tracePath.empty())
@@ -526,9 +551,14 @@ int main(int argc, char** argv) {
         }
         machine.runFrame();
         if (machine.cpu.breakpointHit()) {
-            char dis[256]; machine.cpu.disassemble(dis, machine.cpu.breakpointHitAddr());
-            std::fprintf(stderr, "[headless] BREAK $%06X (trame %d) : %s\n",
-                         machine.cpu.breakpointHitAddr(), frame, dis);
+            const uint32_t bpa = machine.cpu.breakpointHitAddr();
+            char dis[256]; machine.cpu.disassemble(dis, bpa);
+            uint32_t off = 0;
+            const std::string sym = symbols.nameFor(bpa, &off);
+            char label[128] = "";
+            if (!sym.empty()) std::snprintf(label, sizeof label, " <%s+%u>", sym.c_str(), off);
+            std::fprintf(stderr, "[headless] BREAK $%06X%s (trame %d) : %s\n",
+                         bpa, label, frame, dis);
             std::fprintf(stderr, "  PC=%06X SR=%04X\n", machine.cpu.pc(), machine.cpu.sr());
             for (int r = 0; r < 8; ++r) std::fprintf(stderr, "  D%d=%08X A%d=%08X\n",
                                                      r, machine.cpu.reg(r), r, machine.cpu.reg(8 + r));

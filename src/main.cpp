@@ -18,6 +18,7 @@
 #include <GL/gl.h>
 #endif
 #include "gui/CrtEffectStack.h"   // passe d'effets CRT (opt-in, façade moniteur)
+#include "core/Symbols.hpp"       // table de symboles du débogueur (noms ↔ adresses)
 #include <cfloat>                 // FLT_MAX (contrainte de ratio fenêtre écran)
 #include <cstdint>
 #include <cstdio>
@@ -375,6 +376,7 @@ static bool g_showDbg     = false;     // fenêtre « Débogueur » visible
 static bool g_dbgPaused   = false;     // émulation gelée (breakpoint atteint ou pause manuelle)
 static bool g_dbgStepFrame = false;    // requête « avancer d'une trame » (traitée dans la boucle)
 static bool g_dbgStepInstr = false;    // requête « avancer d'une instruction » (idem)
+static SymbolTable g_symbols;          // table de symboles (noms ↔ adresses) du débogueur
 bool  g_joyCfgDirty = false;           // un réglage joystick a changé → resauver neost.cfg
 // Champs de saisie du menu Machine → Disque dur (dossier HD GEMDOS / image ACSI).
 // Globaux (et non statiques du menu) pour que le sous-menu Profils puisse les
@@ -995,13 +997,22 @@ void drawCrtSettings(bool& changed) {
 // dans la boucle principale. Les registres/mémoire ont déjà leurs propres fenêtres.
 void drawDebugger(Machine& machine) {
     Cpu68k& cpu = machine.cpu;
-    ImGui::SetNextWindowSize(ImVec2(460, 520), ImGuiCond_FirstUseEver);
+    // Étiquette symbolique « <nom+off> » d'une adresse (vide si aucun symbole).
+    auto symLabel = [](uint32_t a) -> std::string {
+        uint32_t off = 0;
+        const std::string n = g_symbols.nameFor(a, &off);
+        if (n.empty()) return {};
+        char b[160]; std::snprintf(b, sizeof b, " <%s+%u>", n.c_str(), off);
+        return b;
+    };
+    ImGui::SetNextWindowSize(ImVec2(480, 560), ImGuiCond_FirstUseEver);
     ImGui::Begin(ICON_FA_BUG " Débogueur", &g_showDbg);
 
     // --- État + transport -----------------------------------------------------
     if (g_dbgPaused) {
         ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f),
-                           ICON_FA_PAUSE " EN PAUSE  \xe2\x80\x94  PC=$%06X", cpu.pc());
+                           ICON_FA_PAUSE " EN PAUSE  \xe2\x80\x94  PC=$%06X%s",
+                           cpu.pc(), symLabel(cpu.pc()).c_str());
         if (ImGui::Button(ICON_FA_PLAY " Continuer")) {
             cpu.clearBreakpointHit();   // arme le skip-once de l'adresse courante
             g_dbgPaused = false;
@@ -1013,6 +1024,33 @@ void drawDebugger(Machine& machine) {
     } else {
         ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.5f, 1.0f), ICON_FA_PLAY " En cours");
         if (ImGui::Button(ICON_FA_PAUSE " Pause")) g_dbgPaused = true;
+    }
+    ImGui::Separator();
+
+    // --- Symboles : chargement (.sym nm-style ou exécutable TOS) + bp par nom --
+    ImGui::Text("Symboles (%zu)", g_symbols.count());
+    static char symPath[512] = "";
+    static char symBaseBuf[16] = "";
+    ImGui::SetNextItemWidth(220.0f);
+    ImGui::InputTextWithHint("##sympath", "chemin .sym ou .TOS", symPath, sizeof symPath);
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(80.0f);
+    ImGui::InputTextWithHint("##symbase", "base hex", symBaseBuf, sizeof symBaseBuf,
+                             ImGuiInputTextFlags_CharsHexadecimal);
+    ImGui::SameLine();
+    if (ImGui::Button("Charger") && symPath[0]) {
+        const uint32_t base = (uint32_t)std::strtoul(symBaseBuf, nullptr, 16);
+        g_symbols.load(symPath, base);   // auto-détecte nm-style vs exécutable TOS
+    }
+    // Breakpoint par symbole (nom → adresse via la table).
+    static char symBp[64] = "";
+    ImGui::SetNextItemWidth(220.0f);
+    const bool symEnter = ImGui::InputTextWithHint("##symbp", "nom de symbole", symBp, sizeof symBp,
+                                                   ImGuiInputTextFlags_EnterReturnsTrue);
+    ImGui::SameLine();
+    if ((ImGui::Button("BP symbole") || symEnter) && symBp[0]) {
+        uint32_t a = 0;
+        if (g_symbols.lookup(symBp, a)) { cpu.setBreakpoint(a); symBp[0] = '\0'; }
     }
     ImGui::Separator();
 
@@ -1043,7 +1081,7 @@ void drawDebugger(Machine& machine) {
             }
             ImGui::SameLine();
             char dis[256]; cpu.disassemble(dis, a);
-            ImGui::Text("$%06X  %s", a, dis);
+            ImGui::Text("$%06X%s  %s", a, symLabel(a).c_str(), dis);
             ImGui::PopID();
         }
     }
@@ -1062,8 +1100,9 @@ void drawDebugger(Machine& machine) {
             const bool isPc  = (addr == pc);
             const bool hasBp = cpu.hasBreakpoint(addr);
             char line[300];
-            std::snprintf(line, sizeof line, "%s %s $%06X  %s",
-                          hasBp ? ICON_FA_TIMES : "  ", isPc ? ">" : " ", addr, dis);
+            std::snprintf(line, sizeof line, "%s %s $%06X%s  %s",
+                          hasBp ? ICON_FA_TIMES : "  ", isPc ? ">" : " ", addr,
+                          symLabel(addr).c_str(), dis);
             if (hasBp) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.5f, 0.4f, 1.0f));
             else if (isPc) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.4f, 1.0f, 0.5f, 1.0f));
             if (ImGui::Selectable(line, isPc)) {
