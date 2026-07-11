@@ -1333,6 +1333,21 @@ les **2 cœurs**, avec un vrai TOS. Restes (« Hard error »/VME/FPU) = périph�
 fidèles à Hatari, pas des bugs.
 
 ## Frontend & outillage
+- **Save-states (sauvegarde/restauration d'état complète) (2026-07-11)** : `StateArchive`
+  (sérialiseur SYMÉTRIQUE — une méthode `serialize()` gère save ET load, l'ordre ne peut
+  pas diverger) + `serialize()` sur **chaque puce** (Shifter incl. framebuffer/palette/état
+  glue-spec512, MFP, YM2149, DmaSound, Blitter, IKBD, ACIA, RTC, FDC — contrôleur, pas le
+  contenu des images disque) et le Bus (RAM + config + overlay + latch db + cache MegaSTE).
+  Deux pièges résolus : Moira n'a pas de serialize intégré (→ `NeostMoira::serializeState`
+  sur les membres protégés) ; l'ordonnanceur n'est PAS une file de `std::function` mais un
+  tableau fixe de sources (callbacks re-liés à la construction) → on ne sérialise que les
+  échéances. Format `'NSTS'` versionné. **Test de DÉTERMINISME** (`--save-state-test`) :
+  save → run 200 → load → run 200 → l'état re-sérialisé ET l'écran doivent être
+  byte-identiques (divergence = 1ᵉʳ offset localisé) — PASSE sur boot ST, STE (son DMA +
+  vidéo STE), démo No Cooper (overscan med-res). I/O fichier prouvée : save@300 → fichier
+  1,3 Mo → load + run → écran **diff_px=0** vs run direct. GUI : **F5** sauver / **F7**
+  charger (slot `neost.state`, menu Machine, overlay). Headless : `--save-state`/
+  `--load-state`. Reste : SCC/ACSI + contenu images disque (peu utilisés).
 - **Débogueur interactif — breakpoints, watchpoints, pas-à-pas, symboles (2026-07-11)** :
   réutilise le `Debugger` intégré de Moira (conteneur `Guards`). **Breakpoints PC**
   « break-before » (pré-check dans `Cpu68k::run`, coût nul si aucun ; skip-once à la

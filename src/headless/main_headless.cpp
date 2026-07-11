@@ -42,6 +42,8 @@ void usage() {
         "  --symbols-base HEX  base de relocation ajoutée aux symboles d'un exécutable TOS\n"
         "  --break-sym NAME  breakpoint sur un symbole (nécessite --symbols ; répétable)\n"
         "  --watch HEX       watchpoint mémoire (accès lecture/écriture ; break-after ; répétable)\n"
+        "  --save-state FILE écrit l'état complet (save-state) à la fin des --frames\n"
+        "  --load-state FILE restaure un état AVANT de tourner (même config machine requise)\n"
         "  --cpu CORE        cœur 68000 : moira (seul disponible, cycle-exact)\n"
         "  --machine TYPE    profil : st, megast, ste (défaut), megaste\n"
         "  --fpu             peuple le socket MC68881 du Mega STE ($FFFA40, émulation\n"
@@ -169,6 +171,8 @@ int main(int argc, char** argv) {
     std::vector<uint32_t> breakAddrs;            // --break HEX : breakpoints PC (répétable)
     std::vector<uint32_t> watchAddrs;            // --watch HEX : watchpoints mémoire (répétable)
     bool        saveStateTest = false;            // --save-state-test : run N → save → modif → load → re-save == save
+    std::string saveStatePath;                    // --save-state FILE : écrit l'état à la fin de la boucle
+    std::string loadStatePath;                    // --load-state FILE : restaure l'état AVANT de tourner
     std::vector<std::string> breakSyms;          // --break-sym NAME : breakpoints par symbole
     std::string symbolsPath;                     // --symbols FILE (.sym nm-style ou exécutable TOS)
     uint32_t    symBase = 0;                      // --symbols-base HEX (relocation d'un exécutable TOS)
@@ -314,6 +318,8 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(a, "--break"))      breakAddrs.push_back((uint32_t)std::strtoul(next(a), nullptr, 16));
         else if (!std::strcmp(a, "--watch"))      watchAddrs.push_back((uint32_t)std::strtoul(next(a), nullptr, 16));
         else if (!std::strcmp(a, "--save-state-test")) saveStateTest = true;
+        else if (!std::strcmp(a, "--save-state")) saveStatePath = next(a);
+        else if (!std::strcmp(a, "--load-state")) loadStatePath = next(a);
         else if (!std::strcmp(a, "--break-sym"))  breakSyms.emplace_back(next(a));
         else if (!std::strcmp(a, "--symbols"))    symbolsPath = next(a);
         else if (!std::strcmp(a, "--symbols-base")) symBase = (uint32_t)std::strtoul(next(a), nullptr, 16);
@@ -506,6 +512,11 @@ int main(int argc, char** argv) {
             std::fprintf(stderr, "[headless] breakpoint symbole '%s' → $%06X\n", s.c_str(), a); }
         else std::fprintf(stderr, "[headless] symbole inconnu : '%s'\n", s.c_str());
     }
+    if (!loadStatePath.empty()) {   // restaure un état AVANT de tourner (config machine identique requise)
+        std::fprintf(stderr, machine.loadStateFile(loadStatePath)
+                     ? "[headless] état restauré depuis %s\n"
+                     : "[headless] ÉCHEC restauration état %s\n", loadStatePath.c_str());
+    }
     for (int frame = 0; frame < frames; ++frame) {
         // Trace fenêtrée (--trace-from N) : branche le hook d'instruction à la trame N.
         if (traceFrom > 0 && frame == traceFrom && !tracePath.empty())
@@ -624,6 +635,12 @@ int main(int argc, char** argv) {
             std::fprintf(stderr, "[headless] PC=$%06X atteint à la trame %d\n", untilPc, frame);
             break;
         }
+    }
+
+    if (!saveStatePath.empty()) {   // sauvegarde l'état à la fin de la boucle
+        std::fprintf(stderr, machine.saveStateFile(saveStatePath)
+                     ? "[headless] état sauvegardé \xe2\x86\x92 %s\n"
+                     : "[headless] ÉCHEC sauvegarde état %s\n", saveStatePath.c_str());
     }
 
     // Écriture du WAV (--sound-dump) : PCM 16 bits stéréo 48 kHz, en-tête RIFF canonique.

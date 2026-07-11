@@ -41,6 +41,10 @@ montage de disquettes, bascule couleur/mono, et **upload** de votre propre `.st`
   68000 en direct (Dear ImGui). Aussi en **headless déterministe** (`--break`, `--watch`,
   `--symbols`/`--break-sym`) qui produit des traces façon MAME — l'arme secrète pour
   diagnostiquer un jeu qui bloque.
+- 💾 **Save-states** — sauvegarde/restauration de l'état **complet** de la machine
+  (CPU, RAM, toutes les puces) à l'octet près : **F5** sauver / **F7** charger, ou
+  `--save-state`/`--load-state` en headless. Restauration **déterministe** (l'écran et
+  l'état reprennent byte-identiques).
 - 🔊 **Son complet** — YM2149 (3 voies + bruit + enveloppe), son DMA STE, filtres
   Microwire/LMC1992, et même les **bruits mécaniques du lecteur** de disquette.
 - 🌐 **Multi-plateforme** — macOS Silicon, Linux, et WebAssembly. Une seule base de code.
@@ -137,6 +141,7 @@ auto-supprimé s'il n'existe plus). La liste est **persistée** dans `neost.cfg`
 | **F9** / START           | Ouvre/ferme le menu in-game (jeu en pause)         |
 | **K** / SELECT           | Ouvre/ferme le bandeau Clavier & souris            |
 | **L1 / R1** (Page↑/↓)    | Défilement rapide par page dans la liste des jeux  |
+| **F5** / **F7**          | Sauver / charger l'état (save-state, slot `neost.state`) |
 | **F10**                  | (dés)active le zoom adaptatif (cadre complet fixe) |
 | **F11**                  | (dés)active l'émulation joystick clavier           |
 | A·B / Entrée·Échap       | Valider / revenir (dans le menu)                   |

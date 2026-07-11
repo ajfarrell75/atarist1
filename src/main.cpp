@@ -377,6 +377,9 @@ static bool g_dbgPaused   = false;     // émulation gelée (breakpoint atteint 
 static bool g_dbgStepFrame = false;    // requête « avancer d'une trame » (traitée dans la boucle)
 static bool g_dbgStepInstr = false;    // requête « avancer d'une instruction » (idem)
 static SymbolTable g_symbols;          // table de symboles (noms ↔ adresses) du débogueur
+// Save-state rapide (F5 sauver / F7 charger, slot fichier unique neost.state).
+static std::string g_stateMsg;         // message transitoire affiché en overlay
+static int         g_stateMsgFrames = 0;
 bool  g_joyCfgDirty = false;           // un réglage joystick a changé → resauver neost.cfg
 // Champs de saisie du menu Machine → Disque dur (dossier HD GEMDOS / image ACSI).
 // Globaux (et non statiques du menu) pour que le sous-menu Profils puisse les
@@ -2177,6 +2180,29 @@ int main(int argc, char** argv) {
             }
             if (ran == 6 && clock::now() > emuNext) emuNext = clock::now();  // pause longue : resync
         }
+
+        // Save-state rapide (F5 sauver / F7 charger) — slot fichier unique neost.state, à
+        // la frontière de trame. En kiosk la config est figée mais l'état de jeu, lui, se
+        // sauve/charge (ce n'est pas la config). Fronts montants.
+        {
+            static bool f5Prev = false, f7Prev = false;
+            const std::string statePath = exeDir + "/../neost.state";
+            const bool f5 = glfwGetKey(window, GLFW_KEY_F5) == GLFW_PRESS;
+            const bool f7 = glfwGetKey(window, GLFW_KEY_F7) == GLFW_PRESS;
+            if (f5 && !f5Prev) {
+                const bool ok = machine.saveStateFile(statePath);
+                g_stateMsg = ok ? "\xef\x83\x87 État sauvegardé (F5)" : "Échec sauvegarde";
+                g_stateMsgFrames = 120;
+                std::fprintf(stderr, "[state] save %s → %s\n", ok ? "OK" : "ÉCHEC", statePath.c_str());
+            }
+            if (f7 && !f7Prev) {
+                const bool ok = machine.loadStateFile(statePath);
+                g_stateMsg = ok ? "\xef\x80\x9e État restauré (F7)" : "Aucun état / échec";
+                g_stateMsgFrames = 120;
+                std::fprintf(stderr, "[state] load %s ← %s\n", ok ? "OK" : "ÉCHEC", statePath.c_str());
+            }
+            f5Prev = f5; f7Prev = f7;
+        }
         screen.update(machine.shifter.pixels(), machine.shifter.width(), machine.shifter.height());
 
         int fbw = 0, fbh = 0;
@@ -2224,6 +2250,17 @@ int main(int argc, char** argv) {
             if (ImGui::BeginMenu(ICON_FA_MICROCHIP " Machine")) {
                 if (ImGui::MenuItem(ICON_FA_REDO " Reset"))      reqReset = true;
                 if (ImGui::MenuItem(ICON_FA_POWER_OFF " Hard Reset")) reqHardReset = true;
+                ImGui::Separator();
+                if (ImGui::MenuItem(ICON_FA_SAVE " Sauver l'état", "F5")) {
+                    const bool ok = machine.saveStateFile(exeDir + "/../neost.state");
+                    g_stateMsg = ok ? "\xef\x83\x87 État sauvegardé" : "Échec sauvegarde";
+                    g_stateMsgFrames = 120;
+                }
+                if (ImGui::MenuItem(ICON_FA_FOLDER_OPEN " Charger l'état", "F7")) {
+                    const bool ok = machine.loadStateFile(exeDir + "/../neost.state");
+                    g_stateMsg = ok ? "\xef\x80\x9e État restauré" : "Aucun état / échec";
+                    g_stateMsgFrames = 120;
+                }
                 // Modèle / RAM / cœur / ROM : appliqués À CHAUD (hard reset avec les
                 // nouveaux paramètres) — aucun redémarrage de l'appli. Mémorisés dans
                 // neost.cfg. `reqRebuild` déclenche la reconfiguration en fin de boucle.
@@ -2814,6 +2851,20 @@ int main(int argc, char** argv) {
 
                 drawKioskDiskMenu(disksDir, machine.fdc.mountedPath());
             }
+        }
+
+        // Overlay transitoire du save-state rapide (F5/F7) — coin bas-gauche, ~2,4 s.
+        if (g_stateMsgFrames > 0) {
+            --g_stateMsgFrames;
+            const ImGuiIO& io = ImGui::GetIO();
+            ImGui::SetNextWindowPos(ImVec2(12, io.DisplaySize.y - 12), ImGuiCond_Always, ImVec2(0, 1));
+            ImGui::SetNextWindowBgAlpha(0.75f);
+            ImGui::Begin("##statemsg", nullptr,
+                         ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs |
+                         ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoSavedSettings |
+                         ImGuiWindowFlags_AlwaysAutoResize);
+            ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.6f, 1.0f), "%s", g_stateMsg.c_str());
+            ImGui::End();
         }
 
         ImGui::Render();

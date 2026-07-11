@@ -160,6 +160,10 @@ public:
     // si le buffer est tronqué ou l'en-tête invalide. Puces (Shifter/MFP/PSG…) à venir.
     void saveState(std::vector<uint8_t>& out);
     bool loadState(const uint8_t* data, std::size_t n);
+    // Variantes fichier (wrappers I/O). saveStateFile écrit le buffer ; loadStateFile lit
+    // le fichier puis loadState. Renvoient false sur erreur d'I/O ou en-tête invalide.
+    bool saveStateFile(const std::string& path);
+    bool loadStateFile(const std::string& path);
 
     // Accès direct aux composants (frontend, débogueur, headless).
     Bus       bus;
