@@ -18,6 +18,8 @@
 #include <functional>
 #include <vector>
 
+#include "core/StateArchive.hpp"
+
 class Bus;
 class Mfp;
 class Scheduler;
@@ -99,6 +101,42 @@ public:
     // conserve ses volumes/mixage (cf. Hatari DmaSnd_Reset, bloc `if (bCold)`).
     void    reset(bool cold = false);
     bool    playing() const { return playing_; }
+
+    // ---- Save-state : transfère TOUT l'état runtime (save ET load, symétrique) -----
+    // Un seul passage, ordre fixe. Les références (bus_), pointeurs moteur (mfp_,
+    // sched_) et std::function (cycleClock_) NE sont PAS sérialisés (recâblés au load).
+    void serialize(StateArchive& ar) {
+        // Registres / adresses latchées.
+        ar(ctrl_); ar(mode_);
+        ar(startAddr_); ar(endAddr_); ar(curAddr_);
+        ar(frameStartAddr_); ar(frameEndAddr_);
+        // FIFO 8 octets + consommation DAC.
+        ar(fifo_); ar(fifoPos_); ar(fifoNb_);
+        ar(dacLast_); ar(dacRem_);
+        // Anneau de capture (cœur → rendu audio). Taille fixe (kCapSize) → podVec
+        // re-dimensionne à l'identique au load, indices monotones repris tels quels.
+        ar.podVec(cap_);
+        ar(capW_); ar(capR_);
+        // Microwire / LMC1992.
+        ar(mwData_); ar(mwMask_); ar(mwShift_); ar(mwSteps_);
+        ar(mwMaster_); ar(mwLeft_); ar(mwRight_); ar(mwBass_); ar(mwTreble_); ar(mwMixing_);
+        // État de lecture (thread audio).
+        ar(playing_); ar(phase_);
+        ar(dmaCur_); ar(haveCur_); ar(lpW0_); ar(lpW1_);
+        ar(dmaCurL_); ar(dmaCurR_);
+        ar(lpW0L_); ar(lpW1L_); ar(lpW0R_); ar(lpW1R_);
+        // État côté AUDIO (modèle push horodaté).
+        ar(aPlaying_); ar(aMode_); ar(aPhase_); ar(aHaveCur_);
+        // Événements de trame horodatés (POD).
+        ar.podVec(events_);
+        // Ligne XSINT.
+        ar(xsint_);
+        // Filtres de tonalité (biquads).
+        ar(bx1_); ar(bx2_); ar(by1_); ar(by2_);
+        ar(tx1_); ar(tx2_); ar(ty1_); ar(ty2_);
+        ar(bx1R_); ar(bx2R_); ar(by1R_); ar(by2R_);
+        ar(tx1R_); ar(tx2R_); ar(ty1R_); ar(ty2R_);
+    }
 
 private:
     // ---- FIFO 8 octets + capture (port dmaSnd.c, thread émulation) -----------------

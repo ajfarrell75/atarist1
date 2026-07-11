@@ -24,8 +24,10 @@
 #pragma once
 #include <cstdint>
 #include <deque>
+#include <vector>
 
 #include "core/Scheduler.hpp"
+#include "core/StateArchive.hpp"
 
 class Mfp;
 
@@ -42,6 +44,20 @@ public:
     // Échéance MIDI_TX : le registre d'émission s'est vidé (~1 octet MIDI après
     // une écriture $FFFC06 sous TIE) → TDRE repasse à 1 et ré-arme l'IRQ TX.
     void    onTxEmpty();
+
+    // Save-state : transfère l'intégralité de l'état runtime (save ET load via la
+    // même méthode). Le std::deque rx_ n'a pas d'assistant StateArchive → on le
+    // sérialise via un vector<uint8_t> tampon (longueur préfixée par vec()).
+    void serialize(StateArchive& ar) {
+        std::vector<uint8_t> rxBuf(rx_.begin(), rx_.end());
+        ar.vec(rxBuf);
+        if (ar.loading()) rx_.assign(rxBuf.begin(), rxBuf.end());
+        ar(rdr_);
+        ar(rdrf_);
+        ar(control_);
+        ar(txEnableInt_);
+        ar(tdre_);
+    }
 
 private:
     void raiseIfReady();                     // lève le canal 6 du MFP si cause RX ou TX

@@ -14,6 +14,7 @@
 #include <functional>
 #include <vector>
 
+#include "core/StateArchive.hpp"
 #include "core/Bus.hpp"
 
 class Shifter {
@@ -451,4 +452,81 @@ private:
     std::function<int64_t()> beamClock_;    // cycles dans la trame (cf. setBeamClock)
     std::function<void()>    hblShorten_;   // V2 : signal d'impulsion hi-res (cf. setHblShorten)
     std::function<void(int, int, int)> lineGeom_;   // (ligne, hblPos, cyclesLine) — cf. setLineGeom
+
+public:
+    // Sérialisation save-state SYMÉTRIQUE (save = append, load = lecture). Transfère
+    // TOUS les membres d'état runtime du Shifter : registres vidéo ($FF82xx), palette,
+    // géométrie/mode verrouillés, compteur d'adresse matérialisé + écritures STE
+    // différées, captures par-ligne, état machine Glue (retrait de bordures), buffers
+    // de détection spec512, latches de bordure et le framebuffer ARGB décodé.
+    // SKIP : bus_ (référence), les std::function (branchées par Machine à l'init),
+    // les membres static/constexpr. Inline dans l'en-tête pour l'accès aux privés.
+    void serialize(StateArchive& ar) {
+        // --- Registres vidéo publics ($FF8201/03/0D/09/0B, $FF8260/820A, palette) ---
+        ar(videoBase);
+        ar(palette);
+        ar(mode);
+        ar(sync);
+        // Registres STE ($FF8264/65, $FF820F)
+        ar(hwScrollCount);
+        ar(hwScrollPrefetch);
+        ar(lineWidth);
+        ar(hwScrollReg8264_);
+
+        // --- Compteur d'adresse vidéo matérialisé + écritures STE différées ---
+        ar(vcFrameBase_);
+        ar(vcLineBase_);
+        ar(vcLineY_);
+        ar(newHwScrollCount_);
+        ar(newHwScrollPrefetch_);
+        ar(newLineWidth_);
+        ar(vcDelayedOffset_);
+        ar(vcRestartBase_);
+        ar(vcRestartLine_);
+
+        // --- Captures par-ligne (échantillon faisceau) ---
+        ar.vec(lineSnap_);          // std::vector<uint8_t>
+        ar.podVec(lineSnapLen_);    // std::vector<uint16_t>
+
+        // --- Filtre Glue « même valeur ignorée » (persistant inter-trames) ---
+        ar(lastGlueFreq_);
+        ar(lastGlueRes_);
+        ar(liveStartHBL_);
+
+        // --- Machine Glue : retrait de bordures / overscan ---
+        ar.podVec(syncWrites_);     // std::vector<SyncWrite> (POD)
+        ar(bordersTrick_);
+        ar.podVec(glueLines_);      // std::vector<GlueLine> (POD)
+        ar(glueStartHBL_);
+        ar(glueEndHBL_);
+        ar(glueVOverscan_);
+        ar(glueBlankLines_);
+        ar(glueHblPos_);
+        ar(glueCyclesLine_);
+        ar.podVec(glueLineStart_);  // std::vector<int64_t>
+        ar(liveGlueLen_);
+        ar(nScreenRefreshRate_);
+        ar(liveGlueLine_);
+        ar(liveGlueWi_);            // std::size_t
+        ar(liveGlueRes_);
+        ar(liveGlueFreq50_);
+
+        // --- Spec512 : palette intra-ligne ---
+        ar.podVec(colorWrites_);    // std::vector<ColorWrite> (POD)
+        ar(frameStartPalette_);
+        ar(leftBorderPal0_);
+        ar(paletteAccesses_);
+        ar(spec512Active_);
+
+        // --- Géométrie / mode verrouillés pour la trame + framebuffer ---
+        ar(curW_);
+        ar(curH_);
+        ar(curAH_);
+        ar(activeX_);
+        ar(activeY_);
+        ar(frameMode_);
+        ar(frameSync_);
+        ar.podVec(frame_);          // std::vector<uint32_t> — framebuffer ARGB décodé
+    }
 };
+

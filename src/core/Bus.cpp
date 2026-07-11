@@ -27,11 +27,43 @@ Bus::Bus(std::size_t ramBytes) {
     ram.assign(ramBytes, 0);
 }
 
-// Save-state (increment 1) : la RAM. La taille est préfixée (vec) → un load restaure
-// aussi la bonne taille de RAM. L'état MMIO du Bus (config mémoire, overlay, latch db,
-// registres STE/MegaSTE…) sera ajouté à l'increment suivant.
+// Save-state : la RAM (gros bloc, taille préfixée par vec → le load restaure aussi la
+// bonne taille) PUIS l'état MMIO/config RUNTIME du Bus. NE SONT PAS sérialisés :
+//  - rom / cart : images ROM/cartouche, rechargées depuis leurs fichiers (pas du state).
+//  - cartPath_  : chemin fichier (rechargé par le frontend, pas de l'état machine).
+//  - ioFault_ / ioFaultMachine_ / ioFaultBuilt_ : carte de bus error PUREMENT DÉRIVÉE
+//    (reconstruite à la demande depuis `machine` + `fpu.present` via buildIoFault) → on
+//    laisse ioFaultBuilt_ à sa valeur ; le premier accès MMIO après load la régénère.
 void Bus::serialize(StateArchive& ar) {
     ar.vec(ram);
+
+    // Profil machine + config ROM/TOS chargée.
+    ar(machine);
+    ar(romBase);
+    ar(tosVersion);
+
+    // Overlay de boot (route $0-$7 vers la ROM tant qu'actif).
+    ar(bootOverlay);
+
+    // Latch du bus de données (relu par la zone RAM « void » — cf. cpuDb).
+    ar(cpuDb);
+
+    // Fenêtres de comptage bus du blitter non-hog (bookkeeping possédé par le Bus).
+    ar(blitterWinStart);
+    ar(blitterWinEnd);
+    ar(blitterCountCpu);
+
+    // Registre Cache/CPU MegaSTE ($FF8E21) + contenu du cache externe 16 Ko.
+    ar(megaSteCacheCtrl);
+    ar(megaSteCache);       // struct POD (valid/tag/value)
+
+    // Coprocesseurs / gate / pads : classes triviales à état interne.
+    ar(fpu);                // inclut fpu.present (la carte ioFault_ se rebâtit au besoin)
+    ar(scu);
+    ar(stePads);
+
+    // Largeur d'accès MMIO en cours (transitoire, inoffensif).
+    ar(ioAccessWidth_);
 }
 
 bool Bus::loadTos(const std::string& path) {

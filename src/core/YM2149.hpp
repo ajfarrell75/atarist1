@@ -18,6 +18,7 @@
 #include <array>
 #include <functional>
 #include <vector>
+#include "core/StateArchive.hpp"
 
 class YM2149 {
 public:
@@ -175,6 +176,39 @@ public:
     // Écriture de registre horodatée (cycle CPU dans la trame). Rejouée par
     // synthesizeFrame pour appliquer la modulation au bon instant (digidrums…).
     struct RegEvent { uint32_t cycle; uint8_t reg; uint8_t val; };
+
+    // Sérialisation save-state SYMÉTRIQUE (save et load par le même code, cf.
+    // StateArchive). Transfère chaque champ d'état d'exécution UNE fois. Les membres
+    // de configuration/câblage (std::function : horloge, sinks) sont exclus : ils sont
+    // reposés par le frontend au chargement, pas par l'état.
+    void serialize(StateArchive& ar) {
+        // Registres CPU + sélecteur
+        ar(regs_);
+        ar(selected_);
+        // Générateurs de ton / bruit / enveloppe
+        ar(tonePer_); ar(toneCnt_); ar(toneVal_);
+        ar(noisePer_); ar(noiseCnt_); ar(noiseVal_);
+        ar(envPer_); ar(envCnt_); ar(envPos_); ar(envShape_);
+        ar(mixerT_); ar(mixerN_);
+        ar(envMask3_); ar(vol3_);
+        ar(rndLfsr_); ar(freqDiv2_);
+        // Moteur 250 kHz + rééchantillonnage
+        ar(buf250_);
+        ar(buf250Wr_); ar(buf250Rd_);
+        ar(resampleFracN_);
+        ar(envReload_);
+        // Filtres de sortie + propriétés machine
+        ar(lpf250X1_); ar(lpf250Y0_);
+        ar(hpfX1_); ar(hpfY0_);
+        ar(useStfLpf_);
+        ar(outScale_);
+        // Modèle push horodaté
+        ar(audioRegs_);
+        ar.podVec(events_);
+        // Latches MMIO
+        ar(regReadData_);
+        ar(lastStrobe_);
+    }
 
 private:
     // Synthétise un BLOC de `frames` échantillons depuis la source de registres `r`

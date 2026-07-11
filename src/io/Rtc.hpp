@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <functional>
 #include <utility>
+#include "core/StateArchive.hpp"
 
 class Rtc {
 public:
@@ -43,6 +44,13 @@ public:
     DateTime getDateTime();
     void     setDateTime(const DateTime& dt);
     void     advanceSeconds(int64_t n);      // pont horloge hôte entre deux sessions (borné)
+
+    // Save-state : phase du diviseur 1 Hz + chiffres BCD + registres de banque. La
+    // closure now_ (horloge) est re-liée à la construction → non sérialisée.
+    void serialize(StateArchive& ar) {
+        ar(baseCycle_); ar(primed_);
+        ar(d_); ar(mode_); ar(test_); ar(reset_); ar(fakeAm_); ar(fakeAmz_);
+    }
 
 private:
     void initFromHostTime(); // initialise la date comme Hatari (année GEMDOS depuis 1980)
