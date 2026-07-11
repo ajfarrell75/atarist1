@@ -21,6 +21,8 @@
 #include <string>
 #include <vector>
 
+#include "core/StateArchive.hpp"
+
 class Acsi {
 public:
     static constexpr int MAX_DEVS = 8;
@@ -60,6 +62,18 @@ public:
     void     clearData() { dataLen_ = 0; dmaWrite_ = false; }
     // Écrit `len` octets de `src` (RAM) vers l'image de la cible courante (DMA write).
     void     writeToDisk(const uint8_t* src, int len);
+
+    // Sérialisation save-state (SYMÉTRIQUE). On sérialise UNIQUEMENT l'état mutable
+    // de traitement de commande : la CONFIG des cibles (fp/enabled/hdSize/path…) est
+    // re-établie par `mountAcsi` AVANT un load (« même config machine requise »), et
+    // le CONTENU des images disque vit dans les fichiers hôtes (comme les disquettes).
+    void serialize(StateArchive& ar) {
+        ar(target_); ar(byteCount_); ar.arr(command_);
+        ar(opcode_); ar(status_); ar(dmaError_);
+        ar.vec(buf_); ar(dataLen_); ar(dmaWrite_);
+        // État « soft » par cible (change au fil des commandes : REQUEST SENSE…).
+        for (Dev& d : devs_) { ar(d.lastError); ar(d.lastBlockAddr); ar(d.setLastBlockAddr); }
+    }
 
 private:
     struct Dev {

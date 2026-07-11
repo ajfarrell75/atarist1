@@ -44,6 +44,8 @@ void usage() {
         "  --watch HEX       watchpoint mémoire (accès lecture/écriture ; break-after ; répétable)\n"
         "  --save-state FILE écrit l'état complet (save-state) à la fin des --frames\n"
         "  --load-state FILE restaure un état AVANT de tourner (même config machine requise)\n"
+        "  --save-state-test auto-test de DÉTERMINISME : run --frames → save → load → re-run,\n"
+        "                    l'état re-sérialisé ET l'écran doivent être identiques, puis quitte\n"
         "  --cpu CORE        cœur 68000 : moira (seul disponible, cycle-exact)\n"
         "  --machine TYPE    profil : st, megast, ste (défaut), megaste\n"
         "  --fpu             peuple le socket MC68881 du Mega STE ($FFFA40, émulation\n"
