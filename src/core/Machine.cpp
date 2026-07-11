@@ -581,3 +581,23 @@ bool Machine::loadState(const uint8_t* data, std::size_t n) {
     serializeState(ar);   // relit magic/version (déjà validés) puis restaure le reste
     return ar.ok();
 }
+
+bool Machine::saveStateFile(const std::string& path) {
+    std::vector<uint8_t> buf;
+    saveState(buf);
+    std::ofstream f(path, std::ios::binary);
+    if (!f) return false;
+    f.write(reinterpret_cast<const char*>(buf.data()), std::streamsize(buf.size()));
+    return bool(f);
+}
+
+bool Machine::loadStateFile(const std::string& path) {
+    std::ifstream f(path, std::ios::binary | std::ios::ate);
+    if (!f) return false;
+    const std::streamoff n = f.tellg();
+    if (n <= 0) return false;
+    f.seekg(0);
+    std::vector<uint8_t> buf(static_cast<size_t>(n));
+    f.read(reinterpret_cast<char*>(buf.data()), n);
+    return loadState(buf.data(), buf.size());
+}
