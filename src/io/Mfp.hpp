@@ -21,6 +21,7 @@
 #include <deque>
 
 #include "core/Scheduler.hpp"
+#include "core/StateArchive.hpp"
 
 class Mfp {
 public:
@@ -112,6 +113,62 @@ public:
     // ordonnanceur temps réel. Renvoie true si OK ; détaille sur stderr. Appelé par
     // neost-headless --mfp-selftest.
     bool mfpSelfTest();
+
+    // Sérialisation save-state SYMÉTRIQUE (save ET load). Défini INLINE pour l'accès
+    // aux membres privés. Transfère TOUT l'état runtime : registres MMIO, état des
+    // timers (compteurs vivants + recharges), USART/série, latches d'interruption
+    // (IPR/ISR + chronologie pendingTime_), lignes d'ENTRÉE GPIP et champs dérivés
+    // persistants. NE TOUCHE PAS aux liaisons moteur (sched_, serialSink_) ni aux
+    // static/constexpr. Note : le MFP n'a PAS de FIFO série (deque) — buffer 1 octet.
+    void serialize(StateArchive& ar) {
+        // --- Registres d'interruption exposés au débogueur (publics) -----------------
+        ar(gpip); ar(aer); ar(ddr);
+        ar(iera); ar(ierb);
+        ar(ipra); ar(iprb);
+        ar(imra); ar(imrb);
+        ar(isra); ar(isrb);
+        ar(vr);
+
+        // --- Lignes d'ENTRÉE GPIP + fixtures machine (persistent inter-trame) ---------
+        ar(aciaLineKbd_); ar(aciaLineMidi_);
+        ar(fdcLine_);
+        ar(gpuLine_);
+        ar(colorMonitor_);
+        ar(hasDmaSound_);
+        ar(xsint_);
+        ar(busyLine_);
+        ar(ctsLine_);
+        ar(dcdLine_);
+        ar(riLine_);
+
+        // --- USART / réception série (buffer 1 octet, pas de FIFO) --------------------
+        ar(rxByte_);
+        ar(rxFull_);
+        ar(rxOverrun_);
+        ar(loopback_);
+
+        // --- Timers B/C/D : mode, recharge et compteurs figés ------------------------
+        ar(tbcr_); ar(tbReload_); ar(tbCounter_);
+        ar(tcCounter_); ar(tdCounter_);
+
+        // --- Timer A event-count (ligne TAI = XSINT son DMA STE) ---------------------
+        ar(taReload_); ar(taCounter_);
+        ar(tai_);
+
+        // --- Backing store des registres timer/USART ($FF..) -------------------------
+        ar(timer_);   // C-array uint8_t[0x40]
+
+        // --- Signal IRQ daté (chronologie + délai de propagation) --------------------
+        ar(irq_);
+        ar(irqTime_);
+        ar(currentInt_);
+        ar(pendingTime_);      // C-array int64_t[16]
+        ar(pendingTimeMin_);
+
+        // --- Config USART effective (dérivée du Timer D / UCR) -----------------------
+        ar(serialBaud_);
+        ar(serialUcr_);
+    }
 
     // Lignes d'interruption des DEUX ACIA (clavier ET MIDI), câblées en WIRE-OR
     // sur la MÊME entrée GPIP4 (active BAS). Cf. Hatari MFP_Main_Compute_GPIP_LINE_ACIA

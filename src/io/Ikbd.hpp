@@ -20,6 +20,7 @@
 #include <functional>
 
 #include "core/Scheduler.hpp"
+#include "core/StateArchive.hpp"
 
 class Mfp;
 
@@ -94,6 +95,109 @@ public:
     //  - en mode joystick auto, émet spontanément un paquet $FE/$FF dès qu'un état
     //    de manette change (cf. IKBD_SendAutoJoysticks ; no-op hors JOY_AUTO).
     void onVbl(int64_t vblMicro);
+
+    // Sérialisation save-state SYMÉTRIQUE (save ET load) : transfère tout l'état
+    // runtime de l'ACIA/IKBD. Ne touche PAS les liaisons (mfp_, sched_, joyProbe_)
+    // ni la file rx_ (std::deque non sérialisable — voir note). Défini inline pour
+    // l'accès aux membres privés.
+    void serialize(StateArchive& ar) {
+        // File de sortie IKBD→CPU (std::deque : pas d'aide StateArchive → longueur + octets).
+        {
+            uint32_t n = static_cast<uint32_t>(rx_.size());
+            ar(n);
+            if (ar.loading()) {
+                rx_.clear();
+                for (uint32_t i = 0; i < n && ar.ok(); ++i) { uint8_t b = 0; ar(b); rx_.push_back(b); }
+            } else {
+                for (uint8_t b : rx_) ar(b);
+            }
+        }
+        // --- ACIA / réception ---
+        ar(rdr_);
+        ar(rdrf_);
+        ar(rxPending_);
+        ar(rxOverrun_);
+        ar(ovrn_);
+        ar(srRead_);
+        ar(control_);
+        ar(txEnableInt_);
+        ar(tdre_);
+
+        // --- Tampon de commande multi-octets ---
+        ar(inBuf_);        // std::array<uint8_t, 8>
+        ar(inBufLen_);
+        ar(cmdExpected_);
+
+        // --- Joystick hôte ---
+        ar.arr(hostJoy_);  // uint8_t[2]
+
+        // --- Mode souris ---
+        ar(mouseMode_);
+        ar(absX_);
+        ar(absY_);
+        ar(absMaxX_);
+        ar(absMaxY_);
+        ar(prevAbsButtons_);
+        ar(prevL_);
+        ar(prevR_);
+
+        // --- Paramètres paquet souris relatif ---
+        ar(xThreshold_);
+        ar(yThreshold_);
+        ar(xScale_);
+        ar(yScale_);
+        ar(yAxis_);
+        ar(bOldL_);
+        ar(bOldR_);
+        ar(mouseDeltaX_);
+        ar(mouseDeltaY_);
+        ar(mouseLeft_);
+        ar(mouseRight_);
+
+        // --- MouseAction ($07) + mode curseur ($0A) ---
+        ar(mouseAction_);
+        ar(keyCodeDeltaX_);
+        ar(keyCodeDeltaY_);
+
+        // --- Horloge interne IKBD ---
+        ar.arr(clock_);    // uint8_t[6]
+        ar(clockMicro_);
+
+        // --- Mode joystick ---
+        ar(joyMode_);
+        ar(prevJoy0_);
+        ar(prevJoy1_);
+        ar(vblCount_);
+        ar(duringResetCriticalTime_);
+
+        // --- Quirks souris + joystick simultanés ---
+        ar(mouseDisabled_);
+        ar(joystickDisabled_);
+        ar(mouseEnabledDuringReset_);
+        ar(bothMouseAndJoy_);
+
+        // --- Pause output ($13) ---
+        ar(pauseOutput_);
+
+        // --- État code 6301 custom ($20/$22) ---
+        ar(customWrite_);
+        ar(customRead_);
+        ar(exeMode_);
+        ar(memLoadLeft_);
+        ar(memLoadTotal_);
+        ar(memExeNbBytes_);
+        ar(memLoadCrc_);
+        ar.arr(scanState_);   // uint8_t[128]
+        ar(mDeltaX_);
+        ar(mDeltaY_);
+        ar(lmb_);
+        ar(chaosFirst_);
+        ar(chaosIgnore_);
+        ar(chaosIndex_);
+        ar(chaosCount_);
+        ar(asMagic_);
+        ar(asReadCount_);
+    }
 
 private:
     void pushRx(uint8_t b);                  // empile un octet IKBD → CPU (livraison cadencée)

@@ -460,21 +460,43 @@ int main(int argc, char** argv) {
         else
             std::fprintf(stderr, "[headless] symboles : échec de chargement de %s\n", symbolsPath.c_str());
     }
-    // Save-state (increment 1) : run N trames → save A → modifie (60 trames) → load A →
-    // re-save B → A doit == B (les champs sérialisés sont correctement save ET load).
+    // Save-state — test de DÉTERMINISME (le vrai) : run N trames → save A → passe DIRECTE
+    // (200 trames, capture état+écran) → load(A) → RE-JOUE 200 trames → capture état+écran.
+    // Si la restauration est complète, l'état re-sérialisé ET l'écran sont byte-identiques.
+    // Une divergence d'état affiche le 1ᵉʳ offset qui diffère → localise le champ oublié
+    // (l'ordre de sérialisation est connu : Machine::serializeState).
     if (saveStateTest) {
-        for (int i = 0; i < frames; ++i) machine.runFrame();
+        auto screenHash = [&]() -> uint64_t {   // FNV-1a 64 bits sur le framebuffer
+            const uint8_t* p = reinterpret_cast<const uint8_t*>(machine.shifter.pixels());
+            const size_t n = size_t(machine.shifter.width()) * machine.shifter.height() * 4;
+            uint64_t h = 1469598103934665603ull;
+            for (size_t i = 0; i < n; ++i) { h ^= p[i]; h *= 1099511628211ull; }
+            return h;
+        };
+        const int runLen = 200;
+        for (int i = 0; i < frames; ++i) machine.runFrame();       // → point de sauvegarde
         std::vector<uint8_t> A; machine.saveState(A);
-        for (int i = 0; i < 60; ++i) machine.runFrame();          // modifie l'état
+        for (int i = 0; i < runLen; ++i) machine.runFrame();       // passe DIRECTE
+        std::vector<uint8_t> stD; machine.saveState(stD);
+        const uint64_t hD = screenHash();
         if (!machine.loadState(A.data(), A.size())) {
-            std::fprintf(stderr, "[save-state-test] FAIL : loadState a échoué\n");
+            std::fprintf(stderr, "[save-state-det] FAIL : loadState a échoué\n");
             return 1;
         }
-        std::vector<uint8_t> B; machine.saveState(B);
-        const bool eq = (A == B);
-        std::fprintf(stderr, "[save-state-test] taille=%zu o \xe2\x80\x94 restauration %s\n",
-                     A.size(), eq ? "OK (A==B)" : "FAIL (A!=B)");
-        return eq ? 0 : 1;
+        for (int i = 0; i < runLen; ++i) machine.runFrame();       // RE-JOUE depuis A
+        std::vector<uint8_t> stR; machine.saveState(stR);
+        const uint64_t hR = screenHash();
+        const bool stateEq = (stD == stR), screenEq = (hD == hR);
+        if (!stateEq) {
+            size_t off = 0; const size_t m = std::min(stD.size(), stR.size());
+            while (off < m && stD[off] == stR[off]) ++off;
+            std::fprintf(stderr, "[save-state-det] DIVERGENCE état @ offset %zu / %zu "
+                         "(dir[%zu]=%02X res=%02X)\n", off, stD.size(), off,
+                         off < m ? stD[off] : 0, off < m ? stR[off] : 0);
+        }
+        std::fprintf(stderr, "[save-state-det] écran %s | état re-sérialisé %s\n",
+                     screenEq ? "OK (identique)" : "DIFF", stateEq ? "OK (identique)" : "DIFF");
+        return (stateEq && screenEq) ? 0 : 1;
     }
     for (uint32_t a : breakAddrs) machine.cpu.setBreakpoint(a);   // débogueur : breakpoints PC
     for (uint32_t a : watchAddrs) machine.cpu.setWatchpoint(a);   // débogueur : watchpoints mémoire

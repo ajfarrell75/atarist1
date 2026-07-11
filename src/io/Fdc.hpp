@@ -26,6 +26,7 @@
 #include <vector>
 
 #include "core/Scheduler.hpp"
+#include "core/StateArchive.hpp"
 #include "io/StxImage.hpp"
 #include "io/Acsi.hpp"
 
@@ -92,6 +93,77 @@ public:
     // TR/DR et le mot $FF8604 rémanent sont aussi effacés. Les images montées
     // et la position physique des têtes survivent.
     void    reset(bool cold);
+
+    // Sauvegarde/restauration de l'état RUNTIME du contrôleur (WD1772 + DMA).
+    // Méthode SYMÉTRIQUE (même code save/load, cf. StateArchive). Inline pour
+    // l'accès aux membres privés. Ne sérialise PAS le CONTENU des images disque
+    // (drive_[].image, ->stx, path, géométrie, wd1772Path) : ils sont rechargés
+    // depuis le fichier .st/.stx, pas depuis la save-state. On sérialise en
+    // revanche la POSITION physique de la tête et l'état de transition (Mediach)
+    // de chaque lecteur, plus tous les registres/état DMA/FIFO/rotation. Le
+    // contrôleur ACSI (acsi_) et les liaisons (bus_/psg_/mfp_/sched_/soundSink_)
+    // sont hors périmètre.
+    void serialize(StateArchive& ar) {
+        // --- Position physique / transition par lecteur (PAS le contenu image) ---
+        for (int d = 0; d < 2; ++d) {
+            ar(drive_[d].headTrack);        // position PHYSIQUE de la tête
+            ar(drive_[d].transitionPhase);  // phase Mediach (éjection/insertion)
+            ar(drive_[d].transitionDeadline);
+        }
+
+        // --- Registres internes WD1772 ---
+        ar(cr_);
+        ar(tr_);
+        ar(sr_);
+        ar(dr_);
+        ar(str_);
+        ar(stepDir_);
+        ar(side_);
+        ar(driveSel_);
+        ar(irqSignal_);
+        ar(densityMode_);
+
+        // --- Machine à états des commandes ---
+        ar(command_);
+        ar(commandState_);
+        ar(commandType_);
+        ar(replaceCommandPossible_);
+        ar(fastFloppy_);
+        ar(delayIndexPaced_);
+        ar(statusTypeI_);
+        ar(statusTemp_);
+        ar(indexCounter_);
+        ar(interruptCond_);
+
+        // --- Champ ID du prochain secteur ---
+        ar(nextID_TR_);
+        ar(nextID_SR_);
+        ar(nextID_LEN_);
+        ar(nextID_CRCOK_);
+        ar(stxNextSector_);
+
+        // --- Modèle rotationnel (impulsion d'index + PRNG de phase) ---
+        ar(indexTime_);
+        ar(rng_);
+
+        // --- Contrôleur DMA ---
+        ar(dmaMode_);
+        ar(dmaAddr_);
+        ar(dmaSectorCount_);
+        ar(dmaBytesInSector_);
+        ar(dmaBytesToTransfer_);
+        ar.arr(fifo_);              // uint8_t[16]
+        ar(fifoSize_);
+        ar(dmaError_);
+        ar(ff8604recent_);
+        ar(ctrlHi_);
+        ar(dataHi_);
+
+        // --- Tampon de transfert FDC↔DMA ---
+        ar.vec(buf_);              // std::vector<uint8_t>
+        ar.podVec(bufTiming_);     // std::vector<uint16_t>
+        ar(bufPos_);
+    }
 
 private:
     // Une disquette montée (lecteur A ou B).

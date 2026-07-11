@@ -539,7 +539,7 @@ void Machine::stepInstruction() {
 // Méthode SYMÉTRIQUE (StateArchive gère save ET load) → l'ordre ne peut pas diverger.
 void Machine::serializeState(StateArchive& ar) {
     uint32_t magic   = 0x4E535453u;   // 'NSTS'
-    uint16_t version = 1;
+    uint16_t version = 2;             // v2 : puces (Shifter/MFP/PSG/DMA/Blitter/IKBD/ACIA/RTC/FDC)
     ar(magic); ar(version);
     // État de trame / géométrie (recalculable depuis les puces, mais on le fige pour un
     // save/load à une frontière de trame — les puces suivront à l'increment 2).
@@ -548,10 +548,21 @@ void Machine::serializeState(StateArchive& ar) {
     ar(lineCarry_); ar(v2ShortLine_); ar(v2_);
     ar(lineLenOn_); ar(curLineLen_);
     ar(cpl_); ar(lpf_); ar(disp_); ar(deEnd_); ar(dispStart_);
-    // Composants.
+    // Composants. Ordre quelconque mais IDENTIQUE save/load (même méthode). Scc/Acsi
+    // (série/disque dur, peu utilisés) et le contenu des images disque ne sont pas encore
+    // sérialisés — cf. TODO save-states.
     bus.serialize(ar);
     cpu.serialize(ar);
     sched.serialize(ar);
+    shifter.serialize(ar);
+    mfp.serialize(ar);
+    psg.serialize(ar);
+    dmasnd.serialize(ar);
+    blitter.serialize(ar);
+    ikbd.serialize(ar);
+    midi.serialize(ar);
+    rtc.serialize(ar);
+    fdc.serialize(ar);
 }
 
 void Machine::saveState(std::vector<uint8_t>& out) {
@@ -565,7 +576,7 @@ bool Machine::loadState(const uint8_t* data, std::size_t n) {
     if (n < 6) return false;
     uint32_t magic;   std::memcpy(&magic, data, 4);
     uint16_t version; std::memcpy(&version, data + 4, 2);
-    if (magic != 0x4E535453u || version != 1) return false;
+    if (magic != 0x4E535453u || version != 2) return false;
     StateArchive ar = StateArchive::loader(data, n);
     serializeState(ar);   // relit magic/version (déjà validés) puis restaure le reste
     return ar.ok();

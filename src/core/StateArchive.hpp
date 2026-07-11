@@ -58,6 +58,18 @@ public:
         raw(v.data(), v.size());
     }
 
+    // Un vector<T> d'éléments POD (taille préfixée) — ex. les logs d'écritures horodatées
+    // (events_ du YM2149/DMA sound). Vidés à chaque trame → généralement vides à la
+    // frontière de save, mais sérialisés par sûreté.
+    template <class T>
+    void podVec(std::vector<T>& v) {
+        static_assert(std::is_trivially_copyable_v<T>, "podVec : élément non trivial");
+        uint32_t n = static_cast<uint32_t>(v.size());
+        (*this)(n);
+        if (loading_) { if (!ok_) return; v.resize(n); }
+        raw(v.data(), sizeof(T) * v.size());
+    }
+
 private:
     bool loading_ = false;
     bool ok_      = true;

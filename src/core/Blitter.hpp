@@ -33,6 +33,7 @@
 #include <cstdint>
 
 #include "core/Scheduler.hpp"
+#include "core/StateArchive.hpp"
 
 class Bus;
 
@@ -60,6 +61,26 @@ public:
     // Le blit est-il en cours ? (bit BUSY de $FF8A3C). En non-hog il reste à 1
     // entre les tranches, jusqu'à la fin réelle du transfert.
     bool busy() const { return (reg_[0x3C] & 0x80) != 0; }
+
+    // Sérialisation save-state SYMÉTRIQUE (save ET load) : transfère TOUT l'état
+    // runtime. On saute bus_ (référence), sched_ (pointeur reposé par Machine).
+    void serialize(StateArchive& ar) {
+        ar.arr(reg_);           // backing store big-endian des registres MMIO
+        ar(buffer_);            // registre à décalage source (persiste entre blits)
+        ar(busWord_);           // dernier mot du bus (persiste entre blits)
+        ar(xReset_);            // recharge du X count
+        ar(yLatch_);            // compteur Y latché (0→65536 à l'écriture)
+        ar(midBlit_);           // transfert engagé (même en pause)
+        ar(haveFxsr_);          // lecture source extra faite (ligne)
+        ar(nfsrInt_);           // dernière lecture source de la ligne sautée
+        ar(haveSrc_);           // lecture source du mot courant faite
+        ar(haveDst_);           // lecture destination du mot courant faite
+        ar(fetchSrc_);          // une source a été lue (màj src_addr en fin de mot)
+        ar(dstWord_);           // mot destination lu (survit à la suspension)
+        ar(sliceBus_);          // accès bus consommés par la tranche en cours
+        ar(cpuBusCnt_);         // accès bus CPU consommés (fenêtre COUNT_CPU_BUS)
+        ar(busCountError_);     // accès CPU volé en PRE_START → tranche de 63
+    }
 
 private:
     void start();                            // BUSY écrit à 1 : démarre/reprend le blit
