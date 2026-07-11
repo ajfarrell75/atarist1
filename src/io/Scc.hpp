@@ -20,6 +20,8 @@
 #include <cstdint>
 #include <functional>
 
+#include "core/StateArchive.hpp"
+
 class Scc {
 public:
     Scc() { reset(); }
@@ -42,6 +44,14 @@ public:
     void setSerialSink(std::function<void(int ch, uint8_t b)> fn) { sink_ = std::move(fn); }
     // Injection d'un octet reçu sur le canal `ch` (RX) — bouclage / source externe.
     void receiveByte(int ch, uint8_t b);
+
+    // Sérialisation save-state (SYMÉTRIQUE). `Chn` est POD (trivially-copyable) →
+    // copie brute. On saute `sink_` (callback re-lié à la construction) et `trace_`
+    // (drapeau de débogage, pas de l'état machine).
+    void serialize(StateArchive& ar) {
+        ar(chn_[0]); ar(chn_[1]);
+        ar(irqLine_); ar(ius_); ar(activeReg_);
+    }
 
 private:
     struct Chn {

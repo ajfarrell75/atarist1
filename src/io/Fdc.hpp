@@ -163,6 +163,9 @@ public:
         ar.vec(buf_);              // std::vector<uint8_t>
         ar.podVec(bufTiming_);     // std::vector<uint16_t>
         ar(bufPos_);
+
+        // --- Contrôleur ACSI (état de commande ; config/images hors-snapshot) ---
+        acsi_.serialize(ar);
     }
 
 private:
