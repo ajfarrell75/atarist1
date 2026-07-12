@@ -372,6 +372,7 @@ void Shifter::beginFrame() {
     vcRestartBase_ = -1;
     vcLineBase_  = vcFrameBase_;
     vcLineY_     = 0;
+    commitAnchor_ = -1;   // ancre verticale du commit : re-latchée au 1er commit
     // Fond bordure : remplit tout le buffer overscan avec la couleur de bordure
     // (registre 0) au début de trame. Les lignes actives écrasent leur zone ; les
     // bordures haut/bas et les côtés non réécrits restent à cette couleur. (Phase 1 :
@@ -609,6 +610,24 @@ void Shifter::renderLine(int y) {
 // STE et scroll, ajoutés par l'appelant) : 160 nominal, modulé par les drapeaux de
 // bordure de la machine Glue (port BORDERBYTES_* / Video_CopyScreenLineColor). Sans
 // écriture freq/res cette trame (cas ultra-majoritaire), renvoie le bpl nominal.
+// Ancre verticale du commit de scanlines (endVideoLine/commitScanline) : la 1ʳᵉ
+// scanline dont le commit avance le compteur vidéo. Base = liveStartHBL_ (sticky,
+// chemin historique, zéro régression hors tricks). Sur une trame à écritures
+// freq/res, la fenêtre verticale RÉELLE fait foi : glueStartHBL_ (machine Glue
+// LIVE, port fidèle du nStartHBL d'Hatari — une paire 60/50 trop tôt dans la
+// ligne n'ouvre PAS le haut, contrairement au sticky). max() : un vrai retrait
+// haut donne 34 des deux côtés ; le sticky bogus (34 vs Glue 63) suit la Glue.
+// LATCHÉE au 1er commit de la trame (reset à beginFrame) : si la Glue re-ferme le
+// haut APRÈS le début des commits, l'ancre ne bouge plus — sl reste monotone et
+// lineSnap_/vcLineY_ gardent une indexation stable (verrou Cuddly conservé).
+int Shifter::commitAnchor() {
+    if (commitAnchor_ >= 0) return commitAnchor_;
+    int a = liveStartHBL_;
+    if (frameMode_ != Mode::High && !syncWrites_.empty() && glueStartHBL_ > a)
+        a = glueStartHBL_;
+    return a;
+}
+
 int Shifter::glueLineBytes(int scanline) const {
     const int bpl = (frameMode_ == Mode::High) ? 80 : 160;
     if (frameMode_ == Mode::High || syncWrites_.empty()) return bpl;
@@ -645,16 +664,20 @@ void Shifter::endVideoLine() {
     // calibration fullscreen d'Enchanted Land mesure $FF8209 à travers des lignes
     // élargies/raccourcies). Sans trick, glueLineBytes == bpl (chemin historique).
     if (!syncWrites_.empty())
-        liveGlueCatchUp(liveStartHBL_ + vcLineY_);
-    // ⚠ Divergence documentée (2026-07-03) : la scanline de commit est calée sur
-    // liveStartHBL_ (VDE_On STICKY — un retrait haut verrouillé ne se re-ferme pas)
-    // alors que videoCounter/renderGlueFrame suivent glueStartHBL_ (machine Glue
-    // live, RE-FERMABLE comme le nStartHBL d'Hatari). Les deux ne divergent que si
-    // une trame ouvre PUIS re-ferme la bordure haute (rarissime) ; aligner le commit
-    // sur glueStartHBL_ ré-indexerait lineSnap_/vcLineY_ en cours de trame et
-    // risquerait de casser la capture par-ligne validée (Cuddly) — on documente au
-    // lieu de toucher.
-    const int sl  = liveStartHBL_ + vcLineY_;
+        liveGlueCatchUp(commitAnchor() + vcLineY_);
+    // Ancre verticale du commit : commitAnchor() = max(liveStartHBL_, glueStartHBL_)
+    // sur une trame à tricks, LATCHÉE au 1er commit de la trame (cf. déclaration).
+    // liveStartHBL_ (sticky) passe à 34 sur TOUTE bascule 60 Hz avant la ligne 63 —
+    // y compris une paire 60/50 qui n'ouvre PAS réellement le haut (Hatari exige que
+    // le 60 Hz couvre la comparaison de fin de ligne 33). La calibration de Lethal
+    // Xcess émet une telle paire à la ligne 32 : committer sur l'ancre sticky 34
+    // faisait avancer le compteur vidéo de 29 lignes de bordure haute (160 octets
+    // chacune, glueLineBytes ne connaissant pas la fenêtre VERTICALE) → le poll
+    // $FF8209 de fin de trame lisait base+228 lignes au lieu de base+199 → le jeu
+    // croyait son overscan ouvert → écran en jeu déchiré puis chargements en échec
+    // (2026-07-12, oracle Hatari byte-exact sur ce poll).
+    if (commitAnchor_ < 0) commitAnchor_ = commitAnchor();   // latch au 1er commit
+    const int sl  = commitAnchor_ + vcLineY_;
     const int bpl = glueLineBytes(sl);
     // Capture les octets que le shifter vient de lire sur CETTE ligne (échantillon
     // daté au faisceau, cf. lineSnap_) : bpl + marge d'arrondi au groupe de 16 px
@@ -712,8 +735,12 @@ void Shifter::endVideoLine() {
 // la RAM de fin de trame et l'artefact sprite y persistait). Le rattrapage de
 // renderLine/finishFrame reste en filet (CPU halté, bordure haute mi-trame).
 void Shifter::commitScanline(int line) {
+    // Met la Glue LIVE à jour jusqu'à la ligne qui se termine AVANT d'évaluer
+    // l'ancre : commitAnchor() consulte glueStartHBL_ (fenêtre verticale réelle).
+    if (frameMode_ != Mode::High && !syncWrites_.empty())
+        liveGlueCatchUp(line);
     while (true) {
-        const int sl = liveStartHBL_ + vcLineY_;
+        const int sl = commitAnchor() + vcLineY_;
         if (sl > line) break;
         if (vcLineY_ >= curAH_) {
             if (frameMode_ == Mode::High || syncWrites_.empty()) break;
@@ -806,6 +833,15 @@ void Shifter::finishFrame() {
     // x=45..47 dans la bordure gauche et pal[0] roulant haut/bas manquants).
     // Trame sans AUCUNE écriture palette : rendu ligne-à-ligne conservé.
     if (bordersTrick_ || spec512Active_) renderGlueFrame();
+
+    // Snapshot Glue stable pour le zoom kiosk : capturé ICI, après replayGlue() /
+    // renderGlueFrame(), AVANT que beginFrame_() du cycle suivant ne remette à zéro
+    // glueStartHBL_/glueEndHBL_. Le rendu GL lit snapLiveTop()/snapLiveHeight().
+    snapGlueStart_      = glueStartHBL_;
+    snapGlueEnd_        = glueEndHBL_;
+    snapGlueVOverscan_  = glueVOverscan_;
+    snapGlueBlankLines_ = glueBlankLines_;
+    snapBordersTrick_   = bordersTrick_;
 }
 
 // Rejoue HORS-LIGNE les wait states d'alignement bus du shifter (port fidèle de
@@ -2345,6 +2381,12 @@ uint32_t Shifter::videoCounter() const {
     // ($8209) tournait à vide. ⚠ L'ancienne crainte (« un poll compteur==base sort à
     // la ligne 310 et bascule 60 Hz à la frontière → géométrie de trame flip ») est
     // re-testée aux étalons : overscan_top et make_overscan_test restent verts.
+    // DIAG (NEOST_VC_TRACE=1) : chaque lecture du compteur vidéo, datée au cycle
+    // trame — à diff'er entre builds/против Hatari video_addr (calibrations LX/EL).
+    static const bool vcTrace = std::getenv("NEOST_VC_TRACE") != nullptr;
+    if (vcTrace)
+        std::fprintf(stderr, "[VC] fc=%lld line=%d X=%d addr=%06X vcY=%d vcB=%06X\n",
+                     (long long)fc, line, X, addr & 0xFFFFFF, vcLineY_, vcLineBase_);
     return addr & 0xFFFFFF;
 }
 

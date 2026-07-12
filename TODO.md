@@ -30,7 +30,7 @@ Rapports terrain. TOS 1.02fr sauf mention contraire. Chemins sous `disks/st/` (`
 | **Arkanoid (1987)** (Imagine) | Atteint l'écran-titre mais ne franchit pas la partie (boucle `$31736`/`$26E7`). | Gel FDC `$31736` **résolu** (modèle rotationnel) ; reste une cause distincte (protection ? 2ᵉ chargement ? IRQ ?). 🎯 étalon FDC/protection. |
 | **Captain Blood (1988)** (ERE) | ✅ **JOUABLE en TOS US. Cas TOS FR TRANCHÉ (2026-07-09) = FIDÈLE, pas un bug.** « KEYBOARD PROBLEM » en TOS FR : oracle Hatari TOS FR montre EXACTEMENT le même écran (diff visuel identique). Le jeu n'envoie AUCUNE commande IKBD spéciale (flux IKBD US==FR : $08/$0F/$12/$80 init standard) → détection purement logicielle (lecture table clavier TOS) ; NeoST fait tourner la même ROM FR que Hatari → même résultat. La version crackée `[cr 42-Crew]` rejette la table AZERTY. Rien à corriger. | Vérifié à l'oracle (cmd-fifo+SPACE, tos102fr) : Hatari FR == NeoST FR. |
 | **Enchanted Land (1990)** (Thalion) | ✅✅✅ **RÉSOLU (5ᵉ passe 2026-07-02) : moteur fullscreen verrouillé 100 %** (12402/12402 écritures freq à la position Hatari-exacte). Le dernier verrou n'était PAS la reconnaissance IPL mais un **double comptage du saut STOP** dans la comptabilité de quantum → `sched.now()`/datation vidéo en avance de δ∈{4..26} sur l'horloge CPU (quand δ≡2 mod 4, le calibrateur $8209 déverrouillait). Micro-sauts éliminés. **Son Thalion OK** (confirmé GUI 2026-07-02 — réparé par la même passe). Jeu complet. | Fix = rebase `quantumStartBus_` au saut STOP (`Cpu68k::run`) → `docs/MOIRA_WINUAE_CONVERGENCE.md` (5ᵉ passe). Les 3 mystères (lock, commit-VBL↔loader, IPLFETCH↔loader) avaient cette même cause. |
-| **Lethal Xcess** (`.STX`, TOS 1.62) | ✅ titre stable (churn 0,00 %) + **in-game parfait** (confirmé GUI 2026-07-02). ◑ L'utilisateur rapporte un titre « buggé à ~8 % » en GUI — NON reproduit en headless (ST/tos102fr, trame 3000 : diff Hatari 1,5 % diffuse = phases d'anim, aucune ligne franche) → dépend de la config GUI (machine/TOS/moment), à préciser. | Reproduire avec la config GUI exacte puis diff Hatari. |
+| **Lethal Xcess** (`.STX`, TOS 1.62) | ✅ titre stable + **in-game RÉPARÉ (2026-07-12)** : la régression « commit scanline au HBL » (617d030) faisait committer les 29 lignes de bordure haute sur l'ancre sticky `liveStartHBL_=34` (paire 60/50 de calibration ligne 32, qui n'ouvre PAS le haut) → poll $8209 fin de trame faux (+29×160 octets) → écran en jeu déchiré + chargements en échec. Fix `commitAnchor()` (fenêtre Glue LIVE, latchée) → pixel-identique au pré-régression, flux $8209 byte-identique (~3 M lectures). ◑ Titre « buggé à ~8 % » GUI (2026-07-02) : probablement même cause (calibration $8209 chaque trame), à re-vérifier en GUI. | Recette in-game headless : `--disk Disk_1.STX --diskb Disk_2.STX --keys-at 3000 " " --joy-script 16500 "FFFF" --joy-at 21000 0x80` → jeu ≈ trame 21900 (⚠ le jeu NE DÉMARRE qu'avec le disque 2 monté : titre→SPACE→music select→FEU→briefing→FEU tenu). Oracle Hatari : mêmes disques, Xvfb+xdotool, feu=Control_R tenu pendant chargement+briefing. |
 | **Beyond the Ice Palace** (D-BUG) | Rapport GUI : écran scramblé en jeu. **NON reproduit en headless** : gameplay PROPRE (ST et STE, 1 Mo, boot AUTO). ⚠ Le PRG exige > 512 Ko (BSS dépack 384 Ko → TPA ~471 Ko) : en 512 Ko le TOS skippe l'AUTO — comportement CORRECT (pas un bug). Le chemin GUI = double-clic bureau GEM (Pexec sous AES) ≠ AUTO — à reproduire avec la config GUI exacte. | Recette headless : copier le disque + `mmd ::AUTO` + `mcopy` ; `--mem 1m --keys-at 4000 "n" --keys-at 6200 " " --keys-at 9600 " " --keys-at 12000 "y" --keys-at 14500 "s" --keys-at 16000 " " --keys-at 19600 "y"` → jeu ≈ trame 21000. |
 | **The Cuddly Demos** (TCB) | ✅ **menu robot RÉSOLU (2026-07-03, commit `125388b`)** : clignotement vertical 10-47 % → **0** (250/250 trames verrouillées, mur régulier = Hatari). 1ʳᵉ page OK. | Cause : datations lecture (`−14`) / écriture (`−6`) du compteur vidéo co-calibrées autour d'une « origine −8 » devenue artefact après le fix STOP — ramenées ENSEMBLE aux valeurs fidèles §8 (**read −6, write +2**). Le synchroniseur (pc=f264, sortie sur octet bas `$8209` > `$40` SIGNÉ) lisait 4-6 octets de moins qu'Hatari au même instant → sortie L34→L36 → paire 60/50 une ligne trop tard. ⚠ Ne bouger ces offsets que PAR PAIRE (read seul casse EL). Repro : `--fastfdc --keys-at 3000 " "`, ≈ trame 6000. → `docs/MOIRA_WINUAE_CONVERGENCE.md`. |
 | **Shadow Warriors** (2Hot2Handle) | Après SPACE : titre + musique OK ; le bouton joystick ne lance pas le jeu. (Castle Warrior, lui, fonctionne.) | À diff'er Hatari. |
@@ -154,21 +154,12 @@ densité HD/ED STX (NeoST plus cohérent) ; RTC en temps émulé (déterminisme 
   contraint pas plus ; nécessiterait de modéliser le cycle d'effet de l'écriture registre 0 vs
   DE-start par ligne. Invisible aux étalons. _Valeur très basse._
 
-### Interface — kiosk & effets CRT (revue 2026-07-10)
+### Interface — kiosk & effets CRT (revue 2026-07-10, re-vérifiée 2026-07-12)
 Fonctionnalités **livrées et fonctionnelles** (build OK options strictes, auto-tests cœur
-verts) — voir `CHANGELOG.md § Frontend`. Points mineurs relevés à la relecture (aucun
-bloquant, cœur émulation intact) :
-- **CRT — ordre `edgeMask` vs persistance** (`gui/CrtEffectStack.cpp`, `kFragmentShader`) :
-  `rgb *= edgeMask` puis `rgb = max(rgb, prev*persist)` — la rémanence (`prev`, non masquée)
-  transparaît hors du cadre courbé (baril fort) → léger « bavement » aux bords. Correctif :
-  masquer `prev` aussi, ou appliquer `edgeMask` en tout dernier (`fragColor = vec4(rgb*edgeMask,1)`).
-- **CRT — clamp défensif `centerLighting`** : le shader fait `1.0/uCenterLighting` ; l'UI borne
-  à 0.5..1.0 mais un `neost.cfg` chargeant `crt_center=0` donnerait `1/0`. Clamp à la lecture
-  ou `max(uCenterLighting, 0.01)` dans le shader.
-- **Kiosk — page Clavier, touche « collée » en frappe rapide** (`main.cpp`) : re-valider (A)
-  une touche/clic avant l'expiration de `g_kioskInjectHold` (~4 trames) écrase
-  `g_kioskKeyRelease` → le MAKE précédent n'a jamais son BREAK. Correctif : ignorer une
-  validation tant que `g_kioskInjectHold > 0` (ou relâcher l'attente avant le nouveau MAKE).
+verts) — voir `CHANGELOG.md § Frontend`. Les 3 points fonctionnels relevés à la relecture
+(ordre `edgeMask` vs persistance, clamp `centerLighting`, touche « collée » page Clavier)
+étaient en fait **déjà corrigés dans `0767f66`** (vérifié au code + `git log -S`,
+2026-07-12) — il ne reste que du cosmétique :
 - **Cosmétique** : membres `srcW_`/`srcH_` morts dans `CrtEffectStack` ; destructeur `= default`
   (fuite GL seulement si l'objet cessait d'être un singleton process-lifetime) ; répétition de
   navigation kiosk : tenir gauche/droite (swap one-shot) bloque la répétition haut/bas.

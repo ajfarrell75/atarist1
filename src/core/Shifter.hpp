@@ -123,8 +123,33 @@ public:
     // La trame COURANTE retire-t-elle une bordure (overscan démo : haut/bas via
     // glueVOverscan_, gauche/droite via bordersTrick_) ? Signal MATÉRIEL de la Glue,
     // STABLE — PAS une détection au pixel. Le zoom kiosk s'en sert : cadre FIXE sur la
-    // zone active par défaut, élargi au buffer entier uniquement quand ceci est vrai.
+    // zone active par défaut, élargi à la zone LIVE uniquement quand ceci est vrai.
     bool bordersOpen() const { return bordersTrick_ || glueVOverscan_ != 0; }
+    // Zone affichée par la Glue LIVE en coordonnées buffer (kiosk overscan).
+    // En mode standard : == activeTop()/activeHeight(). En overscan haut (EL, LX…) :
+    // glueStartHBL_ < 63 → liveTop() < activeTop(), liveHeight() > activeHeight().
+    // Les lignes basses vides (glueBlankLines_) sont incluses dans liveHeight().
+    int liveTop() const {
+        return std::max(0, activeY_ + (glueStartHBL_ - 63));
+    }
+    int liveHeight() const {
+        const int lt = liveTop();
+        return std::min(curH_ - lt, (glueEndHBL_ + glueBlankLines_) - glueStartHBL_);
+    }
+    // Snapshot de l'état Glue de la DERNIÈRE trame RENDUE (capturé en fin de
+    // finishFrame, après replayGlue). Stable entre trames : les valeurs ne sont pas
+    // écrasées par beginFrame_() du cycle suivant, contrairement à glueStartHBL_ /
+    // glueEndHBL_ qui sont resettés à chaque début de trame. Le zoom kiosk DOIT
+    // utiliser ces accesseurs (et non liveTop/liveHeight) pour éviter de lire l'état
+    // de début de trame N+1 au lieu de fin de trame N.
+    int snapLiveTop() const {
+        return std::max(0, activeY_ + (snapGlueStart_ - 63));
+    }
+    int snapLiveHeight() const {
+        const int lt = snapLiveTop();
+        return std::min(curH_ - lt, (snapGlueEnd_ + snapGlueBlankLines_) - snapGlueStart_);
+    }
+    bool snapBordersOpen() const { return snapBordersTrick_ || snapGlueVOverscan_ != 0; }
 
     // Fréquence de rafraîchissement COURANTE (mono = 71 Hz, sinon $FF820A bit1 :
     // 50 Hz PAL / 60 Hz NTSC). Pour l'affichage / le débogage (la trame est cadencée
@@ -260,6 +285,10 @@ private:
     // Octets lus par le shifter sur une scanline (160 nominal, modulé par les
     // drapeaux de bordure glue — port BORDERBYTES_*). Hors line-offset/scroll STE.
     int  glueLineBytes(int scanline) const;
+    // Ancre verticale du commit de scanlines (cf. Shifter.cpp) : max(liveStartHBL_,
+    // glueStartHBL_) sur trame à tricks, latchée au 1er commit (commitAnchor_).
+    int  commitAnchor();
+    int  commitAnchor_ = -1;
 
 public:
     // La scanline est-elle AFFICHÉE (Display-Enable vertical) d'après la machine
@@ -352,6 +381,13 @@ private:
     int  glueEndHBL_     = 263;                      // nEndHBL : dernière ligne+1 (peut monter → bottom retiré)
     uint32_t glueVOverscan_ = 0;                     // V_OVERSCAN_* (NO_TOP/NO_BOTTOM/NO_DE…)
     int  glueBlankLines_ = 0;                        // lignes blanches insérées (no-sync)
+    // Snapshot Glue de la DERNIÈRE trame RENDUE — capturé à la fin de finishFrame()
+    // après replayGlue(). Non écrasé par beginFrame_() : stable entre trames.
+    int      snapGlueStart_      = 63;
+    int      snapGlueEnd_        = 263;
+    uint32_t snapGlueVOverscan_  = 0;
+    int      snapGlueBlankLines_ = 0;
+    bool     snapBordersTrick_   = false;
     // Sortie du canal HBL_Pos/nCyclesPerLine de updateGlueState (−1 = pas de match
     // freq sur cette écriture ; sinon position IRQ HBL et longueur de ligne).
     int  glueHblPos_     = -1;
@@ -500,6 +536,7 @@ public:
         ar(lastGlueFreq_);
         ar(lastGlueRes_);
         ar(liveStartHBL_);
+        ar(commitAnchor_);   // ancre verticale du commit (latchée mi-trame)
 
         // --- Machine Glue : retrait de bordures / overscan ---
         // SyncWrite/GlueLine/ColorWrite ont du PADDING interne → champ par champ
