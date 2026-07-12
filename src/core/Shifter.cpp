@@ -695,6 +695,36 @@ void Shifter::endVideoLine() {
     ++vcLineY_;
 }
 
+// Commit des scanlines TERMINÉES au HBL de chaque ligne (port de l'appel
+// Video_EndHBL du handler HBL d'Hatari, video.c:3319) : la capture lineSnap_
+// d'une ligne se fait à SA fin de ligne (~cycle 512). Avant, le commit paresseux
+// n'était tiré que par renderLine(y+1) au cycle 376 de la ligne active SUIVANTE
+// (~380 cycles plus tard) — et en overscan HAUT (Enchanted Land en jeu), la grille
+// RENDER restant ancrée sur dispStartLine=63 alors que l'affichage commence à 34,
+// les captures traînaient de 29 lignes entières (~15 000 cycles). Un moteur qui
+// efface/redessine ses sprites en CHASSANT le faisceau tombait dans cette
+// fenêtre : les lignes du sprite étaient capturées APRÈS son effacement → sprite
+// invisible ou tronqué selon sa position verticale (sprite EL absent en saut).
+// Plafond : curAH_ (mêmes lignes que finishFrame) pour une trame ordinaire ; sur
+// une trame à tricks (écritures freq/res), on étend aux lignes AFFICHÉES par la
+// machine Glue LIVE au-delà de curAH_ (bordure basse retirée : l'affichage
+// continue jusqu'à glueEndHBL_ — sans capture, ces lignes du bas retombaient sur
+// la RAM de fin de trame et l'artefact sprite y persistait). Le rattrapage de
+// renderLine/finishFrame reste en filet (CPU halté, bordure haute mi-trame).
+void Shifter::commitScanline(int line) {
+    while (true) {
+        const int sl = liveStartHBL_ + vcLineY_;
+        if (sl > line) break;
+        if (vcLineY_ >= curAH_) {
+            if (frameMode_ == Mode::High || syncWrites_.empty()) break;
+            if (sl + 1 >= static_cast<int>(glueLines_.size())) break;
+            liveGlueCatchUp(sl);
+            if (sl >= glueEndHBL_ + glueBlankLines_) break;   // fin d'affichage LIVE
+        }
+        endVideoLine();
+    }
+}
+
 // RESTART du compteur vidéo en fin de trame — port de Video_RestartVideoCounter
 // (video.c, ULM DSOTS) : à la ligne 310 (50 Hz) / 260 (60 Hz), cycle 56 (STF),
 // le GLUE recharge le compteur depuis $FF8201/03. La base est relue À CET INSTANT

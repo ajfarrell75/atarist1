@@ -46,6 +46,10 @@ public:
     // rien : le rendu ligne-à-ligne (palette figée par ligne) suffit et reste
     // strictement inchangé (zéro régression hors spec512).
     void finishFrame();
+    // Commit des scanlines TERMINÉES, appelé au HBL de chaque ligne (port de
+    // l'appel Video_EndHBL du handler HBL d'Hatari, video.c:3319) : la capture
+    // lineSnap_ d'une ligne se fait à SA fin de ligne (~cycle 512). Cf. Shifter.cpp.
+    void commitScanline(int line);
     bool spec512Active() const { return spec512Active_; }
 
     // Remise à zéro au RESET machine — port de Video_Reset (video.c:810) : base

@@ -153,6 +153,27 @@ taguées (0.1.x). Le restant est dans [`TODO.md`](TODO.md).
   d'etos192 sur MegaSTE (SCU non programmé). Pour le STE/Mega STE : EmuTOS 256 Ko ou TOS 1.62/2.06.
 
 ## Vidéo (Shifter)
+- **Commit de scanline au HBL — sprites d'Enchanted Land EN JEU réparés (2026-07-12)** :
+  `Shifter::commitScanline`, appelé depuis `Machine::onHbl` = port de l'appel
+  `Video_EndHBL` du handler HBL d'Hatari (video.c:3319). La capture par-ligne au
+  faisceau (`lineSnap_`) se fait désormais à la fin de la ligne MÊME (~cycle 512),
+  plus au RENDER (cycle 376) de la ligne active suivante : ce commit paresseux datait
+  la capture ~380 cycles trop tard — et en overscan HAUT, la grille RENDER restant
+  ancrée sur `dispStartLine=63` alors que l'affichage démarre à 34, les captures
+  traînaient de **29 lignes entières** (~15 000 cycles). Le moteur d'EL efface ses
+  sprites logiciels en CHASSANT le faisceau (buffer UNIQUE, effacement trame paire /
+  retracé trame impaire — mesuré aux dumps RAM `--dump-at`) : les lignes du sprite
+  étaient capturées APRÈS l'effacement → **sprite invisible ou tronqué selon sa
+  position verticale** (héros absent pendant les sauts, mèche de quelques lignes
+  seule visible). Étendu au-delà de `curAH_` aux lignes affichées par la machine
+  Glue LIVE (bordure basse retirée : sans capture, la bande basse retombait sur la
+  RAM de fin de trame — même artefact pour un sprite en bas d'écran). Oracle Hatari
+  (crack Hotline, Xvfb + xdotool + `--joystick 1`, machine à états sur la fenêtre
+  live) : à l'arrêt le héros est affiché à CHAQUE trame (130-135 px) — NeoST
+  post-fix idem après le transitoire de verrouillage du moteur (~50 trames au
+  démarrage du jeu, alternance 1/2 puis stable, même famille que le stabilisateur
+  beam-sync d'EL). Repro : `--joy-script` feu → SPACE au titre → sauts `U` ; suite
+  `run_all --tier full` verte (étalons pixel, oracle, cycle-bench inchangés).
 - **Latch couleur de bordure GAUCHE = registre 0 de la ligne PRÉCÉDENTE (2026-07-09)** :
   résidu du beam-sync EL — la bordure gauche de la ligne N prend la couleur `palette[0]`
   telle qu'elle était en fin de ligne N−1 (la droite garde la couleur courante). Aligné

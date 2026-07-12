@@ -399,6 +399,9 @@ void Machine::onHbl() {
     // + consommation DAC datée) — port de l'appel DmaSnd_STE_HBL_Update du handler
     // HBL d'Hatari (video.c:3322). Peut pulser Timer A (fin de trame) → IPL.
     if (machineHasDmaSound(machineType_)) { dmasnd.onHbl(); cpu.updateIpl(); }
+    // Commit (compteur vidéo + capture lineSnap_) de la scanline qui SE TERMINE —
+    // même ancre que le Video_EndHBL du handler HBL d'Hatari (video.c:3319).
+    shifter.commitScanline(hblLine_);
     // Longueur RÉELLE de la ligne qui se termine (NEOST_LINELEN) : le cumul
     // lineCarry_ décale toutes les planifications des lignes suivantes (−carry),
     // comme la chaîne StartCycle+nCyclesPerLine de Hatari.
