@@ -55,7 +55,8 @@ montage de disquettes, bascule couleur/mono, et **upload** de votre propre `.st`
 
 - **GLFW3** — `brew install glfw` (macOS) / `pacman -S glfw` (CachyOS/Arch)
 - **OpenGL** — fourni par le système (framework Apple / Mesa)
-- Sous-modules : `extern/moira` (cœur 68000), `extern/imgui`, `extern/miniaudio`
+- Sous-modules : `extern/imgui`, `extern/miniaudio` — le cœur 68000 `extern/moira` est
+  **vendorisé** (copié dans le dépôt, cf. `extern/moira/NEOST_VENDOR.md`), rien à cloner
 
 ```sh
 git submodule update --init --recursive
@@ -177,9 +178,14 @@ Les TOS Atari d'origine sont propriétaires et **ne sont pas redistribués** ici
 utilise par défaut **[EmuTOS](https://emutos.sourceforge.io/)** (GPL), dans `roms/` :
 
 ```
-roms/etos192fr.img   EmuTOS 192 Ko, français  (mappé à $FC0000, par défaut)
-roms/etos192us.img   EmuTOS 192 Ko, US
+roms/etos192fr.img   EmuTOS 192 Ko, français  (mappé à $FC0000, par défaut) — ST / Mega ST
+roms/etos192us.img   EmuTOS 192 Ko, US        — ST / Mega ST
+roms/etos256fr.img   EmuTOS 256 Ko, français  (mappé à $E00000) — STE / Mega STE
+roms/etos256us.img   EmuTOS 256 Ko, US        — STE / Mega STE
 ```
+
+Le build 192 Ko se présente « Atari ST » (pas d'autodétection du matériel additionnel) ;
+pour un profil STE/Mega STE, utiliser un build 256 Ko (qui programme le SCU).
 
 ## Disquettes
 
@@ -262,3 +268,23 @@ cartouches de diagnostic atteignent leur menu et passent leurs tests internes.
 l'oracle Hatari**, sans flicker. Le grand chantier en cours est la **précision cycle**
 (bordures, timing fin des jeux/démos) — voir [`TODO.md`](TODO.md) et
 [`docs/CYCLE_ACCURACY.md`](docs/CYCLE_ACCURACY.md).
+
+## Licence
+
+NeoST est publié sous **GNU GPL v3** (voir [`LICENSE`](LICENSE)) —
+(c) 2026 VERHILLE Arnaud. Le comportement matériel est largement porté depuis
+[Hatari](https://hatari.tuxfamily.org/) (GPLv2+), dont NeoST est redevable ;
+la GPLv3 est compatible avec ce portage.
+
+Composants tiers embarqués, avec gratitude :
+
+| Composant | Rôle | Licence |
+|-----------|------|---------|
+| [Moira](https://github.com/dirkwhoffmann/Moira) (vendorisé) | cœur 68000 cycle-exact | MIT — © Dirk W. Hoffmann |
+| [Dear ImGui](https://github.com/ocornut/imgui) (sous-module) | interface | MIT |
+| [miniaudio](https://miniaud.io/) (sous-module) | sortie audio | MIT-0 / domaine public |
+| [EmuTOS](https://emutos.sourceforge.io/) (`roms/etos*`) | TOS libre par défaut | GPLv2 |
+| Fonts DejaVu / Font Awesome | UI | licences libres respectives |
+
+[Hatari](https://framagit.org/hatari/hatari) et MAME servent de **références de
+comportement** (sources lues, oracle d'exécution) — voir [`CLAUDE.md`](CLAUDE.md).

@@ -184,7 +184,23 @@ bloquant, cœur émulation intact) :
 - **SCSI / NCR5380** (MegaSTE/TT) *(gros contrôleur)* — réf. `ncr5380.c`. Non commencé.
 - *(SCC : restes faible valeur — timers du BRG / Zero Count, baudrate temporisé, série hôte.)*
 
+### FPU MC68881 (audit 2026-07-12 — différés)
+- **Arrondis de conversion SORTANTE bit-exacts** : FMOVE.L/W/B (double arrondi 53 bits via
+  extToD, INEX2 jamais levé, NaN→0 au lieu du payload) et FMOVE.S/D (mode FPCR ignoré,
+  INEX2/UNFL absents, OVFL silencieux en D) → porter `floatx80_to_int32/float32/float64`
+  (softfloat.c). FSGLMUL/FSGLDIV : plage d'exposant ÉTENDUE avec mantisse 24 bits → porter
+  `roundSigAndPackFloatx80` (softfloat.c:1502).
+- **Packed decimal** : ±inf/NaN → exposant $FFF (pas du BCD invalide), INEX1 sur conversion
+  inexacte, OPERR si k>17 (complète le différé « packed decimal bit-exact » existant).
+- FMOVECR : précision FPCR non appliquée après la table ; offsets indéfinis → table silicium
+  (`fpp_cr_undef`) au lieu de 0.0. FMOD précision < étendu : ré-arrondir a (expDiff<−1).
+
 ### Périphériques & profils machine
+- **Save-states × GEMDOS HD** : les handles fichiers hôtes ouverts / suivi Pexec de `GemdosHd`
+  sont HORS snapshot (bug hunt 2026-07-12, F7) — un état sauvé pendant qu'un programme a des
+  fichiers ouverts sur C: donne des handles morts au load (Fread/Fclose du guest échouent).
+  Sérialiser la table de handles (chemin + offset + mode) et rouvrir au load ; en attendant,
+  documenté ici.
 - **ROM TOS MegaSTE** : TOS 2.05/2.06 256 Ko à `$E00000` (choix pays, checksums, fallback EmuTOS
   MegaSTE). Aujourd'hui : EmuTOS 256 Ko par défaut.
 - **NVRAM / préférences TOS MegaSTE** (résolution / boot device) si TOS 2.x l'exige.

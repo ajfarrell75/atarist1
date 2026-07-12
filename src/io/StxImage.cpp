@@ -193,8 +193,12 @@ bool StxImage::parse(std::vector<uint8_t> raw) {
                             if (revision_ == 2) {
                                 if (pTim && inBuf(pTim, (sec.sectorSize / 16) * 2)) sec.pTiming = pTim;
                                 if (pTim) pTim += (sec.sectorSize / 16) * 2;
-                            } else {
-                                sec.pTiming = TimingDataDefault;   // table fixe révision 0
+                            } else if (sec.sectorSize <= 512) {
+                                // Table fixe révision 0 : 64 octets = 32 blocs de 16 o,
+                                // soit un secteur de 512 o max. Un .stx forgé rév. 0 avec
+                                // un secteur de 1024 o à timing variable la ferait déborder
+                                // (lecture statique hors bornes) → timing uniforme à la place.
+                                sec.pTiming = TimingDataDefault;
                             }
                         }
                     }
@@ -411,7 +415,13 @@ bool StxImage::loadWd1772(const std::string& path) {
             if (std::size_t(16) + size > blockLen) break; // données tronquées
             ss.data.assign(q + 12, q + 12 + size);
             Sector* sec = findSectorByPosition(ss.track, ss.side, ss.bitPos);
-            if (sec) {                                    // associe l'overlay à son secteur
+            if (sec && ss.data.size() != sec->sectorSize) {
+                // Overlay d'une autre taille que le secteur : les lecteurs bouclent
+                // sur sec.sectorSize → un bloc plus court ferait lire hors du vector.
+                std::fprintf(stderr, "[STX] %s : bloc SECT de %zu o pour un secteur de "
+                             "%u o (piste %d face %d) — ignoré\n", path.c_str(),
+                             ss.data.size(), sec->sectorSize, ss.track, ss.side);
+            } else if (sec) {                             // associe l'overlay à son secteur
                 saveSectors.push_back(std::move(ss));
                 sec->saveIndex = int(saveSectors.size()) - 1;
             } else {

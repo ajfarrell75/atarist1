@@ -34,9 +34,12 @@ public:
     bool mount(int target, const std::string& path);
     void unmountAll();
 
-    // Réinitialise l'état de commande (HDC_ResetCommandStatus) : statut + paquet.
+    // Reset complet (statut + paquet) — hors toggle DMA, cf. resetCommand.
     void reset();
-    void resetCommand() { byteCount_ = 0; }
+    // Toggle du bit 8 de $FF8606 (reset DMA) : Hatari HDC_ResetCommandStatus purge
+    // le STATUT seul (hdc.c:1023-1027) — le paquet de commande en vol CONTINUE
+    // (byteCount intact). L'ancien code faisait l'inverse exact.
+    void resetCommand() { status_ = 0; }
 
     bool anyEnabled() const;
     bool targetEnabled() const;            // cible courante peuplée ?
@@ -71,6 +74,12 @@ public:
         ar(target_); ar(byteCount_); ar.arr(command_);
         ar(opcode_); ar(status_); ar(dmaError_);
         ar.vec(buf_); ar(dataLen_); ar(dmaWrite_);
+        // Invariants : byteCount_ indexe command_[16], dataLen_ borne la lecture de
+        // buf_ par le DMA, target_ indexe devs_ — des valeurs restaurées hors bornes
+        // (négatives comprises) liraient/écriraient hors du tas.
+        ar.check(byteCount_ >= 0 && byteCount_ <= 16);
+        ar.check(dataLen_ >= 0 && static_cast<std::size_t>(dataLen_) <= buf_.size());
+        ar.check(target_ >= 0 && target_ < MAX_DEVS);
         // État « soft » par cible (change au fil des commandes : REQUEST SENSE…).
         for (Dev& d : devs_) { ar(d.lastError); ar(d.lastBlockAddr); ar(d.setLastBlockAddr); }
     }

@@ -13,6 +13,7 @@
 //
 //  (c) 2026 VERHILLE Arnaud — projet NeoST.
 // =============================================================================
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -166,6 +167,7 @@ int main(int argc, char** argv) {
     std::string acsiImg;                         // --acsi IMG : image disque dur ACSI (cible 0)
     std::string soundDumpPath;                   // --sound-dump F : WAV 48 kHz de la boucle --frames
     std::string serialDumpPath;                  // --serial-dump F : octets série RS-232 bruts (verdicts)
+    bool        outFail    = false;   // une SORTIE fichier a échoué → exit ≠ 0 (jamais silencieux)
     bool        regs       = false;
     bool        irq        = false;
     bool        haveUntil  = false;
@@ -233,7 +235,17 @@ int main(int argc, char** argv) {
             if (i + 1 >= argc) { std::fprintf(stderr, "%s attend un argument\n", opt); std::exit(2); }
             return argv[++i];
         };
-        if      (!std::strcmp(a, "--frames"))     frames    = std::atoi(next(a));
+        if (!std::strcmp(a, "--version")) {       // identité de build
+#ifdef NEOST_VERSION
+            std::printf("neost-headless %s\n", NEOST_VERSION);
+#else
+            std::printf("neost-headless (version inconnue)\n");
+#endif
+            return 0;
+        }
+        // Clamp ≥ 0 : une valeur négative signée se propagerait aux calculs de
+        // tailles size_t (--sound-dump réserve frames × 48 kHz) → allocation géante.
+        if      (!std::strcmp(a, "--frames"))     frames    = std::max(0, std::atoi(next(a)));
         else if (!std::strcmp(a, "--sound-dump")) soundDumpPath = next(a);
         else if (!std::strcmp(a, "--serial-dump")) serialDumpPath = next(a);
         else if (!std::strcmp(a, "--trace"))      tracePath = next(a);
@@ -496,7 +508,9 @@ int main(int argc, char** argv) {
         const uint64_t hR = screenHash();
         const bool stateEq = (stD == stR), screenEq = (hD == hR);
         if (!stateEq) {
-            size_t off = 0; const size_t m = std::min(stD.size(), stR.size());
+            // Démarre APRÈS l'en-tête (17 o) : le CRC du payload (offset 13) diverge
+            // dès que le payload diverge et masquerait l'offset du champ fautif.
+            size_t off = 17; const size_t m = std::min(stD.size(), stR.size());
             while (off < m && stD[off] == stR[off]) ++off;
             std::fprintf(stderr, "[save-state-det] DIVERGENCE état @ offset %zu / %zu "
                          "(dir[%zu]=%02X res=%02X)\n", off, stD.size(), off,
@@ -555,6 +569,9 @@ int main(int argc, char** argv) {
                 std::fclose(df);
                 std::fprintf(stderr, "[headless] dump RAM trame %d : $%06X+%u → %s\n",
                              frame, dumpAddr, dumpLen, dumpPath.c_str());
+            } else {
+                std::fprintf(stderr, "[headless] ÉCHEC ouverture dump RAM %s\n", dumpPath.c_str());
+                outFail = true;
             }
         }
         if (joyAtFrame >= 0 && frame == joyAtFrame) {
@@ -630,8 +647,11 @@ int main(int argc, char** argv) {
         if (shotEvery > 0 && frame >= shotFrom && (frame % shotEvery) == 0) {
             char path[512];
             std::snprintf(path, sizeof(path), "%s%05d.ppm", shotPrefix.c_str(), frame);
-            writePpm(path, machine.shifter.pixels(),
-                     machine.shifter.width(), machine.shifter.height());
+            if (!writePpm(path, machine.shifter.pixels(),
+                          machine.shifter.width(), machine.shifter.height())) {
+                std::fprintf(stderr, "[headless] ÉCHEC capture périodique %s\n", path);
+                outFail = true;
+            }
         }
         if (haveUntil && machine.cpu.pc() == untilPc) {
             std::fprintf(stderr, "[headless] PC=$%06X atteint à la trame %d\n", untilPc, frame);
@@ -640,9 +660,10 @@ int main(int argc, char** argv) {
     }
 
     if (!saveStatePath.empty()) {   // sauvegarde l'état à la fin de la boucle
-        std::fprintf(stderr, machine.saveStateFile(saveStatePath)
-                     ? "[headless] état sauvegardé \xe2\x86\x92 %s\n"
-                     : "[headless] ÉCHEC sauvegarde état %s\n", saveStatePath.c_str());
+        const bool ok = machine.saveStateFile(saveStatePath);
+        std::fprintf(stderr, ok ? "[headless] état sauvegardé \xe2\x86\x92 %s\n"
+                                : "[headless] ÉCHEC sauvegarde état %s\n", saveStatePath.c_str());
+        if (!ok) outFail = true;
     }
 
     // Écriture du WAV (--sound-dump) : PCM 16 bits stéréo 48 kHz, en-tête RIFF canonique.
@@ -660,6 +681,9 @@ int main(int argc, char** argv) {
             std::fclose(wf);
             std::fprintf(stderr, "[headless] dump audio → %s (%.1f s à %u Hz)\n",
                          soundDumpPath.c_str(), double(dumpPcm.size() / 2) / kDumpRate, kDumpRate);
+        } else {
+            std::fprintf(stderr, "[headless] ÉCHEC ouverture dump audio %s\n", soundDumpPath.c_str());
+            outFail = true;
         }
     }
 
@@ -718,6 +742,10 @@ int main(int argc, char** argv) {
                      machine.shifter.width(), machine.shifter.height()))
             std::fprintf(stderr, "[headless] capture écran → %s (%dx%d)\n",
                          shotPath.c_str(), machine.shifter.width(), machine.shifter.height());
+        else {
+            std::fprintf(stderr, "[headless] ÉCHEC capture écran %s\n", shotPath.c_str());
+            outFail = true;
+        }
     }
 
     // --disasm ADDR,LEN : désassemble LEN octets à partir de ADDR (hexa) via Moira.
@@ -745,9 +773,10 @@ int main(int argc, char** argv) {
         } else {
             std::fprintf(stderr, "[headless] impossible d'écrire le dump série %s\n",
                          serialDumpPath.c_str());
+            outFail = true;
         }
     }
 
     tracer.close();
-    return 0;
+    return outFail ? 1 : 0;   // une sortie fichier a échoué → visible du runner
 }

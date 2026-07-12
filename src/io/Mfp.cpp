@@ -43,6 +43,7 @@ void Mfp::reset() {
     for (uint8_t& b : timer_) b = 0;
     xsint_ = false;                       // ligne XSINT son DMA (re-synchronisée ensuite par DmaSound::reset)
     rxByte_ = 0; rxFull_ = false; rxOverrun_ = false;   // USART : tampon vidé (pas de RXFULL fantôme)
+    serialBaud_ = 0; serialUcr_ = 0;      // suivi débit série remis (sinon serialBaud() rapporte l'avant-reset)
     // Signal IRQ daté : tout retombe (port MFP_Reset — IRQ/IRQ_Time/Pending_Time).
     irq_ = false; irqTime_ = 0; currentInt_ = -1;
     for (int64_t& t : pendingTime_) t = kNever;
