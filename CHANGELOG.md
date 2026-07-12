@@ -1497,6 +1497,20 @@ les **2 cœurs**, avec un vrai TOS. Restes (« Hard error »/VME/FPU) = périph�
 fidèles à Hatari, pas des bugs.
 
 ## Frontend & outillage
+- **Menu kiosk « Joysticks » : affectation des manettes hôte aux ports ST + boutons
+  ESPACE/RETURN (2026-07-12)** : nouvelle action du menu in-game (START) — une ligne par
+  manette détectée (pastille ● d'activité pour identifier physiquement chaque stick), le
+  FEU fait tourner son rôle **AUTO → PORT 1 → PORT 0 → OFF** (AUTO = affectation
+  historique 1ʳᵉ→P1/2ᵉ→P0 sur les ports libres ; plusieurs manettes épinglées au même
+  port sont OR-ées). Persisté **par GUID** (`joymap=` dans neost.cfg, écrit même en kiosk
+  comme ROM FOLDERS — le jid GLFW change au rebranchement, pas le GUID). Côté
+  `JoystickInput.hpp` : `resolveAssign()` (partagé compose/menu), `compose(…, roles)`
+  rétro-compatible (web inchangé). **Boutons X/Y = touches ESPACE/RETURN** (`readAux` /
+  `composeAux`, make/break IKBD sur fronts, coupés pendant l'overlay) — X/Y sont retirés
+  du FEU (A/B + gâchettes restent le feu) ; repli manette brute : boutons 2/3 (« standard
+  mapping ») ou 1/2 (encodeur arcade). Les jeux « press SPACE » (EL…) se jouent 100 %
+  manette. Vérifié sous Xvfb (page, cycle des 4 rôles, persistance/retrait `joymap=`,
+  DS4 réel détecté) ; étalons `--tier fast` verts.
 - **Save-states (sauvegarde/restauration d'état complète) (2026-07-11)** : `StateArchive`
   (sérialiseur SYMÉTRIQUE — une méthode `serialize()` gère save ET load, l'ordre ne peut
   pas diverger) + `serialize()` sur **chaque puce** (Shifter incl. framebuffer/palette/état

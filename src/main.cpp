@@ -32,6 +32,7 @@
 #include <filesystem>
 #include <algorithm>
 #include <cmath>
+#include <map>
 #include <vector>
 #include <sys/stat.h>
 #if defined(__APPLE__)
@@ -95,6 +96,10 @@ struct Config { std::string rom; std::string disk; std::string cart; bool mono =
                 std::string cpu = "moira"; std::string machine = "st";
                 std::string mem = "512k"; bool fpu = false;   // MC68881 Mega STE (cf. Fpu.hpp)
                 int joyport = 1;
+                // Affectation des manettes HÔTE aux ports ST, persistée par GUID :
+                // "guid:rôle,guid:rôle" avec rôle ∈ {0, 1, x} (port 0, port 1, off).
+                // Une manette absente de la liste est AUTO (cf. stjoy::resolveAssign).
+                std::string joymap;
                 float joydeadzone = 0.30f; bool fastfdc = false;
                 float volume = 1.0f;   // volume maître de la sortie audio (0..1, barre de menu)
                 bool showDisk = true, showCart = true, showHex = true, showCpu = true;
@@ -145,6 +150,7 @@ static Config loadConfig(const std::string& exeDir) {
         else if (line.rfind("mem=", 0)  == 0) c.mem  = line.substr(4);
         else if (line.rfind("fpu=", 0)  == 0) c.fpu  = (line.substr(4) == "1");
         else if (line.rfind("joyport=", 0) == 0) c.joyport = (line.substr(8) == "0") ? 0 : 1;
+        else if (line.rfind("joymap=", 0) == 0) c.joymap = line.substr(7);
         else if (line.rfind("joydeadzone=", 0) == 0) c.joydeadzone = std::strtof(line.substr(12).c_str(), nullptr);
         else if (line.rfind("fastfdc=", 0) == 0) c.fastfdc = (line.substr(8) == "1");
         else if (line.rfind("volume=", 0) == 0) {
@@ -195,7 +201,7 @@ static bool g_kioskAdaptive = true;
 // Déclaré ici (hors garde ImGui) car onKey doit consulter g_kioskDiskMenu pour ne
 // pas transmettre les touches de navigation au ST pendant le menu.
 enum { KIOSK_PAGE_LIST = 0, KIOSK_PAGE_KEYS = 1, KIOSK_PAGE_QUIT = 2,
-       KIOSK_PAGE_BROWSE = 3, KIOSK_PAGE_ROMDIRS = 4 };
+       KIOSK_PAGE_BROWSE = 3, KIOSK_PAGE_ROMDIRS = 4, KIOSK_PAGE_JOY = 5 };
 static bool g_kioskDiskMenu = false;          // menu ouvert
 static int  g_kioskPage     = KIOSK_PAGE_LIST;
 static int  g_kioskDiskSel  = 0;              // index disquette sélectionnée (menu INTÉRIEUR)
@@ -204,8 +210,9 @@ static int  g_kioskDiskSel  = 0;              // index disquette sélectionnée 
 // focus ; le FEU valide l'item surligné du menu focalisé.
 enum { KIOSK_ZONE_LIST = 0, KIOSK_ZONE_ACTIONS = 1 };
 static int  g_kioskZone   = KIOSK_ZONE_LIST;
-static int  g_kioskActSel = 0;                // index action (menu EXTÉRIEUR, 0..2)
+static int  g_kioskActSel = 0;                // index action (menu EXTÉRIEUR, 0..4)
 static int  g_kioskKeySel   = 0;              // page clavier : touche/clic sélectionné
+static int  g_kioskJoySel   = 0;              // page joysticks : manette sélectionnée
 static std::vector<std::string> g_kioskDisks; // chemins listés à l'ouverture
 // Page « Clavier & souris » : un appui (A) envoie la touche/clic au ST puis la
 // relâche après quelques trames (frappe brève). Injection différée gérée dans la
@@ -247,6 +254,7 @@ static void saveConfig(const std::string& exeDir, Config& c, Machine* machine = 
              << "\ncpu=" << c.cpu << "\nmachine=" << c.machine << "\nmem=" << c.mem
              << "\nfpu=" << (c.fpu ? 1 : 0)
              << "\njoyport=" << c.joyport
+             << "\njoymap=" << c.joymap
              << "\njoydeadzone=" << c.joydeadzone << "\nfastfdc=" << (c.fastfdc ? 1 : 0)
              << "\nvolume=" << c.volume
              << "\nshowDisk=" << (c.showDisk ? 1 : 0)
@@ -363,6 +371,55 @@ bool  g_kbdJoy = false;                // émulation joystick au clavier (flèch
 int   g_kbdJoyPort = 1;                // port ST visé par l'émulation clavier (0/1)
 float g_joyDeadzone = 0.30f;           // zone morte centrale des sticks analogiques [0,0.95]
 uint8_t g_lastJoy0 = 0, g_lastJoy1 = 0; // dernier octet composé posé sur l'IKBD (fenêtre Joystick)
+// Affectation des manettes hôte aux ports ST, par GUID (stable au rebranchement —
+// le jid GLFW peut changer). Absente de la table = AUTO. Éditée dans le menu kiosk
+// « Joysticks », persistée dans neost.cfg (joymap=, cf. joymapParse/Serialize).
+static std::map<std::string, int8_t> g_joyRoleByGuid;
+
+// GUID d'une manette présente ("" sinon) — clé de persistance de son rôle.
+static std::string joyGuid(int jid) {
+    const char* g = glfwJoystickPresent(jid) ? glfwGetJoystickGUID(jid) : nullptr;
+    return g ? g : "";
+}
+// Rôles EFFECTIFS par jid pour cette trame (consommés par stjoy::compose/composeAux
+// et le menu kiosk) : table GUID→rôle appliquée aux manettes présentes.
+static void joyResolveRoles(int8_t roles[GLFW_JOYSTICK_LAST + 1]) {
+    for (int jid = GLFW_JOYSTICK_1; jid <= GLFW_JOYSTICK_LAST; ++jid) {
+        roles[jid] = stjoy::ROLE_AUTO;
+        if (!glfwJoystickPresent(jid)) continue;
+        const auto it = g_joyRoleByGuid.find(joyGuid(jid));
+        if (it != g_joyRoleByGuid.end()) roles[jid] = it->second;
+    }
+}
+// joymap= "guid:rôle,guid:rôle" avec rôle ∈ {0, 1, x} — cf. Config::joymap.
+static void joymapParse(const std::string& s) {
+    g_joyRoleByGuid.clear();
+    std::size_t p = 0;
+    while (p < s.size()) {
+        std::size_t e = s.find(',', p);
+        if (e == std::string::npos) e = s.size();
+        const std::string item = s.substr(p, e - p);
+        const std::size_t c = item.rfind(':');
+        if (c != std::string::npos && c > 0 && c + 1 < item.size()) {
+            const char r = item[c + 1];
+            if      (r == '0') g_joyRoleByGuid[item.substr(0, c)] = stjoy::ROLE_PORT0;
+            else if (r == '1') g_joyRoleByGuid[item.substr(0, c)] = stjoy::ROLE_PORT1;
+            else if (r == 'x') g_joyRoleByGuid[item.substr(0, c)] = stjoy::ROLE_OFF;
+        }
+        p = e + 1;
+    }
+}
+static std::string joymapSerialize() {
+    std::string s;
+    for (const auto& [guid, role] : g_joyRoleByGuid) {
+        if (role == stjoy::ROLE_AUTO) continue;   // AUTO = absent de la liste
+        if (!s.empty()) s += ',';
+        s += guid;
+        s += ':';
+        s += (role == stjoy::ROLE_PORT0) ? '0' : (role == stjoy::ROLE_PORT1) ? '1' : 'x';
+    }
+    return s;
+}
 bool  g_showDisk = true, g_showCart = true, g_showHex = true, g_showCpu = true;  // fenêtres masquables
 bool  g_showJoy = false;               // fenêtre joystick (visualisation live)
 
@@ -1402,7 +1459,7 @@ void drawKioskDiskMenu(const std::string& disksDir, const std::string& mounted) 
         ImGui::SetWindowFontScale(1.0f);
         const float sp = ImGui::GetStyle().ItemSpacing.y;
         const float bf = ImGui::GetFontSize();               // taille de police de base
-        const float footer = 4.0f * (bf * 2.3f + sp)         // 4 rangées d'action @2.3
+        const float footer = 5.0f * (bf * 2.3f + sp)         // 5 rangées d'action @2.3
                            + (bf * 1.3f + sp)                // ligne « Roms found » @1.3
                            + (sp + 6.0f);                    // séparateur + petite marge
         ImGui::SetWindowFontScale(1.6f);
@@ -1438,8 +1495,9 @@ void drawKioskDiskMenu(const std::string& disksDir, const std::string& mounted) 
         };
         actionRow(0, kOrange,                          ICON_FA_REDO " RESTART MACHINE");
         actionRow(1, ImVec4(0.55f, 0.8f, 1.0f, 1.0f),  ICON_FA_KEYBOARD " KEYBOARD & MOUSE");
-        actionRow(2, ImVec4(0.6f, 0.95f, 0.6f, 1.0f),  ICON_FA_FOLDER_OPEN " ROM FOLDERS");
-        actionRow(3, ImVec4(1.0f, 0.5f, 0.4f, 1.0f),   ICON_FA_SIGN_OUT_ALT " QUIT NEOST");
+        actionRow(2, ImVec4(0.8f, 0.7f, 1.0f, 1.0f),   ICON_FA_GAMEPAD " JOYSTICKS");
+        actionRow(3, ImVec4(0.6f, 0.95f, 0.6f, 1.0f),  ICON_FA_FOLDER_OPEN " ROM FOLDERS");
+        actionRow(4, ImVec4(1.0f, 0.5f, 0.4f, 1.0f),   ICON_FA_SIGN_OUT_ALT " QUIT NEOST");
         ImGui::SetWindowFontScale(1.0f);
 
         // Bas de fenêtre : nombre de ROMs trouvées (les DOSSIERS se voient dans « ROM FOLDERS »).
@@ -1530,6 +1588,56 @@ void drawKioskDiskMenu(const std::string& disksDir, const std::string& mounted) 
     // ============ PAGE 5 : gestion des dossiers ROM (ajouter / retirer) ========
     // [0] « + ADD A FOLDER » (→ navigateur) ; [1..N] dossiers configurés, chacun avec
     // une croix rouge (FEU = retirer). Auto-prune des dossiers disparus fait à l'ouverture.
+    else if (g_kioskPage == KIOSK_PAGE_JOY) {
+        // Affectation des manettes hôte aux ports joystick ST. Une ligne par
+        // manette PRÉSENTE : nom + rôle (AUTO avec le port effectif résolu, PORT 1,
+        // PORT 0, OFF) + pastille verte si la manette émet (pour identifier
+        // physiquement laquelle est laquelle : bouger le stick l'allume).
+        ImGui::SetWindowFontScale(2.6f);
+        ImGui::TextColored(kYellow, ICON_FA_GAMEPAD " JOYSTICKS");
+        ImGui::SetWindowFontScale(1.4f);
+        ImGui::TextDisabled("up/down move   \xc2\xb7   (A) cycle port   \xc2\xb7   (B) back"
+                            "   \xc2\xb7   move a stick to spot it \xe2\x97\x8f");
+        ImGui::Separator();
+        ImGui::BeginChild("##kjoy", ImVec2(0, 0), true);
+        ImGui::SetWindowFontScale(2.2f);
+        int8_t roles[GLFW_JOYSTICK_LAST + 1];
+        joyResolveRoles(roles);
+        int8_t assign[GLFW_JOYSTICK_LAST + 1];
+        stjoy::resolveAssign(roles, assign);
+        int row = 0;
+        for (int jid = GLFW_JOYSTICK_1; jid <= GLFW_JOYSTICK_LAST; ++jid) {
+            if (!glfwJoystickPresent(jid)) continue;
+            const bool sel = (row == g_kioskJoySel);
+            const char* nm = glfwGetJoystickName(jid);
+            char role[32];
+            if      (roles[jid] == stjoy::ROLE_PORT1) std::snprintf(role, sizeof role, "PORT 1");
+            else if (roles[jid] == stjoy::ROLE_PORT0) std::snprintf(role, sizeof role, "PORT 0");
+            else if (roles[jid] == stjoy::ROLE_OFF)   std::snprintf(role, sizeof role, "OFF");
+            else if (assign[jid] >= 0) std::snprintf(role, sizeof role, "AUTO (PORT %d)", assign[jid]);
+            else                       std::snprintf(role, sizeof role, "AUTO (unused)");
+            const bool active = stjoy::readStick(jid, g_joyDeadzone) != 0;
+            if (sel) ImGui::PushStyleColor(ImGuiCol_Text, kGreen);
+            ImGui::Text("%s %s \xe2\x80\x94 %s", sel ? "\xe2\x96\xb6" : "  ",
+                        nm ? nm : "(unnamed)", role);
+            if (sel) ImGui::PopStyleColor();
+            if (active) {
+                ImGui::SameLine();
+                ImGui::TextColored(kGreen, "\xe2\x97\x8f");
+            }
+            if (sel) ImGui::SetScrollHereY(0.5f);
+            ++row;
+        }
+        if (row == 0)
+            ImGui::TextDisabled("   (no joystick detected \xe2\x80\x94 plug one in, "
+                                "the list is live)");
+        ImGui::SetWindowFontScale(1.4f);
+        ImGui::Separator();
+        ImGui::TextDisabled("PORT 1 = games port. Buttons: A/B = fire, X = SPACE, Y = RETURN.");
+        ImGui::EndChild();
+        ImGui::SetWindowFontScale(1.0f);
+    }
+
     else if (g_kioskPage == KIOSK_PAGE_ROMDIRS) {
         ImGui::SetWindowFontScale(2.6f);
         ImGui::TextColored(kYellow, ICON_FA_FOLDER_OPEN " ROM FOLDERS");
@@ -2006,6 +2114,7 @@ int main(int argc, char** argv) {
     g_kbdJoy     = g_kiosk;
     g_kbdJoyPort = cfg.joyport;
     g_joyDeadzone = cfg.joydeadzone;    // zone morte des sticks (mémorisée)
+    joymapParse(cfg.joymap);            // affectation manettes→ports (par GUID)
     glfwSetKeyCallback(window, onKey);
     glfwSetMouseButtonCallback(window, onMouseButton);
 
@@ -2163,12 +2272,28 @@ int main(int argc, char** argv) {
             if (!g_mouseCaptured && ImGui::GetIO().WantCaptureKeyboard) kbd = false;
 #endif
             uint8_t joy0 = 0, joy1 = 0;
-            stjoy::compose(window, kbd, g_kbdJoyPort, g_joyDeadzone, joy0, joy1);
+            int8_t joyRoles[GLFW_JOYSTICK_LAST + 1];
+            joyResolveRoles(joyRoles);   // affectation par GUID (menu kiosk « Joysticks »)
+            stjoy::compose(window, kbd, g_kbdJoyPort, g_joyDeadzone, joy0, joy1, joyRoles);
             // Overlay kiosk ouvert : la manette pilote l'overlay → on n'envoie
             // rien au ST (sinon le jeu bougerait pendant la navigation).
             if (g_kioskDiskMenu) { joy0 = 0; joy1 = 0; }
             machine.ikbd.setJoystick(joy0, joy1);
             machine.bus.stePads.setJoystick(joy0, joy1);   // joypads STE ($FF9200/02) — même état
+            // Boutons auxiliaires manette → touches ST : X = ESPACE, Y = RETURN
+            // (cf. stjoy::readAux — jeux « PRESS SPACE » jouables sans clavier).
+            // Make/break IKBD sur les FRONTS ; tout est relâché quand l'overlay
+            // kiosk s'ouvre (la manette pilote alors le menu, pas le jeu).
+            {
+                static uint8_t prevAux = 0;
+                uint8_t aux = g_kioskDiskMenu ? 0 : stjoy::composeAux(joyRoles);
+                const uint8_t delta = aux ^ prevAux;
+                if (delta & stjoy::AUX_SPACE)
+                    machine.ikbd.keyEvent(0x39, aux & stjoy::AUX_SPACE);   // ESPACE
+                if (delta & stjoy::AUX_RETURN)
+                    machine.ikbd.keyEvent(0x1C, aux & stjoy::AUX_RETURN);  // RETURN
+                prevAux = aux;
+            }
             // Paddles / axes analogiques STE ($FF9211-17) : axes BRUTS de la
             // première manette hôte (stick gauche, sans zone morte — la plage
             // $04-$43 du STE est déjà grossière). Pad A = port « jeux ».
@@ -2848,6 +2973,41 @@ int main(int argc, char** argv) {
                     }
                     if (caNow && !pCancel) g_kioskPage = KIOSK_PAGE_ROMDIRS;   // (B) annuler
 
+                } else if (g_kioskPage == KIOSK_PAGE_JOY) {
+                    // Affectation des manettes : haut/bas sélectionne une manette
+                    // PRÉSENTE, (A) fait tourner son rôle AUTO → PORT 1 → PORT 0 →
+                    // OFF → AUTO (persisté par GUID via joymap=), (B) revient.
+                    int jids[GLFW_JOYSTICK_LAST + 1]; int nj = 0;
+                    for (int j = GLFW_JOYSTICK_1; j <= GLFW_JOYSTICK_LAST; ++j)
+                        if (glfwJoystickPresent(j)) jids[nj++] = j;
+                    if (nj > 0) {
+                        if (g_kioskJoySel >= nj) g_kioskJoySel = nj - 1;
+                        if (step && (up || down)) {
+                            g_kioskJoySel += down ? 1 : -1;
+                            g_kioskJoySel = (g_kioskJoySel % nj + nj) % nj;
+                        }
+                        if (okNow && !pOk) {
+                            const std::string guid = joyGuid(jids[g_kioskJoySel]);
+                            if (!guid.empty()) {
+                                const auto it = g_joyRoleByGuid.find(guid);
+                                const int8_t cur = (it != g_joyRoleByGuid.end())
+                                                       ? it->second : int8_t(stjoy::ROLE_AUTO);
+                                int8_t next;
+                                switch (cur) {                       // AUTO→P1→P0→OFF→AUTO
+                                    case stjoy::ROLE_AUTO:  next = stjoy::ROLE_PORT1; break;
+                                    case stjoy::ROLE_PORT1: next = stjoy::ROLE_PORT0; break;
+                                    case stjoy::ROLE_PORT0: next = stjoy::ROLE_OFF;   break;
+                                    default:                next = stjoy::ROLE_AUTO;  break;
+                                }
+                                if (next == stjoy::ROLE_AUTO) g_joyRoleByGuid.erase(guid);
+                                else                          g_joyRoleByGuid[guid] = next;
+                                cfg.joymap = joymapSerialize();      // persiste (comme ROM FOLDERS)
+                                saveConfig(exeDir, cfg, &machine, true);
+                            }
+                        }
+                    }
+                    if (caNow && !pCancel) { g_kioskPage = KIOSK_PAGE_LIST; g_kioskZone = KIOSK_ZONE_ACTIONS; }
+
                 } else if (g_kioskPage == KIOSK_PAGE_ROMDIRS) {
                     // Gestion : [0] « + ADD » (→ navigateur), [1..N] dossiers (FEU = retirer).
                     const int total = 1 + (int)g_kioskRomDirs.size();
@@ -2911,7 +3071,7 @@ int main(int argc, char** argv) {
                             }
                         } else if (up || down) {
                             g_kioskActSel += down ? 1 : -1;
-                            g_kioskActSel = (g_kioskActSel % 4 + 4) % 4;
+                            g_kioskActSel = (g_kioskActSel % 5 + 5) % 5;
                         }
                     }
                     // FEU (A/Entrée) : déclenche l'item surligné du menu focalisé.
@@ -2924,7 +3084,9 @@ int main(int argc, char** argv) {
                                         g_kioskDiskMenu = false; break;
                                 case 1: g_kioskPage = KIOSK_PAGE_KEYS;    // Clavier & souris
                                         g_kioskKeySel = 0; break;
-                                case 2:                                   // Dossiers ROM (gestion)
+                                case 2: g_kioskPage = KIOSK_PAGE_JOY;     // Joysticks (affectation)
+                                        g_kioskJoySel = 0; break;
+                                case 3:                                   // Dossiers ROM (gestion)
                                     if (kioskPruneRomDirs()) {           // retire les disparus + persiste
                                         cfg.romDirs = g_kioskRomDirs;
                                         saveConfig(exeDir, cfg, &machine, true);
@@ -2932,7 +3094,7 @@ int main(int argc, char** argv) {
                                     }
                                     g_romDirSel = 0;
                                     g_kioskPage = KIOSK_PAGE_ROMDIRS; break;
-                                case 3: g_kioskPage = KIOSK_PAGE_QUIT; break;  // Quitter
+                                case 4: g_kioskPage = KIOSK_PAGE_QUIT; break;  // Quitter
                             }
                         }
                     }

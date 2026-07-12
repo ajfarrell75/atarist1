@@ -121,13 +121,23 @@ entier** (hystérésis anti-clignotement). F10 fige au contraire le cadre comple
 Libellés en **anglais** (borne). Deux colonnes que l'on bascule gauche/droite — la **liste des
 jeux** (triée par proximité : les phases B/C/D du jeu en cours remontent en tête, **L1/R1** =
 défilement rapide par page) et les **actions** (*Restart machine* / *Keyboard & mouse* /
-*ROM folders* / *Quit*). Le FEU (A / Entrée) valide. Insérer un jeu **échange la disquette à
-chaud, sans reboot** (comme glisser une disquette : le jeu en cours continue) ; seul
-« Restart » relance la machine.
+*Joysticks* / *ROM folders* / *Quit*). Le FEU (A / Entrée) valide. Insérer un jeu **échange
+la disquette à chaud, sans reboot** (comme glisser une disquette : le jeu en cours continue) ;
+seul « Restart » relance la machine.
 
 **Clavier & souris** (**SELECT** manette ou **K**, même en cours de jeu) : un bandeau en bas
 sans mettre le jeu en pause — on envoie une frappe brève (touches F1-F8, chiffres, Espace/
 Return/Escape, clics souris) au jeu qui tourne dessous.
+
+**Joysticks** (action *Joysticks*) : choisir **quelle manette hôte pilote quel port ST**.
+Une ligne par manette détectée (bouger un stick allume une pastille ● pour identifier
+laquelle est laquelle) ; le FEU fait tourner son rôle : **AUTO** (défaut historique — 1ʳᵉ
+manette → port 1 « jeux », 2ᵉ → port 0) → **PORT 1** → **PORT 0** → **OFF**. Plusieurs
+manettes sur le même port sont OR-ées (deux sticks pilotent le même joueur). Le choix est
+**persisté par GUID** dans `neost.cfg` (`joymap=`) — il survit au rebranchement et au
+reboot de la borne. Boutons en jeu : **A/B (et gâchettes) = FEU**, **X = ESPACE**,
+**Y = RETURN** — les jeux « press SPACE to start » (Enchanted Land…) se jouent donc
+entièrement à la manette.
 
 **Dossiers ROM** (action *ROM folders*) : ajouter d'autres dossiers de jeux/disques, scannés
 **en plus** de `disks/`. Un **navigateur piloté à la manette** parcourt tout le système de
