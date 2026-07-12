@@ -154,21 +154,12 @@ densité HD/ED STX (NeoST plus cohérent) ; RTC en temps émulé (déterminisme 
   contraint pas plus ; nécessiterait de modéliser le cycle d'effet de l'écriture registre 0 vs
   DE-start par ligne. Invisible aux étalons. _Valeur très basse._
 
-### Interface — kiosk & effets CRT (revue 2026-07-10)
+### Interface — kiosk & effets CRT (revue 2026-07-10, re-vérifiée 2026-07-12)
 Fonctionnalités **livrées et fonctionnelles** (build OK options strictes, auto-tests cœur
-verts) — voir `CHANGELOG.md § Frontend`. Points mineurs relevés à la relecture (aucun
-bloquant, cœur émulation intact) :
-- **CRT — ordre `edgeMask` vs persistance** (`gui/CrtEffectStack.cpp`, `kFragmentShader`) :
-  `rgb *= edgeMask` puis `rgb = max(rgb, prev*persist)` — la rémanence (`prev`, non masquée)
-  transparaît hors du cadre courbé (baril fort) → léger « bavement » aux bords. Correctif :
-  masquer `prev` aussi, ou appliquer `edgeMask` en tout dernier (`fragColor = vec4(rgb*edgeMask,1)`).
-- **CRT — clamp défensif `centerLighting`** : le shader fait `1.0/uCenterLighting` ; l'UI borne
-  à 0.5..1.0 mais un `neost.cfg` chargeant `crt_center=0` donnerait `1/0`. Clamp à la lecture
-  ou `max(uCenterLighting, 0.01)` dans le shader.
-- **Kiosk — page Clavier, touche « collée » en frappe rapide** (`main.cpp`) : re-valider (A)
-  une touche/clic avant l'expiration de `g_kioskInjectHold` (~4 trames) écrase
-  `g_kioskKeyRelease` → le MAKE précédent n'a jamais son BREAK. Correctif : ignorer une
-  validation tant que `g_kioskInjectHold > 0` (ou relâcher l'attente avant le nouveau MAKE).
+verts) — voir `CHANGELOG.md § Frontend`. Les 3 points fonctionnels relevés à la relecture
+(ordre `edgeMask` vs persistance, clamp `centerLighting`, touche « collée » page Clavier)
+étaient en fait **déjà corrigés dans `0767f66`** (vérifié au code + `git log -S`,
+2026-07-12) — il ne reste que du cosmétique :
 - **Cosmétique** : membres `srcW_`/`srcH_` morts dans `CrtEffectStack` ; destructeur `= default`
   (fuite GL seulement si l'objet cessait d'être un singleton process-lifetime) ; répétition de
   navigation kiosk : tenir gauche/droite (swap one-shot) bloque la répétition haut/bas.
