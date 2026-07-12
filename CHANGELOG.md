@@ -153,6 +153,30 @@ taguées (0.1.x). Le restant est dans [`TODO.md`](TODO.md).
   d'etos192 sur MegaSTE (SCU non programmé). Pour le STE/Mega STE : EmuTOS 256 Ko ou TOS 1.62/2.06.
 
 ## Vidéo (Shifter)
+- **Ancre verticale du commit de scanline = fenêtre Glue LIVE — Lethal Xcess (STX) EN JEU
+  réparé (2026-07-12)** : régression du commit au HBL ci-dessous. `commitScanline` /
+  `endVideoLine` calaient la scanline committée sur `liveStartHBL_` (VDE_On **sticky** :
+  passe à 34 sur TOUTE bascule 60 Hz avant la ligne 63 — même une paire 60/50 qui
+  n'ouvre PAS réellement le haut, Hatari exigeant que le 60 Hz couvre la comparaison
+  de fin de ligne 33). La calibration du loader de Lethal Xcess émet une telle paire à
+  la ligne 32 de CHAQUE trame puis relit $FF8209 à la ligne 262 pour vérifier si son
+  overscan a pris : le commit sur l'ancre sticky faisait avancer le compteur vidéo à
+  travers les 29 lignes de bordure haute (160 octets chacune, `glueLineBytes` ignorant
+  la fenêtre VERTICALE) → le poll lisait base+228 lignes au lieu de base+199 → le jeu
+  croyait le haut ouvert → **écran en jeu déchiré** (HUD dupliqué mi-écran, bandes
+  décalées, palettes croisées) puis chargements en échec. Fix : `commitAnchor()` =
+  `max(liveStartHBL_, glueStartHBL_)` sur trame à écritures freq/res (la machine Glue
+  LIVE, port fidèle de `nStartHBL`, fait foi), **latché au 1ᵉʳ commit** de la trame
+  (une re-fermeture tardive ne ré-indexe pas `lineSnap_`/`vcLineY_` en cours de trame
+  — verrou Cuddly conservé) ; reset à `beginFrame` ; sérialisé (save-states → **v6**).
+  Un vrai retrait haut (EL) donne 34 des deux côtés → chemin EL inchangé. Validation :
+  in-game LX pixel-identique au commit pré-régression sur toutes les trames sondées
+  (22000–25900, mêmes entrées), flux de lectures $FF8209 byte-identique sur 2 900
+  trames (~3 M lectures), oracle Hatari en jeu conforme (Xvfb + xdotool, disque B
+  monté — le jeu ne démarre qu'avec le disque 2 : titre → SPACE → music select → FEU
+  → briefing → FEU tenu) ; suite `run_all --tier full` verte, sprites EL en jeu
+  toujours présents (100/100 trames), `--save-state-test` déterministe. Diag ajouté :
+  `NEOST_VC_TRACE=1` trace chaque lecture du compteur vidéo (fc/ligne/valeur).
 - **Commit de scanline au HBL — sprites d'Enchanted Land EN JEU réparés (2026-07-12)** :
   `Shifter::commitScanline`, appelé depuis `Machine::onHbl` = port de l'appel
   `Video_EndHBL` du handler HBL d'Hatari (video.c:3319). La capture par-ligne au
