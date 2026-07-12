@@ -214,9 +214,27 @@ int Fpu::fmtLen(int fmt) {
 Fpu::Ext Fpu::decodeFmt(int fmt, const uint8_t* b) {
     switch (fmt) {
         case 0:  return dToExt(double(int32_t(get32(b))));            // L
-        case 1: {                                                     // S
-            const uint32_t u = get32(b); float f; std::memcpy(&f, &u, 4);
-            return dToExt(double(f));
+        case 1: {                                                     // S — élargissement EXACT
+            // Port de float32_to_floatx80 (bit à bit) : l'ancien double(f) hôte
+            // quiétait un SNaN (cvtss2sd) et dToExt écrasait le payload — un SNaN
+            // simple ne levait plus jamais FPSR.SNAN en aval.
+            const uint32_t u = get32(b);
+            const int      sign = int(u >> 31);
+            int32_t        e    = int32_t((u >> 23) & 0xFF);
+            uint32_t       f    = u & 0x007FFFFFu;
+            if (e == 0xFF) {
+                if (f) return Ext{uint16_t(sign << 15 | 0x7FFF), uint64_t(f) << 40};  // NaN (bit signalant préservé)
+                // ±inf : mantisse 0 (floatx80_default_infinity_low, forme canonique
+                // 68881) — bit 63 posé donnerait une écriture FMOVE.X ≠ oracle.
+                return Ext{uint16_t(sign << 15 | 0x7FFF), 0};
+            }
+            if (e == 0) {
+                if (f == 0) return Ext{uint16_t(sign << 15), 0};
+                const int sh = sf::clz64(f) - 32 - 8;                 // normalizeFloat32Subnormal
+                f <<= sh; e = 1 - sh;
+            }
+            f |= 0x00800000u;
+            return Ext{uint16_t(sign << 15 | (e + 0x3F80)), uint64_t(f) << 40};
         }
         case 2:  return Ext{uint16_t(b[0] << 8 | b[1]), get64(b + 4)}; // X (bit-exact)
         case 3: {                                                     // P (BCD)
@@ -235,9 +253,24 @@ Fpu::Ext Fpu::decodeFmt(int fmt, const uint8_t* b) {
             return dToExt(std::strtod(s, nullptr));
         }
         case 4:  return dToExt(double(int16_t(b[0] << 8 | b[1])));    // W
-        case 5: {                                                     // D
-            const uint64_t u = get64(b); double d; std::memcpy(&d, &u, 8);
-            return dToExt(d);
+        case 5: {                                                     // D — élargissement EXACT
+            // Port de float64_to_floatx80 (même raison que le format S).
+            const uint64_t u = get64(b);
+            const int      sign = int(u >> 63);
+            int32_t        e    = int32_t((u >> 52) & 0x7FF);
+            uint64_t       f    = u & 0x000FFFFFFFFFFFFFull;
+            if (e == 0x7FF) {
+                if (f) return Ext{uint16_t(sign << 15 | 0x7FFF), f << 11};            // NaN (signalant préservé)
+                // ±inf : mantisse 0 (cf. format S ci-dessus).
+                return Ext{uint16_t(sign << 15 | 0x7FFF), 0};
+            }
+            if (e == 0) {
+                if (f == 0) return Ext{uint16_t(sign << 15), 0};
+                const int sh = sf::clz64(f) - 11;                     // normalizeFloat64Subnormal
+                f <<= sh; e = 1 - sh;
+            }
+            f |= 0x0010000000000000ull;
+            return Ext{uint16_t(sign << 15 | (e + 0x3C00)), f << 11};
         }
         case 6:  return dToExt(double(int8_t(b[0])));                 // B
         default: return Ext{0, 0};
@@ -349,8 +382,13 @@ uint8_t Fpu::read8(uint32_t addr) {
         case 0x10: case 0x12:                    // Operand CIR (fenêtre 4 octets)
             if (!bufIn_ && bufPos_ < bufLen_) {  // transfert FPU → CPU en cours
                 const uint8_t v = buf_[bufPos_++];
-                if (bufPos_ >= bufLen_) setIdle();
-                else {
+                if (bufPos_ >= bufLen_) {
+                    setIdle();
+                    // Fin de drain d'un move-out : les exceptions levées par
+                    // encodeFmt (OPERR saturation entière, OVFL simple) doivent
+                    // pouvoir être livrées via le Response — comme genOp/FMOVECR.
+                    checkException();
+                } else {
                     const int rem = bufLen_ - bufPos_, chunk = rem > 12 ? 12 : rem;
                     response_ = uint16_t((chunk <= 4 ? 0xB100 : 0xB200) | chunk);
                 }
@@ -423,11 +461,16 @@ void Fpu::command(uint16_t cmd) {
             startMoveOut(cmd);
             break;
         case 4: {                                // opclass 100 : <ea> → FPCR/FPSR/FPIAR
+            // Masque VIDE = FPIAR (quirk 68881, cf. Hatari fpp.c:3317 « No control
+            // register bits set: FPIAR ») — l'ancien no-op laissait l'instruction
+            // sans transfert.
+            if (!(cmd & 0x1C00)) cmd_ = cmd = uint16_t(cmd | 0x0400);
             const int n = !!(cmd & 0x1000) + !!(cmd & 0x0800) + !!(cmd & 0x0400);
             if (n) armIn(4 * n, After::CtrlIn);
             break;
         }
         case 5: {                                // opclass 101 : FPCR/FPSR/FPIAR → <ea>
+            if (!(cmd & 0x1C00)) cmd = uint16_t(cmd | 0x0400);   // masque vide = FPIAR (fpp.c:3366)
             int p = 0;
             if (cmd & 0x1000) { put32(buf_ + p, fpcr_);  p += 4; }
             if (cmd & 0x0800) { put32(buf_ + p, fpsr_);  p += 4; }
@@ -562,9 +605,23 @@ void Fpu::genOp(uint16_t cmd, Ext src) {
     fpsr_ &= ~0x0000FF00u;                       // EXC effacé en début d'instruction
 
     // -------- Opérations BIT-EXACTES (pas de calcul) ------------------------
-    if (op == 0x00) { fp_[dn] = src; setCC(src); setIdle(); checkException(); return; }   // FMOVE
-    if (op == 0x18) { Ext r = src; r.se &= 0x7FFF; fp_[dn] = r; setCC(r); setIdle(); checkException(); return; }  // FABS
-    if (op == 0x1A) { Ext r = src; r.se ^= 0x8000; fp_[dn] = r; setCC(r); setIdle(); checkException(); return; }  // FNEG
+    // Une entrée SNaN est QUIÉTÉE + FPSR.SNAN levé, comme floatx80_move/abs/neg
+    // (propagateFloatx80NaNOneArg) — l'ancien code stockait le SNaN brut sans drapeau.
+    if (op == 0x00 || op == 0x18 || op == 0x1A) {
+        Ext r = src;
+        sf::f80 f = toF(r);
+        if (sf::isNaN(f)) {
+            // Tout NaN traverse propagateNaNOneArg (quiété, signe INCHANGÉ — abs/neg
+            // ne touchent pas le signe d'un NaN chez floatx80_abs/neg).
+            sf::Status q{};
+            f = sf::propagateNaN1(q, f);
+            sfFold(q.exceptionFlags);
+            r = toE(f);
+        }
+        else if (op == 0x18) r.se &= 0x7FFF;                                  // FABS
+        else if (op == 0x1A) r.se ^= 0x8000;                                  // FNEG
+        fp_[dn] = r; setCC(r); setIdle(); checkException(); return;
+    }
 
     // -------- Opérations ALGÉBRIQUES en softfloat 80 bits (mantisse 64 bits) -
     sf::Status st = sfStatus();
@@ -590,14 +647,28 @@ void Fpu::genOp(uint16_t cmd, Ext src) {
             break;
         }
         case 0x26: {                                                          // FSCALE : d × 2^trunc(s)
-            // Exposant ∞/NaN : éviter l'UB de int(trunc(±inf/nan)) — NaN → propagation,
-            // ±∞ → OPERR + NaN par défaut (cf. Hatari floatx80_scale).
-            if (sf::isNaN(s))           { rf = sf::propagateNaN(st, d, s); break; }
+            // NaN → propagation ; exposant ±∞ → OPERR + NaN par défaut ; d = ±∞/±0
+            // inchangé (port floatx80_scale, softfloat.c:3258).
+            if (sf::isNaN(s) || sf::isNaN(d)) { rf = sf::propagateNaN(st, d, s); break; }
             if (sf::expOf(s) == 0x7FFF) { rf = sf::defaultNaN(); st.exceptionFlags |= sf::flag_invalid; break; }
-            int n = int(std::trunc(extToD(src)));
-            if (n > 16383) n = 16383; else if (n < -16383) n = -16383;
-            int be = 0x3FFF + n; if (be < 1) be = 1; else if (be > 0x7FFE) be = 0x7FFE;
-            rf = sf::mul(d, sf::pack(0, be, sf::INF_LOW), st);
+            if (sf::expOf(d) == 0x7FFF ||
+                (sf::expOf(d) == 0 && sf::fracOf(d) == 0)) { rf = d; break; }
+            // n = partie entière de s, EXACTE jusqu'à |n| ≤ 131071 (bExp ≤ $400F),
+            // extraite de l'ÉTENDU directement (l'ancien trunc(double) clampé à
+            // ±32768 rendait FSCALE(2^16383, −32769) = 2^−16385 au lieu de 2^−16386).
+            // Au-delà, floatx80_scale SATURE l'exposant (−$6001 / $E000) → under/
+            // overflow garanti par roundAndPack, avec les drapeaux corrects.
+            int32_t aExp = sf::expOf(d); uint64_t aSig = sf::fracOf(d);
+            if (aExp == 0) sf::normalizeSubnormal(aSig, aExp, aSig);
+            const int32_t  bExp = sf::expOf(s);
+            const uint64_t bSig = sf::fracOf(s);
+            if (bExp > 0x400F) {
+                aExp = sf::signOf(s) ? -0x6001 : 0xE000;
+            } else if (bExp >= 0x3FFF) {
+                const int32_t n = int32_t(bSig >> (0x403E - bExp));
+                aExp = sf::signOf(s) ? aExp - n : aExp + n;
+            }   // bExp < $3FFF → |s| < 1 → trunc = 0, exposant inchangé
+            rf = sf::roundAndPack(st.roundingPrecision, sf::signOf(d), aExp, aSig, 0, st);
             break;
         }
         case 0x21: case 0x25: {                                               // FMOD / FREM
@@ -615,15 +686,38 @@ void Fpu::genOp(uint16_t cmd, Ext src) {
                      sa.low &= 0xFFFFFF0000000000ull;                            // (cf. Hatari floatx80_sglmul)
                      rf = sf::mul(da, sa, z); } break;
         case 0x38: case 0x39: {                                               // FCMP (0x39 alias)
+            // Port de floatx80_cmp (softfloat.c:3345) : les CC dérivent du RÉSULTAT
+            // symbolique pack(sign,…) — en particulier Z **et** N pour −0 vs ±0 et
+            // −∞ vs −∞ (l'ancien compare() ne posait que Z), et une entrée SNaN
+            // lève le drapeau signalant (→ FPSR.SNAN).
             store = false;
-            const int c = sf::compare(d, s);                                  // FPn − <ea>
             uint32_t cc = 0;
-            if (c == 2) cc = CC_NAN;
-            else { if (c == 0) cc |= CC_Z; if (c < 0) cc |= CC_N; }
+            if (sf::isNaN(d) || sf::isNaN(s)) {
+                if (sf::isSNaN(d) || sf::isSNaN(s)) st.exceptionFlags |= sf::flag_signaling;
+                cc = CC_NAN;
+            } else {
+                const int32_t  aExp  = sf::expOf(d),  bExp  = sf::expOf(s);
+                const uint64_t aSig  = sf::fracOf(d), bSig  = sf::fracOf(s);
+                const int      aSign = sf::signOf(d), bSign = sf::signOf(s);
+                int z = 0, neg = 0;
+                if      (bExp < aExp)        { neg = aSign; }
+                else if (aExp < bExp)        { neg = bSign ^ 1; }
+                else if (aExp == 0x7FFF)     { z = (aSign == bSign); neg = aSign; }
+                else if (bSig < aSig)        { neg = aSign; }
+                else if (aSig < bSig)        { neg = bSign ^ 1; }
+                else if (aSig == 0)          { z = 1; neg = aSign; }          // ±0 vs ±0 : N = signe de FPn
+                else if (aSign == bSign)     { z = 1; }
+                else                         { neg = aSign; }
+                cc = (z ? CC_Z : 0) | (neg ? CC_N : 0);
+            }
             fpsr_ = (fpsr_ & 0x00FFFFFF) | cc;
             break;
         }
-        case 0x3A: case 0x3B: store = false; setCC(src); break;               // FTST (0x3B alias)
+        case 0x3A: case 0x3B:                                                 // FTST (0x3B alias)
+            store = false;
+            if (sf::isSNaN(s)) st.exceptionFlags |= sf::flag_signaling;       // floatx80_tst
+            setCC(src);
+            break;
         default: handled = false; break;                                      // → chemin transcendantes
     }
     if (handled) {

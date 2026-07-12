@@ -25,6 +25,9 @@
 
 #include <dirent.h>
 #include <sys/stat.h>
+#if defined(__unix__) || defined(__APPLE__)
+#include <sys/statvfs.h>       // Dfree : espace réel du disque hôte (cf. gemDFree)
+#endif
 #include <unistd.h>
 #include <utime.h>
 
@@ -195,7 +198,10 @@ std::string host2atari(const std::string& src) {
         unsigned char u = (unsigned char)c;
         if (u < 32 || u == 127) { c = INVALID_CHAR; continue; }
         switch (c) {
-        case '*': case '/': case ':': case '?': case '\\': case '{': case '}':
+        // ⚠ PAS '{' / '}' : Str_Filename_Host2Atari les conserve (str.c) — les
+        // remplacer rendait le nom listé par Fsfirst inouvrable (le '+' de
+        // remplacement ne re-matchait pas le fichier hôte via onlyInvalid).
+        case '*': case '/': case ':': case '?': case '\\':
             c = INVALID_CHAR; break;
         default: if (u < 128) c = (char)toupper(u);
         }
@@ -667,7 +673,17 @@ bool GemdosHd::gemDFree(uint32_t p) {
 
     uint64_t total = 32 * 1024, freeC = 16 * 1024;   // défaut : 32 Mo / 16 Mo libres
 #if defined(__unix__) || defined(__APPLE__)
-    // (statvfs disponible sur Linux/macOS — borne selon la version de TOS.)
+    // Espace RÉEL du disque hôte (port GemDOS_DFree, gemdos.c:1692-1746) : les
+    // valeurs factices trompaient « Informations disque » et tout installeur qui
+    // vérifie Dfree avant d'extraire. Clusters de 1 Ko (secteurs 512 × 2, cf. bas).
+    {
+        struct statvfs sv;
+        if (statvfs(emudrives_[drive - 2].hdEmuDir.c_str(), &sv) == 0) {
+            const uint64_t frsize = sv.f_frsize ? sv.f_frsize : sv.f_bsize;
+            total = sv.f_blocks * frsize / 1024;
+            freeC = sv.f_bavail * frsize / 1024;
+        }
+    }
 #endif
     {
         unsigned tosMax;
@@ -883,7 +899,10 @@ bool GemdosHd::gemWrite(uint32_t p) {
     if (fh < 0) return false;                          // (mode test sans TOS omis)
     if (writeProtect_) { setD0(cpu_, GEMDOS_EWRPRO); return true; }
     FILE* fp = fileHandles_[fh].fp;
-    if (size < 0) size = 0;
+    // Taille NÉGATIVE → ERANGE comme Hatari (le Size int32 négatif y échoue au
+    // contrôle mémoire non-signé, gemdos.c:2477) ; l'ancien « size = 0 » rendait
+    // D0=0 (« 0 octet écrit ») pour une longueur qui a débordé en négatif.
+    if (size < 0) { setD0(cpu_, GEMDOS_ERANGE); return true; }
     if (!checkArea(addr, size, /*allowRom=*/true)) { setD0(cpu_, GEMDOS_ERANGE); return true; }
 
     const uint8_t* src = bus_.hostRamPtr(addr, size);
@@ -1087,12 +1106,21 @@ bool GemdosHd::gemSFirst(uint32_t p) {
         return true;
     }
 
-    // Dossier + masque : sépare le dossier hôte du masque de fichiers.
+    // Dossier + masque : sépare le dossier hôte du masque de fichiers — SANS jamais
+    // remonter au-dessus de la racine du lecteur (port de fsfirst_dirname,
+    // gemdos.c:493-524). Fsfirst("C:\") donne host == hdEmuDir sans composant final :
+    // l'ancien rfind() scannait le dossier hôte PARENT du montage (sortie du bac à
+    // sable + entrée DTA fantôme au nom du dossier partagé) au lieu de scanner la
+    // racine avec un masque immatchable → EFILNF, comme Hatari/TOS.
     std::string dirPath = host;
     {
         for (char& c : dirPath) if (c == '\\') c = PATHSEP;
-        size_t sep = dirPath.rfind(PATHSEP);
-        if (sep != std::string::npos) dirPath.resize(sep); else dirPath.clear();
+        const size_t rootLen = emudrives_[drive - 2].hdEmuDir.size();
+        if (dirPath.size() > rootLen) {
+            size_t sep = dirPath.rfind(PATHSEP);
+            if (sep == std::string::npos) dirPath.clear();
+            else dirPath.resize(sep > rootLen ? sep : rootLen);
+        } // sinon : racine nue — on la scanne elle-même (masque = son nom → EFILNF)
     }
     dtas_[useidx].path = dirPath;
 

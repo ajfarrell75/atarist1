@@ -34,6 +34,9 @@
 #include <cmath>
 #include <vector>
 #include <sys/stat.h>
+#if defined(__APPLE__)
+#include <mach-o/dyld.h>       // _NSGetExecutablePath (résolution du chemin exécutable)
+#endif
 
 #include "core/Machine.hpp"
 #include "audio/Audio.hpp"
@@ -744,6 +747,12 @@ void updateKbdCountry(const std::vector<uint8_t>& rom) {
 void onKey(GLFWwindow*, int key, int scancode, int action, int /*mods*/) {
     if (!g_ikbd || action == GLFW_REPEAT) return;   // TOS gère sa propre répétition (pas l'IKBD)
     if (key == GLFW_KEY_DELETE) return;             // touche hôte (libération souris)
+    // Touches réservées HÔTE : F5/F7 (save-state), F11 (bascule joystick clavier),
+    // + F9/F10 en kiosk (menu disques, zoom). Sans cette exclusion, le ST recevait
+    // la touche F5/F7 EN MÊME TEMPS que l'état était écrasé/rechargé sous ses pieds
+    // (beaucoup de jeux/GEM mappent les touches de fonction).
+    if (key == GLFW_KEY_F5 || key == GLFW_KEY_F7 || key == GLFW_KEY_F11) return;
+    if (g_kiosk && (key == GLFW_KEY_F9 || key == GLFW_KEY_F10)) return;
     const uint8_t sc = stScancodeFor(key, scancode);   // symbolique (layout hôte + pays TOS) → positionnel
     if (!sc) return;
     // Suivi des touches dont le MAKE a été transmis au ST : leur BREAK doit
@@ -792,6 +801,9 @@ void drawHexViewer(Bus& bus) {
         ImGui::SetWindowFocus(nullptr);
     if (base < 0) base = 0;
     const auto& mem = bus.ram;
+    // Clamp HAUT aussi : saisir $7FFFFFFF ferait déborder base + row*16 (UB signé,
+    // adresse négative qui repasse la garde `< mem.size()` → lecture hors bornes).
+    if (base > (int)mem.size()) base = (int)mem.size();
     for (int row = 0; row < 16; ++row) {
         const int addr = base + row * 16;
         char line[128];
@@ -1188,15 +1200,23 @@ static void kioskScanDisks(const std::string& disksDir, const std::string& mount
     auto scanInto = [&](const std::string& dir) {
         std::error_code e2;
         if (dir.empty() || !fs::is_directory(dir, e2)) return;
-        for (const auto& e : fs::recursive_directory_iterator(dir, e2)) {
-            if (!e.is_regular_file()) continue;
-            std::string ext = e.path().extension().string();
-            for (auto& c : ext) c = (char)std::tolower((unsigned char)c);
-            if (ext == ".st" || ext == ".msa" || ext == ".dim" || ext == ".stx") {
-                const std::string p = e.path().string();
-                if (std::find(g_kioskDisks.begin(), g_kioskDisks.end(), p) == g_kioskDisks.end())
-                    g_kioskDisks.push_back(p);
+        // ⚠ Le range-for incrémente via operator++() qui LANCE filesystem_error sur
+        // un dossier illisible (EACCES — le raccourci « / » du kiosk traverse /root,
+        // /proc…) : itération manuelle avec increment(ec) + skip_permission_denied.
+        fs::recursive_directory_iterator it(dir, fs::directory_options::skip_permission_denied, e2), end;
+        while (!e2 && it != end) {
+            const fs::directory_entry& e = *it;
+            std::error_code e3;
+            if (e.is_regular_file(e3)) {
+                std::string ext = e.path().extension().string();
+                for (auto& c : ext) c = (char)std::tolower((unsigned char)c);
+                if (ext == ".st" || ext == ".msa" || ext == ".dim" || ext == ".stx") {
+                    const std::string p = e.path().string();
+                    if (std::find(g_kioskDisks.begin(), g_kioskDisks.end(), p) == g_kioskDisks.end())
+                        g_kioskDisks.push_back(p);
+                }
             }
+            it.increment(e2);
         }
     };
     scanInto(disksDir);
@@ -1631,13 +1651,21 @@ void drawDiskLibrary(const std::string& disksDir, const std::string& mounted,
         // Récolte RÉCURSIVE des images .st/.msa/.dim/.stx, triées par ordre alphabétique de
         // DOSSIER puis de FICHIER (insensible à la casse) sur le chemin relatif à disks/.
         std::vector<fs::path> images;
-        for (const auto& e : fs::recursive_directory_iterator(base, ec)) {
-            if (!e.is_regular_file()) continue;
-            std::string ext = e.path().extension().string();
-            for (auto& ch : ext) ch = (char)std::tolower((unsigned char)ch);
-            if (ext == ".st" || ext == ".msa" || ext == ".dim" || ext == ".stx")
-                images.push_back(e.path());
+        // Itération manuelle : le range-for lancerait filesystem_error sur un
+        // sous-dossier/symlink illisible — et ce scan tourne À CHAQUE frame.
+        fs::recursive_directory_iterator dit(base, fs::directory_options::skip_permission_denied, ec), dend;
+        while (!ec && dit != dend) {
+            const fs::directory_entry& e = *dit;
+            std::error_code ec2;
+            if (e.is_regular_file(ec2)) {
+                std::string ext = e.path().extension().string();
+                for (auto& ch : ext) ch = (char)std::tolower((unsigned char)ch);
+                if (ext == ".st" || ext == ".msa" || ext == ".dim" || ext == ".stx")
+                    images.push_back(e.path());
+            }
+            dit.increment(ec);
         }
+        ec.clear();
         auto sortKey = [&](const fs::path& p) {
             std::string rel = fs::relative(p, base, ec).generic_string();   // "sous-dossier/fichier"
             for (auto& ch : rel) ch = (char)std::tolower((unsigned char)ch);
@@ -1712,7 +1740,21 @@ void drawCartLibrary(const std::string& cartsDir, const std::string& mounted,
 
 int main(int argc, char** argv) {
     // Répertoire de l'exécutable (pour retrouver roms/ et disk/ depuis build/).
+    // Lancé via le PATH, argv[0] est NU (« neost ») : l'ancien repli « . » faisait
+    // écrire neost.cfg/neost.state dans ../ du cwd courant (config « split-brain »).
+    // → on résout le vrai chemin : /proc/self/exe (Linux), _NSGetExecutablePath (macOS).
     const std::string exeDir = [&] {
+        std::error_code ec;
+#if defined(__linux__)
+        const auto self = std::filesystem::read_symlink("/proc/self/exe", ec);
+        if (!ec && self.has_parent_path()) return self.parent_path().string();
+#elif defined(__APPLE__)
+        char buf[4096]; uint32_t sz = sizeof buf;
+        if (_NSGetExecutablePath(buf, &sz) == 0) {
+            const auto self = std::filesystem::canonical(buf, ec);
+            if (!ec && self.has_parent_path()) return self.parent_path().string();
+        }
+#endif
         const std::string a0 = argv[0] ? argv[0] : "";
         const auto i = a0.find_last_of('/');
         return (i == std::string::npos) ? std::string(".") : a0.substr(0, i);
@@ -1734,6 +1776,14 @@ int main(int argc, char** argv) {
     std::vector<std::string> pos;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i] ? argv[i] : "";
+        if (a == "--version") {           // identité de build (release-readiness)
+#ifdef NEOST_VERSION
+            std::printf("NeoST %s\n", NEOST_VERSION);
+#else
+            std::printf("NeoST (version inconnue)\n");
+#endif
+            return 0;
+        }
         if      (a == "--kiosk")           g_kiosk = true;
         else if (a == "--kiosk-exclusive") { g_kiosk = true; kioskExclusive = true; }
         else if (a == "--kiosk-monitor" && i + 1 < argc) kioskMonitor = std::atoi(argv[++i]);
@@ -1772,8 +1822,10 @@ int main(int argc, char** argv) {
     GLFWwindow* window = nullptr;
     if (g_kiosk) {
         int nmon = 0; GLFWmonitor** mons = glfwGetMonitors(&nmon);
-        GLFWmonitor* mon = (mons && kioskMonitor < nmon) ? mons[kioskMonitor]
-                                                         : glfwGetPrimaryMonitor();
+        // Index borné DES DEUX côtés : --kiosk-monitor -1 passerait la borne haute
+        // seule et lirait mons[-1] (pointeur poubelle → crash dans glfwGetVideoMode).
+        GLFWmonitor* mon = (mons && kioskMonitor >= 0 && kioskMonitor < nmon)
+                               ? mons[kioskMonitor] : glfwGetPrimaryMonitor();
         const GLFWvidmode* vm = glfwGetVideoMode(mon);
         if (kioskExclusive) {
             // Vrai plein écran EXCLUSIF : la fenêtre appartient au moniteur → reste
@@ -1802,7 +1854,11 @@ int main(int argc, char** argv) {
             if (window) glfwSetWindowPos(window, mx, my);
         }
     } else {
+#ifdef NEOST_VERSION
+        window = glfwCreateWindow(1280, 860, "NeoST " NEOST_VERSION " — Atari ST", nullptr, nullptr);
+#else
         window = glfwCreateWindow(1280, 860, "NeoST — Atari ST", nullptr, nullptr);
+#endif
     }
     if (!window) { glfwTerminate(); return 1; }
     glfwMakeContextCurrent(window);
@@ -1881,11 +1937,19 @@ int main(int argc, char** argv) {
     // additionne au flux PSG (cf. Audio::render).
     DriveSound drive;
     bool driveSoundOn = drive.init(resolveData("roms/drivesound/epson_smd480l", exeDir), 48000);
-    if (driveSoundOn)
-        machine.fdc.setSoundSink([&drive](FdcSound e) { drive.onEvent(e); });
     Audio audio(machine.psg, driveSoundOn ? &drive : nullptr, &machine.dmasnd);
     audio.start();   // échec silencieux possible (CI / pas de carte son)
+    // Sink FdcSound armé SEULEMENT si la sortie audio existe : sans elle, produceFrame ne
+    // draine jamais DriveSound et chaque Step/Seek/Index allouait un son miniaudio jamais
+    // recyclé (croissance mémoire non bornée sur une longue session).
+    if (driveSoundOn && audio.ok())
+        machine.fdc.setSoundSink([&drive](FdcSound e) { drive.onEvent(e); });
     audio.setMasterVolume(cfg.volume);   // volume maître mémorisé (menu Son, neost.cfg)
+    // La chaîne DMA/LMC1992 ne s'applique QUE si la machine courante a le son DMA :
+    // sur ST/Mega ST le gain de rattrapage LMC (×2, compensation du ½-YM STE)
+    // doublait le YM (clipping) et l'état microwire d'une session STE colorait le ST.
+    // Prédicat DYNAMIQUE : suit les reconfigure à chaud (applyConfig).
+    audio.setDmaGate([&machine] { return machineHasDmaSound(machine.machineType()); });
     // Modèle « push » (Phase C) : on ARME l'horodatage des écritures PSG (cycle CPU dans
     // la trame). Dès lors, write8 enregistre les écritures et la synthèse les rejoue au bon
     // instant (digidrums/sync-buzzer). produceFrame (après runFrame) génère et empile la trame.
@@ -1908,7 +1972,11 @@ int main(int argc, char** argv) {
         // Abaisse la machine si le TOS ne la supporte pas (TOS <= 1.04 → ST), comme Hatari.
         const MachineType machTypeR = Machine::adjustMachineForTos(parseMachine(cfg.machine), romP);
         machine.reconfigure(parseRamBytes(cfg.mem), Cpu68k::parseCore(cfg.cpu), machTypeR);
-        machine.loadTos(romP);
+        if (!machine.loadTos(romP))
+            // ROM absente/illisible (profil pointant un TOS non installé) : l'ANCIENNE
+            // ROM reste chargée — on le dit au lieu de laisser croire au nouveau profil.
+            std::fprintf(stderr, "[main] ⚠ ROM introuvable : %s — l'ancienne ROM reste active\n",
+                         romP.c_str());
         updateKbdCountry(machine.bus.rom);   // la nouvelle ROM peut changer de pays clavier
         if (cfg.cart.empty()) machine.ejectCart();
         else                  machine.loadCart(resolveData(cfg.cart, exeDir));
@@ -2871,10 +2939,15 @@ int main(int argc, char** argv) {
         if (g_kiosk) drawStKiosk(screen, fbw, fbh, kTop, kH);   // rendu adaptatif (ImGui vide au-dessus)
         ImGui_ImplOpenGL2_RenderDrawData(ImGui::GetDrawData());
 
-        // Disk Library : montage / éjection à chaud du lecteur A.
+        // Disk Library : montage / éjection à chaud du lecteur A. La config n'est
+        // persistée QUE si le montage a réussi — sinon une image corrompue serait
+        // écrite dans neost.cfg et retentée à chaque boot.
         if (!reqMount.empty()) {
-            machine.fdc.loadImage(reqMount);
-            cfg.disk = reqMount; saveConfig(exeDir, cfg, &machine);
+            if (machine.fdc.loadImage(reqMount)) {
+                cfg.disk = reqMount; saveConfig(exeDir, cfg, &machine);
+            } else {
+                g_stateMsg = "Image disquette illisible"; g_stateMsgFrames = 120;
+            }
         }
         if (reqEject) {
             machine.fdc.eject();

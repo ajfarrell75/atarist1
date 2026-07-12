@@ -64,6 +64,11 @@ void Bus::serialize(StateArchive& ar) {
 
     // Largeur d'accès MMIO en cours (transitoire, inoffensif).
     ar(ioAccessWidth_);
+
+    // ar(fpu) a restauré fpu.present en CONTOURNANT setFpuPresent (seul poseur de
+    // ioFaultBuilt_=false) : si la session avait déjà bâti la carte de bus-errors
+    // avec l'autre valeur, $FFFA40-$FFFA5F garderait le mauvais statut → rebâtir.
+    if (ar.loading()) ioFaultBuilt_ = false;
 }
 
 bool Bus::loadTos(const std::string& path) {
@@ -73,6 +78,14 @@ bool Bus::loadTos(const std::string& path) {
         return false;
     }
     const std::streamsize n = f.tellg();
+    // tellg() peut renvoyer -1 (taille indéterminable) OU 2^63-1 (répertoire sous
+    // Linux) → resize géant. Borne haute : la fenêtre ROM à $E00000 fait 1 Mo.
+    constexpr std::streamsize kMaxTos = 1024 * 1024;
+    if (n <= 0 || n > kMaxTos) {
+        std::fprintf(stderr, "[Bus] TOS invalide (%lld o, max %lld o) : %s\n",
+                     static_cast<long long>(n), static_cast<long long>(kMaxTos), path.c_str());
+        return false;
+    }
     f.seekg(0);
     rom.resize(static_cast<std::size_t>(n));
     f.read(reinterpret_cast<char*>(rom.data()), n);
@@ -425,7 +438,9 @@ bool Bus::busSelfTest() {
     };
     // Force le superviseur : sinon la branche user-mode de busFaultN fait fauter TOUT
     // l'espace IO ($0-$7FF + $FF8000+) et masque l'invariant whitelist qu'on teste.
-    if (cpu) cpu->setSr(uint16_t(cpu->sr() | 0x2000));
+    // SR restauré en sortie — le CPU continue de tourner après le self-test.
+    const uint16_t savedSr = cpu ? cpu->sr() : 0;
+    if (cpu) cpu->setSr(uint16_t(savedSr | 0x2000));
 
     // 1) RAM ($0-$3FFFFF) : jamais de faute (byte + long).
     chk("RAM byte", busFault(0x1000) ? 1 : 0, 0);
@@ -452,6 +467,7 @@ bool Bus::busSelfTest() {
     chk("write $0 protégé", busFaultN(0, 2, true) ? 1 : 0, 1);
     chk("write cartouche protégé", busFaultN(stmap::CART_BASE, 2, true) ? 1 : 0, 1);
 
+    if (cpu) cpu->setSr(savedSr);                // restaure le SR d'entrée
     std::fprintf(stderr, "[bus-selftest] %d OK, %d FAIL\n", pass, fail);
     return fail == 0;
 }

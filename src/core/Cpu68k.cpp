@@ -547,7 +547,11 @@ void Cpu68k::initCore() {
 }
 
 // Conservé pour compat (reconfigure à chaud) : libère l'ancien cœur puis ré-init.
+// Cœur INCHANGÉ (le cas de tous les reconfigure : Moira est le seul cœur) → no-op :
+// recréer l'objet effacerait les breakpoints/watchpoints posés dans le débogueur
+// (l'état CPU, lui, est réinitialisé par le reset() que l'appelant enchaîne).
 void Cpu68k::setCore(CpuCore core) {
+    if (g_moira && core == core_) return;
     if (g_moira) { delete g_moira; g_moira = nullptr; }
     core_ = core;
     initCore();
@@ -787,6 +791,16 @@ bool Cpu68k::watchpointByIndex(int nr, uint32_t& outAddr) const {
 void Cpu68k::serialize(StateArchive& ar) {
     g_moira->serializeState(ar);
     ar(g_cpuMul);
+    // g_cpuBias accompagne g_cpuMul : rebasé à CHAQUE bascule 8/16 MHz et non nul
+    // même après retour à 8 MHz — sans lui, busOfClock() rendrait des valeurs d'un
+    // autre domaine que sched.now_ après load (fenêtres blitter, dispatch faux).
+    ar(g_cpuBias);
+    // Broches IRQ vidéo pendantes (niveau-sensibles jusqu'à IACK) : un HBL tombé au
+    // dernier runTo avant la frontière de save avec SR masqué serait perdu au load.
+    ar(g_vblPending); ar(g_hblPending);
+    // Modes opt-in NEOST_IPLDELAY / NEOST_PIN_ARM : latence IPL et broches armées.
+    ar(g_desiredIpl); ar(g_appliedIpl); ar(g_iplChgClock);
+    ar(g_hblPinDue); ar(g_vblPinDue); ar(g_pinNextDue);
     ar(quantumStartClock_); ar(quantumStartBus_);
     ar(instrStartClock_); ar(psgPrevInstrClock_); ar(aciaPrevInstrClock_);
 }

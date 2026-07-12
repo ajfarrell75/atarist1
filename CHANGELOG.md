@@ -1098,6 +1098,125 @@ taguées (0.1.x). Le restant est dans [`TODO.md`](TODO.md).
   Deux chantiers ciblés et testables documentés : lignes raster transitoires SHO (3 candidats +
   traces) et son YM STE (S3 gain LMC ×2 + S4, oracle `--ym-mixing model`). Cf.
   `docs/HATARI_DIVERGENCES.md` § 5ᵉ passe.
+- **Bug hunt pré-release, 3ᵉ passe (2026-07-12, 5 agents parallèles) — suite complète verte** :
+  - **Chargeurs de fichiers (P0, 5 crashs reproduits puis corrigés)** : sous Linux,
+    `tellg()` sur un RÉPERTOIRE renvoie 2⁶³−1 (pas −1) → la garde `n <= 0` de
+    `loadTos`/`loadImage`/`loadStateFile` laissait passer un `resize` de ~9 Eo
+    (`bad_alloc` → abort). Bornes hautes ajoutées (ROM 1 Mo = fenêtre $E00000,
+    disquette 8 Mo, état 64 Mo, sur le modèle de `loadCart` déjà correct) ;
+    `--frames` négatif clampé (le `reserve` de `--sound-dump` explosait). Les
+    parseurs de CONTENU (STX/MSA/DIM/ST, cfg, CLI) re-fuzzés : 130+ cas, zéro crash.
+  - **Save-states v5 (P0/P1)** : **CRC32 du payload** dans l'en-tête, vérifié AVANT
+    toute mutation (la seule troncature était couverte — un fichier corrompu de la
+    bonne longueur mutait la machine sans rollback) ; rollback aussi sur EXCEPTION
+    (`bad_alloc` à mi-restauration) ; **invariants vérifiés au load** (`ar.check`) :
+    `fifoSize_`∈[0,16], `driveSel_`∈{−1,0,1}, `bufPos_ ≤ buf_ == bufTiming_`,
+    `byteCount_`/`dataLen_`/`target_` ACSI, anneau `cap_` = kCapSize, `lineSnap_` ==
+    `lineSnapLen_`×256 — un `.state` forgé déclenchait des écritures hors tas
+    contrôlées (Shifter/DmaSound/FDC/ACSI). Message explicite sur version d'état
+    obsolète.
+  - **Déterminisme byte-exact restauré** : `podVec` sérialisait le PADDING non
+    initialisé des structs `SyncWrite`/`GlueLine`/`ColorWrite`/`DmaEvent`/`RegEvent`
+    (2-5 octets/élément, `--save-state-test` divergait sur des octets morts) →
+    nouveau `StateArchive::objVec` champ-par-champ ; diagnostic `NEOST_STATE_MAP=1`
+    (offset de chaque puce dans le flux) et offset de divergence du test relatif au
+    payload.
+  - **ACSI (P1)** : statut DMA INVERSÉ dans `writeAcsi` (jumeau du bug corrigé en
+    2ᵉ passe dans `acsiDmaTransfer`) — bit0 de $FF8606 rapportait « erreur » après
+    chaque octet de commande accepté, écrasant le statut correct juste après un
+    transfert réussi.
+  - **IKBD** : l'interrogation `$0D` compte le feu du joystick 1 comme bouton droit
+    quand la souris est active (`IKBD_DuplicateMouseFireButtons`, jeux Big Run…).
+  - **FPU 68881** : FSCALE extrait n de l'ÉTENDU (exact jusqu'à ±131071 puis
+    saturation −$6001/$E000, port exact `floatx80_scale` — le clamp ±32768 faussait
+    la bande étroite au-delà) ; ±inf décodé S/D avec mantisse 0 (forme canonique).
+  - **Hygiène** : `*.state` ignoré (F5 écrit à la racine), `a.out` dé-traqué.
+    Divergences basses restantes consignées → `docs/HATARI_DIVERGENCES.md` § 6ᵉ passe.
+  - **Release** : **LICENSE GPLv3** à la racine (texte canonique gnu.org, choix
+    utilisateur — compatible avec le portage Hatari GPLv2+) + section Licence/crédits
+    dans le README (Moira MIT, imgui, miniaudio, EmuTOS) ; `extern/capsimg`
+    (licence SPS non-commerciale, non compilé) dé-traqué et ignoré ;
+    `deploy-web.yml` réparé (étape Musashi fantôme retirée — le job échouait à
+    chaque push depuis le retrait du cœur Musashi). ⚠ Le contenu propriétaire
+    servi par Pages (point 1) reste EN ATTENTE d'une décision utilisateur.
+- **Bug hunt pré-release, 2ᵉ passe (2026-07-12, 5 agents + sanitizers) — 24 correctifs, suite verte** :
+  - **Validation dynamique** : build ASan+UBSan (`build-asan/`) — selftests, boots ST/STE/MegaSTE,
+    nocooper 6800 trames, déterminisme save-state et **72 mutants de fuzz** des chargeurs
+    d'images (byte-flips/troncatures/en-têtes saturés, seed fixe) : **zéro rapport sanitizer**.
+  - **Audio hôte (P1)** : la chaîne DMA/LMC1992 est GATÉE sur le modèle courant
+    (`Audio::setDmaGate`) — sur ST/Mega ST le gain de rattrapage LMC (×2, compensation du
+    ½-YM STE) doublait le YM (clipping) et l'état microwire d'une session STE colorait le ST
+    après reconfigure (aussi corrigé : `dmasnd.reset(cold)` dans `reconfigure`). Le headless
+    avait déjà la garde → GUI et `--sound-dump` de nouveau représentatifs l'un de l'autre.
+    P2 : sink DriveSound armé seulement si la sortie audio existe (sinon accumulation non
+    bornée de sons miniaudio jamais drainés), volume maître en RAMPE par bloc (clic au mute),
+    reprise auto d'un périphérique audio arrêté (~1 tentative/s).
+  - **GEMDOS HD (P1)** : `Fsfirst("C:\")` scannait le dossier hôte PARENT du montage (sortie
+    du bac à sable + entrée DTA fantôme) — port de `fsfirst_dirname` (racine → EFILNF comme
+    TOS). P2 : `Dfree` lit l'espace RÉEL du disque hôte (statvfs, bornes TOS conservées) ;
+    `{`/`}` ne sont plus mutilés par host2atari (fichier listé mais inouvrable) ; `Fwrite`
+    taille négative → ERANGE ; plafond DTA aligné (16 384).
+  - **IKBD (P1)** : Δ souris LATCHÉ au VBL pour les handlers 6301 custom (Froggies,
+    Dragonnels — l'accumulation en cours était lue puis effacée : menu souris mou/mort selon
+    la phase d'injection hôte). P2 : `$0A` pas 0 stocké brut (== 6301), `$0D` rapporte l'état
+    de bouton VIVANT, reset logiciel `$80,$01` ne purge plus le RDR de l'ACIA (côté 6301
+    seul, comme IKBD_Boot_ROM), drain relatif borné 256 (16 tronquait les gros Δ).
+  - **FPU 68881** : FSCALE ré-écrit (l'`int(trunc(±1e12))` était de l'UB et le clamp ±16383
+    perdait les résultats dénormalisables — port de l'arithmétique d'exposant de
+    `floatx80_scale`) ; FCMP/FTST portent `floatx80_cmp` (Z **et** N pour −0/−∞, SNaN →
+    FPSR.SNAN) ; FMOVE/FABS/FNEG quiètent un NaN (propagateNaNOneArg) ; formats S/D décodés
+    BIT À BIT (l'hôte quiétait les SNaN et perdait le payload) ; FMOVEM contrôle masque
+    vide = FPIAR (quirk 68881) ; exceptions d'encodeFmt livrables en fin de drain CIR.
+    Différés (TODO § FPU) : arrondis de conversion sortante S/D/entier bit-exacts
+    (`roundSigAndPackFloatx80`, `floatx80_to_float32/64/int32`), packed decimal ∞/NaN/INEX1.
+  - **Release-readiness** : `--version` (GUI + headless, version CMake), titre de fenêtre
+    versionné, README corrigé (Moira vendorisé ≠ sous-module, builds EmuTOS 256 Ko
+    documentés), `.gitignore` couvre `build-*/` et `a.out`, gating audio GUI == headless.
+    ⚠ Les BLOQUANTS juridiques (ROMs TOS/jeux crackés publiés via Pages, LICENSE absente,
+    capsimg non-commercial inutilisé, artefacts wasm 73 Mo) sont documentés dans le rapport
+    de session — décisions utilisateur requises (purge d'historique, choix GPL).
+- **Bug hunt pré-release (2026-07-12, 5 agents d'audit) — 27 correctifs, tous étalons verts** :
+  - **Save-states durcis (P0/P1)** : bornes `vec`/`podVec` vérifiées AVANT `resize` (un préfixe
+    corrompu 0xFFFFFFFF allouait 4 Go → terminate) ; en-tête **v4** avec empreinte
+    machine/RAM/TOS et REFUS du chargement croisé (ST↔STE = machine hybride) ; **rollback**
+    sur fichier tronqué (l'état de session est figé puis rejoué — plus de machine à moitié
+    restaurée) ; écriture **atomique** (tmp+rename) ; champs manquants sérialisés : `g_cpuBias`
+    (bascule 8/16 MHz Mega STE — sans lui le domaine d'horloge bus divergeait au load),
+    `g_vblPending`/`g_hblPending` + broches IPL opt-in, `Glue::memConfig_` ($FF8001, lu en live
+    par le MMU), densité FDC recalculée au load, carte de bus-errors invalidée (`fpu.present`
+    restauré contournait `setFpuPresent`). Déterminisme re-validé STE **et** Mega STE.
+  - **Crashs (P0)** : débordement de pile `idx[960]` de `renderGlueFrame` (ligne med à
+    DE_end=512 → 1040 octets ; buffer 1072 + clamp) ; `mons[-1]` sur `--kiosk-monitor` négatif ;
+    `filesystem_error` non rattrapée des scans disquettes récursifs (dossier illisible —
+    `skip_permission_denied` + `increment(ec)`, le scan fenêtré tournait à CHAQUE frame) ;
+    overlay `.wd1772` plus court que son secteur STX (lecture heap hors bornes livrée au
+    guest) ; gardes `tellg()<=0` (loadImage/loadTos) ; table timing STX rév. 0 débordée
+    (secteur 1024 o) ; READ ADDRESS/RNF et READ TRACK sur tampon vide (UB vector) ; division
+    par zéro `cyclesPerRev` (STX malformée) ; hex viewer sans clamp haut.
+  - **Comportement (P1)** : **inversion `dmaError_` ACSI** — une erreur DMA était rapportée
+    après chaque transfert RÉUSSI (`!acsi_.dmaError()` ; bit0 $8606 = parité
+    `FDC_SetDMAStatus`) + contrôle de plage RAM porté (hdc.c) ; reset DMA (bit 8 $8606) purge
+    le STATUT ACSI seul, le paquet en vol continue (`HDC_ResetCommandStatus`) ; base vidéo
+    **$FF8201 masquée 0x3F** comme le compteur (Hatari video.c:5084 — le rendu pouvait
+    dispatcher la MMIO : consommation UDR MFP/INTRQ FDC, bus error déclenchée HORS CPU) ;
+    **capture par-ligne au faisceau étendue aux trames « palette seule »** (`spec512Active_`,
+    cf. seuil 1) → **ferme le résidu V2 assumé de No Cooper écran principal : 891 px → 0 px
+    vs oracle** (référence de l'étalon promue `ref_kind: oracle`) ; touches hôte F5/F7 (+F9/F10
+    kiosk) ne fuient plus vers l'IKBD (le jeu recevait F5 pendant que l'état était écrasé) ;
+    `stepInstruction` dispatche les événements en mode bloc (le pas-à-pas ne servait JAMAIS
+    HBL/VBL/timers) ; `Scheduler::runTo` déclenche en ordre **chronologique** (l'énum ne sert
+    plus que de tie-break — un HBL dû 200 cyc avant Timer A partait après) ; `setCore` no-op si
+    cœur inchangé (les breakpoints du débogueur survivaient pas au reconfigure) ; garde-fou
+    `onFdcEvent` reprogramme à `REFRESH_INDEX` (livelock) ; MSA bornes Hatari (spt ≤ 56).
+  - **Mineur (P2)** : resets complétés (biquads gauche DmaSound, `serialBaud_` MFP) ; RDR MIDI
+    amorcé à 1 (midi.c:110) ; montage disquette/ROM échoué non persisté dans `neost.cfg` (une
+    image corrompue était retentée à chaque boot) ; `exeDir` résolu via `/proc/self/exe` /
+    `_NSGetExecutablePath` (lancé via PATH, la config s'écrivait dans `../` du cwd) ; sorties
+    headless bruyantes en échec (`--screenshot`/`--dump-at`/`--sound-dump`… → stderr + exit≠0) ;
+    SR restauré après `--bus-selftest`.
+  - Consigné sans correction (divergences volontaires / hors périmètre) : SCC RR9 (NeoST suit
+    la datasheet, Hatari rend WR9), $FF8E07 (bug copier-coller Hatari), purge des pendings SCU
+    à l'accès des masques (modèle « sources vivantes »), handles GEMDOS HD hors snapshot.
 - **Blitter — partage de bus non-hog cycle-exact (2ᵉ passe, 2026-07-07 soir)** : les deux
   dernières divergences de timing portées depuis le modèle CE d'Hatari (celui de l'oracle).
   **Suspension MID-WORD** (`BLITTER_CONTINUE_LATER_IF_MAX_BUS_REACHED`) : la tranche rend le

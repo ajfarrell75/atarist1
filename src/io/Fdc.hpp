@@ -154,6 +154,7 @@ public:
         ar(dmaBytesToTransfer_);
         ar.arr(fifo_);              // uint8_t[16]
         ar(fifoSize_);
+        ar.check(fifoSize_ >= 0 && fifoSize_ <= 16);   // indexe fifo_[16]
         ar(dmaError_);
         ar(ff8604recent_);
         ar(ctrlHi_);
@@ -163,9 +164,19 @@ public:
         ar.vec(buf_);              // std::vector<uint8_t>
         ar.podVec(bufTiming_);     // std::vector<uint16_t>
         ar(bufPos_);
+        // Invariants : buf_/bufTiming_ grandissent toujours ensemble (bufferAddTiming)
+        // et bufPos_ les indexe — des valeurs restaurées incohérentes liraient hors tas.
+        ar.check(buf_.size() == bufTiming_.size());
+        ar.check(bufPos_ >= 0 && static_cast<std::size_t>(bufPos_) <= buf_.size());
+        ar.check(driveSel_ >= -1 && driveSel_ <= 1);   // indexe drive_[2] (−1 = aucun)
 
         // --- Contrôleur ACSI (état de commande ; config/images hors-snapshot) ---
         acsi_.serialize(ar);
+
+        // La densité par lecteur n'est PAS sérialisée (dérivée du média + piste) :
+        // on la recalcule depuis le headTrack restauré (sinon elle resterait celle
+        // de la piste courante d'AVANT le load — écart sur STX à densité mixte).
+        if (ar.loading()) { updateFloppyDensity(0); updateFloppyDensity(1); }
     }
 
 private:
