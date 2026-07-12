@@ -101,7 +101,7 @@ private:
     static constexpr int FORCED_HANDLES   = 5;
     static constexpr uint32_t DTA_MAGIC_NUMBER = 0x12983476u;
     static constexpr int DTA_CACHE_INC = 256;
-    static constexpr int DTA_CACHE_MAX = 4096;
+    static constexpr int DTA_CACHE_MAX = 16 * 1024;   // == DTA_CACHE_MAX_SIZE d'Hatari (gemdos.c:118)
     static constexpr uint32_t CART_OLDGEMDOS = 0xFA0024u;
     static constexpr uint32_t CART_GEMDOS    = 0xFA002Au;
 

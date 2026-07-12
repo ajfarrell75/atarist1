@@ -1,7 +1,7 @@
 # Artefacts CMake / build local
 build/
-build-native/
-build-web*/
+build-*/
+a.out
 _site/
 cmake-build-*/
 CMakeFiles/
@@ -25,6 +25,7 @@ neost-headless
 # Fichiers locaux de l'emulateur / GUI
 imgui.ini
 neost.cfg
+*.state
 *.ppm
 !tests/reference/*.ppm
 tests/out/
@@ -47,3 +48,6 @@ venv/
 # Hatari (référence, non committé)
 extern/hatari/
 extern/spsdeclib_*/
+
+# capsimg (licence SPS non-commerciale — non redistribuable, non compilé)
+extern/capsimg/

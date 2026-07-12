@@ -190,6 +190,8 @@ public:
         ar.arr(scanState_);   // uint8_t[128]
         ar(mDeltaX_);
         ar(mDeltaY_);
+        ar(mLatchDX_);
+        ar(mLatchDY_);
         ar(lmb_);
         ar(chaosFirst_);
         ar(chaosIgnore_);
@@ -390,6 +392,8 @@ private:
     // État de suivi pour les handlers (équivalents des globales d'Hatari).
     uint8_t   scanState_[128] = {};          // 1 = touche pressée (ScanCodeState[])
     int       mDeltaX_ = 0, mDeltaY_ = 0;    // Δ souris accumulé sur la trame (ExeMode)
+    int       mLatchDX_ = 0, mLatchDY_ = 0;  // Δ LATCHÉ au VBL (lu par les handlers custom —
+                                             // stable toute la trame, comme DeltaX/Y d'Hatari)
     bool      lmb_ = false;                  // bouton souris gauche courant
     // ChaosAD (décodeur de protection) + Audio Sculpture (déchiffrement).
     bool      chaosFirst_ = true;

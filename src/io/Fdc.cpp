@@ -128,7 +128,11 @@ enum {
 // --- Constantes de temps (cycles FDC = cycles CPU ≈ 8,021 MHz sur ST) -------
 static constexpr int64_t MFM_BYTE         = 4 * 8 * 8;     // 256 cyc : 4µs/bit × 8 bits × 8 MHz
 static constexpr int64_t CYCLES_PER_REV   = 1604249;       // 300 tr/min @ 8,021247 MHz → ~200 ms
-static constexpr int64_t INDEX_PULSE_LEN  = 29758;         // 3,71 ms : durée du signal d'index
+static constexpr int64_t INDEX_PULSE_LEN  = 29680;         // 3,71 ms : durée du signal d'index —
+                                                           // à l'horloge STANDARD 8 MHz du datasheet
+                                                           // WD1772 (Hatari FDC_CLOCK_STANDARD,
+                                                           // fdc.c:405/423 : 3710 µs × 8 = 29680),
+                                                           // PAS au 8,021 MHz machine
 static constexpr int     IP_SPIN_UP       = 6;             // tours pour atteindre la vitesse
 static constexpr int     IP_MOTOR_OFF     = 9;             // tours d'inactivité → moteur off
 static constexpr int     IP_ADDRESS_ID    = 5;             // tours max pour trouver un champ ID
@@ -240,7 +244,9 @@ static bool decodeMsa(const std::vector<uint8_t>& raw, std::vector<uint8_t>& out
     const int sides = ((raw[4] << 8) | raw[5]) + 1;
     const int t0    = (raw[6] << 8) | raw[7];
     const int t1    = (raw[8] << 8) | raw[9];
-    if (spt < 1 || spt > 30 || sides < 1 || sides > 2 || t1 < t0) return false;
+    // Bornes Hatari (floppies/msa.c:137-140) : spt ≤ 56 (accepte HD/ED étendues,
+    // l'ancien 30 rejetait une .msa ED 36 spt valide), pistes ≤ 86.
+    if (spt < 1 || spt > 56 || sides < 1 || sides > 2 || t1 < t0 || t1 > 86) return false;
     const std::size_t trackBytes = static_cast<std::size_t>(spt) * 512u;
     out.clear();
     std::size_t p = 10;
@@ -289,6 +295,15 @@ bool Fdc::loadImage(const std::string& path, int drive) {
     std::ifstream f(path, std::ios::binary | std::ios::ate);
     if (!f) { std::fprintf(stderr, "[FDC] image introuvable : %s\n", path.c_str()); return false; }
     const std::streamsize n = f.tellg();
+    // tellg() peut renvoyer -1 (taille indéterminable) OU 2^63-1 (répertoire sous
+    // Linux, qui N'EST PAS -1) → allocation géante. Borne haute large : les plus
+    // grosses images légitimes (STX multi-révolutions) font ~3 Mo.
+    constexpr std::streamsize kMaxImage = 8 * 1024 * 1024;
+    if (n <= 0 || n > kMaxImage) {
+        std::fprintf(stderr, "[FDC] image invalide (%lld o, max %lld o) : %s\n",
+                     static_cast<long long>(n), static_cast<long long>(kMaxImage), path.c_str());
+        return false;
+    }
     f.seekg(0);
     std::vector<uint8_t> raw(static_cast<std::size_t>(n));
     f.read(reinterpret_cast<char*>(raw.data()), n);
@@ -550,10 +565,14 @@ int Fdc::bytesPerTrackStx(int track, int side) const {
     if (!dk.stx) return BYTES_PER_TRACK;
     StxImage::Track* t = dk.stx->findTrack(track, side);
     if (!t) return BYTES_PER_TRACK;
-    if (t->writeReinterpreted) return t->writeMfmSize;          // piste réécrite (WRITE TRACK)
-    if (t->pTrackImage) return t->trackImageSize;
-    if ((t->flags & StxImage::TRACK_FLAG_SECTOR_BLOCK) == 0) return t->mfmSize / 8;  // MFMSize en bits
-    return t->mfmSize;
+    int sz;
+    if (t->writeReinterpreted) sz = t->writeMfmSize;            // piste réécrite (WRITE TRACK)
+    else if (t->pTrackImage) sz = t->trackImageSize;
+    else if ((t->flags & StxImage::TRACK_FLAG_SECTOR_BLOCK) == 0) sz = t->mfmSize / 8;  // MFMSize en bits
+    else sz = t->mfmSize;
+    // Piste vide d'une STX malformée : 0 ferait un modulo par zéro dans indexPulse
+    // (rngNext() % cyclesPerRev()) et un livelock d'événements à période nulle.
+    return sz > 0 ? sz : BYTES_PER_TRACK;
 }
 
 // Période d'un tour : constante pour .ST, dérivée de la longueur de piste pour STX
@@ -753,7 +772,7 @@ void Fdc::dmaResetFifo() {
     dmaBytesInSector_ = 512;
     dmaSectorCount_ = 0;            // après reset, compteur = 0 (vérifié sur STF réel)
     dmaError_ = false;
-    acsi_.resetCommand();          // réinitialise aussi l'état de commande ACSI
+    acsi_.resetCommand();          // purge le statut ACSI (le paquet en vol continue)
 }
 
 uint16_t Fdc::dmaStatusWord() const {
@@ -770,6 +789,10 @@ uint16_t Fdc::dmaStatusWord() const {
 uint8_t Fdc::readSectorST(uint8_t track, uint8_t sector, uint8_t side, int* pSize) {
     if (drive_[driveSel_].imgType == FloppyDisk::IMG_STX) return readSectorStx(pSize);
     FloppyDisk& dk = drive_[driveSel_];
+    // Face au-delà de l'image (face 2 d'une image simple face) : les données
+    // n'existent pas → RNF (port de Floppy_ReadSectors, floppy.c:907 Side >=
+    // nSides). Sans cette garde, lsnOffset replierait sur la piste suivante.
+    if (side >= dk.sides) return STR_RNF;
     const uint32_t off = lsnOffset(track, side, sector, dk.spt, dk.sides);
     if (off + 512u <= dk.image.size()) {
         static const bool fdcDebug = getenv("NEOST_FDC_DEBUG") != nullptr;
@@ -787,6 +810,8 @@ uint8_t Fdc::readSectorST(uint8_t track, uint8_t sector, uint8_t side, int* pSiz
 uint8_t Fdc::writeSectorST(uint8_t track, uint8_t sector, uint8_t side, int size) {
     if (drive_[driveSel_].imgType == FloppyDisk::IMG_STX) return writeSectorStx(size);
     FloppyDisk& dk = drive_[driveSel_];
+    // Face au-delà de l'image → RNF (même garde que readSectorST, Floppy_WriteSectors).
+    if (side >= dk.sides) return STR_RNF;
     const uint32_t off = lsnOffset(track, side, sector, dk.spt, dk.sides);
     if (off + uint32_t(size) <= dk.image.size()) {
         for (int i = 0; i < size; ++i) dk.image[off + i] = bufferReadBytePos(i);
@@ -982,17 +1007,20 @@ uint8_t Fdc::readSectorStx(int* pSize) {
             byte = writeData[i];
         }
 
+        // std::rint (demi-vers-pair, mode FE défaut) == le rint d'Hatari
+        // (floppies/stx.c:1676/1682/1903) — lround (demi-loin-de-zéro) décalait
+        // ±1 cyc la répartition des octets à timing variable (somme identique).
         uint16_t timing;
         if (sec.pTiming && !writeData) {                // timing spécifique par bloc de 16 o
             uint16_t tv = uint16_t((sec.pTiming[(i >> 4) * 2] << 8) + sec.pTiming[(i >> 4) * 2 + 1]);
             tv = uint16_t(tv * 32 + 28);                // 1 unité = 32 cyc + 28 cyc/bloc (Pasti.prg)
             if (i % 16 == 0) totalPrev = 0;
             const double totalCur = (double(tv) * ((i % 16) + 1)) / 16.0;
-            timing = uint16_t(std::lround(totalCur - totalPrev));
+            timing = uint16_t(std::rint(totalCur - totalPrev));
             totalPrev += timing;
         } else {                                        // timing uniforme sur le secteur
             const double totalCur = (double(readTime) * (i + 1)) / sec.sectorSize;
-            timing = uint16_t(std::lround(totalCur - totalPrev));
+            timing = uint16_t(std::rint(totalCur - totalPrev));
             totalPrev += timing;
         }
         bufferAddTiming(byte, timing);
@@ -1104,7 +1132,7 @@ uint8_t Fdc::readTrackStx(int track, int side) {
         double totalPrev = 0;
         for (int i = 0; i < t->trackImageSize; ++i) {
             const double totalCur = (readTime * (i + 1)) / t->trackImageSize;
-            const uint16_t timing = uint16_t(std::lround(totalCur - totalPrev));
+            const uint16_t timing = uint16_t(std::rint(totalCur - totalPrev));
             totalPrev += timing;
             bufferAddTiming(t->pTrackImage[i], timing);
         }
@@ -1159,7 +1187,13 @@ int Fdc::nextSectorID(int* pFdcCycles) {
     const int curPos = indexCurrentPosBytes();
     if (curPos < 0) return RET_NO_DRIVE;                         // pas de lecteur/disque
     FloppyDisk& dk = drive_[driveSel_];
-    if (side_ == 1 && dk.sides == 1) return RET_NO_DRIVE;        // face 1 sur disque simple face
+    // PAS de test des faces de l'IMAGE ici : Hatari teste NumberOfHeads du LECTEUR
+    // (fdc.c:5140, = 2 par défaut — les lecteurs NeoST sont double face). Les champs
+    // ID sont synthétisés depuis le BPB quelle que soit la face (FDC_GetSectorsPerTrack
+    // ignore Side, fdc.c:1778) ; c'est la lecture des DONNÉES qui échoue sur la face
+    // absente (floppy.c:907 Side >= nSides → RNF en < 1 tour, cf. readSectorST). Les
+    // jeux qui sondent la face 2 (Drakkhen, Bolo) obtiennent le RNF rapide, pas le
+    // timeout 5 tours de l'ancien RET_NO_DRIVE (~1 s par sonde).
     if (dk.headTrack >= tracksPerDisk(driveSel_)) return RET_NO_DRIVE;  // piste inexistante
 
     const int maxSector = dk.spt;
@@ -1273,10 +1307,15 @@ int Fdc::updateRestore() {
             fdcCycles = cmdComplete(true);
             break;
         }
-        if (driveSel_ < 0 || !drive_[driveSel_].present() || drive_[driveSel_].headTrack != 0) {
+        // La tête bouge dès qu'un lecteur ACTIVÉ est sélectionné — disque monté ou
+        // pas (Hatari fdc.c:2616-2625 teste `Enabled`, jamais l'insertion ; les
+        // lecteurs NeoST sont toujours activés). RESTORE lecteur vide atteint donc
+        // la piste 0 avec TR00=1 (l'ancien gate present() décomptait 255 essais
+        // sans bouger → RNF + TR00=0, ~1,5 s de délai fantôme).
+        if (driveSel_ < 0 || drive_[driveSel_].headTrack != 0) {
             updateStr(STR_TR00, 0);
             tr_--;
-            if (driveSel_ >= 0 && drive_[driveSel_].present()) {
+            if (driveSel_ >= 0) {
                 drive_[driveSel_].headTrack--;                // déplace la tête physique
                 updateFloppyDensity(driveSel_);               // densité de la nouvelle piste (STX)
             }
@@ -1340,7 +1379,9 @@ int Fdc::updateSeek() {
             tr_ = uint8_t(tr_ + stepDir_);
             fdcCycles = STEP_RATE_MS[cr_ & 3] * 1000 * 8;
             updateStr(STR_TR00, 0);
-            if (driveSel_ >= 0 && drive_[driveSel_].present()) {
+            // Tête déplacée dès qu'un lecteur activé est sélectionné, disque ou
+            // pas (Hatari fdc.c:2785-2808 — cf. commentaire RESTORE).
+            if (driveSel_ >= 0) {
                 int& ht = drive_[driveSel_].headTrack;
                 if (ht == MAX_TRACK && stepDir_ == 1) {       // au-delà de la piste max
                     commandState_ = RUN_SE_VERIFY; fdcCycles = CMD_IMMEDIATE;
@@ -1403,7 +1444,9 @@ int Fdc::updateStep() {
         if (cr_ & CMD_BIT_UPDATETRACK) tr_ = uint8_t(tr_ + stepDir_);
         fdcCycles = STEP_RATE_MS[cr_ & 3] * 1000 * 8;
         updateStr(STR_TR00, 0);
-        if (driveSel_ >= 0 && drive_[driveSel_].present()) {
+        // Tête déplacée dès qu'un lecteur activé est sélectionné, disque ou
+        // pas (Hatari fdc.c:2950-2966 — cf. commentaire RESTORE).
+        if (driveSel_ >= 0) {
             int& ht = drive_[driveSel_].headTrack;
             if (ht == MAX_TRACK && stepDir_ == 1)       fdcCycles = CMD_IMMEDIATE;
             else if (ht == 0 && stepDir_ == -1)         fdcCycles = CMD_IMMEDIATE;
@@ -1492,7 +1535,9 @@ int Fdc::updateReadSectors() {
             bufferReset();
             int size = 0;
             statusTemp_ = readSectorST(uint8_t(drive_[driveSel_].headTrack), sr_, side_, &size);
-            if (statusTemp_ & STR_RNF) { commandState_ = RUN_RS_RNF; fdcCycles = CMD_IMMEDIATE; }
+            // bufferSize()==0 : secteur de taille 0 d'une STX malformée → la boucle
+            // de transfert lirait bufTiming_/buf_ vides. Traité comme RNF.
+            if ((statusTemp_ & STR_RNF) || bufferSize() == 0) { commandState_ = RUN_RS_RNF; fdcCycles = CMD_IMMEDIATE; }
             else {
                 // Type d'enregistrement (« deleted data ») depuis le statut du secteur
                 // (toujours 0 pour .ST, possiblement posé pour STX).
@@ -1651,6 +1696,12 @@ int Fdc::updateReadAddress() {
         if (driveSel_ < 0) { fdcCycles = WAIT_NO_DRIVE; break; }
         bufferReset();
         statusTemp_ = readAddressST(uint8_t(drive_[driveSel_].headTrack), nextID_SR_, side_);
+        // RNF sans octet bufferisé (piste hors image, lecteur changé pendant le délai
+        // rotationnel — éjection/échange à chaud) : bufferReadBytePos(0) lirait un
+        // vector VIDE. Même garde que RUN_RS_TRANSFER_START.
+        if ((statusTemp_ & STR_RNF) || bufferSize() == 0) {
+            commandState_ = RUN_RA_RNF; fdcCycles = CMD_IMMEDIATE; break;
+        }
         sr_ = bufferReadBytePos(0);                           // 1er octet du champ ID → registre secteur
         commandState_ = RUN_RA_TRANSFER_LOOP;
         fdcCycles = int(bufferReadTiming());
@@ -1701,6 +1752,9 @@ int Fdc::updateReadTrack() {
         } else {
             statusTemp_ = readTrackST(uint8_t(drive_[driveSel_].headTrack), side_);
         }
+        // Piste reconstruite VIDE (STX malformée, trackSize 0) : la boucle de
+        // transfert lirait buf_/bufTiming_ vides → terminer directement.
+        if (bufferSize() == 0) { commandState_ = RUN_RT_COMPLETE; fdcCycles = CMD_COMPLETE; break; }
         commandState_ = RUN_RT_TRANSFER_LOOP;
         fdcCycles = int(bufferReadTiming());
         break;
@@ -1877,6 +1931,10 @@ void Fdc::onFdcEvent() {
             }
         }
     } while (command_ != CMD_NULL && fdcCycles == 0 && ++guard < 100000);
+    // Garde-fou atteint (machine à états coincée à délai 0) : reprogrammer à now+0
+    // ré-armerait l'événement à chaque dispatch (livelock inter-événements) —
+    // on force une période de respiration.
+    if (guard >= 100000 && fdcCycles == 0) fdcCycles = REFRESH_INDEX;
 
     // Trace des TRANSITIONS d'état (NEOST_FDC_DEBUG=1) : une ligne par changement
     // de commande/sous-état — complète la trace des écritures de commande
@@ -1967,8 +2025,10 @@ uint8_t Fdc::read8(uint32_t addr) {
                 case DMA_A1: noteFf8604(sr_); return sr_;               // FDC_SR
                 default:     noteFf8604(dr_); return dr_;               // FDC_DR
             }
-        case 0x6: return 0;                          // status, octet haut
-        case 0x7: return uint8_t(dmaStatusWord());   // status, octet bas
+        // Statut DMA : les bits 8-15 rejouent le dernier accès $8604 (vérifié STF
+        // réel — Hatari FDC_DmaStatus_ReadWord renvoie le MOT complet, fdc.c:4996).
+        case 0x6: return uint8_t(dmaStatusWord() >> 8);   // status, octet haut
+        case 0x7: return uint8_t(dmaStatusWord());        // status, octet bas
         // Adresse DMA ($FF8609/0B/0D) : RELISIBLE — le compteur incrémente pendant le
         // transfert (cf. Hatari FDC_GetDMAAddress). Les diagnostics la relisent pour
         // vérifier le nombre d'octets transférés (sinon « DMA count error »).
@@ -1993,8 +2053,11 @@ void Fdc::write8(uint32_t addr, uint8_t v) {
     switch (addr & 0xF) {
         case 0x4: dataHi_ = v; return;               // data, octet haut (latch)
         case 0x5:                                    // data, octet bas → action
-            ff8604recent_ = uint16_t((ff8604recent_ & 0xff00) | v);
+            // SCREG AVANT le stockage de ff8604recent_ : Hatari retourne sans le
+            // mettre à jour (fdc.c:4695-4703, store à :4702 seulement après) — le
+            // compteur de secteurs reste NON relisible via les bits rémanents.
             if (dmaMode_ & DMA_SCREG)  { dmaSectorCount_ = uint16_t(((dataHi_ << 8) | v) & 0xff); return; }
+            ff8604recent_ = uint16_t((ff8604recent_ & 0xff00) | v);
             if (dmaMode_ & DMA_CSACSI) { writeAcsi(addr, v); return; }   // disque dur ACSI
             switch (dmaMode_ & (DMA_A1 | DMA_A0)) {
                 case 0: {                            // FDC_CS : commande
@@ -2070,7 +2133,11 @@ void Fdc::writeAcsi(uint32_t /*addr*/, uint8_t v) {
     // Acquittement : IRQ HDC (INTRQ/GPIP5) + statut DMA si la cible est peuplée → le
     // pilote envoie l'octet suivant ; cible vide → pas d'IRQ → « pas de disque ».
     if (acsi_.targetEnabled()) {
-        dmaError_ = !acsi_.dmaError();   // bit0 de $FF8606 : 1 = pas d'erreur
+        // FDC_SetDMAStatus(AcsiBus.bDmaError) : dmaError_ (« erreur ») = l'erreur
+        // ACSI TELLE QUELLE — le `!` inversé (jumeau du bug corrigé dans
+        // acsiDmaTransfer) rapportait « erreur » au bit0 de $FF8606 après chaque
+        // octet de commande accepté, y compris juste APRÈS un transfert réussi.
+        dmaError_ = acsi_.dmaError();
         setIntrqLine(true);
     }
 }
@@ -2082,7 +2149,13 @@ void Fdc::acsiDmaTransfer() {
     if (acsi_.isWrite() != modeWrite) return;                        // sens DMA ≠ commande
     bus_.megaSteCacheFlushIfEnabled();   // DMA disque dur via BGACK → cache Mega STE invalidé
     const int len = acsi_.dataLen();
-    if (acsi_.isWrite()) {                                           // RAM → image
+    // Plage RAM invalide → erreur DMA, transfert sauté ; l'adresse avance quand
+    // même et l'IRQ part (port Acsi_DmaTransfer, hdc.c:1125-1160 :
+    // STMemory_CheckAreaType/SafeCopy en échec → bDmaError = true).
+    const bool rangeOk = uint64_t(dmaAddr_) + uint64_t(len) <= bus_.ram.size();
+    if (!rangeOk) {
+        std::fprintf(stderr, "[ACSI] DMA hors RAM : $%06x+%d — transfert sauté\n", dmaAddr_, len);
+    } else if (acsi_.isWrite()) {                                    // RAM → image
         std::vector<uint8_t> tmp(len);
         for (int i = 0; i < len; ++i) tmp[i] = bus_.dmaRead8(dmaAddr_ + uint32_t(i));
         acsi_.writeToDisk(tmp.data(), len);
@@ -2092,6 +2165,9 @@ void Fdc::acsiDmaTransfer() {
     }
     dmaAddr_ = (dmaAddr_ + uint32_t(len)) & dmaAddressMask(bus_.ram.size());
     acsi_.clearData();
-    dmaError_ = !acsi_.dmaError();
+    // FDC_SetDMAStatus(bDmaError) : bit0 de $8606 = 1 quand PAS d'erreur —
+    // dmaError_ (« erreur ») = l'erreur ACSI telle quelle. L'ancien `!` inversé
+    // rapportait une erreur DMA après chaque transfert RÉUSSI.
+    dmaError_ = acsi_.dmaError() || !rangeOk;
     setIntrqLine(true);                  // IRQ HDC de fin de transfert
 }

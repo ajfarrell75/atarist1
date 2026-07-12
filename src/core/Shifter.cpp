@@ -34,13 +34,16 @@
 static constexpr int kSpec512AlignCyc = -25;
 
 // Seuil de détection « image spec512 » : nombre d'écritures palette MOT par trame
-// au-delà duquel on bascule sur le re-rendu intra-ligne. Bien au-dessus d'un usage
-// normal (16 couleurs posées une fois = 16, ou raster-bars ~ quelques centaines) pour
-// ne JAMAIS toucher les trames ordinaires. Une image Spectrum 512 réécrit ~48 couleurs/
-// ligne sur 200 lignes (~9600 mots/trame). Depuis la fusion octet→mot de recordColorWrite
-// (un move.w = 1 écriture, comme Hatari), on compte les MOTS : 512 ⇔ l'ancien seuil de
-// 1024 (qui comptait 2 octets par mot), frontière de détection inchangée.
-static constexpr int kSpec512Threshold = 512;
+// à partir duquel on bascule sur le re-rendu intra-ligne. **1 = le défaut Hatari**
+// (configuration.c:769 nSpec512Threshold = 1 ; spec512.c:222 compare en >=) : la
+// PREMIÈRE écriture palette de la trame suffit — toute trame qui touche la palette
+// est rendue palette-par-pixel, datation −25/alignement bus compris. C'est ce qui
+// rend l'écriture palette mid-ligne byte-exacte face à l'oracle même HORS image
+// Spectrum 512 (banc poll : bascule de couleur à x=49..61 selon le cycle d'écriture,
+// l'ancien seuil 512 laissait ces trames au rendu ligne-à-ligne → bascule figée au
+// début d'aire active, ~1330 px/trame de résidu). L'ancien seuil élevé (512 mots,
+// « ne jamais toucher les trames ordinaires ») divergeait de Hatari par principe.
+static constexpr int kSpec512Threshold = 1;
 
 // Correction de datation de la LECTURE du compteur vidéo $FF8205/07/09, en cycles.
 // Pendant côté lecture de kSpec512AlignCyc (qui aligne les ÉCRITURES). Port du modèle
@@ -656,9 +659,14 @@ void Shifter::endVideoLine() {
     // Capture les octets que le shifter vient de lire sur CETTE ligne (échantillon
     // daté au faisceau, cf. lineSnap_) : bpl + marge d'arrondi au groupe de 16 px
     // du décodage fenêtré (+ avance scroll STE). Consommé par renderGlueFrame —
-    // donc capturé SEULEMENT si la trame a des écritures freq/res (candidate au
-    // rendu glue) : zéro coût sur le chemin normal.
-    if (!syncWrites_.empty() && bpl > 0 &&
+    // donc capturé si la trame est candidate au rendu glue : écritures freq/res
+    // (syncWrites_) OU palette touchée (spec512Active_, seuil 1 = toute écriture
+    // palette re-rend la trame ; sans capture, renderGlueFrame relirait la RAM de
+    // FIN de trame et ré-introduirait l'artefact « sprite en course avec le
+    // faisceau » sur tout moteur single-buffer qui pose une couleur au VBL). Les
+    // lignes AVANT la 1ʳᵉ écriture palette restent en repli RAM — acceptable.
+    // Zéro coût sur une trame qui ne touche ni sync/res ni palette.
+    if ((!syncWrites_.empty() || spec512Active_) && bpl > 0 &&
         sl >= 0 && sl < static_cast<int>(lineSnapLen_.size())) {
         int n = bpl + scrollCounterAdvance() + 8;
         if (n > kLineSnapBytes) n = kLineSnapBytes;
@@ -757,82 +765,17 @@ void Shifter::finishFrame() {
         }
     }
 
-    // Si un retrait de bordure est détecté, le rendu fenêtré (palette roulante)
-    // gère TOUT : bordures ouvertes + raster par ligne + spec512 intra-ligne.
-    if (bordersTrick_) { renderGlueFrame(); return; }
-
-    if (!spec512Active_) return;                               // trame normale : rendu ligne-à-ligne conservé
-
-    // Tri stable par cycle : les écritures d'un même move.l / movem partagent un
-    // cycle ; l'ordre d'insertion (= ordre des registres) doit être conservé pour
-    // que la dernière l'emporte, exactement comme sur le bus.
-    std::stable_sort(colorWrites_.begin(), colorWrites_.end(),
-                     [](const ColorWrite& a, const ColorWrite& b) {
-                         return a.frameCycle < b.frameCycle;
-                     });
-
-    // Wait states d'alignement bus 4 cycles du shifter (cf. applyShifterBusAlignment) :
-    // recale les positions intra-ligne sur le vrai HW (sans ça, dérive -2 cyc/ligne).
-    applyShifterBusAlignment();
-
-    // DEBUG (NEOST_SPEC512_TRACE) : dump des écritures palette converties en
-    // (ligne, position dans la ligne) — format comparable au trace `video_color`
-    // d'Hatari (« spec store col line N cyc=H idx=I col=RGB »). Diff oracle.
-    static const char* spcTrace = std::getenv("NEOST_SPEC512_TRACE");
-    if (spcTrace) {
-        const Geometry gg = geometry();
-        FILE* tf = std::fopen(spcTrace, "w");
-        if (tf) {
-            for (const auto& w : colorWrites_) {
-                const int line = static_cast<int>(w.frameCycle / gg.cyclesPerLine);
-                const int hpos = static_cast<int>(w.frameCycle % gg.cyclesPerLine);
-                std::fprintf(tf, "line %d cyc=%d idx=%d col=%03x pc=%06x\n",
-                             line, hpos, w.index, w.colour & 0xFFF, w.pc);
-            }
-            std::fclose(tf);
-            std::fprintf(stderr, "[spec512] %zu écritures palette → %s\n",
-                         colorWrites_.size(), spcTrace);
-        }
-    }
-
-    const Geometry g   = geometry();
-    const int W        = activeWidth();            // pixels de l'écran actif (hors bordures)
-    const int cpl      = g.cyclesPerLine;
-    const int lineStart= g.lineStartCycle;
-    const int dispStart= g.dispStartLine;          // VDE_On : l'affichage actif commence à cette ligne
-    const int span     = g.lineEndCycle - g.lineStartCycle;    // cycles couvrant les W pixels affichés
-
-    // Palette roulante : démarre à l'état de début de trame puis absorbe chaque
-    // écriture au cycle voulu, en avançant un curseur unique sur toute la trame
-    // (les cycles-pixel sont monotones croissants ligne après ligne).
-    std::array<uint16_t, 16> pal = frameStartPalette_;
-    const std::size_t n = colorWrites_.size();
-    std::size_t cur = 0;
-
-    static const char* alo = std::getenv("NEOST_ALIGN_OFF");   // DEBUG : offset ADDITIONNEL (relatif à kSpec512AlignCyc) pour re-calibrer le rendu vs oracle
-    const int alignOff = alo ? std::atoi(alo) : 0;
-
-    uint8_t idx[660];
-    for (int y = 0; y < curAH_; ++y) {
-        const int scroll = decodeLineIndices(y, idx);
-        // Zone active dans le buffer overscan (décalée des bordures gauche/haut).
-        uint32_t* dst = frame_.data() + static_cast<std::size_t>(activeY_ + y) * curW_ + activeX_;
-        for (int c = 0; c < W; ++c) {
-            // Cycle (dans la trame) où le pixel c de la ligne y sort du shifter
-            // (1 cycle/pixel en basse résolution, 0,5 en moyenne). La ligne active y
-            // est balayée à la scanline (dispStart + y) — l'offset VDE_On aligne les
-            // écritures (datées au cycle live, ~(63+y)*cpl) sur les pixels. Le décalage
-            // kSpec512AlignCyc cale le front couleur sur le front pixel.
-            const int64_t pixCyc = static_cast<int64_t>(dispStart + y) * cpl + lineStart
-                                 + static_cast<int64_t>(c) * span / W;
-            const int64_t limit = pixCyc - kSpec512AlignCyc + alignOff;
-            while (cur < n && colorWrites_[cur].frameCycle <= limit) {
-                pal[colorWrites_[cur].index] = colorWrites_[cur].colour;
-                ++cur;
-            }
-            dst[c] = stColorToArgb(pal[idx[c + scroll]]);
-        }
-    }
+    // Rendu fenêtré (palette roulante) si retrait de bordure détecté OU si la
+    // palette a été écrite dans la trame (spec512Active_, seuil Hatari = 1) : il
+    // gère TOUT — bordures ouvertes, bordures ROULANTES (registre 0 au cycle du
+    // faisceau, flancs gauche/droit ET lignes haut/bas compris), raster par ligne,
+    // spec512 intra-ligne. C'est le pendant de la conversion écran UNIQUE d'Hatari
+    // (spec512.c + video.c) : une écriture palette mid-ligne bascule la couleur au
+    // pixel exact, même dans la bordure — l'ancien chemin « actif seul » laissait
+    // les bordures au latch par-ligne de renderLine (banc poll : bascules à
+    // x=45..47 dans la bordure gauche et pal[0] roulant haut/bas manquants).
+    // Trame sans AUCUNE écriture palette : rendu ligne-à-ligne conservé.
+    if (bordersTrick_ || spec512Active_) renderGlueFrame();
 }
 
 // Rejoue HORS-LIGNE les wait states d'alignement bus du shifter (port fidèle de
@@ -1665,6 +1608,26 @@ void Shifter::renderGlueFrame() {
     // bénéficient du même recalage que le chemin sans bordure.
     const int glueAlignCyc = spec512Active_ ? kSpec512AlignCyc : 0;
     if (spec512Active_) applyShifterBusAlignment();
+
+    // DEBUG (NEOST_SPEC512_TRACE) : dump des écritures palette converties en
+    // (ligne, position dans la ligne) — format comparable au trace `video_color`
+    // d'Hatari (« spec store col line N cyc=H idx=I col=RGB »). Diff oracle.
+    // Après tri + alignement bus : datations telles que RENDUES.
+    static const char* spcTrace = std::getenv("NEOST_SPEC512_TRACE");
+    if (spcTrace && spec512Active_) {
+        const Geometry gg = geometry();
+        if (FILE* tf = std::fopen(spcTrace, "w")) {
+            for (const auto& w : colorWrites_)
+                std::fprintf(tf, "line %d cyc=%d idx=%d col=%03x pc=%06x\n",
+                             static_cast<int>(w.frameCycle / gg.cyclesPerLine),
+                             static_cast<int>(w.frameCycle % gg.cyclesPerLine),
+                             w.index, w.colour & 0xFFF, w.pc);
+            std::fclose(tf);
+            std::fprintf(stderr, "[spec512] %zu écritures palette → %s\n",
+                         colorWrites_.size(), spcTrace);
+        }
+    }
+
     std::array<uint16_t, 16> pal = frameStartPalette_;
     const std::size_t n = colorWrites_.size();
     std::size_t cur = 0;
@@ -1679,7 +1642,11 @@ void Shifter::renderGlueFrame() {
     if (rtr) std::fprintf(stderr, "[render f%d] base=%06x start=%d end=%d vover=%d\n",
                           s_renderFrame, vcFrameBase_ & 0xFFFFFF, glueStartHBL_, glueEndHBL_, glueVOverscan_);
 
-    uint8_t idx[960];                                      // max DE med (462-0)*2 px + groupe scroll
+    // Dimensionné pour le PIRE cas décodable : DE_end = LINE_END_FULL (512, hors
+    // table — écriture 71 Hz mi-ligne) × 2 px/cycle (ligne med) = 1024 px, arrondi
+    // au groupe de 16 + groupe scroll (nDec ≤ 1040). L'ancien [960] débordait la
+    // pile sur ce cas pathologique (nPix clampé ci-dessous par ceinture ET bretelles).
+    uint8_t idx[1072];
     const int wsInc = glue::timing(bus_).inc;              // re-normalisation des DE stockés (cf. plus bas)
     for (int row = 0; row < curH_; ++row) {
         const int sl = baseStart + (row - activeY_);       // scanline de cette ligne buffer
@@ -1720,7 +1687,8 @@ void Shifter::renderGlueFrame() {
                              (sl < (int)lineSnapLen_.size() && lineSnapLen_[sl] > 0) ? 1 : 0);
         }
         const int  lppc = lineMed ? 2 : ppc;               // px décodés par cycle de CETTE ligne
-        const int  nPix = lineHasDE ? (de - ds) * lppc : 0;
+        int nPix = lineHasDE ? (de - ds) * lppc : 0;
+        if (nPix > 1024) nPix = 1024;                      // garde idx : cf. dimensionnement ci-dessus
         if (rtr && displayed && (renderAll || sl < baseStart + 12))
             std::fprintf(stderr, "  sl%d ds=%d de=%d bm=%03x nPix=%d addr=%06x\n", sl, ds, de, bm, nPix, addr & 0xFFFFFF);
         // decodeWindowIndices décode des GROUPES de 16 px (+1 groupe si scroll avec
@@ -2395,6 +2363,11 @@ void Shifter::write8(uint32_t addr, uint8_t v) {
     const bool ste = machineIsSte(bus_.machine);
     switch (addr) {
         case 0xFF8201:
+            // Octet haut masqué comme le compteur $FF8205 (port Hatari video.c:5084
+            // DMA_MaskAddressHigh) : sans lui, une base $FFxxxx ferait fetcher la
+            // MMIO par le rendu (lectures à effets de bord — UDR MFP, STR FDC… —
+            // voire bus error déclenchée HORS exécution CPU).
+            v &= 0x3F;
             videoBase = (videoBase & 0x00FF00) | (uint32_t(v) << 16);
             // STE/TT : écrire l'octet haut/milieu remet à 0 l'octet bas $FF820D
             // (cf. Hatari Video_ScreenBase_WriteByte).

@@ -288,8 +288,14 @@ void Ikbd::dispatchCommand() {
             break;
         case 0x0D:
             // $0D = INTERROGATE MOUSE POSITION (cf. Hatari IKBD_Cmd_ReadAbsMousePos) :
-            // paquet $F7 + boutons + X/Y. État de bouton = dernier connu (prevL_/R_).
-            sendAbsMousePos(prevL_, prevR_);
+            // paquet $F7 + boutons + X/Y. État de bouton = l'état VIVANT (Hatari lit
+            // Keyboard.bL/RButtonDown à l'événement hôte) — le latch de trame
+            // (prevL_/R_) rapportait « pas pressé » jusqu'au VBL suivant le clic.
+            // Le feu du joystick 1 compte comme bouton DROIT quand la souris est
+            // active (même ligne physique — bRButtonDown|BUTTON_JOYSTICK posé par
+            // IKBD_DuplicateMouseFireButtons au VBL chez Hatari).
+            sendAbsMousePos(mouseLeft_,
+                            mouseRight_ || (mouseMode_ != OFF && (hostJoy_[1] & 0x80)));
             break;
         case 0x07:
             // $07 = SET MOUSE BUTTON ACTION (cf. Hatari IKBD_Cmd_MouseAction) :
@@ -303,8 +309,11 @@ void Ikbd::dispatchCommand() {
             // $0A = SET MOUSE KEYCODE MODE (cf. Hatari IKBD_Cmd_MouseCursorKeycodes) :
             // les mouvements deviennent des flèches clavier ; octets 1/2 = pas X/Y.
             mouseMode_     = CURSOR;
-            keyCodeDeltaX_ = inBuf_[1] ? inBuf_[1] : 1;
-            keyCodeDeltaY_ = inBuf_[2] ? inBuf_[2] : 1;
+            // Octet BRUT, 0 permis (Hatari ikbd.c:2000 stocke tel quel) : avec pas=0
+            // la boucle sendCursorKeys émet ses 10 paires/trame sans consommer le Δ,
+            // comme le vrai 6301 — l'ancien « ?: 1 » se comportait en pas=1.
+            keyCodeDeltaX_ = inBuf_[1];
+            keyCodeDeltaY_ = inBuf_[2];
             break;
         case 0x12:
             // $12 = DISABLE MOUSE (cf. Hatari IKBD_Cmd_TurnMouseOff) : plus aucun
@@ -576,10 +585,10 @@ void Ikbd::bootRom() {
     bothMouseAndJoy_ = false;
     pauseOutput_   = false;
     rx_.clear();                   // BufferHead=Tail=0 dans IKBD_Boot_ROM
-    rdrf_ = false;                 // RDR vidé + livraison en vol annulée
-    rxOverrun_ = ovrn_ = srRead_ = false;   // overrun oublié (reset IKBD)
-    rxPending_ = false;
-    if (sched_) sched_->cancel(Scheduler::IKBD_RX);
+    // ⚠ On ne purge QUE le côté 6301 : le RDR de l'ACIA (rdrf_), l'overrun et la
+    // livraison en vol SURVIVENT au reset logiciel $80,$01 — Hatari (IKBD_Boot_ROM,
+    // ikbd.c:578-581) ne touche que Keyboard.Buffer ; le SCI n'est resetté qu'au
+    // reset MACHINE (IKBD_Reset). Le CPU peut encore lire le dernier octet reçu.
     duringResetCriticalTime_ = true;
     // Le boot annule tout code 6301 custom en cours (cf. Hatari
     // IKBD_Boot_ROM : LoadMemory/ExeMode coupés).
@@ -643,8 +652,15 @@ void Ikbd::onVbl(int64_t vblMicro) {
     // l'invoque dans le traitement clavier de trame), puis Δ souris consommé. Pas
     // de report joystick auto tant que le 6301 exécute du code custom.
     if (exeMode_) {
-        customReadDispatch();
+        // LATCH du Δ de la trame écoulée AVANT le dispatch : Hatari met à jour
+        // DeltaX/DeltaY à chaque tick (IKBD_UpdateInternalMousePosition) et les
+        // handlers custom (Froggies, Dragonnels) lisent un delta STABLE toute la
+        // trame. Lire l'accumulation en cours puis l'effacer au VBL perdait le
+        // mouvement injecté entre le poll du jeu et le clear (menu souris mou/mort
+        // selon la phase).
+        mLatchDX_ = mDeltaX_; mLatchDY_ = mDeltaY_;
         mDeltaX_ = mDeltaY_ = 0;
+        customReadDispatch();
         return;
     }
     if (duringResetCriticalTime_ || vblCount_ <= 20)
@@ -752,7 +768,9 @@ void Ikbd::sendRelMousePacket(int dx, int dy, bool left, bool right) {
     // mais la soustraction de drain utilise le Δy non signé (comme Hatari). Le
     // reliquat sous le seuil est abandonné (Hatari écrase Δ à la trame suivante).
     int dX = dx, dY = dy;
-    for (int guard = 0; guard < 16; ++guard) {
+    // Garde 256 (Hatari boucle sans borne, l.1382) : 16 tronquait silencieusement un
+    // Δ hôte > 2048/trame ; 256 couvre tout Δ 15 bits sans risque d'emballement.
+    for (int guard = 0; guard < 256; ++guard) {
         int bx = dX; if (bx > 127) bx = 127; else if (bx < -128) bx = -128;
         int by = dY; if (by > 127) by = 127; else if (by < -128) by = -128;
         const bool overThr =
@@ -1018,10 +1036,9 @@ void Ikbd::commonBoot(uint8_t v) {
             if (d.w == CW_CHAOSAD) { chaosFirst_ = true; chaosIgnore_ = 8; chaosIndex_ = 0; chaosCount_ = 0; }
             if (d.w == CW_AS)      { asMagic_ = false; asReadCount_ = 0; }
             rx_.clear();                     // flush des octets en file (BufferHead=Tail=0)
-            rdrf_ = false;
-            rxOverrun_ = ovrn_ = srRead_ = false;
-            rxPending_ = false;
-            if (sched_) sched_->cancel(Scheduler::IKBD_RX);
+            // Comme bootRom : le flush ne touche QUE le côté 6301 (Hatari
+            // ikbd.c:2980-2981 ne vide que Keyboard.Buffer) — RDR/RDRF/overrun de
+            // l'ACIA survivent, la livraison en vol se no-op sur file vide.
             return;
         }
     }
@@ -1072,10 +1089,10 @@ void Ikbd::froggiesWrite(uint8_t v) {
     if (v & 0x80) { exitExeMode(); return; }      // octet <0 → le 6301 quitte ExeMode
     uint8_t res80 = 0, res81 = 0, res82 = 0;
     const uint8_t res83 = 0xFC;                    // valeur fixe (inutilisée par la démo)
-    if (mDeltaY_ < 0) res80 = 0x7A;
-    if (mDeltaY_ > 0) res80 = 0x06;
-    if (mDeltaX_ < 0) res81 = 0x7A;
-    if (mDeltaX_ > 0) res81 = 0x06;
+    if (mLatchDY_ < 0) res80 = 0x7A;               // Δ LATCHÉ au VBL (stable toute la trame)
+    if (mLatchDY_ > 0) res80 = 0x06;
+    if (mLatchDX_ < 0) res81 = 0x7A;
+    if (mLatchDX_ > 0) res81 = 0x06;
     if (lmb_)         res82 |= 0x80;
     if (scanState_[0x48]) res80 |= 0x7A;           // flèche haut
     if (scanState_[0x50]) res80 |= 0x06;           // flèche bas
@@ -1104,8 +1121,8 @@ void Ikbd::transbeauce2Read() {
 // --- Dragonnels : Y souris + bouton gauche --------------------------------------
 void Ikbd::dragonnelsWrite(uint8_t /*v*/) {
     uint8_t res = 0;
-    if (mDeltaY_ < 0) res = 0xFC;
-    if (mDeltaY_ > 0) res = 0x04;
+    if (mLatchDY_ < 0) res = 0xFC;                 // Δ latché au VBL (cf. froggiesWrite)
+    if (mLatchDY_ > 0) res = 0x04;
     if (lmb_)         res = 0x80;
     pushRx(res);
 }

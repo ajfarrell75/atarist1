@@ -130,6 +130,7 @@ endif()
 # =============================================================================
 add_executable(neost-headless src/headless/main_headless.cpp)
 target_link_libraries(neost-headless PRIVATE neost_core)
+target_compile_definitions(neost-headless PRIVATE NEOST_VERSION="${PROJECT_VERSION}")
 set_source_files_properties(src/headless/main_headless.cpp
     PROPERTIES COMPILE_OPTIONS "${NEOST_STRICT_OPTS}")
 
@@ -210,6 +211,7 @@ add_executable(neost
     src/gui/OpenGLShader.cpp
     src/gui/CrtEffectStack.cpp)
 target_link_libraries(neost PRIVATE neost_core glfw OpenGL::GL Threads::Threads)
+target_compile_definitions(neost PRIVATE NEOST_VERSION="${PROJECT_VERSION}")
 set_source_files_properties(src/main.cpp src/audio/DriveSound.cpp
     PROPERTIES COMPILE_OPTIONS "${NEOST_STRICT_OPTS}")
 

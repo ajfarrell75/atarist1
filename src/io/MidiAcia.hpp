@@ -65,7 +65,8 @@ private:
     Mfp&    mfp_;
     Scheduler* sched_ = nullptr;
     std::deque<uint8_t> rx_;                 // file MIDI IN (alimentée par le bouclage)
-    uint8_t rdr_ = 0;                        // dernier octet lu (RDR persistant : relu à vide, cf. 6850)
+    uint8_t rdr_ = 1;                        // dernier octet lu (RDR persistant : relu à vide, cf. 6850) ;
+                                             // amorçage 1 comme Hatari (midi.c:110, Midi_Reset)
     bool    rdrf_ = false;                    // Receive Data Register Full — distinct de !rx_.empty()
                                              // (effacé au master reset SANS purger la file, cf. acia.c)
     uint8_t control_ = 0;                    // registre contrôle ACIA (bit7 = RX int enable)

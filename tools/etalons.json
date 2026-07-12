@@ -226,8 +226,8 @@
     "save_as": "disks/etalons/nocooper.msa"
    },
    "optional": true,
-   "note": "Étalon V2 (Video_WriteToGlueRes) : l'écran principal ouvre les bordures G/D en MED-RES (la nappe traverse bord à bord chez Hatari). Référence courante = capture NeoST (non-régression, écart V2 assumé) ; la CIBLE du chantier V2 est tests/reference/nocooper_oracle.png (oracle Hatari WS3, touche espace tenue vbl ~900, frame 6788 ↔ NeoST --frames 6800 --screenshot, Δ=-11). Écart de départ mesuré 2026-07-08 : 891 px (crop actif).",
-   "ref_kind": "snapshot"
+   "note": "Étalon V2 (Video_WriteToGlueRes) : l'écran principal ouvre les bordures G/D en MED-RES (la nappe traverse bord à bord chez Hatari). RÉSOLU 2026-07-12 (bug hunt) : la capture par-ligne au faisceau étendue aux trames « palette seule » (spec512Active_, endVideoLine) a fermé le résidu V2 assumé de 891 px — 0 px vs oracle. Référence = tests/reference/nocooper.png (copie de nocooper_oracle.png, oracle Hatari WS3, touche espace tenue vbl ~900, frame 6788 ↔ NeoST --frames 6800, Δ=-11).",
+   "ref_kind": "oracle"
   },
   {
    "id": "nocooper_greetings",
