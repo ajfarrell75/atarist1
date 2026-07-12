@@ -39,10 +39,8 @@ jobs:
       - name: Installer Emscripten
         uses: mymindstorm/setup-emsdk@v14
 
-      - name: Générer les opcodes Musashi
-        run: |
-          cc -o extern/Musashi/m68kmake extern/Musashi/m68kmake.c
-          ( cd extern/Musashi && ./m68kmake . m68k_in.c )
+      # (l'étape « Générer les opcodes Musashi » a été retirée : le cœur Musashi
+      # n'existe plus — Moira, vendorisé, se compile tel quel.)
 
       - name: Configurer (WASM, tout rom/ et disks/ embarqués)
         run: emcmake cmake -B build-web -DCMAKE_BUILD_TYPE=Release -DNEOST_WEB_FREE_ONLY=OFF
