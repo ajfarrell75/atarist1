@@ -555,7 +555,7 @@ void Machine::stepInstruction() {
 // Méthode SYMÉTRIQUE (StateArchive gère save ET load) → l'ordre ne peut pas diverger.
 void Machine::serializeState(StateArchive& ar) {
     uint32_t magic   = 0x4E535453u;   // 'NSTS'
-    uint16_t version = 5;             // v5 : + CRC32 du payload dans l'en-tête
+    uint16_t version = 6;             // v6 : + commitAnchor_ (Shifter) ; v5 : + CRC32 du payload dans l'en-tête
     ar(magic); ar(version);
     // Empreinte de configuration : un état n'est rechargeable QUE dans la même
     // config (loadState la vérifie AVANT de restaurer — sinon machine hybride :
@@ -643,9 +643,9 @@ bool Machine::loadState(const uint8_t* data, std::size_t n) {
     uint32_t magic;   std::memcpy(&magic, data, 4);
     uint16_t version; std::memcpy(&version, data + 4, 2);
     if (magic != 0x4E535453u) return false;
-    if (version != 5) {
+    if (version != 6) {
         std::fprintf(stderr, "[state] refusé : format v%u non supporté (cette version "
-                     "de NeoST écrit du v5) — re-sauver l'état avec F5\n", version);
+                     "de NeoST écrit du v6) — re-sauver l'état avec F5\n", version);
         return false;
     }
     uint8_t  mt    = data[6];

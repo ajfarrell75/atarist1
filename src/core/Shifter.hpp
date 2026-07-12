@@ -260,6 +260,10 @@ private:
     // Octets lus par le shifter sur une scanline (160 nominal, modulé par les
     // drapeaux de bordure glue — port BORDERBYTES_*). Hors line-offset/scroll STE.
     int  glueLineBytes(int scanline) const;
+    // Ancre verticale du commit de scanlines (cf. Shifter.cpp) : max(liveStartHBL_,
+    // glueStartHBL_) sur trame à tricks, latchée au 1er commit (commitAnchor_).
+    int  commitAnchor();
+    int  commitAnchor_ = -1;
 
 public:
     // La scanline est-elle AFFICHÉE (Display-Enable vertical) d'après la machine
@@ -500,6 +504,7 @@ public:
         ar(lastGlueFreq_);
         ar(lastGlueRes_);
         ar(liveStartHBL_);
+        ar(commitAnchor_);   // ancre verticale du commit (latchée mi-trame)
 
         // --- Machine Glue : retrait de bordures / overscan ---
         // SyncWrite/GlueLine/ColorWrite ont du PADDING interne → champ par champ
