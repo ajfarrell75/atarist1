@@ -10,10 +10,13 @@
 //  Format d'octet IKBD (cf. Hatari ATARIJOY_BITMASK_*, includes/joy.h) :
 //    bit0 = haut, bit1 = bas, bit2 = gauche, bit3 = droite, bit7 = feu.
 //
-//  Affectation des ports (comme la plupart des jeux ST) : la 1re manette physique
-//  va au PORT 1 (le port « jeux »), la 2e au PORT 0 (partagé avec la souris).
+//  Affectation des ports : par défaut (AUTO, comme la plupart des jeux ST) la
+//  1re manette physique va au PORT 1 (le port « jeux »), la 2e au PORT 0 (partagé
+//  avec la souris). Chaque manette peut être ÉPINGLÉE à un port ou coupée (OFF)
+//  via `roles` (menu kiosk « Joysticks », persisté par GUID — cf. resolveAssign).
 //  L'émulation clavier vise un port configurable (défaut port 1). Les sources
 //  visant le même port sont OR-ées : clavier OU manette font bouger pareil.
+//  Boutons X/Y (ou équivalents bruts) = touches ESPACE/RETURN (cf. readAux).
 //
 //  (c) 2026 VERHILLE Arnaud — projet NeoST.
 // =============================================================================
@@ -26,6 +29,20 @@ namespace stjoy {
 
 // Bits d'état joystick ST (cf. Hatari joy.h).
 enum : uint8_t { UP = 0x01, DOWN = 0x02, LEFT = 0x04, RIGHT = 0x08, FIRE = 0x80 };
+
+// Rôle d'une manette HÔTE : à quel port ST elle est affectée. AUTO = affectation
+// historique (1re manette présente → port 1, 2e → port 0) sur les ports qu'aucune
+// manette ÉPINGLÉE n'occupe ; PORT0/PORT1 = épinglée (plusieurs manettes sur le
+// même port sont OR-ées) ; OFF = ignorée. Choisi dans le menu kiosk « Joysticks »
+// et persisté par GUID (cf. main.cpp joymap=).
+enum : int8_t { ROLE_AUTO = -1, ROLE_PORT0 = 0, ROLE_PORT1 = 1, ROLE_OFF = 2 };
+
+// Boutons AUXILIAIRES d'une manette → touches ST (jeux « PRESS SPACE / RETURN »
+// jouables à la borne sans clavier) : X = ESPACE, Y = RETURN (manette mappée
+// gamepad) ; boutons 2/3 (« standard mapping ») ou 1/2 (encodeur arcade brut)
+// sinon. Ces boutons sont EXCLUS du feu (cf. readStickRaw). Le frontend lit
+// composeAux() chaque trame et envoie make/break IKBD sur les FRONTS.
+enum : uint8_t { AUX_SPACE = 0x01, AUX_RETURN = 0x02 };
 
 // Mapping clavier de l'émulation : flèches + Ctrl droit (défaut façon Hatari).
 // Renvoie le bit ST d'une touche GLFW, ou 0. Sert AUSSI au frontend pour
@@ -72,12 +89,14 @@ inline void readStickRaw(int jid, float thr, uint8_t& analog, uint8_t& digital) 
         if (gs.buttons[GLFW_GAMEPAD_BUTTON_DPAD_LEFT])  digital |= LEFT;
         if (gs.buttons[GLFW_GAMEPAD_BUTTON_DPAD_RIGHT]) digital |= RIGHT;
         // Joystick ST = un seul bouton de feu : n'importe quel bouton d'action
-        // (A/B/X/Y + gâchettes) le déclenche (D-pad et boutons système exclus).
+        // (A/B + gâchettes) le déclenche (D-pad et boutons système exclus ; X et Y
+        // sont RÉSERVÉS aux touches ESPACE/RETURN — cf. readAux — donc exclus aussi).
         for (int i = 0; i <= GLFW_GAMEPAD_BUTTON_LAST; ++i)
             if (gs.buttons[i] &&
                 i != GLFW_GAMEPAD_BUTTON_DPAD_UP   && i != GLFW_GAMEPAD_BUTTON_DPAD_DOWN &&
                 i != GLFW_GAMEPAD_BUTTON_DPAD_LEFT && i != GLFW_GAMEPAD_BUTTON_DPAD_RIGHT &&
                 i != GLFW_GAMEPAD_BUTTON_START     && i != GLFW_GAMEPAD_BUTTON_BACK &&
+                i != GLFW_GAMEPAD_BUTTON_X         && i != GLFW_GAMEPAD_BUTTON_Y &&
                 i != GLFW_GAMEPAD_BUTTON_GUIDE) { digital |= FIRE; break; }
         return;
     }
@@ -110,9 +129,45 @@ inline void readStickRaw(int jid, float thr, uint8_t& analog, uint8_t& digital) 
             if (bt[14]) digital |= LEFT;
             if (bt[15]) digital |= RIGHT;
         }
-        const int fireMax = standard ? 12 : btN;   // exclut le D-pad du feu
-        for (int i = 0; i < fireMax; ++i) if (bt[i]) { digital |= FIRE; break; }
+        // Feu = tout bouton SAUF le D-pad (standard : 12-15) et les boutons
+        // réservés ESPACE/RETURN (cf. readAux : standard 2/3 = X/Y ; brut 1/2).
+        const int fireMax = standard ? 12 : btN;
+        for (int i = 0; i < fireMax; ++i) {
+            if (standard ? (i == 2 || i == 3)
+                         : (btN >= 2 && (i == 1 || (btN >= 3 && i == 2)))) continue;
+            if (bt[i]) { digital |= FIRE; break; }
+        }
     }
+}
+
+// Boutons auxiliaires d'une manette → bits AUX_SPACE/AUX_RETURN. Manette mappée
+// gamepad : X = ESPACE, Y = RETURN (boutons d'action secondaires — A/B restent
+// le feu). Repli brut : « standard mapping » (≥ 16 boutons) → boutons 2/3 (= X/Y
+// du layout navigateur/SDL) ; encodeur arcade (< 16 boutons) → bouton 1 = ESPACE,
+// bouton 2 = RETURN (le bouton 0 reste le feu). Ces boutons sont exclus du FEU
+// dans readStickRaw — sans quoi « PRESS SPACE » tirerait en même temps.
+inline uint8_t readAux(int jid) {
+    if (!glfwJoystickPresent(jid)) return 0;
+    uint8_t aux = 0;
+#ifndef __EMSCRIPTEN__
+    GLFWgamepadstate gs;
+    if (glfwGetGamepadState(jid, &gs)) {
+        if (gs.buttons[GLFW_GAMEPAD_BUTTON_X]) aux |= AUX_SPACE;
+        if (gs.buttons[GLFW_GAMEPAD_BUTTON_Y]) aux |= AUX_RETURN;
+        return aux;
+    }
+#endif
+    int btN = 0;
+    const unsigned char* bt = glfwGetJoystickButtons(jid, &btN);
+    if (!bt) return 0;
+    if (btN >= 16) {                       // « standard mapping » : 2 = X, 3 = Y
+        if (bt[2]) aux |= AUX_SPACE;
+        if (bt[3]) aux |= AUX_RETURN;
+    } else {                               // encodeur brut : 1 = ESPACE, 2 = RETURN
+        if (btN >= 2 && bt[1]) aux |= AUX_SPACE;
+        if (btN >= 3 && bt[2]) aux |= AUX_RETURN;
+    }
+    return aux;
 }
 
 // État d'une manette physique GLFW `jid` → octet ST (bits UP/DOWN/LEFT/RIGHT/FIRE).
@@ -137,14 +192,41 @@ inline uint8_t readStick(int jid, float deadzone) {
     return uint8_t(analog | (digital & trustedDigital[jid]));
 }
 
+// Résout l'affectation EFFECTIVE de chaque manette présente → port ST.
+//  - `roles` : rôle voulu par manette (ROLE_*) — nullptr = tout AUTO (historique).
+//  - `assign[jid]` en sortie : 0/1 = port ST, -1 = non affectée (absente/OFF/
+//    ports déjà pris). Les manettes ÉPINGLÉES (ROLE_PORT0/1) prennent leur port
+//    (plusieurs sur le même port = OR-ées) ; les AUTO remplissent ensuite, dans
+//    l'ordre des jid, les ports qu'aucune épinglée n'occupe — port 1 (« jeux »)
+//    d'abord, puis port 0 — comme l'affectation historique 1re→P1, 2e→P0.
+// Partagé entre compose() (état IKBD) et le menu kiosk « Joysticks » (affichage
+// du port effectif d'une manette AUTO).
+inline void resolveAssign(const int8_t* roles, int8_t assign[GLFW_JOYSTICK_LAST + 1]) {
+    bool pinned[2] = {false, false};
+    for (int jid = GLFW_JOYSTICK_1; jid <= GLFW_JOYSTICK_LAST; ++jid) {
+        assign[jid] = -1;
+        if (!glfwJoystickPresent(jid)) continue;
+        const int8_t r = roles ? roles[jid] : int8_t(ROLE_AUTO);
+        if (r == ROLE_PORT0 || r == ROLE_PORT1) { assign[jid] = r; pinned[r] = true; }
+    }
+    bool autoTaken[2] = {pinned[0], pinned[1]};
+    for (int jid = GLFW_JOYSTICK_1; jid <= GLFW_JOYSTICK_LAST; ++jid) {
+        if (!glfwJoystickPresent(jid)) continue;
+        if ((roles ? roles[jid] : int8_t(ROLE_AUTO)) != ROLE_AUTO) continue;
+        if      (!autoTaken[1]) { assign[jid] = 1; autoTaken[1] = true; }
+        else if (!autoTaken[0]) { assign[jid] = 0; autoTaken[0] = true; }
+    }
+}
+
 // Compose l'état des deux ports ST à partir de l'hôte et le pose sur l'IKBD.
 //  - `kbdEnabled` : émulation clavier active (le frontend l'a déjà gatée sur le
 //    focus, p.ex. pas pendant une saisie ImGui) ; vise le port `kbdPort` (0/1).
 //  - `deadzone` : zone morte centrale des sticks analogiques (cf. readStick).
-//  - 1re manette → port 1, 2e manette → port 0 (le reste est ignoré).
+//  - `roles` : affectation par manette (cf. resolveAssign) — nullptr = AUTO
+//    historique (1re manette → port 1, 2e → port 0, le reste ignoré).
 // `out0`/`out1` reçoivent les octets composés (port 0 / port 1).
 inline void compose(GLFWwindow* win, bool kbdEnabled, int kbdPort, float deadzone,
-                    uint8_t& out0, uint8_t& out1) {
+                    uint8_t& out0, uint8_t& out1, const int8_t* roles = nullptr) {
     uint8_t p[2] = {0, 0};
 
     if (kbdEnabled) {
@@ -157,15 +239,25 @@ inline void compose(GLFWwindow* win, bool kbdEnabled, int kbdPort, float deadzon
         p[kbdPort & 1] |= k;
     }
 
-    int found = 0;
-    for (int jid = GLFW_JOYSTICK_1; jid <= GLFW_JOYSTICK_LAST && found < 2; ++jid) {
-        if (!glfwJoystickPresent(jid)) continue;
-        p[(found == 0) ? 1 : 0] |= readStick(jid, deadzone);   // 1re → port 1, 2e → port 0
-        ++found;
-    }
+    int8_t assign[GLFW_JOYSTICK_LAST + 1];
+    resolveAssign(roles, assign);
+    for (int jid = GLFW_JOYSTICK_1; jid <= GLFW_JOYSTICK_LAST; ++jid)
+        if (assign[jid] >= 0) p[assign[jid]] |= readStick(jid, deadzone);
 
     out0 = p[0];
     out1 = p[1];
+}
+
+// Compose les bits AUXILIAIRES (AUX_SPACE/AUX_RETURN) de toutes les manettes
+// AFFECTÉES à un port (les OFF/non affectées n'injectent pas de touches). Le
+// frontend compare au tick précédent et envoie make/break IKBD sur les fronts.
+inline uint8_t composeAux(const int8_t* roles = nullptr) {
+    int8_t assign[GLFW_JOYSTICK_LAST + 1];
+    resolveAssign(roles, assign);
+    uint8_t aux = 0;
+    for (int jid = GLFW_JOYSTICK_1; jid <= GLFW_JOYSTICK_LAST; ++jid)
+        if (assign[jid] >= 0) aux |= readAux(jid);
+    return aux;
 }
 
 // Diagnostic (NEOST_DEBUG_JOY=1) : imprime sur stderr l'état BRUT de chaque manette
