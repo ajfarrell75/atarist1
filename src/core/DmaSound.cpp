@@ -196,6 +196,7 @@ void DmaSound::reset(bool cold) {
     phase_ = 0.0;
     haveCur_ = false; dmaCur_ = 0.0f; lpW0_ = lpW1_ = 0.0f;   // FIR anti-repliement à zéro
     dmaCurL_ = dmaCurR_ = 0.0f; lpW0L_ = lpW1L_ = lpW0R_ = lpW1R_ = 0.0f;   // idem chemin stéréo
+    bx1_  = bx2_  = by1_  = by2_  = 0; tx1_  = tx2_  = ty1_  = ty2_  = 0;   // filtres tonalité G/mono
     bx1R_ = bx2R_ = by1R_ = by2R_ = 0; tx1R_ = tx2R_ = ty1R_ = ty2R_ = 0;   // filtres tonalité D
     aPlaying_ = false; aMode_ = 0;                 // état audio « push »
     aPhase_ = 0.0; aHaveCur_ = false;
@@ -501,7 +502,21 @@ void DmaSound::write8(uint32_t addr, uint8_t v) {
         // transfert EN COURS (shift), les écritures data/mask sont IGNORÉES —
         // « Only update, if no shift is in progress » (Hatari DmaSnd_MicrowireData/
         // Mask_WriteWord, dmaSnd.c:1195-1206 et 1238-1244).
-        case 0x22: if (mwSteps_ == 0) mwData_ = uint16_t((mwData_ & 0x00FF) | (v << 8)); break;
+        case 0x22:
+            if (mwSteps_ == 0) {
+                mwData_ = uint16_t((mwData_ & 0x00FF) | (v << 8));
+                // Accès OCTET isolé (move.b $FF8922) : Hatari intercepte la donnée
+                // Microwire en SIZE_WORD (ioMemTabSTE.c:164) — TOUT accès écriture,
+                // même octet, déclenche le transfert avec (octet haut neuf | octet
+                // bas ancien) (dmaSnd.c:1195-1204). L'accès MOT (write16 → 2 write8)
+                // ne démarre que sur l'octet BAS (case 0x23), mot complet posé.
+                if (bus_.ioAccessWidth() == 1) {
+                    mwShift_ = mwData_;
+                    if (sched_) { mwSteps_ = 16; sched_->schedule(Scheduler::MICROWIRE, sched_->now() + 8); }
+                    else        { mwShift_ = 0; decodeMicrowire(); }
+                }
+            }
+            break;
         case 0x23:
             // Écriture de l'octet bas de la donnée (mot complet) → démarre un
             // transfert série Microwire (16 décalages de 8 cycles, cf. Hatari

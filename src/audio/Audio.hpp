@@ -11,6 +11,7 @@
 #pragma once
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <vector>
 
 #include "audio/SampleRing.hpp"
@@ -46,6 +47,12 @@ public:
     void  setMasterVolume(float v) { masterVol_ = v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v); }
     float masterVolume() const { return masterVol_; }
 
+    // Prédicat « la machine courante a le son DMA » (évalué à CHAQUE trame — suit les
+    // reconfigure à chaud) : gate la branche DMA/LMC1992 de produceFrame. Sans gate,
+    // le gain de rattrapage LMC (×2) s'appliquait au YM des machines ST. Nul = legacy
+    // (branche DMA active dès que dma_ existe).
+    void setDmaGate(std::function<bool()> f) { dmaGate_ = std::move(f); }
+
 private:
     YM2149&     psg_;
     DriveSound* drive_   = nullptr;
@@ -63,6 +70,9 @@ private:
     std::vector<float> driveScratch_;    // bruits lecteur mono intermédiaires (frames)
     uint32_t           rate_ = 48000;    // fréquence de sortie réelle du périphérique (frames/s)
     float              masterVol_ = 1.0f; // volume maître utilisateur (cf. setMasterVolume)
+    float              volSmooth_ = 1.0f; // volume EFFECTIF de fin de bloc précédent (rampe anti-clic)
+    std::function<bool()> dmaGate_;      // cf. setDmaGate (nul = branche DMA dès que dma_ existe)
+    int                devLostFrames_ = 0; // trames depuis la détection « périphérique arrêté »
     double             sampleCarry_ = 0.0; // report fractionnaire (nb d'échantillons/trame exact à long terme)
     uint32_t           primeSamples_ = 4000; // coussin cible (≈ latence visée, ~85 ms) — amorçage + asservissement
     bool               primed_ = false;  // (thread audio) : l'anneau a-t-il atteint le coussin ? sinon → silence

@@ -138,6 +138,10 @@ public:
         bus.stePads.setMegaSte(machine == MachineType::MegaSte);
         psg.setOutputScale(machineIsSte(machine) ? 0.5f : 1.0f);   // ½ ampli YM sur STE (cf. ctor)
         psg.setStfLowPass(!machineIsSte(machine));                 // LPF_STF sur ST/Mega ST, PWM sur STE
+        // Reconfigure = boot à FROID (la RAM est effacée) : le LMC1992/Microwire repart
+        // aux défauts — le reset() chaud que l'appelant enchaîne les PRÉSERVE, et sans
+        // ça l'état microwire d'une session STE (mixing/tonalité) colorait la suivante.
+        dmasnd.reset(/*cold=*/true);
     }
 
     // Exécute UNE trame complète : 313 lignes de cycles CPU, 4 tics Timer C

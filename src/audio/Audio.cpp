@@ -64,6 +64,20 @@ void Audio::produceFrame(int64_t frameCycles) {
         if (dma_) dma_->clearEvents();
         return;
     }
+    // Périphérique hôte PERDU (débranché, suspend/resume, backend brut) : le thread audio
+    // meurt en silence — plus d'underrun signalé, anneau saturé, son mort jusqu'au
+    // redémarrage. On surveille l'état du device et on retente un start ~1×/s.
+    if (device_) {
+        auto* dev = static_cast<ma_device*>(device_);
+        if (ma_device_get_state(dev) == ma_device_state_stopped) {
+            if (devLostFrames_++ == 0)
+                std::fprintf(stderr, "[Audio] périphérique audio arrêté — reprise auto…\n");
+            if (devLostFrames_ % 50 == 0 && ma_device_start(dev) == MA_SUCCESS) {
+                std::fprintf(stderr, "[Audio] périphérique audio repris\n");
+                devLostFrames_ = 0;
+            }
+        } else devLostFrames_ = 0;
+    }
 
     // Nombre d'échantillons pour cette trame = durée émulée × fréquence de sortie, avec
     // report fractionnaire (le débit moyen colle EXACTEMENT au temps émulé). Puis
@@ -89,14 +103,21 @@ void Audio::produceFrame(int64_t frameCycles) {
     float* st = scratch_.data();
 
     psg_.synthesizeFrame(ym, uint32_t(n), rate_, frameCycles);   // (1) PSG horodaté → ym mono (écrase)
-    if (dma_) {
+    // Branche DMA/LMC1992 gatée par le MODÈLE COURANT (cf. setDmaGate) : sur ST/Mega ST
+    // le gain de rattrapage LMC ×2 (compensation du ½-YM STE, outScale_ 0.5) doublerait
+    // un YM à pleine échelle (outScale_ 1.0) → clipping ; et l'état microwire d'une
+    // session STE (reconfigure à chaud) colorerait le ST. Le headless a la même garde
+    // (machineHasDmaSound). Les événements DMA sont drainés même gatés.
+    const bool dmaOn = dma_ && (!dmaGate_ || dmaGate_());
+    if (dmaOn) {
         dma_->mixStereo(st, ym, uint32_t(n), rate_, frameCycles);   // (2) DMA STE horodaté → stéréo L/R
         const float gL = dma_->gainLeft(), gR = dma_->gainRight();   // (3) volume maître × G/D (panoramique)
         if (gL != 1.0f || gR != 1.0f)
             for (int i = 0; i < n; ++i) { st[2 * i] *= gL; st[2 * i + 1] *= gR; }
         dma_->applyToneStereo(st, uint32_t(n), rate_);     // (4) basses/aigus LMC1992 (L/R indépendants)
     } else {
-        for (int i = 0; i < n; ++i) { st[2 * i] = ym[i]; st[2 * i + 1] = ym[i]; }   // ST sans DMA : YM centré
+        if (dma_) dma_->clearEvents();                     // machine sans DMA : drainer quand même
+        for (int i = 0; i < n; ++i) { st[2 * i] = ym[i]; st[2 * i + 1] = ym[i]; }   // YM centré
     }
     if (drive_) {                                          // (5) bruits lecteur (mono, hors LMC1992) → centrés
         if (int(driveScratch_.size()) < n) driveScratch_.assign(n, 0.0f);
@@ -105,8 +126,17 @@ void Audio::produceFrame(int64_t frameCycles) {
         drive_->mix(dv, uint32_t(n));
         for (int i = 0; i < n; ++i) { st[2 * i] += dv[i]; st[2 * i + 1] += dv[i]; }
     }
-    if (masterVol_ != 1.0f)                                // volume maître utilisateur (menu)
-        for (int i = 0; i < 2 * n; ++i) st[i] *= masterVol_;
+    // Volume maître utilisateur (menu), appliqué en RAMPE linéaire sur le bloc depuis la
+    // valeur effective du bloc précédent : un saut instantané (mute 1→0 en plein signal,
+    // drag du slider) posait une marche d'amplitude par bloc de ~20 ms (clic / zipper).
+    if (masterVol_ != volSmooth_ || masterVol_ != 1.0f) {
+        const float v0 = volSmooth_, vt = masterVol_;
+        for (int i = 0; i < n; ++i) {
+            const float v = v0 + (vt - v0) * (float(i + 1) / float(n));
+            st[2 * i] *= v; st[2 * i + 1] *= v;
+        }
+        volSmooth_ = vt;
+    }
     for (int i = 0; i < 2 * n; ++i)                        // garde-fou anti-saturation
         st[i] = std::max(-1.0f, std::min(1.0f, st[i]));
 

@@ -115,7 +115,10 @@ public:
         ar(dacLast_); ar(dacRem_);
         // Anneau de capture (cœur → rendu audio). Taille fixe (kCapSize) → podVec
         // re-dimensionne à l'identique au load, indices monotones repris tels quels.
+        // Invariant : l'indexation se fait au masque FIXE (capW_ & (kCapSize-1)) —
+        // un anneau restauré d'une autre taille serait lu/écrit hors bornes.
         ar.podVec(cap_);
+        ar.check(cap_.size() == kCapSize);
         ar(capW_); ar(capR_);
         // Microwire / LMC1992.
         ar(mwData_); ar(mwMask_); ar(mwShift_); ar(mwSteps_);
@@ -127,8 +130,11 @@ public:
         ar(lpW0L_); ar(lpW1L_); ar(lpW0R_); ar(lpW1R_);
         // État côté AUDIO (modèle push horodaté).
         ar(aPlaying_); ar(aMode_); ar(aPhase_); ar(aHaveCur_);
-        // Événements de trame horodatés (POD).
-        ar.podVec(events_);
+        // Événements de trame horodatés — DmaEvent a du padding interne → champ par
+        // champ (objVec), cf. StateArchive.
+        ar.objVec(events_, 15, [](StateArchive& a, DmaEvent& e) {
+            a(e.cycle); a(e.kind); a(e.start); a(e.end); a(e.mode); a(e.repeat);
+        });
         // Ligne XSINT.
         ar(xsint_);
         // Filtres de tonalité (biquads).

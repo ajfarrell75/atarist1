@@ -487,6 +487,10 @@ public:
         // --- Captures par-ligne (échantillon faisceau) ---
         ar.vec(lineSnap_);          // std::vector<uint8_t>
         ar.podVec(lineSnapLen_);    // std::vector<uint16_t>
+        // Invariant : les deux tableaux sont indexés ENSEMBLE (lineSnap_ par
+        // tranches de kLineSnapBytes, borné par lineSnapLen_.size()) — un fichier
+        // forgé désynchronisé ferait écrire endLine() hors du tas.
+        ar.check(lineSnap_.size() == lineSnapLen_.size() * kLineSnapBytes);
 
         // --- Filtre Glue « même valeur ignorée » (persistant inter-trames) ---
         ar(lastGlueFreq_);
@@ -494,9 +498,17 @@ public:
         ar(liveStartHBL_);
 
         // --- Machine Glue : retrait de bordures / overscan ---
-        ar.podVec(syncWrites_);     // std::vector<SyncWrite> (POD)
+        // SyncWrite/GlueLine/ColorWrite ont du PADDING interne → champ par champ
+        // (objVec) : podVec sérialiserait des octets non initialisés (fichier non
+        // byte-déterministe, cf. StateArchive).
+        ar.objVec(syncWrites_, 6, [](StateArchive& a, SyncWrite& w) {
+            a(w.frameCycle); a(w.val); a(w.isRes);
+        });
         ar(bordersTrick_);
-        ar.podVec(glueLines_);      // std::vector<GlueLine> (POD)
+        ar.objVec(glueLines_, 10, [](StateArchive& a, GlueLine& g) {
+            a(g.displayStartCycle); a(g.displayEndCycle);
+            a(g.displayPixelShift); a(g.borderMask);
+        });
         ar(glueStartHBL_);
         ar(glueEndHBL_);
         ar(glueVOverscan_);
@@ -512,7 +524,9 @@ public:
         ar(liveGlueFreq50_);
 
         // --- Spec512 : palette intra-ligne ---
-        ar.podVec(colorWrites_);    // std::vector<ColorWrite> (POD)
+        ar.objVec(colorWrites_, 11, [](StateArchive& a, ColorWrite& c) {
+            a(c.frameCycle); a(c.colour); a(c.index); a(c.pc);
+        });
         ar(frameStartPalette_);
         ar(leftBorderPal0_);
         ar(paletteAccesses_);

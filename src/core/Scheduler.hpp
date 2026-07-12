@@ -158,23 +158,33 @@ public:
     // (Scan complet ; pour le chemin chaud sync() utiliser peekNextDue() — O(1).)
     int64_t nextDue() const { return scanNextDue(); }
 
-    // Avance l'horloge jusqu'à `cycle` puis déclenche, DANS L'ORDRE DES SOURCES,
-    // tout événement échu (due <= cycle). Chaque callback peut se replanifier
-    // (il pose une nouvelle échéance > now, qui ne re-déclenche pas ce tour-ci).
+    // Avance l'horloge jusqu'à `cycle` puis déclenche les événements échus (due <=
+    // cycle) DANS L'ORDRE CHRONOLOGIQUE de leurs échéances (comme la liste triée
+    // cycInt d'Hatari) — l'ordre de l'énum ne sert que de tie-break à cycle égal.
+    // (L'ancien scan par index déclenchait TIMER_A avant un HBL dû 200 cycles plus
+    // tôt quand l'overshoot d'un quantum franchissait plusieurs échéances.)
+    // Chaque source tire AU PLUS une fois par runTo (garde anti-livelock) ; un
+    // callback peut replanifier (échéance > now : re-déclenchée au tour suivant).
     void runTo(int64_t cycle) {
         now_ = cycle;
-        for (int s = 0; s < SRC_COUNT; ++s) {
-            if (due_[s] != kInactive && due_[s] <= now_) {
-                // Métrique cycle-accuracy : retard d'un timer MFP daté (now - échéance).
-                // Piloté par sync(), il reste ~1 accès (sous-instruction en PRECISE_TIMING).
-                if (isMfpTimer(s)) {
-                    const int64_t late = now_ - due_[s];
-                    if (late > timerMaxLate) timerMaxLate = late;
-                }
-                firingDue_ = due_[s];                // échéance servie (pour replanif. anti-dérive)
-                due_[s] = kInactive;                 // consommé avant l'appel…
-                if (cb_[s]) cb_[s]();                 // …le callback peut replanifier
+        uint32_t fired = 0;
+        static_assert(SRC_COUNT <= 32, "masque fired sur 32 bits");
+        for (;;) {
+            int best = -1;
+            for (int s = 0; s < SRC_COUNT; ++s)
+                if (!(fired & (1u << s)) && due_[s] != kInactive && due_[s] <= now_
+                    && (best < 0 || due_[s] < due_[best])) best = s;
+            if (best < 0) break;
+            // Métrique cycle-accuracy : retard d'un timer MFP daté (now - échéance).
+            // Piloté par sync(), il reste ~1 accès (sous-instruction en PRECISE_TIMING).
+            if (isMfpTimer(best)) {
+                const int64_t late = now_ - due_[best];
+                if (late > timerMaxLate) timerMaxLate = late;
             }
+            fired |= 1u << best;
+            firingDue_ = due_[best];             // échéance servie (pour replanif. anti-dérive)
+            due_[best] = kInactive;              // consommé avant l'appel…
+            if (cb_[best]) cb_[best]();           // …le callback peut replanifier
         }
         firingDue_ = kInactive;
         nextDue_ = scanNextDue();                    // les callbacks ont pu (re)planifier

@@ -202,9 +202,12 @@ public:
         ar(hpfX1_); ar(hpfY0_);
         ar(useStfLpf_);
         ar(outScale_);
-        // Modèle push horodaté
+        // Modèle push horodaté — RegEvent a du padding interne → champ par champ
+        // (objVec), cf. StateArchive.
         ar(audioRegs_);
-        ar.podVec(events_);
+        ar.objVec(events_, 6, [](StateArchive& a, RegEvent& e) {
+            a(e.cycle); a(e.reg); a(e.val);
+        });
         // Latches MMIO
         ar(regReadData_);
         ar(lastStrobe_);

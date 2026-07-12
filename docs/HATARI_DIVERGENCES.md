@@ -193,6 +193,9 @@ feu/boutons : **conformes** (l'ancien doc `IKBD_HATARI_DIFF.md`, périmé, a ét
 - **[basse]** `IKBD_CheckForDoubleClicks` et joystick→barre d'espace absents (confort fast-forward, non matériel).
 - **[basse] ✅ corrigé** — MIDI : master reset ne **purge plus** la file RX (`MidiAcia.cpp`), aligné sur l'ACIA clavier et la note Hatari (« don't clear bytes in transit »).
 - **[basse] ✅ partiel** — MIDI : lecture RDR à vide rend désormais le **dernier octet** (`rdr_` persistant, comme le 6850). Restent non modélisés (sans impact ST) : bit OVRN, SR sans DCD/CTS/FE/PE (modèle réduit).
+- **[basse, assumée (2026-07-12)]** PAUSE `$13` : NeoST gèle aussi l'octet déjà « en vol » (relivré à la reprise, rien de perdu) ; Hatari laisse finir TDR + TSR (jusqu'à 2 octets livrés après `$13`, ikbd.c:922-929).
+- **[basse, assumée — NeoST plus robuste]** Monitoring `$17` : paquet « entier ou rien » ; Hatari est le SEUL émetteur sans `CheckFreeCount` et peut déchirer un paquet à 1 octet libre (désynchronise le flux, ikbd.c:1484). Observable seulement avec 1024 octets d'arriéré.
+- **[basse, assumée]** Horloge IKBD amorcée sur l'heure hôte à la construction (Hatari l'efface au cold boot, ikbd.c:539) — confort bureau ; `--keys`/`setClock` couvrent le déterminisme headless. Idem : état des handlers 6301 custom ré-initialisé à chaque reconnaissance (les `static` d'Hatari casseraient un 2ᵉ lancement).
 
 ### Bus / mémoire / bus-error — `Bus.cpp` ↔ `ioMem*.c`, `memory.c`, `stMemory.c`
 MMU/banques ST vs STE (`ConfToBank` : `bank1=bank0` sur STE), aliasing RAS/CAS, whitelist
@@ -280,6 +283,20 @@ reset HW/canal, IRQ niveau 5 gatée par le SCU).
   Hatari » ci-dessous. (`Scc.cpp:serialWriteByte`)
 - **[basse]** Horloges/baud (PCLK, BCLK, time constant `WR12/13`) entièrement absentes
   (`SCC_Compute_BaudRate` `scc.c:1027`) — conséquence de SC1, volontaire (cible NeoST).
+- **[SC2 — basse, TRANCHÉ : NeoST suit la datasheet (2026-07-12)]** **Lecture RR9** : NeoST
+  renvoie `WR[13]` (`Scc.cpp:304`, RR9 = image de RR13 selon la datasheet Zilog) là où Hatari
+  renvoie `WR[9]` (`scc.c:1606-1610` — son propre commentaire « also returns RR13 » contredit
+  son code). Diff au byte près face à l'oracle si un programme lit RR9 — à garder en tête
+  lors d'un diff SCC, ne PAS « corriger » sans le documenter.
+- **[SC3 — basse, bug Hatari]** **Lecture $FF8E07 (VME Interrupter)** : Hatari renvoie
+  `SCU.SysInterrupter` (copier-coller, `scu_vme.c:282-286`) ; NeoST renvoie bien
+  `vmeInterrupter` — conforme au matériel, cf. § « NeoST améliore Hatari ».
+- **[SC4 — basse, non porté]** **Accès aux masques SCU ($FF8E01/$FF8E0D)** : chez Hatari,
+  LIRE ou ÉCRIRE un registre de masque **purge toutes les IRQ pendantes** SCU
+  (`scu_vme.c:202-221,351-369`) ; dans NeoST le modèle « sources vivantes » (`Cpu68k::syncState`
+  re-peuple les pendings à chaque updateIpl) les fait survivre. Observable seulement sur
+  MegaSTE si un programme polle $FF8E01 avec une VBL/HBL en attente — divergence assumée du
+  modèle niveau, à re-trancher si un étalon MegaSTE l'expose.
 
 ---
 
@@ -303,6 +320,10 @@ par le présent document :
 - **WRITE TRACK `.ST`** : NeoST écrit les secteurs d'une géométrie standard (Hatari renvoie
   LOST_DATA, TODO).
 - **SCC `WR14` bit4** : bouclage local conforme à la datasheet Zilog (absent d'Hatari).
+- **SCC RR9** (SC2) : NeoST rend l'image de RR13 (datasheet) ; Hatari rend WR9 (son commentaire
+  dit l'inverse de son code).
+- **SCU $FF8E07** (SC3) : NeoST renvoie le VME Interrupter ; Hatari renvoie le Sys Interrupter
+  (copier-coller `scu_vme.c:282-286`).
 
 ---
 
@@ -767,3 +788,39 @@ RAM_SLOT), `NEOST_LINELEN=0` (désactive le canal par-ligne, **ON par défaut** 
 11 ouvertes (majorité basses), 2 assumées. Fidélité « très élevée » partout ; les deux fronts
 utiles sont désormais **ciblés et testables** : raster SHO (candidats 1-3 + traces) et son STE
 (S3/S4 + oracle WAV).
+
+## 6ᵉ passe — bug hunt pré-release (2026-07-12, agents parallèles)
+
+Audit ciblé des composants MODIFIÉS depuis la 5ᵉ passe (Ikbd, Mfp, DmaSound, ACSI,
+MidiAcia, Fpu, Shifter) contre `extern/hatari/src`. **Corrigés dans la foulée** :
+
+- **ACSI statut DMA inversé dans `writeAcsi`** (jumeau du bug d'`acsiDmaTransfer` corrigé
+  au hunt précédent) : bit0 de $FF8606 rapportait « erreur » après chaque octet de
+  commande accepté, y compris juste après un transfert réussi → `Fdc.cpp` (H1).
+- **IKBD $0D** : le feu du joystick 1 compte désormais comme bouton droit quand la souris
+  est active (même ligne physique, cf. `IKBD_DuplicateMouseFireButtons`) → `Ikbd.cpp` (M1).
+- **FSCALE** : n extrait de l'étendu, exact jusqu'à ±131071 puis saturation −$6001/$E000
+  (port exact de `floatx80_scale` ; l'ancien clamp ±32768 faussait la bande étroite
+  |n| ∈ (32768, 131071]) → `Fpu.cpp` (M2).
+- **±inf décodé S/D** : mantisse 0 (`floatx80_default_infinity_low`, forme canonique
+  68881) au lieu de bit 63 posé → `Fpu.cpp` (M4).
+
+**Ouvertes (basses, consignées sans correction)** :
+
+| # | Où | Divergence |
+|---|----|------------|
+| M3 | `SoftFloatX80.hpp:164` | `normalizeSubnormal` en convention x87 (`1−sc`) vs 68881 (`−shiftCount`, `SOFTFLOAT_68K`) : opérande dénormal étendu → résultat ×2 vs oracle. SYSTÉMIQUE (add/mul/div aussi), pré-existant — correction à faire d'un bloc avec étalon FPU dédié. |
+| B1 | `Ikbd.cpp` flush $80,$01 | avale l'octet « en vol » (Hatari : l'octet tiré vers TDR/TSR survit). |
+| B2 | `Ikbd.cpp` bootRom | ne remet pas `mDeltaX_/Y_` (Hatari : Delta remis à 0). |
+| B4 | `Ikbd.cpp` master reset TIE | Hatari force SR=TDRE immédiatement ; NeoST à l'échéance TX. |
+| B6 | `Fdc.cpp` DMA ACSI hors plage | Hatari pose aussi `status=ERROR` en lecture ; accepte la ROM comme source en écriture. |
+| B7 | `Acsi.cpp` `dmaWrite_` | remis à false à chaque commande ; Hatari le fait persister jusqu'au transfert (refus de sens contradictoire). |
+| B8 | `Fdc.cpp`/`Acsi.cpp` | sans image ACSI, Hatari ignore l'octet ($FF8604=0) ; NeoST pose status=2 (probe TOS identique). |
+| B9 | `MidiAcia.hpp` | registres posés à la construction seulement, pas à chaque reset machine (extension de l'écart déjà consigné). |
+| B10 | `DmaSound.cpp` $FF8922 | octet compagnon : Hatari lit 0 (réécrit à chaque shift) ; NeoST combine avec le dernier mot latché. |
+| B11 | `Fpu.cpp` SNaN double | NeoST livre SNAN (plus fidèle au 68881 réel) ; Hatari lève OPERR à la conversion — assumé façon SC2. |
+| B14 | `Shifter.cpp` | capture `lineSnap_`/comptage palette actifs en mono (Hatari : skip hi-res) — surcoût pur, rendu inchangé. |
+| B15 | `Shifter.cpp` | pas de wrap 22 bits (`Video_GetAddrMask` $3FFFFF) à l'usage du compteur vidéo — cas pathologique. |
+
+Divergences **assumées** confirmées cette passe : symlinks suivis dans un montage GEMDOS
+(même modèle de confiance que Hatari) ; VME/FPU MegaSTE « not found » correct.

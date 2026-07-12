@@ -531,7 +531,20 @@ void Machine::finalizeFrame_() {
 void Machine::stepInstruction() {
     if (!frameInProgress_) beginFrame_();
     cpu.clearBreakpointHit();   // arme le skip-once du PC courant → exécute même si BP ici
-    cpu.run(1);                 // run(1) = une instruction (toute instr ≥ 4 cyc > 1)
+    if (g_blockDispatch) {
+        // Modèle BLOC (défaut) : sync() n'avance QUE l'horloge — il faut dispatcher
+        // les événements échus ici, comme la boucle de runFrame, sinon le pas-à-pas
+        // ne sert JAMAIS HBL/VBL/timers (aucune IRQ) et tout se déverse d'un coup à
+        // la finalisation de trame — comportement divergent de l'exécution continue.
+        int64_t next = sched.nextDue();
+        if (next < 0 || next > frameEnd_) next = frameEnd_;
+        sched.beginRun(next);
+        const int ran = cpu.run(1);   // run(1) = une instruction (toute instr ≥ 4 cyc > 1)
+        sched.endRun();
+        sched.runTo(sched.now() + ran);
+    } else {
+        cpu.run(1);                 // sync-driven : sync() dispatche au fil de l'instruction
+    }
     if (cpu.busClockNow() >= frameEnd_) { finalizeFrame_(); frameInProgress_ = false; }
 }
 
@@ -539,8 +552,26 @@ void Machine::stepInstruction() {
 // Méthode SYMÉTRIQUE (StateArchive gère save ET load) → l'ordre ne peut pas diverger.
 void Machine::serializeState(StateArchive& ar) {
     uint32_t magic   = 0x4E535453u;   // 'NSTS'
-    uint16_t version = 3;             // v3 : + SCC (Mega STE) & état de commande ACSI
+    uint16_t version = 5;             // v5 : + CRC32 du payload dans l'en-tête
     ar(magic); ar(version);
+    // Empreinte de configuration : un état n'est rechargeable QUE dans la même
+    // config (loadState la vérifie AVANT de restaurer — sinon machine hybride :
+    // bus.machine restauré mais machineType_/ROM de la session → timings/MMIO
+    // incohérents). Sérialisée aussi ici pour rester dans le flux symétrique.
+    uint8_t  mt    = static_cast<uint8_t>(machineType_);
+    uint32_t ramSz = static_cast<uint32_t>(bus.ram.size());
+    uint16_t tosV  = bus.tosVersion;
+    ar(mt); ar(ramSz); ar(tosV);
+    // CRC32 du payload (tout ce qui suit ce champ) : écrit par saveState (patch à
+    // l'offset fixe 13), vérifié par loadState AVANT toute restauration. Dans le
+    // flux symétrique il vaut 0 — seul le patch post-sérialisation le remplit.
+    uint32_t crcField = 0;
+    ar(crcField);
+    if (ar.loading()) machineType_ = static_cast<MachineType>(mt);
+    // Config banques RAM du GLUE ($FF8001) : lue en LIVE par mmuTranslate à chaque
+    // accès RAM — sans elle, l'aliasing MMU d'une session différente relirait la
+    // RAM restaurée de travers.
+    ar(glue.memConfig_);
     // État de trame / géométrie (recalculable depuis les puces, mais on le fige pour un
     // save/load à une frontière de trame — les puces suivront à l'increment 2).
     ar(frameStart_); ar(frameStartInit_); ar(frameEnd_); ar(frameInProgress_);
@@ -552,52 +583,128 @@ void Machine::serializeState(StateArchive& ar) {
     // (Mega STE) et l'état de commande ACSI (dans `fdc`) sont sérialisés ; seul le
     // CONTENU des images disque/disque dur reste hors-snapshot (il vit dans les
     // fichiers hôtes, `writeBack` les persiste au fil de l'eau).
-    bus.serialize(ar);
-    cpu.serialize(ar);
-    sched.serialize(ar);
-    shifter.serialize(ar);
-    mfp.serialize(ar);
-    psg.serialize(ar);
-    dmasnd.serialize(ar);
-    blitter.serialize(ar);
-    ikbd.serialize(ar);
-    midi.serialize(ar);
-    rtc.serialize(ar);
-    fdc.serialize(ar);          // inclut le contrôleur ACSI (état de commande)
-    scc.serialize(ar);          // SCC série Z85C30 (Mega STE ; repos ailleurs)
+    // NEOST_STATE_MAP=1 : trace l'offset de début de chaque composant (diagnostic
+    // des divergences du test de déterminisme — l'offset fautif → la puce fautive).
+    const bool mapDbg = !ar.loading() && std::getenv("NEOST_STATE_MAP");
+    auto mapAt = [&](const char* who, size_t off) {
+        if (mapDbg) std::fprintf(stderr, "[state-map] %-8s @ %zu\n", who, off);
+    };
+    bus.serialize(ar);      mapAt("cpu",     ar.saveSize());
+    cpu.serialize(ar);      mapAt("sched",   ar.saveSize());
+    sched.serialize(ar);    mapAt("shifter", ar.saveSize());
+    shifter.serialize(ar);  mapAt("mfp",     ar.saveSize());
+    mfp.serialize(ar);      mapAt("psg",     ar.saveSize());
+    psg.serialize(ar);      mapAt("dmasnd",  ar.saveSize());
+    dmasnd.serialize(ar);   mapAt("blitter", ar.saveSize());
+    blitter.serialize(ar);  mapAt("ikbd",    ar.saveSize());
+    ikbd.serialize(ar);     mapAt("midi",    ar.saveSize());
+    midi.serialize(ar);     mapAt("rtc",     ar.saveSize());
+    rtc.serialize(ar);      mapAt("fdc",     ar.saveSize());
+    fdc.serialize(ar);      mapAt("scc",     ar.saveSize());   // inclut l'ACSI
+    scc.serialize(ar);      mapAt("fin",     ar.saveSize());   // SCC Z85C30 (Mega STE)
+}
+
+// En-tête d'un .state v5 : magic(4) version(2) machine(1) ram(4) tos(2) crc32(4).
+static constexpr std::size_t kStateHeaderSize = 17;
+static constexpr std::size_t kStateCrcOffset  = 13;
+
+// CRC32 (IEEE, réflexe, sans table) du payload : détecte un fichier corrompu de la
+// bonne longueur AVANT de muter la machine — la seule troncature était couverte.
+static uint32_t stateCrc32(const uint8_t* p, std::size_t n) {
+    uint32_t c = 0xFFFFFFFFu;
+    for (std::size_t i = 0; i < n; ++i) {
+        c ^= p[i];
+        for (int k = 0; k < 8; ++k) c = (c >> 1) ^ (0xEDB88320u & (0u - (c & 1u)));
+    }
+    return ~c;
 }
 
 void Machine::saveState(std::vector<uint8_t>& out) {
     out.clear();
     StateArchive ar = StateArchive::saver(out);
     serializeState(ar);
+    // Patch du CRC32 du payload à son offset fixe (le flux symétrique a écrit 0).
+    if (out.size() >= kStateHeaderSize) {
+        const uint32_t crc = stateCrc32(out.data() + kStateHeaderSize,
+                                        out.size() - kStateHeaderSize);
+        std::memcpy(out.data() + kStateCrcOffset, &crc, 4);
+    }
 }
 
 bool Machine::loadState(const uint8_t* data, std::size_t n) {
-    // Valide l'en-tête (magic + version) AVANT de restaurer quoi que ce soit.
-    if (n < 6) return false;
+    // Valide l'en-tête (magic + version + empreinte de config + CRC du payload)
+    // AVANT de restaurer quoi que ce soit : un état d'une autre machine/RAM/TOS est
+    // REFUSÉ (sinon machine hybride ST/STE ou RAM invitée incohérente avec la ROM
+    // présente), un payload corrompu aussi.
+    if (n < kStateHeaderSize) return false;
     uint32_t magic;   std::memcpy(&magic, data, 4);
     uint16_t version; std::memcpy(&version, data + 4, 2);
-    if (magic != 0x4E535453u || version != 3) return false;
-    StateArchive ar = StateArchive::loader(data, n);
-    serializeState(ar);   // relit magic/version (déjà validés) puis restaure le reste
-    return ar.ok();
+    if (magic != 0x4E535453u) return false;
+    if (version != 5) {
+        std::fprintf(stderr, "[state] refusé : format v%u non supporté (cette version "
+                     "de NeoST écrit du v5) — re-sauver l'état avec F5\n", version);
+        return false;
+    }
+    uint8_t  mt    = data[6];
+    uint32_t ramSz; std::memcpy(&ramSz, data + 7, 4);
+    uint16_t tosV;  std::memcpy(&tosV, data + 11, 2);
+    if (mt != static_cast<uint8_t>(machineType_) || ramSz != bus.ram.size()
+        || tosV != bus.tosVersion) {
+        std::fprintf(stderr, "[state] refusé : l'état a été sauvé sur une autre config "
+                     "(machine %u/RAM %u Ko/TOS %03x vs session %u/%zu Ko/%03x)\n",
+                     mt, ramSz / 1024u, tosV, unsigned(machineType_),
+                     bus.ram.size() / 1024u, bus.tosVersion);
+        return false;
+    }
+    uint32_t crc; std::memcpy(&crc, data + kStateCrcOffset, 4);
+    if (crc != stateCrc32(data + kStateHeaderSize, n - kStateHeaderSize)) {
+        std::fprintf(stderr, "[state] refusé : CRC du payload invalide (fichier corrompu)\n");
+        return false;
+    }
+    // Filet de sécurité : un load qui échoue à MI-restauration (ok_=false — champ
+    // hors bornes détecté par un ar.check(), taille incohérente — ou exception
+    // d'allocation) laisserait la machine à moitié mutée. On fige l'état courant
+    // et on le rejoue (le backup vient d'être produit par ce même code → valide).
+    std::vector<uint8_t> backup;
+    saveState(backup);
+    bool ok = false;
+    try {
+        StateArchive ar = StateArchive::loader(data, n);
+        serializeState(ar);   // relit l'en-tête (déjà validé) puis restaure le reste
+        ok = ar.ok();
+    } catch (...) { ok = false; }
+    if (!ok) {
+        StateArchive rb = StateArchive::loader(backup.data(), backup.size());
+        serializeState(rb);
+        std::fprintf(stderr, "[state] fichier tronqué/incohérent — état de la session restauré\n");
+        return false;
+    }
+    return true;
 }
 
 bool Machine::saveStateFile(const std::string& path) {
     std::vector<uint8_t> buf;
     saveState(buf);
-    std::ofstream f(path, std::ios::binary);
-    if (!f) return false;
-    f.write(reinterpret_cast<const char*>(buf.data()), std::streamsize(buf.size()));
-    return bool(f);
+    // Écriture ATOMIQUE (tmp + rename) : le slot est unique — un crash/disque plein
+    // en cours d'écriture ne doit pas détruire le seul état existant.
+    const std::string tmp = path + ".tmp";
+    {
+        std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
+        if (!f) return false;
+        f.write(reinterpret_cast<const char*>(buf.data()), std::streamsize(buf.size()));
+        if (!f) { std::remove(tmp.c_str()); return false; }
+    }
+    if (std::rename(tmp.c_str(), path.c_str()) != 0) { std::remove(tmp.c_str()); return false; }
+    return true;
 }
 
 bool Machine::loadStateFile(const std::string& path) {
     std::ifstream f(path, std::ios::binary | std::ios::ate);
     if (!f) return false;
     const std::streamoff n = f.tellg();
-    if (n <= 0) return false;
+    // tellg() sur un répertoire renvoie 2^63-1 sous Linux (pas -1) → borne haute.
+    // Un état légitime = RAM (≤ 4 Mo) + puces + marges ; 64 Mo est très large.
+    if (n <= 0 || n > 64 * 1024 * 1024) return false;
     f.seekg(0);
     std::vector<uint8_t> buf(static_cast<size_t>(n));
     f.read(reinterpret_cast<char*>(buf.data()), n);
