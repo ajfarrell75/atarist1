@@ -2290,13 +2290,37 @@ int main(int argc, char** argv) {
         // F10 (g_kioskAdaptive OFF) force le cadre complet en permanence.
         int kTop = 0, kH = machine.shifter.height();
         if (g_kiosk && g_kioskAdaptive) {
-            static int overscanLatch = 0;
-            if (machine.shifter.bordersOpen()) overscanLatch = 30;   // ~0,6 s de maintien
-            else if (overscanLatch > 0)        --overscanLatch;
-            if (overscanLatch == 0) {           // zone active fixe (cas normal)
+            static int overscanLatch    = 0;   // bordure ouverte (haut ou bas)
+            static int fullOverscanLatch = 0;  // bordure BASSE retirée (démos full-overscan)
+            // snapBordersOpen/snapLiveTop/snapLiveHeight : snapshot capturé à finishFrame(),
+            // stable au rendu (les champs live glueStartHBL_/glueEndHBL_ sont remis à zéro
+            // par beginFrame_() du cycle suivant AVANT que le rendu GL ne s'exécute).
+            if (machine.shifter.snapBordersOpen()) overscanLatch = 30;  // ~0,6 s de maintien
+            else if (overscanLatch > 0)             --overscanLatch;
+            if (overscanLatch == 0) {
+                fullOverscanLatch = 0;          // plus de trick : reset du second latch
                 kTop = machine.shifter.activeTop();
                 kH   = machine.shifter.activeHeight();
-            }                                    // sinon : kTop=0, kH=hauteur (buffer entier)
+            } else {
+                // Second latch : détecte une bordure BASSE retirée (LX, Cuddly…) et latche
+                // ce constat pour éviter les basculements frame-à-frame.
+                if (machine.shifter.snapLiveHeight() + machine.shifter.snapLiveTop()
+                        > machine.shifter.activeHeight() + machine.shifter.activeTop())
+                    fullOverscanLatch = 30;
+                else if (fullOverscanLatch > 0)
+                    --fullOverscanLatch;
+
+                if (fullOverscanLatch > 0) {
+                    // Bordure BASSE retirée (démos full-overscan : Cuddly, LX…) : buffer entier.
+                    kTop = 0;
+                    kH   = machine.shifter.height();
+                } else {
+                    // Bordure HAUTE seule (ex. Enchanted Land en jeu) : même zoom que la zone
+                    // active, légèrement remontée pour montrer 2 lignes overscan en haut.
+                    kTop = std::max(0, machine.shifter.activeTop() - 2);
+                    kH   = machine.shifter.activeHeight();
+                }
+            }
         }
 
         bool reqReset = false, reqHardReset = false, reqRebuild = false, reqCapture = false;

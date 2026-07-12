@@ -833,6 +833,15 @@ void Shifter::finishFrame() {
     // x=45..47 dans la bordure gauche et pal[0] roulant haut/bas manquants).
     // Trame sans AUCUNE écriture palette : rendu ligne-à-ligne conservé.
     if (bordersTrick_ || spec512Active_) renderGlueFrame();
+
+    // Snapshot Glue stable pour le zoom kiosk : capturé ICI, après replayGlue() /
+    // renderGlueFrame(), AVANT que beginFrame_() du cycle suivant ne remette à zéro
+    // glueStartHBL_/glueEndHBL_. Le rendu GL lit snapLiveTop()/snapLiveHeight().
+    snapGlueStart_      = glueStartHBL_;
+    snapGlueEnd_        = glueEndHBL_;
+    snapGlueVOverscan_  = glueVOverscan_;
+    snapGlueBlankLines_ = glueBlankLines_;
+    snapBordersTrick_   = bordersTrick_;
 }
 
 // Rejoue HORS-LIGNE les wait states d'alignement bus du shifter (port fidèle de
