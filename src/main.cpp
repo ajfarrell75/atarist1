@@ -1383,7 +1383,7 @@ static const KioskKey KIOSK_KEYS[] = {
     {"T",0x14,0},{"Y",0x15,0},{"N",0x31,0},
     {"CLICK L",0,1},{"CLICK R",0,2},                                  // rangée 2 (8)
 };
-static const int KIOSK_KEY_COUNT = (int)(sizeof(KIOSK_KEYS) / sizeof(KIOSK_KEYS[0]));
+[[maybe_unused]] static const int KIOSK_KEY_COUNT = (int)(sizeof(KIOSK_KEYS) / sizeof(KIOSK_KEYS[0]));
 // Bornes de rangées (indices de début) : [0,8) [8,18) [18,26).
 static const int KIOSK_KEY_ROWS[][2] = { {0, 8}, {8, 18}, {18, 26} };
 static const int KIOSK_KEY_ROWN = 3;

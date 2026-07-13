@@ -85,7 +85,7 @@ static const uint8_t Cart_data[] = {
 //  Constantes GEMDOS (gemdos_defines.h) et helpers de chemin/conversion.
 // -----------------------------------------------------------------------------
 namespace {
-constexpr int GEMDOS_EOK=0, GEMDOS_ERROR=-1, GEMDOS_E_SEEK=-6,
+[[maybe_unused]] constexpr int GEMDOS_EOK=0, GEMDOS_ERROR=-1, GEMDOS_E_SEEK=-6,
   GEMDOS_EWRPRO=-13, GEMDOS_EINVFN=-32, GEMDOS_EFILNF=-33, GEMDOS_EPTHNF=-34,
   GEMDOS_ENHNDL=-35, GEMDOS_EACCDN=-36, GEMDOS_ENSMEM=-39, GEMDOS_EDRIVE=-46,
   GEMDOS_ENMFIL=-49, GEMDOS_ERANGE=-64, GEMDOS_EINTRN=-65, GEMDOS_EPLFMT=-66;
