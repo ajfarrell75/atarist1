@@ -144,7 +144,7 @@ private:
     bool writeProtect_ = false;
     bool hostTime_     = false;
     int  caseConv_     = 0;        // 0=normal, 1=majuscules, 2=minuscules
-    bool filenameConv_ = false;
+    [[maybe_unused]] bool filenameConv_ = false;
     bool trace_        = false;
 
     uint16_t currentDrive_ = 0;   // lecteur courant (0=A, 2=C…)

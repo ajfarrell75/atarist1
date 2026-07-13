@@ -29,10 +29,10 @@ for arg in "$@"; do
     fi
 done
 
-# Configure si l'arbre de build n'existe pas encore.
+# Première fois ? Pas de build → setup complet (dépendances + sous-modules).
 if [ ! -d "$BUILD_DIR" ]; then
-    echo "==> Pas de build — configuration CMake (Release)…"
-    cmake -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE=Release
+    echo "==> Pas de build — lancement de ./setup.sh…"
+    ./setup.sh
 fi
 
 # Recompile l'incrément (no-op si à jour).

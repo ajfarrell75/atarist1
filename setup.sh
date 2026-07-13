@@ -1,8 +1,14 @@
 #!/usr/bin/env bash
-# setup.sh — prépare l'arbre de build NeoST de zéro.
+# setup.sh — installe TOUTES les dépendances de NeoST puis compile.
 #
-# Étapes : dépendances système (GLFW) → sous-modules → opcodes Musashi →
-# configuration CMake → compilation. Idempotent : relançable sans danger.
+# Étapes :
+#   1) paquets système : GLFW3 + OpenGL + CMake + toolchain C++17  (brew/apt/pacman/dnf)
+#   2) sous-modules     : extern/imgui, extern/miniaudio
+#   3) configuration CMake (Release par défaut) + compilation des 3 cibles
+#
+# Le cœur Moira (extern/moira) n'est PAS un sous-module : il est vendorisé
+# (copié dans le dépôt, avec le patch NEOST_IPLFETCH) — cf. extern/moira/NEOST_VENDOR.md.
+# Il arrive donc déjà avec le clone NeoST, rien à télécharger.
 #
 # Usage :
 #   ./setup.sh            # build Release complet
@@ -20,44 +26,49 @@ for arg in "$@"; do
         --debug)   BUILD_TYPE=Debug ;;
         --release) BUILD_TYPE=Release ;;
         --no-deps) INSTALL_DEPS=0 ;;
-        -h|--help)
-            grep '^#' "$0" | sed 's/^# \{0,1\}//'
-            exit 0 ;;
+        -h|--help) grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "Option inconnue : $arg" >&2; exit 2 ;;
     esac
 done
 
-say() { printf '\033[1;36m==>\033[0m %s\n' "$*"; }
+say()  { printf '\033[1;36m==>\033[0m %s\n' "$*"; }
+warn() { printf '\033[1;33m/!\\\033[0m %s\n' "$*" >&2; }
 
-# 1) Dépendances système (GLFW3 + OpenGL). Best-effort selon le gestionnaire.
+# ---------------------------------------------------------------------------
+# 1) Dépendances système (GLFW3 + OpenGL + CMake + compilateur C++17).
+# ---------------------------------------------------------------------------
 if [ "$INSTALL_DEPS" -eq 1 ]; then
-    say "Vérification des dépendances système (GLFW3)…"
-    if command -v pacman >/dev/null 2>&1; then
-        pacman -Qi glfw glfw-x11 glfw-wayland >/dev/null 2>&1 \
-            || sudo pacman -S --needed --noconfirm glfw cmake base-devel
+    say "Installation des dépendances système (GLFW3, CMake, toolchain)…"
+    if command -v brew >/dev/null 2>&1; then
+        brew list glfw  >/dev/null 2>&1 || brew install glfw
+        brew list cmake >/dev/null 2>&1 || brew install cmake
+    elif command -v pacman >/dev/null 2>&1; then
+        sudo pacman -S --needed --noconfirm glfw cmake base-devel
     elif command -v apt-get >/dev/null 2>&1; then
-        dpkg -s libglfw3-dev >/dev/null 2>&1 \
-            || sudo apt-get install -y libglfw3-dev cmake build-essential
-    elif command -v brew >/dev/null 2>&1; then
-        brew list glfw >/dev/null 2>&1 || brew install glfw
+        sudo apt-get update
+        sudo apt-get install -y libglfw3-dev libgl1-mesa-dev cmake build-essential git
+    elif command -v dnf >/dev/null 2>&1; then
+        sudo dnf install -y glfw-devel mesa-libGL-devel cmake gcc-c++ git
     else
-        say "Gestionnaire de paquets non reconnu — installez GLFW3 + CMake à la main."
+        warn "Gestionnaire de paquets non reconnu — installez GLFW3 + OpenGL + CMake à la main."
     fi
 fi
 
-# 2) Sous-modules (Musashi, imgui, miniaudio, moira).
-say "Initialisation des sous-modules…"
-git submodule update --init --recursive
+# ---------------------------------------------------------------------------
+# 2) Sous-modules : imgui + miniaudio. (Moira est vendorisé, pas un sous-module.)
+# ---------------------------------------------------------------------------
+say "Initialisation des sous-modules imgui + miniaudio…"
+git submodule update --init extern/imgui extern/miniaudio
 
-# 3) Génération des opcodes Musashi (obligatoire après le clone).
-if [ ! -f extern/Musashi/m68kops.c ]; then
-    say "Génération du cœur d'opcodes Musashi…"
-    ( cd extern/Musashi && cc -o m68kmake m68kmake.c && ./m68kmake . m68k_in.c )
-else
-    say "Opcodes Musashi déjà générés — saut."
+# Moira est vendorisé : il doit déjà être là. Sinon, le dépôt est incomplet.
+if [ ! -f extern/moira/Moira/Moira.cpp ]; then
+    warn "extern/moira/Moira/Moira.cpp absent — Moira est vendorisé, restaurez-le :"
+    warn "  git checkout -- extern/moira   (ou réclonez le dépôt NeoST)."
 fi
 
-# 4) Configuration + compilation.
+# ---------------------------------------------------------------------------
+# 3) Configuration + compilation des 3 cibles (neost, neost-headless, lib).
+# ---------------------------------------------------------------------------
 say "Configuration CMake ($BUILD_TYPE)…"
 cmake -B build -DCMAKE_BUILD_TYPE="$BUILD_TYPE"
 
