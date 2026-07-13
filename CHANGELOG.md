@@ -1562,8 +1562,8 @@ fidèles à Hatari, pas des bugs.
   **Affichage → Effets CRT** (panneau live), CLI `--crt` / `--crt-preset off|leger|arcade|
   phosphor`, persistance dans `neost.cfg` (13 clés `crt_*`). Figé en kiosk.
 - **Mode kiosk (borne / expo) — plein écran + menu in-game (2026-07-10)** : `--kiosk`
-  (borderless-windowed, toujours au 1er plan), `--kiosk-exclusive` (plein écran exclusif,
-  garde le focus), `--kiosk-monitor N`. Config **figée** (`neost.cfg` jamais réécrit),
+  (vrai plein écran EXCLUSIF, garde le focus, reste au-dessus de tout), `--kiosk-monitor N`.
+  Config **figée** (`neost.cfg` jamais réécrit),
   souris capturée, joystick clavier activé. **Zoom adaptatif** (défaut, bascule F10) : cale
   la ZONE ACTIVE (rectangle matériel `activeTop`/`activeHeight`, jamais au pixel → zéro
   saccade) sur la hauteur écran ; quand la Glue signale une **bordure ouverte**

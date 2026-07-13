@@ -1875,12 +1875,10 @@ int main(int argc, char** argv) {
     g_kioskRomDirs = cfg.romDirs;   // dossiers ROM additionnels du menu kiosk (persistés)
     const std::string defRom = cfg.rom.empty() ? std::string("roms/etos192us.img") : cfg.rom;
     // Ligne de commande : arguments POSITIONNELS (ROM, disque) + DRAPEAUX.
-    //   --kiosk            : borne plein écran « borderless-windowed » (cf. g_kiosk).
-    //   --kiosk-exclusive  : vrai plein écran EXCLUSIF (reste au-dessus de tout, ne
-    //                        peut pas être recouvert par une autre fenêtre) ; implique --kiosk.
+    //   --kiosk            : borne en vrai plein écran EXCLUSIF (reste au-dessus de
+    //                        tout, ne peut pas être recouvert par une autre fenêtre).
     //   --kiosk-monitor N  : moniteur cible (0 = principal ; défaut 0).
     int  kioskMonitor = 0;
-    bool kioskExclusive = false;
     std::vector<std::string> pos;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i] ? argv[i] : "";
@@ -1893,7 +1891,6 @@ int main(int argc, char** argv) {
             return 0;
         }
         if      (a == "--kiosk")           g_kiosk = true;
-        else if (a == "--kiosk-exclusive") { g_kiosk = true; kioskExclusive = true; }
         else if (a == "--kiosk-monitor" && i + 1 < argc) kioskMonitor = std::atoi(argv[++i]);
         //   --crt              : active les effets CRT (façade moniteur).
         //   --crt-preset NAME  : preset (off|leger|arcade|phosphor) ; implique --crt.
@@ -1935,32 +1932,18 @@ int main(int argc, char** argv) {
         GLFWmonitor* mon = (mons && kioskMonitor >= 0 && kioskMonitor < nmon)
                                ? mons[kioskMonitor] : glfwGetPrimaryMonitor();
         const GLFWvidmode* vm = glfwGetVideoMode(mon);
-        if (kioskExclusive) {
-            // Vrai plein écran EXCLUSIF : la fenêtre appartient au moniteur → reste
-            // au-dessus de TOUT (panneaux/dock inclus), impossible à recouvrir. Hints
-            // calés sur le mode courant → aucun changement de résolution.
-            if (vm) {
-                glfwWindowHint(GLFW_RED_BITS,     vm->redBits);
-                glfwWindowHint(GLFW_GREEN_BITS,   vm->greenBits);
-                glfwWindowHint(GLFW_BLUE_BITS,    vm->blueBits);
-                glfwWindowHint(GLFW_REFRESH_RATE, vm->refreshRate);
-            }
-            glfwWindowHint(GLFW_AUTO_ICONIFY, GLFW_FALSE);
-            window = glfwCreateWindow(vm ? vm->width : 1280, vm ? vm->height : 860,
-                                      "NeoST", mon, nullptr);
-        } else {
-            // « Borderless-windowed » : fenêtre SANS bordure à la taille du moniteur,
-            // posée dessus, toujours au premier plan. Pas de changement de mode vidéo
-            // (meilleur alt-tab / multi-écran) mais peut être masquée par un panneau
-            // override-redirect d'un bureau type GNOME Shell → préférer --kiosk-exclusive.
-            int mx = 0, my = 0; glfwGetMonitorPos(mon, &mx, &my);
-            glfwWindowHint(GLFW_DECORATED, GLFW_FALSE);
-            glfwWindowHint(GLFW_AUTO_ICONIFY, GLFW_FALSE);
-            glfwWindowHint(GLFW_FLOATING, GLFW_TRUE);
-            window = glfwCreateWindow(vm ? vm->width : 1280, vm ? vm->height : 860,
-                                      "NeoST", nullptr, nullptr);
-            if (window) glfwSetWindowPos(window, mx, my);
+        // Vrai plein écran EXCLUSIF : la fenêtre appartient au moniteur → reste
+        // au-dessus de TOUT (panneaux/dock inclus), impossible à recouvrir. Hints
+        // calés sur le mode courant → aucun changement de résolution.
+        if (vm) {
+            glfwWindowHint(GLFW_RED_BITS,     vm->redBits);
+            glfwWindowHint(GLFW_GREEN_BITS,   vm->greenBits);
+            glfwWindowHint(GLFW_BLUE_BITS,    vm->blueBits);
+            glfwWindowHint(GLFW_REFRESH_RATE, vm->refreshRate);
         }
+        glfwWindowHint(GLFW_AUTO_ICONIFY, GLFW_FALSE);
+        window = glfwCreateWindow(vm ? vm->width : 1280, vm ? vm->height : 860,
+                                  "NeoST", mon, nullptr);
     } else {
 #ifdef NEOST_VERSION
         window = glfwCreateWindow(1280, 860, "NeoST " NEOST_VERSION " — Atari ST", nullptr, nullptr);

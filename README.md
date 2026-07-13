@@ -94,16 +94,12 @@ toujours identique) — mais avec un **menu in-game** manette/clavier pour chang
 jeu, envoyer des touches ou redémarrer, sans jamais quitter le plein écran.
 
 ```sh
-./build/neost --kiosk           roms/tos102uk.img "disks/Jeu.stx"   # plein écran sans bordure
-./build/neost --kiosk-exclusive roms/tos102uk.img "disks/Jeu.stx"   # plein écran EXCLUSIF (recommandé)
-./build/neost --kiosk-exclusive --kiosk-monitor 1 roms/tos162fr.img  # sur le 2ᵉ écran
+./build/neost --kiosk roms/tos102uk.img "disks/Jeu.stx"              # plein écran EXCLUSIF
+./build/neost --kiosk --kiosk-monitor 1 roms/tos162fr.img            # sur le 2ᵉ écran
 ```
 
-- **`--kiosk`** : fenêtre plein écran *sans bordure* (« borderless-windowed »), toujours au
-  premier plan. Simple, mais un bureau à panneaux « toujours au-dessus » (GNOME Shell…)
-  peut la recouvrir.
-- **`--kiosk-exclusive`** : vrai plein écran **exclusif** — reste au-dessus de tout, garde le
-  focus clavier. **À préférer** pour une vraie borne. (`--kiosk` est impliqué.)
+- **`--kiosk`** : vrai plein écran **exclusif** — reste au-dessus de tout (panneaux/dock
+  inclus, impossible à recouvrir), garde le focus clavier.
 - **`--kiosk-monitor N`** : écran cible (0 = principal).
 
 En kiosk : la souris est capturée et le curseur masqué ; l'**émulation joystick au
