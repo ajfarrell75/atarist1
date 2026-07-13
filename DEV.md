@@ -45,9 +45,9 @@ extern/hatari/src           SOURCE DE VÉRITÉ matérielle (lue, pas compilée)
 
 ## Mode kiosk (`main.cpp`)
 
-Borne d'exposition : `--kiosk` (borderless plein écran) / `--kiosk-exclusive` (vrai
-plein écran, argument moniteur passé à `glfwCreateWindow` → reste au-dessus de tout) /
-`--kiosk-monitor N`. Piloté par le global `g_kiosk` (+ `kioskExclusive` local). Points clés :
+Borne d'exposition : `--kiosk` (vrai plein écran EXCLUSIF, moniteur passé à
+`glfwCreateWindow` → reste au-dessus de tout) / `--kiosk-monitor N`. Piloté par le
+global `g_kiosk`. Points clés :
 
 - **Parsing** : les drapeaux `--*` sont filtrés ; les arguments POSITIONNELS restants
   donnent ROM (0) et disquette (1). Ne pas remettre d'accès `argv[1/2]` en dur.
