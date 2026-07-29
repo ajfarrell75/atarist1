@@ -75,6 +75,12 @@ bool StxImage::parse(std::vector<uint8_t> raw) {
     const uint8_t* const base = buf_.data();
     const uint8_t* const end  = base + buf_.size();
     auto inBuf = [&](const uint8_t* q, std::size_t n) { return q >= base && q + n <= end; };
+    // Plafonne une taille d'image de piste annoncée par le fichier sur ce qui reste
+    // du tampon à partir de `img` (cf. les deux branches TRACK_FLAG_IMAGE plus bas).
+    auto clampImage = [](uint16_t sz, const uint8_t* img, const uint8_t* e) -> uint16_t {
+        const std::size_t avail = (img <= e) ? std::size_t(e - img) : 0u;
+        return uint16_t(avail < std::size_t(sz) ? avail : std::size_t(sz));
+    };
 
     // En-tête (16 o).
     if (std::memcmp(base, "RSY\0", 4) != 0) return false;
@@ -125,18 +131,25 @@ bool StxImage::parse(std::vector<uint8_t> raw) {
             if ((trk.flags & TRACK_FLAG_IMAGE) == 0) {
                 trk.pTrackImage   = nullptr;
                 trk.pSectorsImage = trk.pTrackData;
+            // TrackImageSize vient du FICHIER (0..65535) : le plafonner sur ce qui
+            // reste réellement du tampon. Sans ça, une .stx tronquée fait lire
+            // Fdc::readTrackStx jusqu'à 64 Ko au-delà du tas (la boucle n'est bornée
+            // que par trackImageSize). Hatari ne borne pas non plus (stx.c:1095) mais
+            // NeoST borne tous les autres champs — c'était le dernier trou. On
+            // TRONQUE plutôt qu'on ne rejette (esprit du clamp de msa.c:205) : une
+            // image partiellement valide reste exploitable.
             } else if ((trk.flags & TRACK_FLAG_IMAGE_SYNC) == 0) {
                 if (inBuf(trk.pTrackData, 2)) {
-                    trk.trackImageSize = rd16le(trk.pTrackData);
-                    trk.pTrackImage    = trk.pTrackData + 2;
-                    trk.pSectorsImage  = trk.pTrackImage + trk.trackImageSize;
+                    trk.trackImageSize = clampImage(rd16le(trk.pTrackData), trk.pTrackData + 2, end);
+                    trk.pTrackImage    = trk.trackImageSize ? trk.pTrackData + 2 : nullptr;
+                    trk.pSectorsImage  = trk.pTrackData + 2 + trk.trackImageSize;
                 }
             } else {
                 if (inBuf(trk.pTrackData, 4)) {
                     trk.trackImageSyncPos = rd16le(trk.pTrackData);
-                    trk.trackImageSize    = rd16le(trk.pTrackData + 2);
-                    trk.pTrackImage       = trk.pTrackData + 4;
-                    trk.pSectorsImage     = trk.pTrackImage + trk.trackImageSize;
+                    trk.trackImageSize    = clampImage(rd16le(trk.pTrackData + 2), trk.pTrackData + 4, end);
+                    trk.pTrackImage       = trk.trackImageSize ? trk.pTrackData + 4 : nullptr;
+                    trk.pSectorsImage     = trk.pTrackData + 4 + trk.trackImageSize;
                 }
             }
 

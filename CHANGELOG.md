@@ -3,6 +3,77 @@
 (c) 2026 VERHILLE Arnaud. Ce qui est **implémenté et validé**. Pas encore de versions
 taguées (0.1.x). Le restant est dans [`TODO.md`](TODO.md).
 
+## Bug hunt multi-agents (2026-07-29)
+
+Chasse à 6 lentilles parallèles (diff non commité, cœur CPU/Bus/état, vidéo, I/O disque,
+périphériques, audio & concurrence), chaque lot passé à un sceptique mandaté pour RÉFUTER :
+26 findings bruts → **22 confirmés, 4 réfutés**, tous corrigés. Étalons `--tier full` verts
+avant/après (Cuddly & Enchanted Land 0 px), build ASan/UBSan sans rapport.
+
+- **Sécurité mémoire — 3 critiques, toutes reproduites puis refermées :**
+  - *Save-state / framebuffer* : `curW_`/`curH_` étaient restaurés sans invariant les liant à
+    la taille de `frame_`, et le court-circuit « même w/h » de `resizeFor()` empêchait la
+    réallocation → écriture hors du tas dès le 1ᵉʳ `renderLine` (repro : *stack smashing* +
+    core dump). Invariants `ar.check` posés APRÈS `podVec(frame_)` (géométrie, mode, aires
+    actives) + taille du tampon intégrée au test de `resizeFor`. `Shifter.hpp/.cpp`.
+  - *Parseur STX* : `TrackImageSize` (16 bits venus du fichier) n'était jamais confronté à la
+    fin du tampon → `readTrackStx` lisait jusqu'à ~64 Ko hors du tas sur une `.stx` tronquée
+    (mesuré : 65535 annoncés pour 6 octets disponibles). Plafonné sur le reste réel, dans
+    l'esprit du clamp de `msa.c:205`. `StxImage.cpp`.
+  - *Save-state PSG* : `RegEvent::reg` relu brut (0..255) indexait `audioRegs_[16]` → écrasait
+    les pointeurs de `events_` et les `std::function` voisines. `ar.check(reg < 14)` (borne de
+    `write8`) + masque par événement. `YM2149.hpp/.cpp`.
+- **Autres invariants de save-state** (même classe, tous « fichier forgé passé le CRC ») :
+  `envPos_ < 96` (table d'enveloppes), `fifoPos_ < 8 && fifoNb_ <= 8` + masque dans `fifoPull`
+  (FIFO DMA son), `mwSteps_ ∈ [0,16]` (compteur de décalage Microwire), et la borne FDC
+  `fifoSize_ <= 16` corrigée en `< 16` — `fifoPush` écrit `fifo_[fifoSize_]`, donc 16 était la
+  seule valeur toxique que l'invariant laissait passer.
+- **`.msa` illisible ne détruit plus l'image source** : une longueur de run RLE non plafonnée
+  (cas nommément prévu par `msa.c:205-210`) faisait échouer tout le décodage, et le repli
+  montait les octets COMPRESSÉS comme `.st` **brut et inscriptible** — le premier `write sector`
+  de l'invité écrasait le `.msa` de l'utilisateur. Clamp porté + repli en LECTURE SEULE dès que
+  l'en-tête ressemble vraiment à une `.msa` (`looksLikeMsaHeader`). `Fdc.cpp`.
+- **Vidéo — trois consommateurs manquants, alignés sur `video.c` :**
+  - `V_OVERSCAN_NO_DE` était détecté fidèlement mais consommé NULLE PART : une trame dont le DE
+    vertical n'est jamais activé s'affichait normalement au lieu de sortir à l'index couleur 0,
+    et le compteur vidéo avançait à tort. Branché sur ses trois consommateurs Hatari — rendu
+    (`video.c:3988`), stride du compteur (raster non avancé) et Timer B en event-count
+    (`video.c:3649`) — avec un cas d'auto-test Glue dédié (détection + contre-épreuve).
+  - `videoCounter()` ignorait `BORDERMASK_LEFT_OFF_2_STE`/`_MED` (+20 o, `video.c:1514-1517`) :
+    la ligne valait 180 o pour l'accumulation inter-lignes mais 160 pour l'offset intra-ligne,
+    et le gel de fin de ligne tombait 40 cycles trop tôt.
+  - Fenêtre verticale plus COURTE que `curAH_` (`VO_BOTTOM_SHORT_50`, −29 lignes) : le compteur
+    avançait sur les lignes non affichées. Borné dans `glueLineBytes` plutôt que dans la boucle
+    de commit, pour ne pas toucher à la cadence de capture `lineSnap_`.
+- **Verrou `NEOST_LINELEN` à sémantique inversée** : `Machine` lit la VALEUR (défaut ON, `0` =
+  OFF), les 3 sites `Shifter` testaient la seule PRÉSENCE de la variable — `NEOST_LINELEN=0`
+  désactivait donc une moitié et ACTIVAIT l'autre, et l'A/B documenté mesurait un hybride
+  jamais validé. Lecture unifiée (`envFlag`), défaut de chaque site INCHANGÉ (c'est l'hybride
+  validé au pixel), docs corrigées.
+- **FPU (68881)** : infini GÉNÉRÉ empaqueté avec la mantisse `$8000…` au lieu de la forme
+  canonique 0 (`floatx80_default_infinity_low`) → deux motifs binaires différents pour +∞ selon
+  qu'il est chargé ou calculé (`INF_SIG` séparé d'`INF_LOW`) ; `FGETEXP` d'un NaN rendait
+  l'opérande BRUT, sans quiéter le SNaN ni lever `FPSR.SNAN` (délégué à `propagateNaN1`, comme
+  `FGETMAN`) ; `FMOD` empruntait le court-circuit de `FREM` sur `expDiff < 0`, sautant arrondi
+  de précision et `UNFL` (`softfloat.c:3048` vs `2941`).
+- **Blitter** : les accès bus CPU étaient datés dans l'horloge du CŒUR alors que les fenêtres
+  du blitter sont armées dans celle de l'ORDONNANCEUR — 40 cycles d'écart (les cycles de
+  `Moira::reset()` avant l'ancrage de la 1ʳᵉ trame), donc fenêtre PRE_START ratée et tranche
+  reprogrammée trop tard. Datation unifiée sur `Scheduler::liveNow()`.
+- **Kiosk (travail en cours de `main.cpp`)** : le gel de la configuration était définitivement
+  rompu par un aller-retour F8 (la borne réécrivait `neost.cfg` avec la session du visiteur) —
+  `g_kioskLaunched` distingue désormais l'invariant de DÉPLOIEMENT de l'état courant ;
+  l'émulation joystick-clavier restait armée en revenant au bureau depuis une session lancée en
+  `--kiosk` (capture de lambda évaluée après `g_kbdJoy = g_kiosk`), avalant flèches et Ctrl
+  droit sans rien afficher ; la fenêtre était replacée en (0,0) faute de géométrie fenêtrée
+  jamais observée (drapeau `g_winGeomValid` + centrage sur la zone de travail du moniteur).
+- **MIDI** : la file de bouclage OUT→IN croissait sans borne (~11 Mo/heure pour un séquenceur
+  qui n'a aucune raison de lire MIDI IN, recopiée dans chaque save-state, `RDRF` collé donc IRQ
+  ACIA permanente sous RIE). Bornée à la profondeur physique d'un 6850 (RDR + registre à
+  décalage), ce qui modélise en prime l'overrun.
+- **UB** : `mwData_ << 16` débordait un `int` signé dès que le bit 15 de `$FF8922` était posé
+  (atteignable par du code invité, sans save-state) → arithmétique non signée.
+
 ## Cœur & boot
 - **Cœur Musashi RETIRÉ — Moira seul cœur 68000.** L'ancien cœur Musashi (rapide mais
   **non cycle-exact**) n'apportait plus rien face à Moira (cycle-exact) et doublait chaque

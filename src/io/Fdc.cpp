@@ -238,6 +238,18 @@ static void findDiskDetails(const std::vector<uint8_t>& image, int& spt, int& si
 // En-tête (mots big-endian) : 0E0F, secteurs/piste, faces-1, piste début, fin.
 // Chaque piste : un mot de longueur ; si != spt*512, flux RLE (marqueur 0xE5
 // suivi de valeur + compteur mot). Cf. Hatari src/msa.c.
+// Le fichier se PRÉSENTE-t-il comme une .msa ? Mêmes contrôles d'en-tête que
+// decodeMsa (le magic seul, 2 octets, ferait des faux positifs sur des .st
+// légitimes). Sert au repli de loadImage quand la décompression échoue.
+static bool looksLikeMsaHeader(const std::vector<uint8_t>& raw) {
+    if (raw.size() < 10 || raw[0] != 0x0E || raw[1] != 0x0F) return false;
+    const int spt   = (raw[2] << 8) | raw[3];
+    const int sides = ((raw[4] << 8) | raw[5]) + 1;
+    const int t0    = (raw[6] << 8) | raw[7];
+    const int t1    = (raw[8] << 8) | raw[9];
+    return spt >= 1 && spt <= 56 && sides >= 1 && sides <= 2 && t1 >= t0 && t1 <= 86;
+}
+
 static bool decodeMsa(const std::vector<uint8_t>& raw, std::vector<uint8_t>& out) {
     if (raw.size() < 10 || raw[0] != 0x0E || raw[1] != 0x0F) return false;
     const int spt   = (raw[2] << 8) | raw[3];
@@ -265,8 +277,16 @@ static bool decodeMsa(const std::vector<uint8_t>& raw, std::vector<uint8_t>& out
                     const uint8_t b = raw[p++];
                     if (b == 0xE5 && p + 3 <= end) {                   // run-length
                         const uint8_t val = raw[p];
-                        const int cnt = (raw[p + 1] << 8) | raw[p + 2]; p += 3;
-                        out.insert(out.end(), static_cast<std::size_t>(cnt), val);
+                        std::size_t cnt = static_cast<std::size_t>((raw[p + 1] << 8) | raw[p + 2]); p += 3;
+                        // Plafond sur ce qui reste de la piste (msa.c:205-210 : « Limit
+                        // length to size of track, incorrect images may overflow »).
+                        // Sans lui, out dépasse target et TOUTE l'image est rejetée →
+                        // repli en .st brut INSCRIPTIBLE, qui écrase le fichier source.
+                        if (out.size() + cnt > target) {
+                            std::fprintf(stderr, "[FDC] .msa : run RLE trop long → tronqué (image douteuse)\n");
+                            cnt = target - out.size();
+                        }
+                        out.insert(out.end(), cnt, val);
                     } else {
                         out.push_back(b);
                     }
@@ -365,8 +385,17 @@ bool Fdc::loadImage(const std::string& path, int drive) {
         dk.raw = false;                          // .dim : en-tête 32 o à préserver
         std::fprintf(stderr, "[FDC] image .dim (en-tête 32 o retiré) : %s\n", path.c_str());
     } else {
+        // Un en-tête .msa PLAUSIBLE (mêmes contrôles que decodeMsa) qui ne se décode
+        // pas ne doit surtout pas repartir en « .st brut inscriptible » : dk.raw
+        // réactiverait writeBack, qui recopierait des secteurs bruts par-dessus le
+        // fichier .msa source et le détruirait. dk.raw = false neutralise writeBack
+        // ET force dk.writeProtect (plus bas).
+        const bool msaLike = looksLikeMsaHeader(raw);
         dk.image = std::move(raw);               // .st brut
-        dk.raw = true;
+        dk.raw   = !msaLike;
+        if (msaLike)
+            std::fprintf(stderr, "[FDC] %s : en-tête .msa mais décompression impossible — "
+                                 "monté BRUT en LECTURE SEULE (image douteuse)\n", path.c_str());
     }
 
     // Géométrie : BPB recoupé avec la taille réelle de l'image (cf. Hatari
@@ -389,7 +418,8 @@ bool Fdc::loadImage(const std::string& path, int drive) {
 
     // Write-protect auto-détecté d'après les permissions du fichier (cf. Hatari
     // floppy.c:Floppy_IsWriteProtected, mode « automatic »). Une .msa/.dim est
-    // TOUJOURS protégée (writeBack ne sait pas réencoder le format → dk.raw == false).
+    // TOUJOURS protégée (writeBack ne sait pas réencoder le format → dk.raw == false),
+    // de même qu'une .msa reconnue mais indécodable (cf. looksLikeMsaHeader).
     struct stat st;
     const bool writable = (::stat(path.c_str(), &st) == 0) && (st.st_mode & S_IWUSR);
     dk.writeProtect = !dk.raw || !writable;

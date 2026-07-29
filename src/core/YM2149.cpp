@@ -347,7 +347,7 @@ void YM2149::synthesizeFrame(float* out, uint32_t frames, uint32_t sampleRate, i
         uint32_t off = uint32_t(int64_t(e.cycle) * frames / frameCycles);
         if (off > frames) off = frames;
         if (off > pos) { synthBlock(audioRegs_.data(), out + pos, off - pos, sampleRate); pos = off; }
-        audioRegs_[e.reg] = e.val;
+        audioRegs_[e.reg & 15] = e.val;   // ET par ÉVÉNEMENT (pas par échantillon) : gratuit
         if (e.reg == 13) envReload_ = true;
     }
     if (pos < frames) synthBlock(audioRegs_.data(), out + pos, frames - pos, sampleRate);
