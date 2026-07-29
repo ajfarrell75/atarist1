@@ -506,6 +506,7 @@ public:
         ar(videoBase);
         ar(palette);
         ar(mode);
+        ar.check(static_cast<uint8_t>(mode) <= static_cast<uint8_t>(Mode::High));
         ar(sync);
         // Registres STE ($FF8264/65, $FF820F)
         ar(hwScrollCount);
@@ -582,6 +583,16 @@ public:
         ar(frameMode_);
         ar(frameSync_);
         ar.podVec(frame_);          // std::vector<uint32_t> — framebuffer ARGB décodé
+        // Invariant : le framebuffer est indexé par la géométrie VERROUILLÉE ci-dessus
+        // (renderLine écrit à frame_ + (activeY_+y)*curW_ + activeX_). Un fichier forgé
+        // qui grossit curW_/curH_ sans grossir frame_ ferait écrire hors du tas — et
+        // resizeFor() ne rattrape rien, son court-circuit « même w/h » saute la
+        // réallocation. On vérifie donc APRÈS relecture du vecteur.
+        ar.check(static_cast<uint8_t>(frameMode_) <= static_cast<uint8_t>(Mode::High));
+        ar.check(curW_ > 0 && curH_ > 0 && curW_ <= 1024 && curH_ <= 512);
+        ar.check(frame_.size() == static_cast<std::size_t>(curW_) * static_cast<std::size_t>(curH_));
+        ar.check(curAH_ >= 0 && activeX_ >= 0 && activeY_ >= 0 &&
+                 activeY_ + curAH_ <= curH_ && activeX_ + activeWidth() <= curW_);
     }
 };
 

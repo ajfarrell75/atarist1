@@ -66,6 +66,10 @@ void MidiAcia::write8(uint32_t addr, uint8_t v) {
         tdre_ = false;
         sched_->schedule(Scheduler::MIDI_TX, sched_->now() + kMidiTxByteCycles);
     }
+    // Profondeur physique d'un 6850 : RDR + registre à décalage. Au-delà, l'octet le
+    // plus ancien tombe — ce qui modélise en prime l'overrun réel du composant (le
+    // bit OVRN reste non modélisé, cf. HATARI_DIVERGENCES.md).
+    if (rx_.size() >= kMidiRxMax) rx_.pop_front();
     rx_.push_back(v);
     rdrf_ = true;                    // un octet bouclé est disponible (RDRF)
     raiseIfReady();

@@ -112,6 +112,7 @@ public:
         ar(frameStartAddr_); ar(frameEndAddr_);
         // FIFO 8 octets + consommation DAC.
         ar(fifo_); ar(fifoPos_); ar(fifoNb_);
+        ar.check(fifoPos_ < 8 && fifoNb_ <= 8);   // fifoPull lit fifo_[fifoPos_] sans masque
         ar(dacLast_); ar(dacRem_);
         // Anneau de capture (cœur → rendu audio). Taille fixe (kCapSize) → podVec
         // re-dimensionne à l'identique au load, indices monotones repris tels quels.
@@ -122,6 +123,7 @@ public:
         ar(capW_); ar(capR_);
         // Microwire / LMC1992.
         ar(mwData_); ar(mwMask_); ar(mwShift_); ar(mwSteps_);
+        ar.check(mwSteps_ >= 0 && mwSteps_ <= 16);   // sert de compteur de décalage (16 - mwSteps_)
         ar(mwMaster_); ar(mwLeft_); ar(mwRight_); ar(mwBass_); ar(mwTreble_); ar(mwMixing_);
         // État de lecture (thread audio).
         ar(playing_); ar(phase_);
