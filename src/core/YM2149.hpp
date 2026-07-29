@@ -189,6 +189,7 @@ public:
         ar(tonePer_); ar(toneCnt_); ar(toneVal_);
         ar(noisePer_); ar(noiseCnt_); ar(noiseVal_);
         ar(envPer_); ar(envCnt_); ar(envPos_); ar(envShape_);
+        ar.check(envPos_ < 96);     // indexe envW[..][96] ; le repli -=64 ne rattrape pas une valeur folle
         ar(mixerT_); ar(mixerN_);
         ar(envMask3_); ar(vol3_);
         ar(rndLfsr_); ar(freqDiv2_);
@@ -207,6 +208,7 @@ public:
         ar(audioRegs_);
         ar.objVec(events_, 6, [](StateArchive& a, RegEvent& e) {
             a(e.cycle); a(e.reg); a(e.val);
+            a.check(e.reg < 14);        // borne posée par write8 ; indexe audioRegs_[16]
         });
         // Latches MMIO
         ar(regReadData_);

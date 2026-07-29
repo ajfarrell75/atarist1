@@ -104,6 +104,7 @@ struct Config { std::string rom; std::string disk; std::string cart; bool mono =
                 float volume = 1.0f;   // volume maître de la sortie audio (0..1, barre de menu)
                 bool showDisk = true, showCart = true, showHex = true, showCpu = true;
                 bool showJoy = false;
+                bool dock = true;              // mode ancré (dockspace ImGui) — cf. renderDockSpace
                 bool crt = false;              // effets CRT actifs (façade moniteur)
                 neost::CrtParams crtParams;    // réglages CRT (cf. gui/CrtParams.h)
                 std::vector<std::string> romDirs;   // kiosk : dossiers ROM/disques additionnels (en plus de disks/)
@@ -163,6 +164,7 @@ static Config loadConfig(const std::string& exeDir) {
         else if (line.rfind("showHex=", 0) == 0) c.showHex = (line.substr(8) == "1");
         else if (line.rfind("showCpu=", 0) == 0) c.showCpu = (line.substr(8) == "1");
         else if (line.rfind("showJoy=", 0) == 0) c.showJoy = (line.substr(8) == "1");
+        else if (line.rfind("dock=", 0) == 0) c.dock = (line.substr(5) == "1");
         else if (line.rfind("rtc_saved=", 0) == 0) c.rtcSaved = std::strtoll(line.substr(10).c_str(), nullptr, 10);
         else if (line.rfind("rtc=", 0) == 0) c.rtc = line.substr(4);
         else if (line.rfind("kiosk_romdir=", 0) == 0) { const std::string d = line.substr(13); if (!d.empty()) c.romDirs.push_back(d); }
@@ -188,6 +190,17 @@ static Config loadConfig(const std::string& exeDir) {
 // Mode kiosk (borne/expo) : plein écran sans chrome, config figée, sortie par chord.
 // Activé par --kiosk. Déclaré ici car saveConfig doit le consulter (gel de la config).
 static bool g_kiosk = false;
+// Lancé en borne (--kiosk) — invariant de DÉPLOIEMENT, distinct de g_kiosk qui suit
+// la bascule à chaud. Sans lui, un aller-retour F8 rendrait la main à tous les
+// saveConfig du GUI pour le reste du processus : la borne repartirait sur le disque
+// et les réglages du dernier visiteur au lieu de sa configuration d'exposition.
+static bool g_kioskLaunched = false;
+// Bascule GUI ⇄ kiosk À CHAUD (F8, menu Machine, action « DESKTOP MODE » du menu
+// borne). La demande est POSÉE ici puis appliquée en tête de boucle, à une frontière
+// de trame : la bascule prend un instantané de la machine et le restaure derrière
+// elle, et Machine::loadState n'accepte que l'entre-deux-trames.
+//   0 = rien à faire · 1 = passer en kiosk · 2 = revenir au GUI.
+static int g_kioskSwitchReq = 0;
 // Zoom kiosk adaptatif (cale le contenu réel sur la hauteur) : ON par défaut,
 // basculable à chaud par F10. OFF = cadre complet fixe (pillarbox, rien ne déborde).
 static bool g_kioskAdaptive = true;
@@ -244,7 +257,7 @@ static int g_browseSel = 0;
 // réglage que la borne a le droit de persister : le dossier ROM additionnel choisi via
 // le menu in-game (le reste de la config kiosk reste identique à ce qui a été chargé).
 static void saveConfig(const std::string& exeDir, Config& c, Machine* machine = nullptr, bool force = false) {
-    if (g_kiosk && !force) return;   // kiosk : configuration figée — la borne repart toujours identique
+    if ((g_kiosk || g_kioskLaunched) && !force) return;   // kiosk : configuration figée — la borne repart toujours identique
     if (machine) snapshotRtc(*machine, c);
     std::ofstream f(cfgPath(exeDir));
     if (!f) f.open("neost.cfg");
@@ -262,6 +275,7 @@ static void saveConfig(const std::string& exeDir, Config& c, Machine* machine = 
              << "\nshowHex=" << (c.showHex ? 1 : 0)
              << "\nshowCpu=" << (c.showCpu ? 1 : 0)
              << "\nshowJoy=" << (c.showJoy ? 1 : 0)
+             << "\ndock=" << (c.dock ? 1 : 0)
              << "\ncrt=" << (c.crt ? 1 : 0)
              << "\ncrt_bright=" << c.crtParams.brightness
              << "\ncrt_contrast=" << c.crtParams.contrast
@@ -334,25 +348,45 @@ static bool IconButton(const char* icon, const char* tooltip) {
 static GLFWwindow* g_window = nullptr;        // fenêtre hôte (pour interroger/poser sa taille)
 static int  g_iniWinW = 0, g_iniWinH = 0;     // taille relue depuis imgui.ini
 static bool g_iniWinValid = false;
+// Disposition ancrée déjà SEMÉE au moins une fois. Persistée à côté de la taille de
+// fenêtre (même section imgui.ini, où vit aussi la disposition des nœuds d'ancrage) :
+// c'est le seul moyen de distinguer « première exécution » de « l'utilisateur a
+// tout désancré exprès » — le nœud, lui, existe toujours dès le 1er DockSpace().
+static bool g_dockSeeded = false;
+// Géométrie FENÊTRÉE mémorisée (position + taille), tenue à jour hors kiosk. Sert à
+// deux choses : restaurer la fenêtre en sortant du plein écran kiosk, et écrire dans
+// imgui.ini la taille fenêtrée — jamais celle du plein écran, sinon un aller-retour
+// kiosk laisserait la fenêtre à la taille de l'écran au prochain lancement.
+static int g_winX = 0, g_winY = 0, g_winW = 1280, g_winH = 860;
+// La géométrie ci-dessus a-t-elle été OBSERVÉE au moins une fois en mode fenêtré ?
+// Un test sur (0,0) ne suffirait pas : une fenêtre légitimement placée à l'origine
+// se ferait recentrer à chaque sortie de borne.
+static bool g_winGeomValid = false;
 
 static void* WinSettings_ReadOpen(ImGuiContext*, ImGuiSettingsHandler*, const char* /*name*/) {
     return (void*)1;                           // une seule entrée → on accepte toujours
 }
 static void WinSettings_ReadLine(ImGuiContext*, ImGuiSettingsHandler*, void*, const char* line) {
-    int w = 0, h = 0;
+    int w = 0, h = 0, v = 0;
     if (std::sscanf(line, "Size=%d,%d", &w, &h) == 2 && w > 0 && h > 0) {
         g_iniWinW = w; g_iniWinH = h; g_iniWinValid = true;
     }
+    else if (std::sscanf(line, "DockSeeded=%d", &v) == 1) g_dockSeeded = (v != 0);
 }
 static void WinSettings_ApplyAll(ImGuiContext*, ImGuiSettingsHandler*) {
-    if (g_iniWinValid && g_window) glfwSetWindowSize(g_window, g_iniWinW, g_iniWinH);
+    if (!g_iniWinValid) return;
+    g_winW = g_iniWinW; g_winH = g_iniWinH;    // taille à retrouver en quittant le kiosk
+    // En kiosk la fenêtre APPARTIENT au moniteur (plein écran exclusif) : la
+    // redimensionner changerait le mode vidéo. On garde la taille pour plus tard.
+    if (!g_kiosk && g_window) glfwSetWindowSize(g_window, g_iniWinW, g_iniWinH);
 }
 static void WinSettings_WriteAll(ImGuiContext*, ImGuiSettingsHandler* handler, ImGuiTextBuffer* buf) {
     if (!g_window) return;
-    int w = 0, h = 0;
-    glfwGetWindowSize(g_window, &w, &h);
+    int w = g_winW, h = g_winH;                // en kiosk : la dernière taille FENÊTRÉE
+    if (!g_kiosk) glfwGetWindowSize(g_window, &w, &h);
     buf->appendf("[%s][Window]\n", handler->TypeName);
-    buf->appendf("Size=%d,%d\n\n", w, h);
+    buf->appendf("Size=%d,%d\n", w, h);
+    buf->appendf("DockSeeded=%d\n\n", g_dockSeeded ? 1 : 0);
 }
 #endif
 
@@ -437,6 +471,16 @@ static bool g_dbgPaused   = false;     // émulation gelée (breakpoint atteint 
 static bool g_dbgStepFrame = false;    // requête « avancer d'une trame » (traitée dans la boucle)
 static bool g_dbgStepInstr = false;    // requête « avancer d'une instruction » (idem)
 static SymbolTable g_symbols;          // table de symboles (noms ↔ adresses) du débogueur
+// --- Ancrage (docking) : les fenêtres de debug deviennent des ONGLETS d'une
+// disposition persistante au lieu d'une pile de fenêtres qui se recouvrent.
+// Repris de POM2 (MainWindow::renderDockSpace / applyDockLayout). Exige la branche
+// `docking` de Dear ImGui (IMGUI_HAS_DOCK) — cf. extern/imgui, sous-module épinglé.
+// Le #ifdef laisse le code compiler tel quel avec un imgui de la branche master.
+static bool    g_dockOn    = true;     // mode ancré actif (persisté : neost.cfg dock=)
+static bool    g_dockReset = false;    // requête « réinitialiser la disposition »
+#ifdef IMGUI_HAS_DOCK
+static ImGuiID g_dockId    = 0;        // identifiant du nœud racine du dockspace
+#endif
 // Save-state rapide (F5 sauver / F7 charger, slot fichier unique neost.state).
 static std::string g_stateMsg;         // message transitoire affiché en overlay
 static int         g_stateMsgFrames = 0;
@@ -804,10 +848,17 @@ void updateKbdCountry(const std::vector<uint8_t>& rom) {
 void onKey(GLFWwindow*, int key, int scancode, int action, int /*mods*/) {
     if (!g_ikbd || action == GLFW_REPEAT) return;   // TOS gère sa propre répétition (pas l'IKBD)
     if (key == GLFW_KEY_DELETE) return;             // touche hôte (libération souris)
-    // Touches réservées HÔTE : F5/F7 (save-state), F11 (bascule joystick clavier),
-    // + F9/F10 en kiosk (menu disques, zoom). Sans cette exclusion, le ST recevait
-    // la touche F5/F7 EN MÊME TEMPS que l'état était écrasé/rechargé sous ses pieds
-    // (beaucoup de jeux/GEM mappent les touches de fonction).
+    // Touches réservées HÔTE : F5/F7 (save-state), F8 (bascule GUI ⇄ kiosk),
+    // F11 (bascule joystick clavier), + F9/F10 en kiosk (menu disques, zoom). Sans
+    // cette exclusion, le ST recevait la touche F5/F7 EN MÊME TEMPS que l'état était
+    // écrasé/rechargé sous ses pieds (beaucoup de jeux/GEM mappent les touches de fonction).
+    // F8 = bascule borne ⇄ bureau, traitée ICI (dans le callback) et non par scrutation :
+    // un appui bref peut être posé ET relâché entre deux tours de boucle — glfwGetKey ne
+    // verrait alors jamais l'état PRESS. La demande est appliquée en tête de boucle.
+    if (key == GLFW_KEY_F8) {
+        if (action == GLFW_PRESS) g_kioskSwitchReq = g_kiosk ? 2 : 1;
+        return;
+    }
     if (key == GLFW_KEY_F5 || key == GLFW_KEY_F7 || key == GLFW_KEY_F11) return;
     if (g_kiosk && (key == GLFW_KEY_F9 || key == GLFW_KEY_F10)) return;
     const uint8_t sc = stScancodeFor(key, scancode);   // symbolique (layout hôte + pays TOS) → positionnel
@@ -1459,7 +1510,7 @@ void drawKioskDiskMenu(const std::string& disksDir, const std::string& mounted) 
         ImGui::SetWindowFontScale(1.0f);
         const float sp = ImGui::GetStyle().ItemSpacing.y;
         const float bf = ImGui::GetFontSize();               // taille de police de base
-        const float footer = 5.0f * (bf * 2.3f + sp)         // 5 rangées d'action @2.3
+        const float footer = 6.0f * (bf * 2.3f + sp)         // 6 rangées d'action @2.3
                            + (bf * 1.3f + sp)                // ligne « Roms found » @1.3
                            + (sp + 6.0f);                    // séparateur + petite marge
         ImGui::SetWindowFontScale(1.6f);
@@ -1497,7 +1548,8 @@ void drawKioskDiskMenu(const std::string& disksDir, const std::string& mounted) 
         actionRow(1, ImVec4(0.55f, 0.8f, 1.0f, 1.0f),  ICON_FA_KEYBOARD " KEYBOARD & MOUSE");
         actionRow(2, ImVec4(0.8f, 0.7f, 1.0f, 1.0f),   ICON_FA_GAMEPAD " JOYSTICKS");
         actionRow(3, ImVec4(0.6f, 0.95f, 0.6f, 1.0f),  ICON_FA_FOLDER_OPEN " ROM FOLDERS");
-        actionRow(4, ImVec4(1.0f, 0.5f, 0.4f, 1.0f),   ICON_FA_SIGN_OUT_ALT " QUIT NEOST");
+        actionRow(4, ImVec4(0.75f, 0.85f, 1.0f, 1.0f), ICON_FA_CLONE " DESKTOP MODE");
+        actionRow(5, ImVec4(1.0f, 0.5f, 0.4f, 1.0f),   ICON_FA_SIGN_OUT_ALT " QUIT NEOST");
         ImGui::SetWindowFontScale(1.0f);
 
         // Bas de fenêtre : nombre de ROMs trouvées (les DOSSIERS se voient dans « ROM FOLDERS »).
@@ -1675,6 +1727,75 @@ void drawKioskDiskMenu(const std::string& disksDir, const std::string& mounted) 
     ImGui::End();
 }
 
+// ─── Ancrage (docking) ──────────────────────────────────────────────────────
+// Porté de POM2 (MainWindow::renderDockSpace / applyDockLayout).
+//
+// Sème la disposition par DÉFAUT : l'écran ST au centre, les bibliothèques à
+// droite, les inspecteurs en onglets sous elles, le débogueur en bas. Reconstruit
+// tout à partir de zéro (RemoveNode désancre d'abord : une fenêtre non citée ici
+// finit flottante, jamais coincée dans un vieux nœud).
+static void applyDockLayout() {
+#ifdef IMGUI_HAS_DOCK
+    if (g_dockId == 0) return;
+    ImGui::DockBuilderRemoveNode(g_dockId);
+    ImGui::DockBuilderAddNode(g_dockId, ImGuiDockNodeFlags_DockSpace);
+    // SetNodeSize compte : les ratios de découpe sont calculés sur la taille du
+    // nœud — sans lui, la première découpe donne des tailles fantaisistes.
+    ImGui::DockBuilderSetNodeSize(g_dockId, ImGui::GetMainViewport()->WorkSize);
+
+    // `centre` est RELIÉ au reste après chaque découpe : on rogne les côtés
+    // successivement et l'écran ST garde le milieu.
+    ImGuiID centre = g_dockId;
+    ImGuiID right  = ImGui::DockBuilderSplitNode(centre, ImGuiDir_Right, 0.30f, nullptr, &centre);
+    ImGuiID rlow   = ImGui::DockBuilderSplitNode(right,  ImGuiDir_Down,  0.50f, nullptr, &right);
+    ImGuiID bottom = ImGui::DockBuilderSplitNode(centre, ImGuiDir_Down,  0.32f, nullptr, &centre);
+
+    // L'écran ST est TOUJOURS le centre.
+    ImGui::DockBuilderDockWindow("Atari ST Screen", centre);
+    // Le reste s'ancre par titre LITTÉRAL. Les fenêtres actuellement masquées sont
+    // affectées quand même : c'est cette affectation qui les fera réapparaître en
+    // onglet du bon groupe plus tard, au lieu de flotter par-dessus l'écran.
+    ImGui::DockBuilderDockWindow("Disk Library", right);
+    ImGui::DockBuilderDockWindow("Cart Library", right);
+    ImGui::DockBuilderDockWindow("CPU 68000",     rlow);
+    ImGui::DockBuilderDockWindow("Mémoire (hex)", rlow);
+    ImGui::DockBuilderDockWindow("Joystick",      rlow);
+    ImGui::DockBuilderDockWindow("Effets CRT",    rlow);
+    ImGui::DockBuilderDockWindow(ICON_FA_BUG " Débogueur",      bottom);
+    ImGui::DockBuilderFinish(g_dockId);
+#endif
+}
+
+// Pose le dockspace sur la ZONE DE TRAVAIL du viewport — le menu et la barre de
+// boutons en ont déjà réservé leur part (ce sont des `BeginViewportSideBar`), donc
+// le chrome n'est jamais recouvert et aucun décalage n'est codé en dur.
+//   · PassthruCentralNode : un centre vide ne peint pas de fond (sinon dalle grise).
+//   · KeepAliveOnly : en kiosk (ou mode ancré coupé) on ne DESSINE pas le dockspace
+//     mais on garde le nœud VIVANT — sans ça, l'aller-retour kiosk↔GUI perdrait
+//     l'ancrage des fenêtres. Rien n'est soumis dans ce mode (cf. imgui.cpp).
+// À appeler APRÈS le menu/la barre et AVANT toute fenêtre ancrable : le nœud doit
+// exister quand les Begin() suivants s'exécutent, sinon leur 1re trame est flottante.
+static void renderDockSpace(bool visible) {
+#ifdef IMGUI_HAS_DOCK
+    // Mode ancré coupé (menu « Fenêtres ») : on ne soumet RIEN. Le viewport hôte de
+    // DockSpaceOverViewport couvre toute la zone de travail — le laisser vivre sans
+    // ancrage avalerait la souris au-dessus de l'écran ST.
+    if (!(ImGui::GetIO().ConfigFlags & ImGuiConfigFlags_DockingEnable)) return;
+    ImGuiDockNodeFlags flags = ImGuiDockNodeFlags_PassthruCentralNode;
+    if (!visible) flags |= ImGuiDockNodeFlags_KeepAliveOnly;
+    g_dockId = ImGui::DockSpaceOverViewport(ImGui::GetID("NeoST_DockSpace"),
+                                            ImGui::GetMainViewport(), flags);
+    if (!visible) return;
+    // 1re exécution avec l'ancrage : on sème. Conditionné à un drapeau PERSISTÉ et
+    // non à « le nœud est-il vide » — DockSpaceOverViewport vient de le créer, donc
+    // sa vacuité ne distingue pas « installation neuve » de « tout désancré exprès ».
+    if (!g_dockSeeded) { g_dockSeeded = true; g_dockReset = true; ImGui::MarkIniSettingsDirty(); }
+    if (g_dockReset)   { g_dockReset = false; applyDockLayout(); }
+#else
+    (void)visible;
+#endif
+}
+
 // Fenêtre de l'écran ST : fenêtre de BASE (toujours là, jamais au premier plan).
 // Placée sous les barres au 1er lancement, puis DÉPLAÇABLE par glissé de sa barre de
 // titre (ImGui mémorise sa position). La taille d'affichage suit la résolution
@@ -1683,9 +1804,12 @@ void drawKioskDiskMenu(const std::string& disksDir, const std::string& mounted) 
 // ~640×400 et les bordures s'ajoutent autour (low res bordée = 416×276 → 832×552).
 // Clic dans l'image = capture souris.
 void drawStScreen(const GlScreen& s, bool captured, bool& reqCapture, float topOffset) {
-    // FirstUseEver (et non Always) : on ne fixe la position qu'au tout 1er affichage,
-    // sinon la fenêtre serait re-ancrée à chaque trame et impossible à déplacer.
-    ImGui::SetNextWindowPos(ImVec2(0.0f, topOffset), ImGuiCond_FirstUseEver);
+    // ANCRÉE : c'est le nœud qui donne position ET taille. On ne pose donc ni pos, ni
+    // taille, ni contrainte de ratio (elles se battraient avec le nœud — la fenêtre
+    // « pomperait » à chaque trame). L'image, elle, garde son ratio en letterbox.
+    // L'état d'ancrage n'est connu qu'APRÈS Begin() → on relit celui de la trame
+    // précédente (stable : un (dés)ancrage ne coûte qu'une trame de transition).
+    static bool s_docked = false;
     // Aspect pixel ST : la basse rés a des pixels 2× plus larges/hauts que la mono
     // (320×200 et 640×400 couvrent la même surface écran). On dérive l'échelle des
     // dimensions du buffer (overscan inclus) : largeur ×2 si ≤ 480 px (classe basse
@@ -1694,19 +1818,24 @@ void drawStScreen(const GlScreen& s, bool captured, bool& reqCapture, float topO
     const float sy = (s.h <= 300) ? 2.0f : 1.0f;
     const float nativeW = s.w * sx, nativeH = s.h * sy;   // taille « moniteur » corrigée
     const float aspect  = (nativeH > 0.f) ? nativeW / nativeH : 4.f / 3.f;
-    // Taille par défaut = native (au 1er affichage) ; ensuite LIBREMENT redimensionnable.
-    ImGui::SetNextWindowSize(ImVec2(nativeW, nativeH + 34.f), ImGuiCond_FirstUseEver);
-    // Contrainte de ratio : la FENÊTRE garde l'aspect ST (l'image remplit alors sans
-    // bandes). ImGui appelle ce callback pendant le redimensionnement.
     static float s_aspect = aspect;   // capté pour le callback (mono/couleur → maj)
     s_aspect = aspect;
-    ImGui::SetNextWindowSizeConstraints(
-        ImVec2(160.f, 120.f), ImVec2(FLT_MAX, FLT_MAX),
-        [](ImGuiSizeCallbackData* d) {
-            const float extra = 34.f;   // barre de titre + ligne d'aide (approx.)
-            const float a = *static_cast<float*>(d->UserData);
-            d->DesiredSize.y = (d->DesiredSize.x / a) + extra;
-        }, &s_aspect);
+    if (!s_docked) {
+        // FirstUseEver (et non Always) : on ne fixe la position qu'au tout 1er affichage,
+        // sinon la fenêtre serait re-ancrée à chaque trame et impossible à déplacer.
+        ImGui::SetNextWindowPos(ImVec2(0.0f, topOffset), ImGuiCond_FirstUseEver);
+        // Taille par défaut = native (au 1er affichage) ; ensuite LIBREMENT redimensionnable.
+        ImGui::SetNextWindowSize(ImVec2(nativeW, nativeH + 34.f), ImGuiCond_FirstUseEver);
+        // Contrainte de ratio : la FENÊTRE garde l'aspect ST (l'image remplit alors sans
+        // bandes). ImGui appelle ce callback pendant le redimensionnement.
+        ImGui::SetNextWindowSizeConstraints(
+            ImVec2(160.f, 120.f), ImVec2(FLT_MAX, FLT_MAX),
+            [](ImGuiSizeCallbackData* d) {
+                const float extra = 34.f;   // barre de titre + ligne d'aide (approx.)
+                const float a = *static_cast<float*>(d->UserData);
+                d->DesiredSize.y = (d->DesiredSize.x / a) + extra;
+            }, &s_aspect);
+    }
     ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse |
                  ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse |
                  ImGuiWindowFlags_NoBringToFrontOnFocus;
@@ -1714,6 +1843,9 @@ void drawStScreen(const GlScreen& s, bool captured, bool& reqCapture, float topO
     // fenêtre (pas de glissé). Une fois libérée (DEL), elle redevient déplaçable.
     if (captured) flags |= ImGuiWindowFlags_NoMove;
     ImGui::Begin("Atari ST Screen", nullptr, flags);
+#ifdef IMGUI_HAS_DOCK
+    s_docked = ImGui::IsWindowDocked();   // pour la trame SUIVANTE (cf. plus haut)
+#endif
     ImGui::TextDisabled(captured ? "Souris capturée — Suppr (DEL) pour la libérer"
                                  : "Clic dans l'écran pour capturer la souris (curseur GEM)");
     // On AJUSTE l'image à la zone dispo en gardant le ratio ST (letterbox centré) :
@@ -1871,6 +2003,7 @@ int main(int argc, char** argv) {
     Config cfg = loadConfig(exeDir);
     g_showDisk = cfg.showDisk; g_showCart = cfg.showCart; g_showHex = cfg.showHex;
     g_showCpu  = cfg.showCpu;  g_showJoy  = cfg.showJoy;
+    g_dockOn   = cfg.dock;     // mode ancré mémorisé (cf. renderDockSpace)
     g_crtOn    = cfg.crt;      g_crtParams = cfg.crtParams;   // effets CRT (figés en kiosk)
     g_kioskRomDirs = cfg.romDirs;   // dossiers ROM additionnels du menu kiosk (persistés)
     const std::string defRom = cfg.rom.empty() ? std::string("roms/etos192us.img") : cfg.rom;
@@ -1890,7 +2023,7 @@ int main(int argc, char** argv) {
 #endif
             return 0;
         }
-        if      (a == "--kiosk")           g_kiosk = true;
+        if      (a == "--kiosk")           g_kiosk = g_kioskLaunched = true;
         else if (a == "--kiosk-monitor" && i + 1 < argc) kioskMonitor = std::atoi(argv[++i]);
         //   --crt              : active les effets CRT (façade moniteur).
         //   --crt-preset NAME  : preset (off|leger|arcade|phosphor) ; implique --crt.
@@ -2104,6 +2237,14 @@ int main(int argc, char** argv) {
 #if defined(NEOST_WITH_IMGUI)
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
+#ifdef IMGUI_HAS_DOCK
+    // Ancrage (branche `docking` de Dear ImGui) : les fenêtres de debug deviennent
+    // des onglets d'une disposition persistante. Le MULTI-VIEWPORT (l'autre apport
+    // de la branche) reste volontairement COUPÉ : il sort les fenêtres du contexte
+    // GL de la fenêtre hôte, ce que le backend OpenGL 2 immediate-mode et la passe
+    // CRT (FBO liés à ce contexte) ne suivent pas.
+    if (g_dockOn) ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+#endif
     // Enregistre la taille de la fenêtre PRINCIPALE dans imgui.ini : gestionnaire de
     // réglages personnalisé, posé AVANT le 1er NewFrame (qui charge imgui.ini et applique
     // la taille relue). Un resize marque les réglages « sales » → ImGui resauvegarde.
@@ -2177,8 +2318,133 @@ int main(int argc, char** argv) {
 
     double lastMx = 0, lastMy = 0;
     if (g_kiosk) glfwGetCursorPos(window, &lastMx, &lastMy);   // évite le saut au 1er delta
+    // Géométrie fenêtrée de départ (à retrouver en quittant le kiosk). Lancé en
+    // --kiosk, on n'a JAMAIS été fenêtré : g_winX/g_winY resteraient à (0,0) et la
+    // première sortie de borne collerait la fenêtre à l'origine de l'écran VIRTUEL
+    // (donc sur le mauvais moniteur en bi-écran, barre de titre hors champ sous X11).
+    // D'où le drapeau : tant qu'il est faux, la sortie de borne centre la fenêtre.
+    if (!g_kiosk) {
+        glfwGetWindowPos(window, &g_winX, &g_winY);
+        glfwGetWindowSize(window, &g_winW, &g_winH);
+        g_winGeomValid = true;
+    }
+
+    // ─── Bascule GUI ⇄ kiosk à chaud ────────────────────────────────────────
+    // Le kiosk n'est plus seulement un drapeau de lancement : F8 (ou le menu
+    // « Machine », ou l'action DESKTOP MODE du menu borne) fait l'aller-retour sans
+    // relancer l'application. La MACHINE traverse la bascule intacte :
+    //   1. instantané mémoire (Machine::saveState) AVANT de toucher à quoi que ce soit ;
+    //   2. la fenêtre GLFW change de moniteur (plein écran exclusif ⇄ fenêtré) — le
+    //      contexte GL, ses textures et la passe CRT survivent, on ne recrée rien ;
+    //   3. l'instantané est rechargé derrière (Machine::loadState).
+    // L'étape 3 est la ceinture de sécurité de l'étape 2 : le ST repart exactement
+    // dans l'état quitté (jeu en cours compris) quoi que la bascule remue côté hôte
+    // — reconfiguration d'entrée, recalage de cadence, anneau audio.
+    // ⚠ À n'appeler qu'entre deux runFrame (loadState refuse le milieu de trame).
+    // kbdJoyDesk : réglage « joystick au clavier » à rendre au bureau. Initialisé à
+    // false et NON à g_kbdJoy — à ce point g_kbdJoy vaut g_kiosk, donc lancé en borne
+    // on capturerait true et la sortie vers le bureau avalerait les flèches + Ctrl
+    // droit du ST sans rien afficher. La branche GUI→KIOSK le rafraîchit ensuite.
+    auto switchKioskMode = [&, kbdJoyDesk = (g_kiosk ? false : g_kbdJoy)](bool on) mutable {
+        if (on == g_kiosk) return;
+        std::vector<uint8_t> snap;
+        machine.saveState(snap);                 // (1) instantané
+
+        if (on) {
+            // GUI → KIOSK. La config est GELÉE en kiosk : on persiste d'abord l'état
+            // courant, sinon les préférences de la session seraient perdues.
+            cfg.disk = machine.fdc.mountedPath();
+            cfg.cart = machine.bus.mountedCartPath();
+            cfg.mono = !machine.mfp.colorMonitor();
+            cfg.showDisk = g_showDisk; cfg.showCart = g_showCart; cfg.showHex = g_showHex;
+            cfg.showCpu  = g_showCpu;  cfg.showJoy  = g_showJoy;  cfg.dock = g_dockOn;
+            saveConfig(exeDir, cfg, &machine);
+#if defined(NEOST_WITH_IMGUI)
+            // Disposition des fenêtres écrite MAINTENANT : en kiosk plus aucune n'est
+            // soumise, une sauvegarde automatique plus tard n'aurait rien à dire d'elles.
+            if (ImGui::GetIO().IniFilename)
+                ImGui::SaveIniSettingsToDisk(ImGui::GetIO().IniFilename);
+#endif
+            glfwGetWindowPos(window, &g_winX, &g_winY);
+            glfwGetWindowSize(window, &g_winW, &g_winH);
+            g_winGeomValid = true;
+            g_kiosk = true;                      // AVANT saveConfig suivant : config figée
+
+            // (2) Plein écran EXCLUSIF sur le moniteur choisi (--kiosk-monitor).
+            // Même borne que la création : un index hors plage lirait mons[-1].
+            int nmon = 0; GLFWmonitor** mons = glfwGetMonitors(&nmon);
+            GLFWmonitor* mon = (mons && kioskMonitor >= 0 && kioskMonitor < nmon)
+                                   ? mons[kioskMonitor] : glfwGetPrimaryMonitor();
+            const GLFWvidmode* vm = mon ? glfwGetVideoMode(mon) : nullptr;
+            glfwSetWindowAttrib(window, GLFW_AUTO_ICONIFY, GLFW_FALSE);
+            glfwSetWindowMonitor(window, mon, 0, 0,
+                                 vm ? vm->width : g_winW, vm ? vm->height : g_winH,
+                                 vm ? vm->refreshRate : GLFW_DONT_CARE);
+            // Borne : curseur masqué, souris capturée, joystick clavier armé (une
+            // borne se joue au joystick — flèches + Ctrl droit, sans menu pour l'activer).
+            g_mouseCaptured = true;
+            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+            if (glfwRawMouseMotionSupported())
+                glfwSetInputMode(window, GLFW_RAW_MOUSE_MOTION, GLFW_TRUE);
+            kbdJoyDesk = g_kbdJoy;               // à rendre en revenant au bureau
+            g_kbdJoy   = true;
+        } else {
+            // KIOSK → GUI. Retour à la géométrie fenêtrée mémorisée + chrome rendu.
+            g_kiosk = false;
+            g_kioskDiskMenu = false;             // aucun overlay borne ne survit à la bascule
+            g_kioskPage = KIOSK_PAGE_LIST; g_kioskZone = KIOSK_ZONE_LIST;
+            // Jamais été fenêtré (session lancée en --kiosk) : centrer sur la zone de
+            // travail du moniteur COURANT plutôt que d'atterrir en (0,0). Le moniteur
+            // se lit AVANT glfwSetWindowMonitor(…, nullptr, …), qui le remet à null.
+            if (!g_winGeomValid) {
+                GLFWmonitor* m = glfwGetWindowMonitor(window);
+                if (!m) m = glfwGetPrimaryMonitor();
+                int mx = 0, my = 0, mw = 0, mh = 0;
+                if (m) glfwGetMonitorWorkarea(m, &mx, &my, &mw, &mh);
+                if (mw > 0 && mh > 0) {
+                    g_winX = mx + (mw - g_winW) / 2;
+                    g_winY = my + (mh - g_winH) / 2;
+                }
+                g_winGeomValid = true;
+            }
+            glfwSetWindowMonitor(window, nullptr, g_winX, g_winY, g_winW, g_winH,
+                                 GLFW_DONT_CARE);
+            glfwSetWindowAttrib(window, GLFW_AUTO_ICONIFY, GLFW_TRUE);
+            g_mouseCaptured = false;             // le curseur hôte revient (clic écran = recapture)
+            if (glfwRawMouseMotionSupported())
+                glfwSetInputMode(window, GLFW_RAW_MOUSE_MOTION, GLFW_FALSE);
+            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+            // Émulation joystick clavier : on REND le réglage d'avant la borne (par
+            // défaut OFF au bureau — sinon les flèches n'atteindraient plus le ST).
+            g_kbdJoy = kbdJoyDesk;
+        }
+
+        // (3) Restaure l'instantané : le ST reprend EXACTEMENT où il en était.
+        if (!snap.empty() && !machine.loadState(snap.data(), snap.size()))
+            std::fprintf(stderr, "[kiosk] ⚠ restauration de l'état échouée — "
+                                 "la machine continue telle quelle\n");
+        // Recale l'horloge et le delta souris : la bascule a pris du temps réel et
+        // déplacé le curseur (changement de mode). Sans ça : rafale de rattrapage
+        // de trames + saut de souris d'un demi-écran à la reprise.
+        emuNext = clock::now();
+        glfwGetCursorPos(window, &lastMx, &lastMy);
+        g_stateMsg = g_kiosk ? "\xef\x84\x88 Mode borne (F8 pour revenir)"
+                             : "\xef\x84\x88 Mode bureau (F8 pour la borne)";
+        g_stateMsgFrames = 120;
+        std::fprintf(stderr, "[kiosk] bascule → %s\n", g_kiosk ? "BORNE" : "BUREAU");
+    };
+
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();                      // les transitions de boutons → onMouseButton
+
+        // Bascule GUI ⇄ kiosk demandée (F8 / menus) : appliquée ICI, en tête de tour,
+        // donc entre deux trames émulées — la seule fenêtre où l'instantané se recharge.
+        if (g_kioskSwitchReq) {
+            const bool on = (g_kioskSwitchReq == 1);
+            g_kioskSwitchReq = 0;
+            switchKioskMode(on);
+        }
+
 
         // Suppr (DEL) libère la souris si elle est capturée (le curseur GEM est piloté
         // tant que la capture est active). Échap, lui, reste disponible pour le ST.
@@ -2461,6 +2727,12 @@ int main(int argc, char** argv) {
                     g_stateMsg = ok ? "\xef\x80\x9e État restauré" : "Aucun état / échec";
                     g_stateMsgFrames = 120;
                 }
+                ImGui::Separator();
+                // Bascule borne : plein écran sans chrome, config figée, navigation à
+                // la manette. La machine traverse la bascule par instantané → le jeu
+                // en cours continue. F8 revient au bureau.
+                if (ImGui::MenuItem(ICON_FA_DESKTOP " Mode borne (kiosk)", "F8"))
+                    g_kioskSwitchReq = 1;
                 // Modèle / RAM / cœur / ROM : appliqués À CHAUD (hard reset avec les
                 // nouveaux paramètres) — aucun redémarrage de l'appli. Mémorisés dans
                 // neost.cfg. `reqRebuild` déclenche la reconfiguration en fin de boucle.
@@ -2713,18 +2985,40 @@ int main(int argc, char** argv) {
                 ImGui::MenuItem(ICON_FA_GAMEPAD " Joystick",      nullptr, &g_showJoy);
                 ImGui::MenuItem(ICON_FA_BUG " Débogueur",         nullptr, &g_showDbg);
                 ImGui::MenuItem(ICON_FA_DESKTOP " Effets CRT",     nullptr, &g_showCrt);
+#ifdef IMGUI_HAS_DOCK
+                ImGui::Separator();
+                // Mode ancré : les fenêtres ci-dessus deviennent des onglets d'une
+                // disposition persistante (imgui.ini). Décoché → ImGui DÉTRUIT ses
+                // nœuds (elles redeviennent flottantes) ; recoché → on resème la
+                // disposition par défaut, la personnalisation précédente est perdue.
+                if (ImGui::MenuItem(ICON_FA_CLONE " Mode ancré (dock)", nullptr, &g_dockOn)) {
+                    ImGuiIO& dio = ImGui::GetIO();
+                    if (g_dockOn) { dio.ConfigFlags |=  ImGuiConfigFlags_DockingEnable; g_dockReset = true; }
+                    else            dio.ConfigFlags &= ~ImGuiConfigFlags_DockingEnable;
+                    cfg.dock = g_dockOn; saveConfig(exeDir, cfg, &machine);
+                }
+                if (ImGui::MenuItem(ICON_FA_REDO " Disposition par défaut", nullptr, false, g_dockOn))
+                    g_dockReset = true;
+#endif
                 ImGui::EndMenu();
             }
             ImGui::EndMainMenuBar();
         }
 
         // --- Barre de boutons (sous le menu) ---------------------------------
-        ImGui::SetNextWindowPos(ImVec2(0.0f, menuH), ImGuiCond_Always);
-        ImGui::SetNextWindowSize(ImVec2(ImGui::GetIO().DisplaySize.x, 0.0f), ImGuiCond_Always);
-        ImGui::Begin("##toolbar", nullptr,
+        // Barre latérale de VIEWPORT (et non fenêtre positionnée à la main, depuis
+        // l'arrivée de l'ancrage) : BeginViewportSideBar RÉSERVE sa hauteur dans la
+        // zone de travail, donc le dockspace posé juste après commence dessous —
+        // aucun décalage codé en dur, et la réservation suit la hauteur réelle.
+        // La taille d'un axe est donnée D'AVANCE : on la calcule (une ligne de
+        // contenu = hauteur de frame + le padding vertical de la fenêtre).
+        const float toolPadY = ImGui::GetStyle().WindowPadding.y;
+        const float toolH    = ImGui::GetFrameHeight() + toolPadY * 2.0f;
+        ImGui::BeginViewportSideBar("##toolbar", ImGui::GetMainViewport(), ImGuiDir_Up, toolH,
                      ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
                      ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
-                     ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus);
+                     ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking |
+                     ImGuiWindowFlags_NoBringToFrontOnFocus);
         ImGui::Checkbox("Disk", &g_showDisk);  ImGui::SameLine();
         ImGui::Checkbox("Cart", &g_showCart);  ImGui::SameLine();
         ImGui::Checkbox("Hex",  &g_showHex);   ImGui::SameLine();
@@ -2742,8 +3036,10 @@ int main(int argc, char** argv) {
         ImGui::SameLine();
         // Reset à froid : efface la ST-RAM → EmuTOS/TOS refait un boot complet.
         if (IconButton(ICON_FA_POWER_OFF, "Hard Reset")) reqHardReset = true;
-        const float toolH = ImGui::GetWindowSize().y;
         ImGui::End();
+
+        // --- Dockspace (après les barres, AVANT toute fenêtre ancrable) ------
+        renderDockSpace(g_dockOn);
 
         // --- Fenêtre écran (base) + fenêtres masquables ----------------------
         drawStScreen(screen, g_mouseCaptured, reqCapture, menuH + toolH);
@@ -2767,6 +3063,11 @@ int main(int argc, char** argv) {
             saveConfig(exeDir, cfg, &machine); g_joyCfgDirty = false;
         }
         }                                        // fin if(!g_kiosk) : chrome ImGui
+
+        // KIOSK : aucun chrome dessiné, mais on garde le nœud d'ancrage VIVANT
+        // (KeepAliveOnly ne soumet rien de visible). Sans ça, un aller-retour
+        // GUI → kiosk → GUI rendrait toutes les fenêtres flottantes.
+        if (g_kiosk) renderDockSpace(false);
 
         // --- Kiosk : menu in-game (START manette ou F9), jeu en PAUSE ------------
         // Modèle « vraie machine » : (A) INSÈRE la disquette choisie SANS jamais
@@ -3054,7 +3355,7 @@ int main(int argc, char** argv) {
                             }
                         } else if (up || down) {
                             g_kioskActSel += down ? 1 : -1;
-                            g_kioskActSel = (g_kioskActSel % 5 + 5) % 5;
+                            g_kioskActSel = (g_kioskActSel % 6 + 6) % 6;
                         }
                     }
                     // FEU (A/Entrée) : déclenche l'item surligné du menu focalisé.
@@ -3077,7 +3378,10 @@ int main(int argc, char** argv) {
                                     }
                                     g_romDirSel = 0;
                                     g_kioskPage = KIOSK_PAGE_ROMDIRS; break;
-                                case 4: g_kioskPage = KIOSK_PAGE_QUIT; break;  // Quitter
+                                case 4:                                   // Mode bureau (GUI)
+                                        g_kioskSwitchReq = 2;
+                                        g_kioskDiskMenu = false; break;
+                                case 5: g_kioskPage = KIOSK_PAGE_QUIT; break;  // Quitter
                             }
                         }
                     }

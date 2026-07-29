@@ -64,6 +64,7 @@ private:
 
     Mfp&    mfp_;
     Scheduler* sched_ = nullptr;
+    static constexpr std::size_t kMidiRxMax = 2;   // RDR + registre à décalage (6850)
     std::deque<uint8_t> rx_;                 // file MIDI IN (alimentée par le bouclage)
     uint8_t rdr_ = 1;                        // dernier octet lu (RDR persistant : relu à vide, cf. 6850) ;
                                              // amorçage 1 comme Hatari (midi.c:110, Midi_Reset)

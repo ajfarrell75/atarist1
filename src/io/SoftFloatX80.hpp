@@ -55,7 +55,13 @@ inline f80      pack(int sign, int32_t exp, uint64_t sig) {
 inline bool isNaN(f80 a) { return (a.high & 0x7FFF) == 0x7FFF && (a.low << 1) != 0; }
 inline bool isSNaN(f80 a){ return isNaN(a) && !(a.low & 0x4000000000000000ull); }
 inline f80  defaultNaN() { return f80{ 0x7FFF, 0xFFFFFFFFFFFFFFFFull }; }     // QNaN 68881
-constexpr uint64_t INF_LOW = 0x8000000000000000ull;
+constexpr uint64_t INF_LOW = 0x8000000000000000ull;   // MSB du SIGNIFICANDE
+// Significande canonique d'un infini GÉNÉRÉ par l'arithmétique 68881 : bit entier
+// explicite j = 0, fraction = 0 (≙ floatx80_default_infinity_low, softfloat.h:348).
+// À ne pas confondre avec INF_LOW ci-dessus : Fpu::decodeFmt rend déjà cette forme
+// pour un ±∞ chargé depuis la mémoire ; empaqueter INF_LOW ici produirait DEUX
+// motifs binaires différents pour +∞ selon son origine, et FMOVE.X ≠ oracle.
+constexpr uint64_t INF_SIG = 0x0000000000000000ull;
 
 // Propagation des NaN (cf. Hatari propagateFloatx80NaN, chemin SOFTFLOAT_68K) :
 // renvoie l'opérande NaN RÉEL (signe + payload) quiété (bit 62 = 1), au lieu d'un
@@ -189,7 +195,7 @@ inline f80 roundAndPack(int prec, int sign, int32_t zExp, uint64_t zSig0, uint64
         if (zSig0 & roundMask) raise(st, flag_inexact);
         if (rm == round_to_zero || (sign && rm == round_up) || (!sign && rm == round_down))
             return pack(sign, 0x7FFE - expOffset, ~roundMask);
-        return pack(sign, 0x7FFF, INF_LOW);
+        return pack(sign, 0x7FFF, INF_SIG);
     }
     if (zExp < (expOffset + 1)) {
         raise(st, flag_underflow);
@@ -222,7 +228,7 @@ precision80:
             if (zSig1) raise(st, flag_inexact);
             if (rm == round_to_zero || (sign && rm == round_up) || (!sign && rm == round_down))
                 return pack(sign, 0x7FFE, ~uint64_t(0));
-            return pack(sign, 0x7FFF, INF_LOW);
+            return pack(sign, 0x7FFF, INF_SIG);
         }
         if (zExp < 0) {
             raise(st, flag_underflow);
@@ -347,7 +353,7 @@ inline f80 div(f80 a, f80 b, Status& st) {
     if (bExp == 0) {
         if (bSig == 0) {
             if ((aExp | aSig) == 0) { raise(st, flag_invalid); return defaultNaN(); }
-            raise(st, flag_divzero); return pack(zSign, 0x7FFF, INF_LOW);
+            raise(st, flag_divzero); return pack(zSign, 0x7FFF, INF_SIG);
         }
         normalizeSubnormal(bSig, bExp, bSig);
     }
@@ -415,7 +421,14 @@ inline f80 rem(f80 a, f80 b, uint64_t& q, int& s, bool mod, Status& st) {
     if (bExp == 0) { if (bSig == 0) { raise(st, flag_invalid); return defaultNaN(); } normalizeSubnormal(bSig, bExp, bSig); }
     if (aExp == 0) { if (aSig0 == 0) { s = (aSign != bSign); return a; } normalizeSubnormal(aSig0, aExp, aSig0); }
     bSig |= INF_LOW; zSign = aSign; expDiff = aExp - bExp; s = (aSign != bSign); aSig1 = 0;
-    if (expDiff < 0) { if (expDiff < -1) return a; shift128Right(aSig0, 0, 1, aSig0, aSig1); expDiff = 0; }
+    if (expDiff < 0) {
+        // floatx80_mod (softfloat.c:3048) passe TOUT expDiff négatif par roundAndPack
+        // — d'où l'arrondi à la précision du FPCR et UNFL sur un dénormal ; seul
+        // floatx80_rem (softfloat.c:2941) court-circuite par « return a ».
+        if (mod) return roundAndPack(st.roundingPrecision, aSign, aExp, aSig0, 0, st);
+        if (expDiff < -1) return a;
+        shift128Right(aSig0, 0, 1, aSig0, aSig1); expDiff = 0;
+    }
     qTemp = (bSig <= aSig0); if (qTemp) aSig0 -= bSig;
     q = (expDiff > 63) ? 0 : (qTemp << expDiff); expDiff -= 64;
     while (0 < expDiff) {

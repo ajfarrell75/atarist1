@@ -117,7 +117,7 @@ int8_t DmaSound::fifoPull() {
         fifoRefill();
         if (fifoNb_ == 0) return 0;                    // FIFO vide et DMA arrêté
     }
-    const int8_t s = fifo_[fifoPos_];
+    const int8_t s = fifo_[fifoPos_ & 7];
     fifoPos_ = (fifoPos_ + 1) & 7;
     --fifoNb_;
     return s;
@@ -273,7 +273,7 @@ uint16_t DmaSound::mwMaskRead() const {
 void DmaSound::onMicrowireShift() {
     if (mwSteps_ <= 0) return;
     --mwSteps_;
-    mwShift_ = uint16_t(mwData_ << (16 - mwSteps_));    // étapes=0 → <<16 = 0
+    mwShift_ = uint16_t(uint32_t(mwData_) << (16 - mwSteps_));  // étapes=0 → <<16 = 0 (non signé : <<16 déborderait un int)
     if (mwSteps_ > 0) {
         if (sched_) sched_->schedule(Scheduler::MICROWIRE, sched_->now() + 8);
     } else {
