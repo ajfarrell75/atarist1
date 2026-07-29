@@ -154,7 +154,7 @@ public:
         ar(dmaBytesToTransfer_);
         ar.arr(fifo_);              // uint8_t[16]
         ar(fifoSize_);
-        ar.check(fifoSize_ >= 0 && fifoSize_ <= 16);   // indexe fifo_[16]
+        ar.check(fifoSize_ >= 0 && fifoSize_ < 16);    // fifoPush écrit fifo_[fifoSize_] : 0..15
         ar(dmaError_);
         ar(ff8604recent_);
         ar(ctrlHi_);

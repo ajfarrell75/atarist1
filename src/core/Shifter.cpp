@@ -33,6 +33,18 @@
 // sur les 9552 écritures/trame → seule la règle de quantification différait).
 static constexpr int kSpec512AlignCyc = -25;
 
+// Lecture d'un verrou d'environnement booléen, avec la MÊME règle partout :
+// variable absente → défaut, sinon « 0 » (ou toute valeur nulle) = OFF. Les trois
+// sites NEOST_LINELEN de ce fichier testaient la seule PRÉSENCE de la variable,
+// alors que Machine.cpp lit sa valeur : NEOST_LINELEN=0, censé désactiver le
+// mécanisme pour l'A/B, désactivait la moitié Machine et ACTIVAIT la moitié
+// Shifter — l'A/B mesurait donc un hybride jamais validé. Le défaut de chaque
+// site est inchangé ici : seule la façon de lire la variable est corrigée.
+static bool envFlag(const char* name, bool dflt) {
+    const char* s = std::getenv(name);
+    return s ? (std::atoi(s) != 0) : dflt;
+}
+
 // Seuil de détection « image spec512 » : nombre d'écritures palette MOT par trame
 // à partir duquel on bascule sur le re-rendu intra-ligne. **1 = le défaut Hatari**
 // (configuration.c:769 nSpec512Threshold = 1 ; spec512.c:222 compare en >=) : la
@@ -324,7 +336,12 @@ void Shifter::resizeFor(Mode m) {
     const int w = border ? (kBorderLeftPx + aw + kBorderRightPx) : aw;
     const int h = border ? (kBorderTopLines + ah + kBorderBotLines) : ah;
     curAH_ = ah;
-    if (w == curW_ && h == curH_) return;
+    // La taille du tampon fait partie du test : sans elle, une géométrie restaurée
+    // d'un save-state qui coïncide avec celle du mode courant sauterait la
+    // réallocation et laisserait frame_ sous-dimensionné (cf. l'invariant posé
+    // dans Shifter::serialize).
+    if (w == curW_ && h == curH_ &&
+        frame_.size() == static_cast<std::size_t>(w) * static_cast<std::size_t>(h)) return;
     curW_ = w; curH_ = h;
     frame_.assign(static_cast<std::size_t>(w) * h, 0xFF000000u);
 }
@@ -423,7 +440,7 @@ void Shifter::liveGlueCatchUp(int targetLine) {
     // NEOST_LINELEN : attribution des écritures à la grille RÉELLE (échelle des
     // débuts de ligne glueLineStart_, alimentée à chaque avance de ligne ;
     // longueur courante déplacée par les « Freq_match » via glueCyclesLine_).
-    static const bool lineLen = std::getenv("NEOST_LINELEN") != nullptr;
+    static const bool lineLen = envFlag("NEOST_LINELEN", false);
     for (;;) {
         // Écriture en attente sur une ligne déjà initialisée → consommer AVANT
         // d'avancer (elle conditionne res/freq des lignes suivantes).
@@ -635,6 +652,22 @@ int Shifter::glueLineBytes(int scanline) const {
     const GlueLine& L = glueLines_[static_cast<std::size_t>(scanline)];
     if (L.displayStartCycle < 0) return bpl;             // ligne sans état glue calculé
     if (L.borderMask & glue::NO_DE) return 0;            // ligne sans display-enable
+    // DE vertical jamais activé de toute la trame : Hatari efface la ligne SANS
+    // avancer pVideoRaster (video.c:3988) — le compteur reste donc figé sur la base
+    // vidéo, ce qu'un programme relit en $FF8205/07/09 pour savoir si son retrait
+    // de bordure haute a échoué.
+    if (glueVOverscan_ & glue::VO_NO_DE) return 0;
+    // Hors de la fenêtre verticale [nStartHBL, nEndHBL + BlankLines) : même branche
+    // « total blank line » d'Hatari, qui n'avance pas non plus pVideoRaster
+    // (video.c:3985). Le garde-fou de commitScanline ne couvrait QUE le cas d'une
+    // fenêtre plus LONGUE que curAH_ (bordure basse retirée) car il est imbriqué
+    // dans `vcLineY_ >= curAH_` ; une fenêtre plus COURTE — VO_BOTTOM_SHORT_50, un
+    // écran 50 Hz qui se termine à la position 60 Hz, soit 29 lignes de moins —
+    // laissait le compteur avancer sur des lignes non affichées. On borne ici
+    // plutôt que dans la boucle de commit : la CADENCE de capture lineSnap_ reste
+    // intacte (c'est elle qui tient les sprites d'Enchanted Land et l'ancre de
+    // Lethal Xcess), seul le stride devient nul, comme chez Hatari.
+    if (scanline < glueStartHBL_ || scanline >= glueEndHBL_ + glueBlankLines_) return 0;
     int bytes = 160;                                     // BORDERBYTES_NORMAL
     const uint32_t bm = L.borderMask;
     if (bm & (glue::LEFT_OFF | glue::LEFT_OFF_MED)) bytes += 26;   // BORDERBYTES_LEFT (hi/lo OU hi/med)
@@ -1022,6 +1055,8 @@ bool Shifter::liveLineDisplayed(int line) {
         liveGlueCatchUp(line);
         // Fenêtre verticale [nStartHBL, nEndHBL + BlankLines) comme Hatari
         // (video.c:3649) : les lignes blanches no-sync repoussent la fin d'autant.
+        // Le même test d'Hatari exclut aussi la trame sans DE vertical.
+        if (glueVOverscan_ & glue::VO_NO_DE) return false;
         if (line < glueStartHBL_ || line >= glueEndHBL_ + glueBlankLines_) return false;
         return !(glueLines_[static_cast<std::size_t>(line)].borderMask & glue::NO_DE);
     }
@@ -1449,7 +1484,7 @@ void Shifter::replayGlue() {
     // (dernier nCyclesPerLine posé par un « Freq_match », défaut cpl), comme la
     // chaîne StartCycle/nCyclesPerLine de Hatari. Remplace l'heuristique V2
     // « impulsion hi ≤57 → 224 ».
-    static const bool lineLen = std::getenv("NEOST_LINELEN") != nullptr;
+    static const bool lineLen = envFlag("NEOST_LINELEN", false);
     std::size_t wi = 0;
     const std::size_t nw = syncWrites_.size();
     int64_t lineCyc = 0;                                  // cycle-trame du début de la ligne (V2/LINELEN)
@@ -1719,8 +1754,14 @@ void Shifter::renderGlueFrame() {
         // Fenêtre verticale = [nStartHBL, nEndHBL + BlankLines) comme Hatari
         // (video.c:3985, :1568) : les lignes blanches no-sync insérées (glueBlank-
         // Lines_) repoussent la fin d'affichage d'autant. 0 sans trick no-sync.
+        // VO_NO_DE : trame 50 Hz dont le DE vertical n'a JAMAIS été activé (bascule
+        // de fréquence entre Top_Pos et nStartHBL) — chez Hatari, TOUTES les lignes
+        // tombent dans le test « total blank line » (video.c:3988) et sortent à
+        // l'index couleur 0. Le drapeau est figé dès nStartHBL, donc l'appliquer à
+        // la trame entière au rendu équivaut au test par-ligne d'Hatari.
         const bool displayed = (sl >= glueStartHBL_ && sl < glueEndHBL_ + glueBlankLines_
-                                && sl >= 0 && sl < nLines);
+                                && sl >= 0 && sl < nLines
+                                && !(glueVOverscan_ & glue::VO_NO_DE));
         int ds = 0, de = 0, shift = 0; uint32_t bm = 0;
         if (displayed) { const GlueLine& L = glueLines_[sl]; ds = L.displayStartCycle; de = L.displayEndCycle; bm = L.borderMask; shift = L.displayPixelShift; }
         // Re-normalisation wakestate : les DE stockés viennent de la table Glue
@@ -1904,6 +1945,21 @@ bool Shifter::glueSelfTest() {
     // 5. Retrait BAS : 60 Hz @ ligne 261.
     run({ {261,100,0,0x00} });
     chk("bottom nEndHBL", glueEndHBL_, 310);                         // VDE_Off_NoBottom_50
+
+    // 4bis. DE vertical JAMAIS activé (video.c:2920-2923) : écran 50 Hz dont la
+    // fréquence passe à 60 Hz APRÈS Top_Pos (34) et avant nStartHBL (63) sans
+    // revenir à 50 Hz à temps. Le drapeau étant STICKY et noircissant toute la
+    // trame, la détection est verrouillée ici AVANT ses trois consommateurs
+    // (rendu, compteur vidéo, Timer B event-count).
+    run({ {45,100,0,0x00} });
+    chk("node NO_DE",     (glueVOverscan_ & glue::VO_NO_DE) ? 1 : 0, 1);
+    chk("node bytes",     glueLineBytes(100), 0);                    // raster non avancé
+    chk("node timerB",    liveLineDisplayed(100) ? 1 : 0, 0);        // event-count muet
+    // Contre-épreuve : la MÊME bascule AVANT Top_Pos est un retrait de bordure
+    // haute ordinaire — surtout pas un écran noir (cas 4 ci-dessus).
+    run({ {10,100,0,0x00}, {40,100,0,0x02} });
+    chk("node !top",      (glueVOverscan_ & glue::VO_NO_DE) ? 1 : 0, 0);
+    chk("node !top bytes", glueLineBytes(100), 160);
 
     // 6. Écran NORMAL (aucune écriture) : aucune bordure retirée.
     run({});
@@ -2261,7 +2317,7 @@ uint32_t Shifter::videoCounter() const {
     // clignotement vertical bistable (fenêtre 34..310 ↔ 63..263). Mesuré à
     // l'oracle (traces video_addr + cpu_disasm, 2026-07-03) : chemin CPU et
     // ancre VBL identiques, seule la fonction valeur(t) différait.
-    static const bool lineLenRead = std::getenv("NEOST_LINELEN") != nullptr;
+    static const bool lineLenRead = envFlag("NEOST_LINELEN", false);
     if (lineLenRead && frameMode_ != Mode::High && !syncWrites_.empty()
         && static_cast<std::size_t>(line) + 2 < glueLineStart_.size()) {
         const_cast<Shifter*>(this)->liveGlueCatchUp(line + 1);
@@ -2341,6 +2397,14 @@ uint32_t Shifter::videoCounter() const {
                     leftOff = (bm & glue::LEFT_OFF) != 0;
                     int curSize = 160;                                // BORDERBYTES_NORMAL
                     if (leftOff)                       curSize += 26; // BORDERBYTES_LEFT
+                    // Retrait gauche COURT du STE : +20 o comme les autres masques
+                    // (video.c:1514-1517, BORDERBYTES_LEFT_2_STE). Il manquait ici
+                    // alors que glueLineBytes() le crédite déjà — la ligne faisait
+                    // donc 180 o pour l'accumulation inter-lignes mais 160 pour
+                    // l'offset intra-ligne, et la borne de gel LineEndCycle tombait
+                    // 40 cycles trop tôt. Ordre repris d'Hatari : LEFT_OFF garde la
+                    // priorité, LEFT_PLUS_2 reste APRÈS les variantes STE.
+                    else if (bm & (glue::LEFT_OFF_2_STE | glue::LEFT_OFF_2_STE_MED)) curSize += 20;
                     else if (bm & glue::LEFT_PLUS_2)   curSize += 2;
                     else if (hwScrollCount && hwScrollPrefetch) curSize += 8;
                     if (bm & glue::STOP_MIDDLE)        curSize -= 106;

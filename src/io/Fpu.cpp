@@ -639,11 +639,17 @@ void Fpu::genOp(uint16_t cmd, Ext src) {
                      rf = sf::roundToInt(s, z); }       break;
         case 0x1F: rf = sf::getMan(s, st);              break;                 // FGETMAN
         case 0x1E: {                                                           // FGETEXP
+            // Ordre d'Hatari (softfloat.c:3201) : le NaN passe par propagateNaN1, qui
+            // QUIÈTE un SNaN et lève flag_signaling → FPSR.SNAN + AEXC.IOP (vecteur 54
+            // si armé). L'ancien code rendait l'opérande BRUT : le SNaN restait
+            // signalant et aucun drapeau n'était posé — cf. le même correctif déjà
+            // appliqué à FMOVE/FABS/FNEG, et FGETMAN qui délègue déjà à propagateNaN1.
+            if (sf::expOf(s) == 0x7FFF) {
+                if (sf::isNaN(s)) { rf = sf::propagateNaN1(st, s); break; }
+                rf = sf::defaultNaN(); st.exceptionFlags |= sf::flag_invalid; break;   // ±∞ → OPERR
+            }
             bool sp; int32_t e = sf::getExpUnbiased(s, sp);
-            if (!sp)                          rf = toF(dToExt(double(e)));
-            else if (sf::isNaN(s))            rf = s;
-            else if (sf::expOf(s) == 0x7FFF){ rf = sf::defaultNaN(); st.exceptionFlags |= sf::flag_invalid; }
-            else                              rf = s;                          // ±0 → ±0
+            rf = sp ? s : toF(dToExt(double(e)));                               // sp ici ⇒ ±0 → ±0
             break;
         }
         case 0x26: {                                                          // FSCALE : d × 2^trunc(s)

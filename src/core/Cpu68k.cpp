@@ -479,10 +479,19 @@ namespace {
 //    SES accès (la tranche suivante n'en fera que 63) ;
 //  - fenêtre CPU (phase COUNT_CPU_BUS) : le blitter attend 64 accès bus CPU réels
 //    avant de reprendre le bus — le 64ᵉ date la tranche suivante (+4 cycles).
-// Date de l'accès = horloge bus absolue (busOfClock, domaine Scheduler::liveNow).
+// Date de l'accès = horloge de l'ORDONNANCEUR (Scheduler::liveNow), et pas celle du
+// cœur : la fenêtre PRE_START est armée et la tranche reprogrammée avec liveNow()
+// (Blitter.cpp:233-234), or les deux horloges sont décalées d'environ 40 cycles — les
+// ~40 cycles que Moira::reset() consomme avant que la 1ʳᵉ trame n'ancre frameStart_ sur
+// sched.now(). Comparer un timestamp du cœur à une fenêtre du domaine ordonnanceur
+// ratait donc la fenêtre, et réinjecter ce timestamp dans schedule() décalait la
+// reprise du blitter. (L'écart se résorbait par accident au 1ᵉʳ saut STOP, qui
+// resynchronise les deux horloges.) L'ancrage de la trame sur sched.now() est, lui,
+// DÉLIBÉRÉ — cf. Machine.cpp : l'ancrer sur busClockNow décalerait la grille faisceau.
 void noteBlitterPreStart() {
     if (!g_moira || !g_bus->blitter) return;
-    const int64_t t = busOfClock(static_cast<int64_t>(g_moira->getClock()));
+    const int64_t t = g_sched ? g_sched->liveNow()
+                              : busOfClock(static_cast<int64_t>(g_moira->getClock()));
     if (t >= g_bus->blitterWinStart && t < g_bus->blitterWinEnd)
         g_bus->blitter->notePreStartCpuAccess();
     if (g_bus->blitterCountCpu)
