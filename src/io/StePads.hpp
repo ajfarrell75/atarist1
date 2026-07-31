@@ -120,7 +120,7 @@ public:
         if ((select_ & 0xF0) != 0xF0) {
             nData &= 0x0F;
             if (!(select_ & 0x10))                   // ligne « directions »
-                nData |= uint16_t((~stickData(padB_) << 4) & 0xF0);
+                nData |= uint16_t((~unsigned(stickData(padB_)) << 4) & 0xF0);   // unsigned : décaler un négatif est UB
             else nData |= 0xF0;
         }
 

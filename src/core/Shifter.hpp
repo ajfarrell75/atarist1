@@ -129,8 +129,11 @@ public:
     // En mode standard : == activeTop()/activeHeight(). En overscan haut (EL, LX…) :
     // glueStartHBL_ < 63 → liveTop() < activeTop(), liveHeight() > activeHeight().
     // Les lignes basses vides (glueBlankLines_) sont incluses dans liveHeight().
+    // 63 serait le début d'affichage 50 Hz seulement : en 60 Hz il vaut 34, et coder
+    // la valeur PAL en dur faisait rendre 0 sur une trame 60 Hz à bordure retirée —
+    // le cadrage kiosk en concluait alors qu'aucune bordure basse n'était ouverte.
     int liveTop() const {
-        return std::max(0, activeY_ + (glueStartHBL_ - 63));
+        return std::max(0, activeY_ + (glueStartHBL_ - geometry().dispStartLine));
     }
     int liveHeight() const {
         const int lt = liveTop();
@@ -143,7 +146,7 @@ public:
     // utiliser ces accesseurs (et non liveTop/liveHeight) pour éviter de lire l'état
     // de début de trame N+1 au lieu de fin de trame N.
     int snapLiveTop() const {
-        return std::max(0, activeY_ + (snapGlueStart_ - 63));
+        return std::max(0, activeY_ + (snapGlueStart_ - geometry().dispStartLine));
     }
     int snapLiveHeight() const {
         const int lt = snapLiveTop();

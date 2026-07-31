@@ -117,7 +117,7 @@ void DriveSound::mix(float* out, uint32_t frames) {
         ma_uint64 got = 0;
         if (ma_engine_read_pcm_frames(eng, tmp, want, &got) != MA_SUCCESS) break;
         for (ma_uint64 i = 0; i < got; ++i) out[done + i] += tmp[i];   // mono : somme directe
-        done += static_cast<uint32_t>(want);
+        done += static_cast<uint32_t>(got);   // got, PAS want : sinon une lecture courte décalerait out[] hors tampon
         if (got < want) break;
     }
 }

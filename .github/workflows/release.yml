@@ -124,6 +124,12 @@ jobs:
           echo "Symbole glibc le plus haut : ${MAX:-aucun}"
           test "$(printf '%s\nGLIBC_2.27\n' "$MAX" | sort -V | tail -1)" = "GLIBC_2.27" \
             || { echo "ERREUR : le paquet exige ${MAX} > GLIBC_2.27"; exit 1; }
+          # libstdc++ doit être STATIQUE : linuxdeploy blackliste libstdc++.so.6 et ne
+          # l'embarquera jamais, donc un GLIBCXX dynamique (flags -static-libstdc++
+          # retirés) laisserait la garde GLIBC_ ci-dessus au vert tout en rendant le
+          # paquet inutilisable sur Mint 19 — le seul public que ce job existe pour servir.
+          GXX=$(objdump -T "$BIN" | grep -oE 'GLIBCXX_[0-9.]+' | sort -V | tail -1 || true)
+          test -z "$GXX" || { echo "ERREUR : libstdc++ liée dynamiquement ($GXX)"; exit 1; }
           # GLFW doit être DANS le paquet (les cibles ne l'ont pas forcément)…
           find squashfs-root -name 'libglfw*' | grep -q . \
             || { echo "ERREUR : libglfw absente du paquet"; exit 1; }
@@ -134,15 +140,32 @@ jobs:
           # Contenu libre uniquement : aucune ROM non-EmuTOS, aucun jeu.
           STRAY=$(find squashfs-root/usr/roms -maxdepth 1 -name '*.img' ! -name 'etos*')
           test -z "$STRAY" || { echo "ERREUR : ROM non libre embarquée : $STRAY"; exit 1; }
+          # …et rien d'autre que diskA.st côté disquettes : le dépôt contient des jeux
+          # sous copyright, la garde ROM seule ne les aurait jamais vus.
+          STRAYD=$(find squashfs-root/usr/disks -type f ! -name 'diskA.st')
+          test -z "$STRAYD" || { echo "ERREUR : disquette non libre embarquée : $STRAYD"; exit 1; }
+          # Polices : sans elles le GUI se replie en silence sur la police bitmap
+          # d'ImGui et tous les pictogrammes deviennent des carrés vides (invisible
+          # ici, le smoke étant headless — d'où cette garde structurelle).
+          for f in DejaVuSans.ttf fa-solid-900.ttf; do
+            test -s "squashfs-root/usr/fonts/$f" || { echo "ERREUR : police absente du paquet : $f"; exit 1; }
+          done
           echo "OK : AppImage x86_64 valide (ET_EXEC, glibc <= 2.27)"
 
       - name: Smoke-launch (boot EmuTOS headless 500 trames + capture)
+        env:
+          NEOST_VERSION: ${{ needs.version.outputs.neost_version }}
         run: |
           set -euo pipefail
           # glibc rétro-compatible : le binaire 2.27 tourne sur le runner.
           # neost-headless résout roms/ depuis le cwd → se placer dans usr/.
           cd squashfs-root/usr
+          # La version ANNONCÉE doit être celle du paquet : le define était figé sur le
+          # project() de CMake, donc tous les paquets d'une release se présentaient
+          # comme « 0.1.0 » et aucun rapport de bug n'était rattachable à une release.
           bin/neost-headless --version
+          bin/neost-headless --version | grep -qF "$NEOST_VERSION" \
+            || { echo "ERREUR : version binaire ≠ $NEOST_VERSION"; exit 1; }
           bin/neost-headless roms/etos192us.img --frames 500 --screenshot boot.ppm
           # Le bureau EmuTOS doit être affiché : capture non uniforme.
           python3 - <<'EOF'
@@ -210,13 +233,30 @@ jobs:
           fi
           STRAY=$(find squashfs-root/usr/roms -maxdepth 1 -name '*.img' ! -name 'etos*')
           test -z "$STRAY" || { echo "ERREUR : ROM non libre embarquée : $STRAY"; exit 1; }
+          # …et rien d'autre que diskA.st côté disquettes : le dépôt contient des jeux
+          # sous copyright, la garde ROM seule ne les aurait jamais vus.
+          STRAYD=$(find squashfs-root/usr/disks -type f ! -name 'diskA.st')
+          test -z "$STRAYD" || { echo "ERREUR : disquette non libre embarquée : $STRAYD"; exit 1; }
+          # Polices : sans elles le GUI se replie en silence sur la police bitmap
+          # d'ImGui et tous les pictogrammes deviennent des carrés vides (invisible
+          # ici, le smoke étant headless — d'où cette garde structurelle).
+          for f in DejaVuSans.ttf fa-solid-900.ttf; do
+            test -s "squashfs-root/usr/fonts/$f" || { echo "ERREUR : police absente du paquet : $f"; exit 1; }
+          done
           echo "OK : AppImage aarch64 générique valide (ET_EXEC)"
 
       - name: Smoke-launch (boot EmuTOS headless 500 trames + capture)
+        env:
+          NEOST_VERSION: ${{ needs.version.outputs.neost_version }}
         run: |
           set -euo pipefail
           cd squashfs-root/usr
+          # La version ANNONCÉE doit être celle du paquet : le define était figé sur le
+          # project() de CMake, donc tous les paquets d'une release se présentaient
+          # comme « 0.1.0 » et aucun rapport de bug n'était rattachable à une release.
           bin/neost-headless --version
+          bin/neost-headless --version | grep -qF "$NEOST_VERSION" \
+            || { echo "ERREUR : version binaire ≠ $NEOST_VERSION"; exit 1; }
           bin/neost-headless roms/etos192us.img --frames 500 --screenshot boot.ppm
           python3 - <<'EOF'
           data = open('boot.ppm', 'rb').read()
@@ -290,15 +330,32 @@ jobs:
           fi
           STRAY=$(find squashfs-root/usr/roms -maxdepth 1 -name '*.img' ! -name 'etos*')
           test -z "$STRAY" || { echo "ERREUR : ROM non libre embarquée : $STRAY"; exit 1; }
+          # …et rien d'autre que diskA.st côté disquettes : le dépôt contient des jeux
+          # sous copyright, la garde ROM seule ne les aurait jamais vus.
+          STRAYD=$(find squashfs-root/usr/disks -type f ! -name 'diskA.st')
+          test -z "$STRAYD" || { echo "ERREUR : disquette non libre embarquée : $STRAYD"; exit 1; }
+          # Polices : sans elles le GUI se replie en silence sur la police bitmap
+          # d'ImGui et tous les pictogrammes deviennent des carrés vides (invisible
+          # ici, le smoke étant headless — d'où cette garde structurelle).
+          for f in DejaVuSans.ttf fa-solid-900.ttf; do
+            test -s "squashfs-root/usr/fonts/$f" || { echo "ERREUR : police absente du paquet : $f"; exit 1; }
+          done
           echo "OK : AppImage Raspberry Pi valide (glibc <= 2.36)"
 
       - name: Smoke-launch (boot EmuTOS headless 500 trames + capture)
+        env:
+          NEOST_VERSION: ${{ needs.version.outputs.neost_version }}
         run: |
           set -euo pipefail
           # La glibc est rétro-compatible : le binaire bâti en 2.36 tourne sur
           # le runner 2.39. neost-headless résout roms/ depuis le cwd.
           cd squashfs-root/usr
+          # La version ANNONCÉE doit être celle du paquet : le define était figé sur le
+          # project() de CMake, donc tous les paquets d'une release se présentaient
+          # comme « 0.1.0 » et aucun rapport de bug n'était rattachable à une release.
           bin/neost-headless --version
+          bin/neost-headless --version | grep -qF "$NEOST_VERSION" \
+            || { echo "ERREUR : version binaire ≠ $NEOST_VERSION"; exit 1; }
           bin/neost-headless roms/etos192us.img --frames 500 --screenshot boot.ppm
           python3 - <<'EOF'
           data = open('boot.ppm', 'rb').read()
@@ -350,9 +407,23 @@ jobs:
           test -z "$LEAKED" || { echo "ERREUR : dylib hors bundle : $LEAKED"; exit 1; }
           STRAY=$(find dist/NeoST.app/Contents/roms -maxdepth 1 -name '*.img' ! -name 'etos*')
           test -z "$STRAY" || { echo "ERREUR : ROM non libre embarquée : $STRAY"; exit 1; }
+          STRAYD=$(find dist/NeoST.app/Contents/disks -type f ! -name 'diskA.st')
+          test -z "$STRAYD" || { echo "ERREUR : disquette non libre embarquée : $STRAYD"; exit 1; }
+          for f in DejaVuSans.ttf fa-solid-900.ttf; do
+            test -s "dist/NeoST.app/Contents/fonts/$f" || { echo "ERREUR : police absente du paquet : $f"; exit 1; }
+          done
+          # Plancher système : sans CMAKE_OSX_DEPLOYMENT_TARGET, clang estampille la
+          # version de l'OS du runner (15.x) et le .dmg refuse de démarrer sur
+          # Ventura/Sonoma comme sur tout Mac Intel d'avant 2019.
+          MINOS=$(vtool -show-build "$BIN" | awk '/minos/{print $2; exit}')
+          echo "Plancher macOS : ${MINOS:-inconnu}"
+          test -n "$MINOS" && test "$(printf '%s\n11.0\n' "$MINOS" | sort -V | head -1)" = "11.0" \
+            || { echo "ERREUR : le paquet exige macOS ${MINOS} > 11.0"; exit 1; }
           echo "OK : .app Universal 2 autonome"
 
       - name: Smoke-launch (boot EmuTOS headless 500 trames + capture)
+        env:
+          NEOST_VERSION: ${{ needs.version.outputs.neost_version }}
         run: |
           set -euo pipefail
           # Exerce la tranche arm64 (l'arch du runner) ; la tranche x86_64 est
@@ -360,6 +431,8 @@ jobs:
           # macOS arm64 de GitHub n'ont pas Rosetta, on ne peut pas l'exécuter.
           cd dist/NeoST.app/Contents
           MacOS/neost-headless --version
+          MacOS/neost-headless --version | grep -qF "$NEOST_VERSION" \
+            || { echo "ERREUR : version binaire ≠ $NEOST_VERSION"; exit 1; }
           MacOS/neost-headless roms/etos192us.img --frames 500 --screenshot boot.ppm
           python3 - <<'EOF'
           data = open('boot.ppm', 'rb').read()

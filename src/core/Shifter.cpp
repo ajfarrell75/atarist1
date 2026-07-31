@@ -732,8 +732,17 @@ void Shifter::endVideoLine() {
         lineSnapLen_[sl] = static_cast<uint16_t>(n);
     }
     vcLineBase_ += static_cast<uint32_t>(bpl);
-    vcLineBase_ += static_cast<uint32_t>(scrollCounterAdvance());   // prefetch : +1 mot PAR PLAN
-    vcLineBase_ += static_cast<uint32_t>(lineWidth) * 2u;  // line-offset STE (mots sautés)
+    // Prefetch et line-offset STE ne s'appliquent QUE sur une ligne réellement
+    // affichée : chez Hatari les deux sont dans la branche « else » de la ligne
+    // totalement blanche (video.c:3993 → :4213 « pVideoRaster += LineWidth*2 »),
+    // seuls l'offset différé et les latches HSCROLL/LINEWIDTH ci-dessous en sont
+    // dehors (video.c:4329-4375). Les appliquer sur une ligne NO_DE faisait dériver
+    // le compteur vidéo d'autant d'octets par ligne non affichée — visible sur STE
+    // à scrolling matériel dès qu'une trame se termine avant sa fin nominale.
+    if (bpl > 0) {
+        vcLineBase_ += static_cast<uint32_t>(scrollCounterAdvance());   // prefetch : +1 mot PAR PLAN
+        vcLineBase_ += static_cast<uint32_t>(lineWidth) * 2u;  // line-offset STE (mots sautés)
+    }
     if (vcDelayedOffset_ != 0) {                           // écriture compteur pendant le DE
         vcLineBase_ += static_cast<uint32_t>(vcDelayedOffset_ & ~1);
         vcDelayedOffset_ = 0;

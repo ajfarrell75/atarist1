@@ -94,6 +94,7 @@ public:
         bus.megaSteReset(); cpu.setMegaSteSpeed(false); bus.fpu.reset(); bus.scu.reset(/*cold=*/false);
         gemdos.reset();    // ferme les fichiers HD GEMDOS ouverts (no-op si inactif)
         scc.reset();       // SCC série (Mega STE) au repos
+        midi.reset();      // ACIA MIDI (reset.c:111 ACIA_Reset + :124 Midi_Reset)
         bus.seedResetVectors();    // vecteurs SSP/PC $0-$7 : miroir ROM en RAM (stMemory.c)
         cpu.reset();
         frameStartInit_ = false;   // FIX1 : ré-ancre frameStart_ sur sched.now() à la 1re trame post-reset
@@ -112,6 +113,8 @@ public:
         bus.megaSteReset(); cpu.setMegaSteSpeed(false); bus.fpu.reset(); bus.scu.reset(/*cold=*/true);
         gemdos.reset();    // ferme les fichiers HD GEMDOS ouverts (no-op si inactif)
         scc.reset();       // SCC série (Mega STE) au repos
+        midi.reset();      // ACIA MIDI (reset.c:111 ACIA_Reset + :124 Midi_Reset)
+        if (bus.glue) bus.glue->memConfig_ = 0;   // $FF8001 remis à 0 au FROID seulement (stMemory.c:93, bCold)
         bus.seedResetVectors();    // vecteurs SSP/PC $0-$7 (après l'effacement RAM !)
         cpu.reset();
         frameStartInit_ = false;   // FIX1 : ré-ancre frameStart_ sur sched.now() à la 1re trame post-reset

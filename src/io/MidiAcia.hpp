@@ -41,6 +41,20 @@ public:
     uint8_t read8(uint32_t addr);            // $FFFC04 statut / $FFFC06 données
     void    write8(uint32_t addr, uint8_t v);
 
+    // Reset matériel — appelé par les resets CHAUD et FROID, comme chez Hatari
+    // (reset.c:111 ACIA_Reset + :124 Midi_Reset, tous deux dans Reset_ST()). Sans
+    // lui, un séquenceur qui avait armé RIE/TIE laissait après un Ctrl-Alt-Del un
+    // statut périmé sur $FFFC04 et un octet fantôme livrable sur $FFFC06.
+    void reset() {
+        rx_.clear();
+        rdr_ = 1;                            // amorçage 1 (midi.c:110)
+        rdrf_ = false;
+        control_ = 0;
+        txEnableInt_ = false;
+        tdre_ = true;                        // ACIA_SR_TX_EMPTY
+        if (sched_) sched_->cancel(Scheduler::MIDI_TX);
+    }
+
     // Échéance MIDI_TX : le registre d'émission s'est vidé (~1 octet MIDI après
     // une écriture $FFFC06 sous TIE) → TDRE repasse à 1 et ré-arme l'IRQ TX.
     void    onTxEmpty();

@@ -26,6 +26,13 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG")
 
+# Version affichée par `--version` et par l'« À propos ». Les scripts d'empaquetage
+# passent -DNEOST_VERSION_STR=<tag> pour que le binaire livré annonce la MÊME version
+# que le nom du paquet : sans cela tous les paquets d'une release 1.2.3 se présentent
+# comme la version figée du project() ci-dessus, et aucun rapport de bug utilisateur
+# n'est rattachable à une release.
+set(NEOST_VERSION_STR "${PROJECT_VERSION}" CACHE STRING "Version affichée par les binaires")
+
 option(NEOST_WITH_IMGUI  "Greffe Dear ImGui (visualiseur hexa + registres)" ON)
 option(NEOST_WARN_STRICT "Compilation stricte (-Wall -Wextra -Wpedantic)"   ON)
 
@@ -130,7 +137,7 @@ endif()
 # =============================================================================
 add_executable(neost-headless src/headless/main_headless.cpp)
 target_link_libraries(neost-headless PRIVATE neost_core)
-target_compile_definitions(neost-headless PRIVATE NEOST_VERSION="${PROJECT_VERSION}")
+target_compile_definitions(neost-headless PRIVATE NEOST_VERSION="${NEOST_VERSION_STR}")
 set_source_files_properties(src/headless/main_headless.cpp
     PROPERTIES COMPILE_OPTIONS "${NEOST_STRICT_OPTS}")
 
@@ -177,6 +184,14 @@ if(EMSCRIPTEN)
         target_link_options(neost-web PRIVATE
             "SHELL:--preload-file ${CMAKE_SOURCE_DIR}/roms/etos192us.img@/roms/etos192us.img"
             "SHELL:--preload-file ${CMAKE_SOURCE_DIR}/roms/etos192fr.img@/roms/etos192fr.img"
+            # EmuTOS 256 Ko : GPL lui aussi, et INDISPENSABLE au STE/Mega STE — sans lui
+            # le frontend web se rabat sur l'EmuTOS 192 Ko, qui se présente en TOS 1.4 et
+            # fait rétrograder la machine en ST (adjustMachineForTos) : le mode STE du
+            # paquet public était donc silencieusement inopérant. Les paquets bureau, eux,
+            # embarquent bien les 4 (packaging/stage_free_data.sh) — c'est l'incohérence
+            # entre les deux listes qui était le bug. Coût : +512 Ko sur 40 Mo de marge.
+            "SHELL:--preload-file ${CMAKE_SOURCE_DIR}/roms/etos256us.img@/roms/etos256us.img"
+            "SHELL:--preload-file ${CMAKE_SOURCE_DIR}/roms/etos256fr.img@/roms/etos256fr.img"
             "SHELL:--preload-file ${CMAKE_SOURCE_DIR}/roms/drivesound@/roms/drivesound"
             "SHELL:--preload-file ${CMAKE_SOURCE_DIR}/disks/diskA.st@/disks/diskA.st")
     else()
@@ -214,7 +229,7 @@ add_executable(neost
 # 2.34 (bionic — l'image release Linux), libdl est séparée et doit être liée
 # explicitement. Vide sur les systèmes où dlopen vit dans libc → sans effet.
 target_link_libraries(neost PRIVATE neost_core glfw OpenGL::GL Threads::Threads ${CMAKE_DL_LIBS})
-target_compile_definitions(neost PRIVATE NEOST_VERSION="${PROJECT_VERSION}")
+target_compile_definitions(neost PRIVATE NEOST_VERSION="${NEOST_VERSION_STR}")
 set_source_files_properties(src/main.cpp src/audio/DriveSound.cpp
     PROPERTIES COMPILE_OPTIONS "${NEOST_STRICT_OPTS}")
 

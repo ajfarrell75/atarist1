@@ -2590,6 +2590,7 @@ int main(int argc, char** argv) {
             const bool f10 = glfwGetKey(window, GLFW_KEY_F10) == GLFW_PRESS;
             if (f10 && !f10Prev) {
                 g_autoZoom = !g_autoZoom;
+                cfg.autoZoom = g_autoZoom;   // sinon un retour au bureau resauverait l'ANCIENNE valeur
                 std::fprintf(stderr, "[kiosk] zoom adaptatif %s\n", g_autoZoom ? "ON" : "OFF");
             }
             f10Prev = f10;
@@ -2751,8 +2752,13 @@ int main(int argc, char** argv) {
         glClear(GL_COLOR_BUFFER_BIT);
 
         // Région de contenu du zoom adaptatif — commune au kiosk et au bureau.
+        // Appelée à CHAQUE trame même zoom coupé : ses latches d'hystérésis sont des
+        // statiques de fonction, et les sauter les GÈLERAIT à leur dernière valeur —
+        // à la réactivation, un latch resté armé sur une démo overscan afficherait le
+        // buffer entier pendant ~30 trames avant de retomber d'un coup.
+        int cTop, cH; stContentRegion(machine, cTop, cH);
         int kTop = 0, kH = machine.shifter.height();
-        if (g_autoZoom) stContentRegion(machine, kTop, kH);
+        if (g_autoZoom) { kTop = cTop; kH = cH; }
 
         bool reqReset = false, reqHardReset = false, reqRebuild = false, reqCapture = false;
         int  reqMonitor = -1;
@@ -3427,7 +3433,9 @@ int main(int argc, char** argv) {
                     // FEU (A/Entrée) : déclenche l'item surligné du menu focalisé.
                     if (okNow && !pOk) {
                         if (g_kioskZone == KIOSK_ZONE_LIST) {
-                            if (nd > 0) reqMount = g_kioskDisks[g_kioskDiskSel];  // INSÉRER à chaud
+                            // Borne défensive : la liste peut avoir rétréci (dossier ROM
+                            // débranché) sans que le curseur ait bougé depuis.
+                            if (nd > 0) reqMount = g_kioskDisks[std::min(std::max(0, g_kioskDiskSel), nd - 1)];  // INSÉRER à chaud
                         } else {
                             switch (g_kioskActSel) {
                                 case 0: reqHardReset = true;              // Redémarrer
@@ -3441,6 +3449,7 @@ int main(int argc, char** argv) {
                                         cfg.romDirs = g_kioskRomDirs;
                                         saveConfig(exeDir, cfg, &machine, true);
                                         kioskScanDisks(disksDir, machine.fdc.mountedPath());
+                                        g_kioskDiskSel = 0;   // la liste vient de rétrécir : l'ancien index pointerait hors du vecteur
                                     }
                                     g_romDirSel = 0;
                                     g_kioskPage = KIOSK_PAGE_ROMDIRS; break;
@@ -3483,7 +3492,14 @@ int main(int argc, char** argv) {
         // écrite dans neost.cfg et retentée à chaque boot.
         if (!reqMount.empty()) {
             if (machine.fdc.loadImage(reqMount)) {
-                cfg.disk = reqMount; saveConfig(exeDir, cfg, &machine);
+                // En BORNE, ne pas mémoriser la disquette insérée par un visiteur : même
+                // si saveConfig() refuse d'écrire ici, salir `cfg` suffirait à faire fuir
+                // ce disk= lors d'un saveConfig(force=true) ultérieur (dossiers ROM,
+                // joysticks), qui réécrit TOUT le fichier — et la borne ne repartirait
+                // plus sur son jeu d'origine (invariant « config figée », cf. DEV.md).
+                if (!g_kiosk && !g_kioskLaunched) {
+                    cfg.disk = reqMount; saveConfig(exeDir, cfg, &machine);
+                }
             } else {
                 g_stateMsg = "Image disquette illisible"; g_stateMsgFrames = 120;
             }

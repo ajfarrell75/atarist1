@@ -271,7 +271,16 @@ bool GemdosHd::setDirectory(const std::string& hostDir) {
         return false;
     }
     trace_ = getenv("NEOST_GEMDOS_TRACE") != nullptr;
-    initDrives(hostDir);
+    // Le dossier monté doit être ABSOLU (comme Configuration_Apply chez Hatari, qui
+    // applique File_CleanFileName PUIS File_MakeAbsoluteName avant GemDOS_InitDrives).
+    // Gardé relatif, il ne pouvait jamais préfixer le chemin absolu que gemChDir
+    // compare : TOUT Dsetpath échouait en EPTHNF, y compris « C:\ » — un installeur
+    // qui entre dans un sous-dossier avant d'écrire déversait alors ses fichiers à la
+    // racine du lecteur. La GUI masquait le bug (elle résout déjà le chemin), pas le
+    // headless (« --gemdos ../rel/dir »).
+    std::string absDir = hostDir;
+    makeAbsoluteName(absDir);
+    initDrives(absDir);
     int mapped = 0;
     for (auto& d : emudrives_) if (d.used) ++mapped;
     if (mapped == 0) {
@@ -611,7 +620,17 @@ bool GemdosHd::addPathComponent(std::string& path, const std::string& origname, 
 void GemdosHd::createHostFileName(int drive, const std::string& gemNameIn, std::string& out) {
     out.clear();
     EmuDrive& d = emudrives_[drive - 2];
-    const char* filename = gemNameIn.c_str();
+    // SÉCURITÉ — normalisation du séparateur. Côté GEMDOS le séparateur est « \ » et
+    // « / » est un caractère de nom INVALIDE (cf. filenameInvalidChar, porté de
+    // Str_Filename_Invalid_Char) ; côté hôte « / » EST le séparateur. Un nom hostile
+    // « ../X » (ou « C:/../X ») traversait donc le parseur ci-dessous intact — aucun
+    // strchr('\\') ne le voyait — et ressortait tel quel dans le chemin hôte, où le
+    // « .. » était résolu pour de bon : lecture, écriture ET listage hors du dossier
+    // monté, avec les droits de l'utilisateur. On le convertit en séparateur GEMDOS
+    // dès l'entrée, ce qui le soumet au garde-fou « sep >= minlen » comme tout « ..\ ».
+    std::string gemName = gemNameIn;
+    for (char& c : gemName) if (c == '/') c = '\\';
+    const char* filename = gemName.c_str();
     if (filename[0] == '\0') return;
 
     if (filename[1] == ':')      { out = d.hdEmuDir; filename += 2; }
@@ -651,6 +670,30 @@ void GemdosHd::createHostFileName(int drive, const std::string& gemNameIn, std::
         } else if (!addPathComponent(out, filename, false)) {
             if (trace_) std::fprintf(stderr, "[gemdos] introuvable: %s\n", out.c_str());
             return;
+        }
+    }
+    // SÉCURITÉ — garde-fou terminal, indépendant du parsing ci-dessus. Quel que soit
+    // le chemin demandé par le programme émulé, le résultat DOIT rester sous le
+    // dossier monté : on résout les « .. » lexicalement puis on compare le préfixe
+    // SÉPARATEUR INCLUS (sans lui, un dossier frère « …/gemdosEVIL » passerait pour
+    // « …/gemdos »). En cas d'évasion on rabat sur la racine du lecteur — même issue
+    // que le clamp « sep >= minlen » des « ..\ » — et on le journalise TOUJOURS :
+    // NeoST lance des binaires inconnus (cracks, démos), une tentative d'évasion est
+    // un signal de sécurité, pas une trace de mise au point.
+    {
+        std::string root = d.hdEmuDir;
+        addSlash(root);
+        std::string canon = out;
+        makeAbsoluteName(canon);
+        const bool isRoot = (canon.size() + 1 == root.size() && root.compare(0, canon.size(), canon) == 0);
+        if (!isRoot && canon.compare(0, root.size(), root) != 0) {
+            const std::size_t sep = canon.rfind(PATHSEP);
+            const std::string base = (sep == std::string::npos) ? canon : canon.substr(sep + 1);
+            std::fprintf(stderr, "[gemdos] REFUS : '%s' sortait du lecteur (%s) — rabattu sur la racine\n",
+                         gemNameIn.c_str(), canon.c_str());
+            out = root + base;
+        } else {
+            out = canon;
         }
     }
     if (trace_) std::fprintf(stderr, "[gemdos] %s -> %s\n", gemNameIn.c_str(), out.c_str());

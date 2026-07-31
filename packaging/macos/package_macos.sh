@@ -24,6 +24,12 @@ cd "$ROOT"
 VERSION="${NEOST_VERSION:-dev}"
 GLFW_TAG="3.4"
 ARCHS="arm64;x86_64"                     # Universal 2
+# Plancher macOS. SANS lui, clang estampille le binaire avec la version de l'OS du
+# runner (macOS 15) : le .dmg refusait alors de se lancer sur Ventura/Sonoma et sur
+# TOUS les Mac Intel d'avant 2019 — c'est-à-dire précisément le public que la tranche
+# x86_64 existe pour servir. C'est le pendant du plancher glibc si soigneusement
+# contrôlé côté Linux. Doit être posé sur GLFW *et* sur NeoST (sinon le lien avertit).
+MACOS_MIN="11.0"
 
 # Les deux tranches doivent être là, sinon la moitié du parc reçoit un paquet
 # qui ne s'exécute pas du tout.
@@ -46,7 +52,7 @@ if [ ! -f build-deps/glfw/lib/libglfw3.a ]; then
     git clone --depth 1 --branch "$GLFW_TAG" https://github.com/glfw/glfw.git build-deps/glfw-src
     cmake -S build-deps/glfw-src -B build-deps/glfw-build \
         -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
-        -DCMAKE_OSX_ARCHITECTURES="$ARCHS" \
+        -DCMAKE_OSX_ARCHITECTURES="$ARCHS" -DCMAKE_OSX_DEPLOYMENT_TARGET="$MACOS_MIN" \
         -DGLFW_BUILD_EXAMPLES=OFF -DGLFW_BUILD_TESTS=OFF -DGLFW_BUILD_DOCS=OFF \
         -DCMAKE_INSTALL_PREFIX="$ROOT/build-deps/glfw"
     cmake --build build-deps/glfw-build -j"$(sysctl -n hw.ncpu)"
@@ -56,7 +62,8 @@ assert_universal build-deps/glfw/lib/libglfw3.a
 
 # --- Build NeoST universel contre le GLFW statique ---------------------------
 cmake -B build-macos -DCMAKE_BUILD_TYPE=Release \
-      -DCMAKE_OSX_ARCHITECTURES="$ARCHS" \
+      -DCMAKE_OSX_ARCHITECTURES="$ARCHS" -DCMAKE_OSX_DEPLOYMENT_TARGET="$MACOS_MIN" \
+      -DNEOST_VERSION_STR="$VERSION" \
       -DCMAKE_PREFIX_PATH="$ROOT/build-deps/glfw"
 cmake --build build-macos -j"$(sysctl -n hw.ncpu)"
 test -x build-macos/neost || { echo "ERREUR : le frontend GUI n'a pas été construit (GLFW introuvable ?)"; exit 1; }
@@ -79,6 +86,10 @@ for s in 16 32 128 256; do
 done
 iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/neost.icns"
 
+# CFBundleVersion n'accepte qu'une suite de nombres séparés par des points : hors tag,
+# VERSION vaut « dev-a1b2c3d » et produirait un plist non conforme.
+PLIST_VER=$(printf '%s' "$VERSION" | grep -oE '^[0-9]+(\.[0-9]+)*' || true)
+[ -n "$PLIST_VER" ] || PLIST_VER="0.0.0"
 cat > "$APP/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -86,7 +97,7 @@ cat > "$APP/Contents/Info.plist" <<EOF
     <key>CFBundleName</key>            <string>NeoST</string>
     <key>CFBundleDisplayName</key>     <string>NeoST</string>
     <key>CFBundleIdentifier</key>      <string>net.gistlabs.neost</string>
-    <key>CFBundleVersion</key>         <string>${VERSION}</string>
+    <key>CFBundleVersion</key>         <string>${PLIST_VER}</string>
     <key>CFBundleShortVersionString</key> <string>${VERSION}</string>
     <key>CFBundleExecutable</key>      <string>neost</string>
     <key>CFBundleIconFile</key>        <string>neost</string>

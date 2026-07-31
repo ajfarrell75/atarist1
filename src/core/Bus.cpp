@@ -581,7 +581,13 @@ uint8_t Bus::dmaRead8(uint32_t addr) {
 
 void Bus::dmaWrite8(uint32_t addr, uint8_t v) {
     addr &= stmap::ADDR_MASK;
-    if (busFault(addr)) return;              // écriture en zone fautive perdue
+    // $0-$7 (SSP + PC de reset) sont mappés sur la ROM par la GLUE : personne ne peut
+    // les écrire, DMA compris. busFault() ne connaît pas cette protection en écriture,
+    // d'où le test explicite — sans lui, un pointeur DMA disquette dégénéré (registres
+    // $FF8609/0B/0D à 0) écrasait le miroir SSP/PC et faisait partir dans le décor
+    // l'idiome de reboot à chaud « move.l $4.w,a0 ; jmp (a0) ». Chez Hatari l'écriture
+    // est simplement perdue (cpu/memory.c:775, SysMem_bput : « if (addr < 0x8) »).
+    if (addr < 0x8 || busFault(addr)) return;   // écriture en zone protégée/fautive perdue
     write8(addr, v);
 }
 

@@ -127,6 +127,15 @@ private:
     // dans ce second cas, re-poser BUSY ne relance RIEN (blitter.c:1433-1437 — le
     // protocole restart du driver blitter du TOS re-set BUSY après chaque blit).
     uint32_t yLatch_   = 0;
+    // Garde de RÉ-ENTRANCE : vrai pendant runSlice(). Les accès bus du blitter passent
+    // par Bus::write16, qui re-route $FF8A00-$FF8A3F vers Blitter::write16 — un blit
+    // dont la DESTINATION est son propre registre de contrôle se relançait donc
+    // lui-même en plein transfert, avec des compteurs non encore réécrits : récursion
+    // infinie et SIGSEGV de l'émulateur, déclenchables par un simple programme émulé.
+    // Hatari ne peut pas connaître ce cas : Blitter_Control_WriteByte n'appelle jamais
+    // Blitter_Start(), il passe par une phase/interruption différée (blitter.c:1421).
+    // Transitoire (toujours faux hors runSlice) → non sérialisé en save-state.
+    bool     inSlice_  = false;
     bool     midBlit_  = false;              // un transfert est engagé (même en pause)
     bool     haveFxsr_ = false;              // lecture source extra déjà faite (ligne)
     bool     nfsrInt_  = false;              // dernière lecture source de la ligne sautée
