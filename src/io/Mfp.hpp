@@ -282,8 +282,13 @@ public:
     bool    hasDmaSound_  = false;// machine avec son DMA (STE/Mega STE) → XOR XSINT sur GPIP7
     bool    xsint_        = false;// ligne XSINT du son DMA STE (HAUT = trame en cours)
     bool    busyLine_ = false;    // Centronics BUSY (GPIP0, actif bas) — bouclage port parallèle
-    bool    ctsLine_  = false;    // RS232 CTS (GPIP2, actif bas) — bouclage RTS
-    bool    dcdLine_  = false;    // RS232 DCD (GPIP1, actif bas) — bouclage DTR
+    // CTS et DCD sont ASSERTÉES au repos, donc GPIP bits 2 et 1 lus à 0 (« signal
+    // actif ») : c'est la valeur par défaut d'Hatari quand aucun vrai port série n'est
+    // branché (rs232.c:516-518 pose dcd = cts = 1, que mfp.c:1984-1993 traduit en bits
+    // EFFACÉS). Les laisser désassertées faisait lire $FFFA01 = FF au lieu de A1, et un
+    // logiciel qui attend CTS avant d'émettre aurait bouclé indéfiniment.
+    bool    ctsLine_  = true;     // RS232 CTS (GPIP2, actif bas) — bouclage RTS
+    bool    dcdLine_  = true;     // RS232 DCD (GPIP1, actif bas) — bouclage DTR
     bool    riLine_   = false;    // RS232 RI  (GPIP6, actif bas) — bouclage DTR
 
     // USART (RS232) : tampon de réception 1 OCTET (le 68901 n'a PAS de FIFO ; un

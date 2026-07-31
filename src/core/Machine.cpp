@@ -45,6 +45,19 @@ MachineType Machine::adjustMachineForTos(MachineType requested, const std::strin
             tosVer >> 8, tosVer & 0xFF, machineName(requested));
         return MachineType::St;
     }
+    // Symétrique (port de tos.c:844-855) : TOS 1.06 et 1.62 sont des ROM **STE
+    // exclusivement**. Sur un ST/Mega ST, la routine de nettoyage RAM du TOS
+    // ($E001AA-$E001B2) monte jusqu'à $00400000, prend une bus error, double-faute et
+    // HALTE le CPU : NeoST restait sur un écran uniforme, définitivement, SANS le
+    // moindre message — un utilisateur qui choisit « ST » avec un TOS 1.62 n'avait
+    // aucun moyen de comprendre. Hatari bascule en STE et boote ; on fait pareil.
+    if ((tosVer == 0x0106 || tosVer == 0x0162) && requested != MachineType::Ste) {
+        std::fprintf(stderr,
+            "[NeoST] TOS %X.%02X est une ROM STE exclusivement — bascule %s -> STE.\n"
+            "        (sur ST, son nettoyage RAM déborde et halte le CPU : écran figé)\n",
+            tosVer >> 8, tosVer & 0xFF, machineName(requested));
+        return MachineType::Ste;
+    }
     // Le Mega STE exige un TOS ≥ 2.0x : lui seul programme le cache 16 Ko, le SCU et
     // les 16 MHz. Un TOS 1.0x/1.6x (STE) ne connaît pas ce matériel et reste bloqué au
     // boot (combo inexistant sur vrai matériel — chaque machine a son ROM). On bascule

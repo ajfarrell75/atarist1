@@ -114,7 +114,12 @@ public:
         gemdos.reset();    // ferme les fichiers HD GEMDOS ouverts (no-op si inactif)
         scc.reset();       // SCC série (Mega STE) au repos
         midi.reset();      // ACIA MIDI (reset.c:111 ACIA_Reset + :124 Midi_Reset)
-        if (bus.glue) bus.glue->memConfig_ = 0;   // $FF8001 remis à 0 au FROID seulement (stMemory.c:93, bCold)
+        // $FF8001 remis à 0 au FROID (stMemory.c:93, bCold). ⚠ DIVERGENCE ASSUMÉE : à la
+        // CONFIGURATION (constructeur / reconfigure), NeoST le pré-remplit au contraire
+        // avec memConfigForBytes() alors qu'Hatari laisse 0 et compte sur le test mémoire
+        // du TOS pour le programmer. Visible uniquement pour du code exécuté AVANT le TOS
+        // (sonde MMIO : NeoST 0x04 vs Hatari 0x00 sur 1 Mo) ; après boot le TOS l'écrase.
+        if (bus.glue) bus.glue->memConfig_ = 0;
         bus.seedResetVectors();    // vecteurs SSP/PC $0-$7 (après l'effacement RAM !)
         cpu.reset();
         frameStartInit_ = false;   // FIX1 : ré-ancre frameStart_ sur sched.now() à la 1re trame post-reset
