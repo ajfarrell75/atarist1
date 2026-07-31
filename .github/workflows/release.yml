@@ -5,7 +5,8 @@
 #    1. NeoST-<ver>-x86_64.AppImage             (Linux Intel/AMD, image bionic
 #                                                gelée → plancher glibc 2.27)
 #    2. NeoST-<ver>-aarch64.AppImage            (Linux ARM64 générique)
-#    3. NeoST-<ver>-macOS-arm64.dmg             (Apple Silicon, GLFW statique)
+#    3. NeoST-<ver>-macOS-universal2.dmg        (Universal 2 arm64+x86_64,
+#                                                GLFW statique)
 #    4. NeoST-<ver>-raspberry-aarch64.AppImage  (Raspberry Pi, plancher glibc
 #                                                bookworm 2.36 = Pi OS)
 #    5. NeoST-<ver>-web-wasm.zip                (WebAssembly, contenu libre)
@@ -313,6 +314,8 @@ jobs:
           if-no-files-found: error
 
   # ----------------------------------------------------------------- macOS --
+  # UN .dmg Universal 2 (arm64 + x86_64) — natif sur Apple Silicon ET Intel,
+  # aucun Rosetta. Le runner arm64 cross-compile la tranche x86_64 nativement.
   macos:
     needs: version
     runs-on: macos-15          # Apple Silicon natif
@@ -322,28 +325,39 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Empaqueter .app + .dmg (GLFW statique depuis les sources)
+      - name: Empaqueter .app + .dmg Universal 2 (GLFW statique depuis les sources)
         env:
           NEOST_VERSION: ${{ needs.version.outputs.neost_version }}
         run: packaging/macos/package_macos.sh
 
-      - name: Vérifier le .app (arm64, autonome, contenu libre)
+      - name: Vérifier le .app (Universal 2, autonome, contenu libre)
         run: |
           set -euo pipefail
           BIN=dist/NeoST.app/Contents/MacOS/neost
           otool -L "$BIN"
-          lipo -info "$BIN" | grep -qw arm64 || { echo "ERREUR : pas de tranche arm64"; exit 1; }
+          # Universal 2 : les DEUX tranches, sinon la moitié du parc reçoit un
+          # paquet qui ne s'exécute pas du tout.
+          for f in "$BIN" dist/NeoST.app/Contents/MacOS/neost-headless; do
+            lipo -info "$f"
+            for a in arm64 x86_64; do
+              lipo -info "$f" | grep -qw "$a" \
+                || { echo "ERREUR : $f n'a pas la tranche $a"; exit 1; }
+            done
+          done
           # Le garde anti-chemin-brew a déjà tourné dans le packager ; re-vérifier ici.
           LEAKED=$(otool -L "$BIN" | tail -n +2 | awk '{print $1}' \
                    | grep -E '^(/usr/local|/opt/homebrew|/opt/local)' || true)
           test -z "$LEAKED" || { echo "ERREUR : dylib hors bundle : $LEAKED"; exit 1; }
           STRAY=$(find dist/NeoST.app/Contents/roms -maxdepth 1 -name '*.img' ! -name 'etos*')
           test -z "$STRAY" || { echo "ERREUR : ROM non libre embarquée : $STRAY"; exit 1; }
-          echo "OK : .app arm64 autonome"
+          echo "OK : .app Universal 2 autonome"
 
       - name: Smoke-launch (boot EmuTOS headless 500 trames + capture)
         run: |
           set -euo pipefail
+          # Exerce la tranche arm64 (l'arch du runner) ; la tranche x86_64 est
+          # vérifiée structurellement par le garde lipo ci-dessus — les images
+          # macOS arm64 de GitHub n'ont pas Rosetta, on ne peut pas l'exécuter.
           cd dist/NeoST.app/Contents
           MacOS/neost-headless --version
           MacOS/neost-headless roms/etos192us.img --frames 500 --screenshot boot.ppm
@@ -357,7 +371,7 @@ jobs:
 
       - uses: actions/upload-artifact@v5
         with:
-          name: NeoST-macOS-arm64-dmg
+          name: NeoST-macOS-universal2-dmg
           path: dist/*.dmg
           if-no-files-found: error
 
