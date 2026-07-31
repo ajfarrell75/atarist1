@@ -105,6 +105,7 @@ struct Config { std::string rom; std::string disk; std::string cart; bool mono =
                 bool showDisk = true, showCart = true, showHex = true, showCpu = true;
                 bool showJoy = false;
                 bool dock = true;              // mode ancré (dockspace ImGui) — cf. renderDockSpace
+                bool autoZoom = true;          // zoom adaptatif de l'écran ST — cf. g_autoZoom
                 bool crt = false;              // effets CRT actifs (façade moniteur)
                 neost::CrtParams crtParams;    // réglages CRT (cf. gui/CrtParams.h)
                 std::vector<std::string> romDirs;   // kiosk : dossiers ROM/disques additionnels (en plus de disks/)
@@ -165,6 +166,7 @@ static Config loadConfig(const std::string& exeDir) {
         else if (line.rfind("showCpu=", 0) == 0) c.showCpu = (line.substr(8) == "1");
         else if (line.rfind("showJoy=", 0) == 0) c.showJoy = (line.substr(8) == "1");
         else if (line.rfind("dock=", 0) == 0) c.dock = (line.substr(5) == "1");
+        else if (line.rfind("autozoom=", 0) == 0) c.autoZoom = (line.substr(9) == "1");
         else if (line.rfind("rtc_saved=", 0) == 0) c.rtcSaved = std::strtoll(line.substr(10).c_str(), nullptr, 10);
         else if (line.rfind("rtc=", 0) == 0) c.rtc = line.substr(4);
         else if (line.rfind("kiosk_romdir=", 0) == 0) { const std::string d = line.substr(13); if (!d.empty()) c.romDirs.push_back(d); }
@@ -201,9 +203,13 @@ static bool g_kioskLaunched = false;
 // elle, et Machine::loadState n'accepte que l'entre-deux-trames.
 //   0 = rien à faire · 1 = passer en kiosk · 2 = revenir au GUI.
 static int g_kioskSwitchReq = 0;
-// Zoom kiosk adaptatif (cale le contenu réel sur la hauteur) : ON par défaut,
-// basculable à chaud par F10. OFF = cadre complet fixe (pillarbox, rien ne déborde).
-static bool g_kioskAdaptive = true;
+// Zoom ADAPTATIF (cale le contenu réel sur la hauteur disponible) : ON par défaut.
+// S'applique aux DEUX modes — plein écran kiosk (viewport GL) et fenêtre « Atari ST
+// Screen » du bureau (UV de l'image) — pour que le bureau présente le même cadrage
+// que la borne. OFF = cadre complet fixe (pillarbox, rien ne déborde).
+// Bascule : F10 en kiosk (où les touches ne vont pas au ST), menu Résolution au
+// bureau (F10 y est une touche du ST, on ne la confisque pas).
+static bool g_autoZoom = true;
 // Menu kiosk plein écran (START manette ou F9). Le jeu est MIS EN PAUSE tant que le
 // menu est ouvert (cf. boucle d'émulation). Modèle « comme une vraie machine » :
 //   · INSÉRER une disquette (A) = on échange le contenu du lecteur — JAMAIS de reboot
@@ -276,6 +282,7 @@ static void saveConfig(const std::string& exeDir, Config& c, Machine* machine = 
              << "\nshowCpu=" << (c.showCpu ? 1 : 0)
              << "\nshowJoy=" << (c.showJoy ? 1 : 0)
              << "\ndock=" << (c.dock ? 1 : 0)
+             << "\nautozoom=" << (c.autoZoom ? 1 : 0)
              << "\ncrt=" << (c.crt ? 1 : 0)
              << "\ncrt_bright=" << c.crtParams.brightness
              << "\ncrt_contrast=" << c.crtParams.contrast
@@ -332,6 +339,7 @@ static void saveConfig(const std::string& exeDir, Config& c, Machine* machine = 
 #define ICON_FA_PLAY          "\xef\x81\x8b"
 #define ICON_FA_PAUSE         "\xef\x81\x8c"
 #define ICON_FA_STEP_FORWARD  "\xef\x81\x91"
+#define ICON_FA_EXPAND        "\xef\x81\xa5"
 
 // Bouton à ICÔNE SEULE (le texte est superflu quand le pictogramme est explicite) :
 // l'infobulle au survol rappelle l'action. Renvoie true au clic.
@@ -587,6 +595,52 @@ static bool applyCrtPreset(const std::string& name, neost::CrtParams& p, bool& o
     }
     p = q; on = true;
     return true;
+}
+
+// Région de CONTENU de la trame courante, en lignes du buffer ST — le cœur du zoom
+// adaptatif, PARTAGÉ par le kiosk (qui la cale en viewport GL) et par la fenêtre
+// « Atari ST Screen » du bureau (qui la cale en UV d'image). Deux cadrages francs,
+// jamais au pixel (→ zéro saccade) :
+//  · Défaut (99 % des jeux) : cadre FIXE sur la ZONE ACTIVE (rectangle net donné par
+//    le matériel — activeTop/activeHeight), qui ne bouge JAMAIS. Un champ d'étoiles,
+//    un fond noir : rien ne fait « respirer » le zoom.
+//  · Overscan (démos, ouvertures de bordures — Enchanted Land, Lethal Xcess) : quand
+//    la Glue signale une bordure retirée, on montre le BUFFER ENTIER. Hystérésis
+//    (latch) pour ne pas basculer sur un retrait d'une seule trame.
+// Les latches sont des statiques de fonction : un seul jeu pour toute l'application,
+// donc un aller-retour bureau ⇄ kiosk ne réinitialise pas l'hystérésis en cours.
+static void stContentRegion(Machine& machine, int& cTop, int& cH) {
+    static int overscanLatch     = 0;   // bordure ouverte (haut ou bas)
+    static int fullOverscanLatch = 0;   // bordure BASSE retirée (démos full-overscan)
+    // snapBordersOpen/snapLiveTop/snapLiveHeight : snapshot capturé à finishFrame(),
+    // stable au rendu (les champs live glueStartHBL_/glueEndHBL_ sont remis à zéro
+    // par beginFrame_() du cycle suivant AVANT que le rendu GL ne s'exécute).
+    if (machine.shifter.snapBordersOpen()) overscanLatch = 30;   // ~0,6 s de maintien
+    else if (overscanLatch > 0)             --overscanLatch;
+    if (overscanLatch == 0) {
+        fullOverscanLatch = 0;              // plus de trick : reset du second latch
+        cTop = machine.shifter.activeTop();
+        cH   = machine.shifter.activeHeight();
+        return;
+    }
+    // Second latch : détecte une bordure BASSE retirée (LX, Cuddly…) et latche ce
+    // constat pour éviter les basculements frame-à-frame.
+    if (machine.shifter.snapLiveHeight() + machine.shifter.snapLiveTop()
+            > machine.shifter.activeHeight() + machine.shifter.activeTop())
+        fullOverscanLatch = 30;
+    else if (fullOverscanLatch > 0)
+        --fullOverscanLatch;
+
+    if (fullOverscanLatch > 0) {
+        // Bordure BASSE retirée (démos full-overscan : Cuddly, LX…) : buffer entier.
+        cTop = 0;
+        cH   = machine.shifter.height();
+    } else {
+        // Bordure HAUTE seule (ex. Enchanted Land en jeu) : même zoom que la zone
+        // active, légèrement remontée pour montrer 2 lignes overscan en haut.
+        cTop = std::max(0, machine.shifter.activeTop() - 2);
+        cH   = machine.shifter.activeHeight();
+    }
 }
 
 // Rendu kiosk ADAPTATIF : on cale la région de contenu [cTop, cTop+cH) sur la
@@ -1799,11 +1853,16 @@ static void renderDockSpace(bool visible) {
 // Fenêtre de l'écran ST : fenêtre de BASE (toujours là, jamais au premier plan).
 // Placée sous les barres au 1er lancement, puis DÉPLAÇABLE par glissé de sa barre de
 // titre (ImGui mémorise sa position). La taille d'affichage suit la résolution
-// COURANTE du buffer (bordures overscan INCLUSES) en respectant l'aspect pixel ST :
-// basse rés ×2/×2, moyenne ×1/×2, mono ×1/×1 — l'écran actif occupe donc toujours
-// ~640×400 et les bordures s'ajoutent autour (low res bordée = 416×276 → 832×552).
+// COURANTE du buffer en respectant l'aspect pixel ST : basse rés ×2/×2, moyenne
+// ×1/×2, mono ×1/×1 — l'écran actif occupe donc toujours ~640×400.
 // Clic dans l'image = capture souris.
-void drawStScreen(const GlScreen& s, bool captured, bool& reqCapture, float topOffset) {
+//
+// [cTop, cTop+cH) = région de CONTENU (cf. stContentRegion) : le bureau applique le
+// MÊME zoom adaptatif que le kiosk, à ceci près qu'il le cadre en UV de l'image et
+// non en viewport GL — les bordures inutilisées sortent du cadre au lieu d'ajouter
+// des bandes noires. Zoom auto OFF → cTop=0, cH=hauteur du buffer (cadre entier).
+void drawStScreen(const GlScreen& s, bool captured, bool& reqCapture, float topOffset,
+                  int cTop, int cH) {
     // ANCRÉE : c'est le nœud qui donne position ET taille. On ne pose donc ni pos, ni
     // taille, ni contrainte de ratio (elles se battraient avec le nœud — la fenêtre
     // « pomperait » à chaque trame). L'image, elle, garde son ratio en letterbox.
@@ -1816,7 +1875,13 @@ void drawStScreen(const GlScreen& s, bool captured, bool& reqCapture, float topO
     // rés), hauteur ×2 si ≤ 300 lignes (classe 200 lignes).
     const float sx = (s.w <= 480) ? 2.0f : 1.0f;
     const float sy = (s.h <= 300) ? 2.0f : 1.0f;
-    const float nativeW = s.w * sx, nativeH = s.h * sy;   // taille « moniteur » corrigée
+    // Bornage défensif : la région vient du Glue LIVE, une trame de transition peut la
+    // donner hors du buffer courant (changement de résolution).
+    const int visTop = std::max(0, std::min(cTop, std::max(0, s.h - 1)));
+    const int visH   = std::max(1, std::min(cH, s.h - visTop));
+    // La taille « moniteur » se calcule sur la partie VISIBLE : c'est elle qui donne
+    // l'aspect à respecter et la contrainte de ratio de la fenêtre.
+    const float nativeW = s.w * sx, nativeH = visH * sy;
     const float aspect  = (nativeH > 0.f) ? nativeW / nativeH : 4.f / 3.f;
     static float s_aspect = aspect;   // capté pour le callback (mono/couleur → maj)
     s_aspect = aspect;
@@ -1848,20 +1913,50 @@ void drawStScreen(const GlScreen& s, bool captured, bool& reqCapture, float topO
 #endif
     ImGui::TextDisabled(captured ? "Souris capturée — Suppr (DEL) pour la libérer"
                                  : "Clic dans l'écran pour capturer la souris (curseur GEM)");
-    // On AJUSTE l'image à la zone dispo en gardant le ratio ST (letterbox centré) :
-    // la fenêtre est libre, l'image suit sans jamais se déformer.
+    // Cadrage de l'image dans la zone dispo. Deux régimes :
+    //  · Zoom auto (défaut) — RÈGLE DU KIOSK : l'échelle est pilotée par la HAUTEUR,
+    //    la région de contenu cale dessus, et la largeur en excès (bordures latérales)
+    //    est ROGNÉE aux UV au lieu d'ajouter des bandes. Si le cadre entier tient en
+    //    largeur à cette échelle, on retombe sur un pillarbox latéral — exactement les
+    //    deux cas de drawStKiosk, transposés du viewport GL aux UV.
+    //  · Zoom auto OFF : ancien comportement, cadre entier en letterbox, jamais rogné.
+    // Dans les deux cas le ratio pixel ST est respecté : l'image ne se déforme jamais.
     const ImVec2 avail = ImGui::GetContentRegionAvail();
-    float dw = avail.x, dh = dw / aspect;
-    if (dh > avail.y) { dh = avail.y; dw = dh * aspect; }   // limité par la hauteur
+    const float availW = std::max(1.f, avail.x), availH = std::max(1.f, avail.y);
+    float dw, dh;
+    float u0 = 0.f, u1 = 1.f;
+    if (g_autoZoom) {
+        dh = availH;
+        const float scale = dh / (visH * sy);              // px écran par px ST (vertical)
+        const float fullW = s.w * sx * scale;              // cadre ENTIER à cette échelle
+        if (fullW > availW) {                              // déborde → on rogne les côtés
+            const float visW = availW / (sx * scale);      // largeur ST réellement montrée
+            u0 = 0.5f - visW / (2.f * s.w);
+            u1 = 0.5f + visW / (2.f * s.w);
+            dw = availW;
+        } else {
+            dw = fullW;                                    // tient → pillarbox latéral
+        }
+    } else {
+        dw = availW; dh = dw / aspect;
+        if (dh > availH) { dh = availH; dw = dh * aspect; }   // limité par la hauteur
+    }
     dw = std::max(1.f, dw); dh = std::max(1.f, dh);
     // Centre l'image dans la zone dispo (bandes égales si la fenêtre n'a pas le ratio).
     const ImVec2 cur = ImGui::GetCursorPos();
     ImGui::SetCursorPos(ImVec2(cur.x + (avail.x - dw) * 0.5f,
                                cur.y + (avail.y - dh) * 0.5f));
-    // Passe CRT (ou texture brute si off/indispo), rendue à la taille affichée (arrondie).
+    const float v0 = (float)visTop / (float)s.h;
+    const float v1 = (float)(visTop + visH) / (float)s.h;
+    // Passe CRT (ou texture brute si off/indispo). La passe traite TOUJOURS le cadre
+    // complet (comme en kiosk) : on lui demande donc la taille qu'aurait le cadre
+    // ENTIER à ce zoom, pour que la portion visible garde la densité demandée au lieu
+    // d'être sous-échantillonnée. Le cadrage, lui, se fait aux UV.
     const int dstW = (int)std::lround(dw), dstH = (int)std::lround(dh);
-    const ImTextureID id = (ImTextureID)(intptr_t)crtApply(s, dstW, dstH);
-    ImGui::Image(id, ImVec2((float)dstW, (float)dstH));
+    const int fboW = (int)std::lround(dw / std::max(0.001f, u1 - u0));
+    const int fboH = (int)std::lround(dh / std::max(0.001f, v1 - v0));
+    const ImTextureID id = (ImTextureID)(intptr_t)crtApply(s, std::max(1, fboW), std::max(1, fboH));
+    ImGui::Image(id, ImVec2((float)dstW, (float)dstH), ImVec2(u0, v0), ImVec2(u1, v1));
     if (!captured && ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
         reqCapture = true;
     ImGui::End();
@@ -2004,6 +2099,7 @@ int main(int argc, char** argv) {
     g_showDisk = cfg.showDisk; g_showCart = cfg.showCart; g_showHex = cfg.showHex;
     g_showCpu  = cfg.showCpu;  g_showJoy  = cfg.showJoy;
     g_dockOn   = cfg.dock;     // mode ancré mémorisé (cf. renderDockSpace)
+    g_autoZoom = cfg.autoZoom; // zoom adaptatif de l'écran ST (bureau ET kiosk)
     g_crtOn    = cfg.crt;      g_crtParams = cfg.crtParams;   // effets CRT (figés en kiosk)
     g_kioskRomDirs = cfg.romDirs;   // dossiers ROM additionnels du menu kiosk (persistés)
     const std::string defRom = cfg.rom.empty() ? std::string("roms/etos192us.img") : cfg.rom;
@@ -2493,8 +2589,8 @@ int main(int argc, char** argv) {
             static bool f10Prev = false;
             const bool f10 = glfwGetKey(window, GLFW_KEY_F10) == GLFW_PRESS;
             if (f10 && !f10Prev) {
-                g_kioskAdaptive = !g_kioskAdaptive;
-                std::fprintf(stderr, "[kiosk] zoom adaptatif %s\n", g_kioskAdaptive ? "ON" : "OFF");
+                g_autoZoom = !g_autoZoom;
+                std::fprintf(stderr, "[kiosk] zoom adaptatif %s\n", g_autoZoom ? "ON" : "OFF");
             }
             f10Prev = f10;
         }
@@ -2654,48 +2750,9 @@ int main(int argc, char** argv) {
         else         glClearColor(0.10f, 0.10f, 0.12f, 1.f);
         glClear(GL_COLOR_BUFFER_BIT);
 
-        // Zoom kiosk : DEUX cadrages francs, jamais au pixel (→ zéro saccade).
-        //  · Défaut (99 % des jeux) : cadre FIXE sur la ZONE ACTIVE (rectangle net
-        //    donné par le matériel — activeTop/activeHeight), qui ne bouge JAMAIS.
-        //    Un champ d'étoiles, un fond noir : rien ne fait « respirer » le zoom.
-        //  · Overscan (démos, ouvertures de bordures — Enchanted Land, Lethal Xcess) :
-        //    quand la Glue signale une bordure retirée, on montre le BUFFER ENTIER.
-        //    Hystérésis (latch) pour ne pas basculer sur un retrait d'une seule trame.
-        // F10 (g_kioskAdaptive OFF) force le cadre complet en permanence.
+        // Région de contenu du zoom adaptatif — commune au kiosk et au bureau.
         int kTop = 0, kH = machine.shifter.height();
-        if (g_kiosk && g_kioskAdaptive) {
-            static int overscanLatch    = 0;   // bordure ouverte (haut ou bas)
-            static int fullOverscanLatch = 0;  // bordure BASSE retirée (démos full-overscan)
-            // snapBordersOpen/snapLiveTop/snapLiveHeight : snapshot capturé à finishFrame(),
-            // stable au rendu (les champs live glueStartHBL_/glueEndHBL_ sont remis à zéro
-            // par beginFrame_() du cycle suivant AVANT que le rendu GL ne s'exécute).
-            if (machine.shifter.snapBordersOpen()) overscanLatch = 30;  // ~0,6 s de maintien
-            else if (overscanLatch > 0)             --overscanLatch;
-            if (overscanLatch == 0) {
-                fullOverscanLatch = 0;          // plus de trick : reset du second latch
-                kTop = machine.shifter.activeTop();
-                kH   = machine.shifter.activeHeight();
-            } else {
-                // Second latch : détecte une bordure BASSE retirée (LX, Cuddly…) et latche
-                // ce constat pour éviter les basculements frame-à-frame.
-                if (machine.shifter.snapLiveHeight() + machine.shifter.snapLiveTop()
-                        > machine.shifter.activeHeight() + machine.shifter.activeTop())
-                    fullOverscanLatch = 30;
-                else if (fullOverscanLatch > 0)
-                    --fullOverscanLatch;
-
-                if (fullOverscanLatch > 0) {
-                    // Bordure BASSE retirée (démos full-overscan : Cuddly, LX…) : buffer entier.
-                    kTop = 0;
-                    kH   = machine.shifter.height();
-                } else {
-                    // Bordure HAUTE seule (ex. Enchanted Land en jeu) : même zoom que la zone
-                    // active, légèrement remontée pour montrer 2 lignes overscan en haut.
-                    kTop = std::max(0, machine.shifter.activeTop() - 2);
-                    kH   = machine.shifter.activeHeight();
-                }
-            }
-        }
+        if (g_autoZoom) stContentRegion(machine, kTop, kH);
 
         bool reqReset = false, reqHardReset = false, reqRebuild = false, reqCapture = false;
         int  reqMonitor = -1;
@@ -2902,6 +2959,15 @@ int main(int argc, char** argv) {
             if (ImGui::BeginMenu(ICON_FA_DESKTOP " Résolution")) {
                 if (ImGui::MenuItem(ICON_FA_PALETTE " Couleur (basse rés)", nullptr,  color)) reqMonitor = 1;
                 if (ImGui::MenuItem(ICON_FA_ADJUST " Mono (haute rés)",    nullptr, !color)) reqMonitor = 0;
+                ImGui::Separator();
+                // Même cadrage adaptatif que la borne : l'écran cale sa zone de contenu
+                // sur la hauteur disponible, les bordures inutilisées sortent du cadre,
+                // et une ouverture de bordure (démo overscan) rend le cadre entier.
+                // Décoché = cadre complet fixe. En kiosk, F10 bascule la même chose.
+                if (ImGui::MenuItem(ICON_FA_EXPAND " Zoom auto (cadre adaptatif)",
+                                    nullptr, &g_autoZoom)) {
+                    cfg.autoZoom = g_autoZoom; saveConfig(exeDir, cfg, &machine);
+                }
                 ImGui::EndMenu();
             }
             if (ImGui::BeginMenu(ICON_FA_GAMEPAD " Joystick")) {
@@ -3042,7 +3108,7 @@ int main(int argc, char** argv) {
         renderDockSpace(g_dockOn);
 
         // --- Fenêtre écran (base) + fenêtres masquables ----------------------
-        drawStScreen(screen, g_mouseCaptured, reqCapture, menuH + toolH);
+        drawStScreen(screen, g_mouseCaptured, reqCapture, menuH + toolH, kTop, kH);
         if (g_showDisk) drawDiskLibrary(disksDir, machine.fdc.mountedPath(), reqMount, reqEject);
         if (g_showCart) drawCartLibrary(cartsDir, machine.bus.mountedCartPath(), reqMountCart, reqEjectCart);
         if (g_showHex)  drawHexViewer(machine.bus);
