@@ -168,7 +168,13 @@ inline uint32_t estimateSqrt32(int aExp, uint32_t a) {
 }
 
 inline void normalizeSubnormal(uint64_t aSig, int32_t& zExp, uint64_t& zSig) {
-    int sc = clz64(aSig); zSig = aSig << sc; zExp = 1 - sc;
+    // « -sc » et NON « 1 - sc » : le format étendu du 68881 a un bit entier EXPLICITE,
+    // là où le x87/IEEE l'a implicite. softfloat.c porte les deux formes derrière un
+    // #ifdef SOFTFLOAT_68K (softfloat.c:1061-1065) — défini en tête de softfloat.h, donc
+    // TOUJOURS actif chez Hatari — et c'est la branche x87 qui avait été portée ici.
+    // Effet : TOUT opérande dénormal ressortait exactement ×2 (et FGETEXP décalé de 1),
+    // sur FADD/FSUB/FMUL/FDIV/FSQRT/FREM/FMOD/FGETEXP/FGETMAN/FSCALE.
+    int sc = clz64(aSig); zSig = aSig << sc; zExp = -sc;
 }
 
 // --- Cœur : arrondi + emballage (port de roundAndPackFloatx80) ------------------

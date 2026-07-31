@@ -51,6 +51,9 @@ public:
     void serialize(StateArchive& ar) {
         ar(chn_[0]); ar(chn_[1]);
         ar(irqLine_); ar(ius_); ar(activeReg_);
+        // writeControl fait « ch.WR[activeReg_] = value » : un état forgé passant le CRC
+        // écrirait hors du tableau WR[16] (même convention de garde qu'Acsi::serialize).
+        ar.check(activeReg_ >= 0 && activeReg_ <= 15);
     }
 
 private:

@@ -16,6 +16,7 @@
 //  (c) 2026 VERHILLE Arnaud — projet NeoST.
 // =============================================================================
 #pragma once
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <string>
@@ -73,7 +74,19 @@ public:
     void serialize(StateArchive& ar) {
         ar(target_); ar(byteCount_); ar.arr(command_);
         ar(opcode_); ar(status_); ar(dmaError_);
-        ar.vec(buf_); ar(dataLen_); ar(dmaWrite_);
+        // buf_ n'est sérialisé qu'à hauteur de dataLen_ : il ne fait que GROSSIR
+        // (prepRespBuf), et un READ(10) dont le `count` vient du programme émulé peut le
+        // porter à 32 Mo DÉFINITIVEMENT — tous les save-states suivants auraient alors
+        // pesé 32 Mo. Hatari a la même croissance mais ne le snapshotte pas du tout.
+        if (ar.loading()) {
+            ar.vec(buf_);
+        } else {
+            std::vector<uint8_t> live(buf_.begin(),
+                                      buf_.begin() + std::min<std::size_t>(buf_.size(),
+                                          dataLen_ > 0 ? std::size_t(dataLen_) : 0));
+            ar.vec(live);
+        }
+        ar(dataLen_); ar(dmaWrite_);
         // Invariants : byteCount_ indexe command_[16], dataLen_ borne la lecture de
         // buf_ par le DMA, target_ indexe devs_ — des valeurs restaurées hors bornes
         // (négatives comprises) liraient/écriraient hors du tas.

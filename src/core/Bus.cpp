@@ -64,6 +64,7 @@ void Bus::serialize(StateArchive& ar) {
 
     // Coprocesseurs / gate / pads : classes triviales à état interne.
     ar(fpu);                // inclut fpu.present (la carte ioFault_ se rebâtit au besoin)
+    ar.check(fpu.stateValid());   // index du tampon CIR : cf. Fpu::stateValid
     ar(scu);
     ar(stePads);
 
