@@ -177,6 +177,9 @@ inline void normalizeSubnormal(uint64_t aSig, int32_t& zExp, uint64_t& zSig) {
     int sc = clz64(aSig); zSig = aSig << sc; zExp = -sc;
 }
 
+// Déclaration anticipée : roundSigAndPack délègue à roundAndPack pour prec == 80.
+inline f80 roundAndPack(int prec, int sign, int32_t zExp, uint64_t zSig0, uint64_t zSig1, Status& st);
+
 // --- Cœur : arrondi + emballage (port de roundAndPackFloatx80) ------------------
 inline f80 roundAndPack(int prec, int sign, int32_t zExp, uint64_t zSig0, uint64_t zSig1, Status& st) {
     int rm = st.roundingMode;
@@ -325,6 +328,58 @@ inline f80 sub(f80 a, f80 b, Status& st) {
     return (aS == bS) ? subSigs(a, b, aS, st) : addSigs(a, b, aS, st);
 }
 
+// --- Arrondi à la précision SANS réduction de plage d'exposant -------------------
+// Port de roundSigAndPackFloatx80 (softfloat.c:1503), utilisé par les seules FSGLMUL /
+// FSGLDIV. Différence ESSENTIELLE avec roundAndPack : la mantisse est arrondie à 24 ou
+// 53 bits, mais l'exposant garde la plage ÉTENDUE (seuils 0x7FFE / 0), là où roundAndPack
+// applique en plus un expOffset qui rabat la plage sur celle du simple/double précision.
+// Passer par roundAndPack faisait donc déborder FSGLMUL/FSGLDIV vers 2^±126 au lieu de
+// 2^±16383 — un résultat parfaitement représentable rendu ±∞.
+inline f80 roundSigAndPack(int prec, int sign, int32_t zExp, uint64_t zSig0, uint64_t zSig1, Status& st) {
+    const int rm = st.roundingMode;
+    const bool rne = (rm == round_nearest_even);
+    uint64_t roundIncr, roundMask;
+    if (prec == 32)      { roundIncr = 0x0000008000000000ull; roundMask = 0x000000FFFFFFFFFFull; }
+    else if (prec == 64) { roundIncr = 0x0000000000000400ull; roundMask = 0x00000000000007FFull; }
+    else return roundAndPack(80, sign, zExp, zSig0, zSig1, st);
+    zSig0 |= (zSig1 != 0);
+    if (!rne) {
+        if (rm == round_to_zero) roundIncr = 0;
+        else { roundIncr = roundMask;
+               if (sign) { if (rm == round_up)   roundIncr = 0; }
+               else      { if (rm == round_down) roundIncr = 0; } }
+    }
+    uint64_t roundBits = zSig0 & roundMask;
+    if (0x7FFE <= uint32_t(zExp)) {
+        if ((0x7FFE < zExp) || ((zExp == 0x7FFE) && (zSig0 + roundIncr < zSig0))) {
+            raise(st, flag_overflow);
+            if (zSig0 & roundMask) raise(st, flag_inexact);
+            if (rm == round_to_zero || (sign && rm == round_up) || (!sign && rm == round_down))
+                return pack(sign, 0x7FFE, ~uint64_t(0));
+            return pack(sign, 0x7FFF, INF_SIG);
+        }
+        if (zExp < 0) {
+            raise(st, flag_underflow);
+            shift64RightJamming(zSig0, -zExp, zSig0);
+            zExp = 0;
+            roundBits = zSig0 & roundMask;
+            if (roundBits) raise(st, flag_inexact);
+            zSig0 += roundIncr;
+            if (rne && (roundBits == roundIncr)) roundMask |= roundIncr << 1;
+            zSig0 &= ~roundMask;
+            return pack(sign, zExp, zSig0);
+        }
+    }
+    if (roundBits) raise(st, flag_inexact);
+    zSig0 += roundIncr;
+    if (zSig0 < roundIncr) { ++zExp; zSig0 = INF_LOW; }
+    roundIncr = roundMask + 1;
+    if (rne && ((roundBits << 1) == roundIncr)) roundMask |= roundIncr;
+    zSig0 &= ~roundMask;
+    if (zSig0 == 0) zExp = 0;
+    return pack(sign, zExp, zSig0);
+}
+
 inline f80 mul(f80 a, f80 b, Status& st) {
     int aSign = signOf(a), bSign = signOf(b), zSign = aSign ^ bSign;
     int32_t aExp = expOf(a), bExp = expOf(b), zExp; uint64_t aSig = fracOf(a), bSig = fracOf(b), zSig0, zSig1;
@@ -379,6 +434,69 @@ inline f80 div(f80 a, f80 b, Status& st) {
         zSig1 |= ((rem1 | rem2) != 0);
     }
     return roundAndPack(st.roundingPrecision, zSign, zExp, zSig0, zSig1, st);
+}
+
+// --- FSGLMUL / FSGLDIV (ports de floatx80_sglmul / floatx80_sgldiv) --------------
+// Mantisses tronquées à 24 bits, mais résultat arrondi par roundSigAndPack (plage
+// d'exposant ÉTENDUE). La troncature n'intervient qu'APRÈS le traitement des NaN/∞/zéro
+// ET après normalisation des dénormaux : la faire sur les opérandes bruts écrasait le
+// payload des NaN propagés et réduisait un dénormal à zéro.
+inline f80 sglmul(f80 a, f80 b, Status& st) {
+    int aSign = signOf(a), bSign = signOf(b), zSign = aSign ^ bSign;
+    int32_t aExp = expOf(a), bExp = expOf(b), zExp; uint64_t aSig = fracOf(a), bSig = fracOf(b), zSig0, zSig1;
+    if (aExp == 0x7FFF) {
+        if ((aSig << 1) || ((bExp == 0x7FFF) && (bSig << 1))) return propagateNaN(st, a, b);
+        if ((bExp | bSig) == 0) { raise(st, flag_invalid); return defaultNaN(); }
+        return pack(zSign, aExp, aSig);
+    }
+    if (bExp == 0x7FFF) {
+        if (bSig << 1) return propagateNaN(st, a, b);
+        if ((aExp | aSig) == 0) { raise(st, flag_invalid); return defaultNaN(); }
+        return pack(zSign, bExp, bSig);
+    }
+    if (aExp == 0) { if (aSig == 0) return pack(zSign, 0, 0); normalizeSubnormal(aSig, aExp, aSig); }
+    if (bExp == 0) { if (bSig == 0) return pack(zSign, 0, 0); normalizeSubnormal(bSig, bExp, bSig); }
+    aSig &= 0xFFFFFF0000000000ull;      // 24 bits — APRÈS les cas spéciaux (cf. en-tête)
+    bSig &= 0xFFFFFF0000000000ull;
+    zExp = aExp + bExp - 0x3FFE;
+    mul64To128(aSig, bSig, zSig0, zSig1);
+    if (0 < int64_t(zSig0)) { shortShift128Left(zSig0, zSig1, 1, zSig0, zSig1); --zExp; }
+    return roundSigAndPack(32, zSign, zExp, zSig0, zSig1, st);
+}
+
+inline f80 sgldiv(f80 a, f80 b, Status& st) {
+    int aSign = signOf(a), bSign = signOf(b), zSign = aSign ^ bSign;
+    int32_t aExp = expOf(a), bExp = expOf(b), zExp; uint64_t aSig = fracOf(a), bSig = fracOf(b), zSig0, zSig1;
+    uint64_t rem0, rem1, rem2, term0, term1, term2;
+    if (aExp == 0x7FFF) {
+        if (aSig << 1) return propagateNaN(st, a, b);
+        if (bExp == 0x7FFF) { if (bSig << 1) return propagateNaN(st, a, b); raise(st, flag_invalid); return defaultNaN(); }
+        return pack(zSign, aExp, aSig);
+    }
+    if (bExp == 0x7FFF) { if (bSig << 1) return propagateNaN(st, a, b); return pack(zSign, 0, 0); }
+    if (bExp == 0) {
+        if (bSig == 0) {
+            if ((aExp | aSig) == 0) { raise(st, flag_invalid); return defaultNaN(); }
+            raise(st, flag_divzero); return pack(zSign, 0x7FFF, INF_SIG);
+        }
+        normalizeSubnormal(bSig, bExp, bSig);
+    }
+    if (aExp == 0) { if (aSig == 0) return pack(zSign, 0, 0); normalizeSubnormal(aSig, aExp, aSig); }
+    zExp = aExp - bExp + 0x3FFE;
+    rem1 = 0;
+    if (bSig <= aSig) { shift128Right(aSig, 0, 1, aSig, rem1); ++zExp; }
+    zSig0 = estimateDiv128To64(aSig, rem1, bSig);
+    mul64To128(bSig, zSig0, term0, term1);
+    sub128(aSig, rem1, term0, term1, rem0, rem1);
+    while (int64_t(rem0) < 0) { --zSig0; add128(rem0, rem1, 0, bSig, rem0, rem1); }
+    zSig1 = estimateDiv128To64(rem1, 0, bSig);
+    if (uint64_t(zSig1 << 1) <= 8) {
+        mul64To128(bSig, zSig1, term1, term2);
+        sub128(rem1, 0, term1, term2, rem1, rem2);
+        while (int64_t(rem1) < 0) { --zSig1; add128(rem1, rem2, 0, bSig, rem1, rem2); }
+        zSig1 |= ((rem1 | rem2) != 0);
+    }
+    return roundSigAndPack(32, zSign, zExp, zSig0, zSig1, st);
 }
 
 inline f80 sqrt_(f80 a, Status& st) {

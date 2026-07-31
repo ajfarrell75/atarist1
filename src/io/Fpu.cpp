@@ -684,13 +684,8 @@ void Fpu::genOp(uint16_t cmd, Ext src) {
             fpsr_ = (fpsr_ & 0xFF00FFFFu) | (qb << 16);
             break;
         }
-        case 0x24: { sf::Status z = st; z.roundingPrecision = sf::prec_single;   // FSGLDIV
-                     rf = sf::div(d, s, z); } break;
-        case 0x27: { sf::Status z = st; z.roundingPrecision = sf::prec_single;   // FSGLMUL
-                     auto da = d, sa = s;                                        // entrées tronquées à
-                     da.low &= 0xFFFFFF0000000000ull;                            // 24 bits AVANT le produit
-                     sa.low &= 0xFFFFFF0000000000ull;                            // (cf. Hatari floatx80_sglmul)
-                     rf = sf::mul(da, sa, z); } break;
+        case 0x24: rf = sf::sgldiv(d, s, st); break;   // FSGLDIV (cf. SoftFloatX80.hpp)
+        case 0x27: rf = sf::sglmul(d, s, st); break;   // FSGLMUL (cf. SoftFloatX80.hpp)
         case 0x38: case 0x39: {                                               // FCMP (0x39 alias)
             // Port de floatx80_cmp (softfloat.c:3345) : les CC dérivent du RÉSULTAT
             // symbolique pack(sign,…) — en particulier Z **et** N pour −0 vs ±0 et
