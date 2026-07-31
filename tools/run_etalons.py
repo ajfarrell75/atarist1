@@ -141,6 +141,11 @@ def resolve_ref(entry: dict, ref_ppm: Path, ref_png: Path):
     return None, kind or "?"
 
 
+# Étalons dont la comparaison n'a PAS eu lieu (référence absente) : recensés pour
+# que « TOUS OK » ne puisse jamais masquer une couverture creuse.
+SKIPPED = []
+
+
 def run_one(entry: dict, args) -> bool:
     eid = entry["id"]
     print(f"\n=== {eid} — {entry['name']} ===")
@@ -198,6 +203,10 @@ def run_one(entry: dict, args) -> bool:
         want = ".png (oracle)" if kind == "oracle" else ref_ppm.name
         print(f"  SKIP diff : pas de référence {want} (ref_kind={kind}) — "
               f"lancer {'--oracle' if kind == 'oracle' else '--update-ref'}")
+        # La capture a EU LIEU mais il n'y a rien à quoi la comparer : ce n'est pas
+        # la même chose qu'une donnée d'entrée absente, et le compter comme une
+        # réussite transformait l'étalon en no-op parfaitement vert. On le RECENSE.
+        SKIPPED.append(eid)
         return entry.get("optional", False)
     print(f"  référence : {ref.name} (ref_kind={kind})")
 
@@ -284,12 +293,28 @@ def main() -> int:
         subprocess.run(cmd, cwd=ROOT, check=False)
 
     want = set(args.only.split(",")) if args.only else None
+    # Un ID inconnu ne doit PAS rendre « TOUS OK » sur zéro étalon exécuté : run_all.py
+    # passe au palier P0 une liste d'IDs CODÉE EN DUR, donc un simple renommage dans le
+    # manifeste viderait le garde-fou logique du hook pre-push sans un mot.
+    if want:
+        unknown = want - {e["id"] for e in entries}
+        if unknown:
+            print("ID inconnu(s) : " + ", ".join(sorted(unknown)))
+            return 2
     ok = True
+    ran = 0
     for entry in entries:
         if want and entry["id"] not in want:
             continue
+        ran += 1
         if not run_one(entry, args):
             ok = False
+    if ran == 0:
+        print("\nAUCUN étalon exécuté — filtre trop restrictif ?")
+        return 2
+    if SKIPPED:
+        print(f"\n⚠ NON COMPARÉS ({len(SKIPPED)}) : " + ", ".join(SKIPPED)
+              + "\n  (capture faite, mais aucune référence — ces étalons ne valident RIEN)")
     print("\n" + ("TOUS OK" if ok else "ÉCHECS — voir ci-dessus"))
     return 0 if ok else 1
 

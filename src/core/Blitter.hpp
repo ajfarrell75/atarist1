@@ -86,7 +86,7 @@ private:
     void start();                            // BUSY écrit à 1 : démarre/reprend le blit
     bool runSlice(int maxBusAccesses);       // ≤ N accès bus (-1 = tout) ; true = terminé
     void finishTransfer();                   // y_count = 0 : BUSY/HOG effacés + IRQ GPIP3
-    void stallCpu(int busAccesses, int arbCycles);   // 4 cyc/accès + arbitration (Moira)
+    void stallCpu(int64_t busAccesses, int arbCycles);   // 4 cyc/accès + arbitration (Moira)
     void pauseTransfer();                    // BUSY effacé pendant un blit : tranche annulée
     // Fenêtre PRE_START de 4 cycles avant chaque prise de bus non-hog (cf. .cpp) :
     // armée dans Bus::blitterWinStart/End, consultée par les callbacks mémoire de
@@ -146,7 +146,10 @@ private:
     bool     haveDst_  = false;              // lecture destination du mot courant déjà faite
     bool     fetchSrc_ = false;              // une source a été lue (màj src_addr en fin de mot)
     uint16_t dstWord_  = 0;                  // mot destination lu (survit à la suspension)
-    int      sliceBus_ = 0;                  // accès bus consommés par la tranche en cours
+    // int64 : un blit HOG x_count=y_count=0 vaut 65536×65536 → ~8,6e9 accès bus, soit
+    // un débordement signé (UB) sur int, et « busAccesses * 4 » débordait dès 5,4e8 —
+    // le stall CPU devenait alors négatif et était silencieusement ignoré.
+    int64_t  sliceBus_ = 0;                  // accès bus consommés par la tranche en cours
     int      cpuBusCnt_ = 0;                 // accès bus CPU consommés (fenêtre COUNT_CPU_BUS)
     bool     busCountError_ = false;         // accès CPU « volé » en PRE_START → tranche de 63
 };

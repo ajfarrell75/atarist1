@@ -655,12 +655,20 @@ void drawStKiosk(GlScreen& s, int fbw, int fbh, int cTop, int cH) {
     // reposant sur les UV (0..1 = cadre entier), la taille FBO ne change PAS le
     // cadrage — juste la finesse d'anti-alias. Baril/vignette encadrent donc tout
     // le cadre ST (bords courbés rognés hors écran en zoom fort — assumé v1).
-    const GLuint t = crtApply(s, fbw, fbh);
     // Aspect pixel : basse rés (≤480 px de large) et 200 lignes = pixels doublés.
     const float sx = (s.w <= 480) ? 2.f : 1.f;
     const float sy = (s.h <= 300) ? 2.f : 1.f;
     const float scale = (float)fbh / (cH * sy);        // px écran par px ST logique (vertical)
     const float vw = s.w * sx * scale, vh = s.h * sy * scale;   // cadre COMPLET à cette échelle
+    // Passe CRT demandée à la taille du CADRE ENTIER À CE ZOOM, pas à celle de l'écran :
+    // le viewport ci-dessous étire ensuite le résultat d'un facteur s.h/cH, et un FBO
+    // calé sur l'écran voyait donc son masque triade et ses scanlines — calculés
+    // analytiquement pour un pas de 1 px écran — magnifiés d'autant, d'où moiré et
+    // perte d'alignement sur la grille du moniteur. C'est exactement la correction
+    // déjà appliquée au cadrage du bureau (cf. drawStScreen) ; les deux moitiés du
+    // zoom adaptatif sont maintenant cohérentes.
+    const GLuint t = crtApply(s, std::max(1, (int)std::lround(vw)),
+                                 std::max(1, (int)std::lround(vh)));
     const float cc = cTop + cH / 2.0f;                 // ligne ST au centre du contenu
     const float vy = fbh / 2.0f - vh * (1.0f - cc / s.h);       // centre le contenu à l'écran
     const float vx = (fbw - vw) / 2.0f;
@@ -914,7 +922,10 @@ void onKey(GLFWwindow*, int key, int scancode, int action, int /*mods*/) {
         return;
     }
     if (key == GLFW_KEY_F5 || key == GLFW_KEY_F7 || key == GLFW_KEY_F11) return;
-    if (g_kiosk && (key == GLFW_KEY_F9 || key == GLFW_KEY_F10)) return;
+    // K ouvre/ferme le bandeau « KEYBOARD & MOUSE » de la borne : comme F9/F10 c'est un
+    // raccourci HÔTE, il ne doit pas partir AUSSI au ST — sinon taper ses initiales dans
+    // une table des scores ouvrait le bandeau, qui avale ensuite tout le clavier.
+    if (g_kiosk && (key == GLFW_KEY_F9 || key == GLFW_KEY_F10 || key == GLFW_KEY_K)) return;
     const uint8_t sc = stScancodeFor(key, scancode);   // symbolique (layout hôte + pays TOS) → positionnel
     if (!sc) return;
     // Suivi des touches dont le MAKE a été transmis au ST : leur BREAK doit
@@ -2012,7 +2023,11 @@ void drawDiskLibrary(const std::string& disksDir, const std::string& mounted,
         for (const auto& p : images) {
             const std::string rel = fs::relative(p, base, ec).generic_string();  // affiché (montre le dossier)
             ImGui::PushID(p.string().c_str());
-            if (!mountedName.empty() && p.filename().string() == mountedName) {
+            // Chemin COMPLET et non nom de fichier : le scan est récursif, et deux
+            // dumps homonymes dans deux sous-dossiers (« Xenon/DISK1.ST », « Gods/
+            // DISK1.ST » — nommage très courant) étaient tous deux marqués « montée »,
+            // aucun n'offrant plus le bouton Monter : le second devenait inaccessible.
+            if (!mounted.empty() && p.string() == mounted) {
                 ImGui::TextDisabled("●");                  // montée
             } else if (ImGui::SmallButton("Monter")) {
                 reqMount = p.string();
@@ -2048,7 +2063,9 @@ void drawCartLibrary(const std::string& cartsDir, const std::string& mounted,
     if (fs::is_directory(cartsDir, ec)) {
         const std::string mountedName = mounted.empty() ? "" : fs::path(mounted).filename().string();
         for (const auto& e : fs::directory_iterator(cartsDir, ec)) {
-            if (!e.is_regular_file()) continue;
+            // is_regular_file() SANS error_code LANCE sur un symlink dont la cible est devenue
+            // illisible (clé USB débranchée) : rien ne l'attrape ici → std::terminate.
+            std::error_code ec2; if (!e.is_regular_file(ec2)) continue;
             std::string ext = e.path().extension().string();
             for (auto& ch : ext) ch = (char)std::tolower((unsigned char)ch);
             if (ext != ".bin" && ext != ".img" && ext != ".rom") continue;
@@ -2837,7 +2854,7 @@ int main(int argc, char** argv) {
                     if (fs::is_directory(romsDir, ec)) {
                         std::vector<fs::path> roms;
                         for (const auto& e : fs::directory_iterator(romsDir, ec)) {
-                            if (!e.is_regular_file()) continue;
+                            std::error_code ec2; if (!e.is_regular_file(ec2)) continue;   // sans ec : lance sur un symlink cassé
                             std::string ext = e.path().extension().string();
                             for (auto& ch : ext) ch = (char)std::tolower((unsigned char)ch);
                             if (ext != ".img" && ext != ".rom") continue;
@@ -2873,7 +2890,7 @@ int main(int argc, char** argv) {
                     const std::string curCart = fs::path(machine.bus.mountedCartPath()).filename().string();
                     if (fs::is_directory(cartsDir, ec)) {
                         for (const auto& e : fs::directory_iterator(cartsDir, ec)) {
-                            if (!e.is_regular_file()) continue;
+                            std::error_code ec2; if (!e.is_regular_file(ec2)) continue;   // sans ec : lance sur un symlink cassé
                             std::string ext = e.path().extension().string();
                             for (auto& ch : ext) ch = (char)std::tolower((unsigned char)ch);
                             if (ext != ".bin" && ext != ".img" && ext != ".rom") continue;

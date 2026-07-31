@@ -88,9 +88,26 @@ def run_one(entry, args) -> bool:
     if entry.get("fpu"):
         cmd.append("--fpu")
     print("  $", " ".join(cmd))
-    subprocess.run(cmd, cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    # Le dump série n'est écrit qu'À LA FIN de main() côté headless : s'il reste celui
+    # du run PRÉCÉDENT, un émulateur qui segfaute (ou qui sort tôt) laisse le runner
+    # relire un verdict périmé et conclure au succès. On l'efface AVANT, et on lit le
+    # code de retour — c'est tout l'intérêt du palier P1 : attraper une régression qui
+    # fait crasher le cœur.
+    try:
+        serial_path.unlink()
+    except FileNotFoundError:
+        pass
+    log_path = serial_path.with_name(serial_path.stem + "_run.log")
+    with open(log_path, "wb") as log:
+        rc = subprocess.run(cmd, cwd=ROOT, stdout=log, stderr=subprocess.STDOUT).returncode
+    if rc != 0:
+        print(f"  ÉCHEC : neost-headless a rendu {rc} (voir {log_path.relative_to(ROOT)})")
+        return False
+    if not serial_path.exists():
+        print(f"  ÉCHEC : aucun dump série produit ({serial_path.relative_to(ROOT)})")
+        return False
 
-    serial = serial_path.read_text(encoding="latin-1") if serial_path.exists() else ""
+    serial = serial_path.read_text(encoding="latin-1")
     verdicts = parse_verdicts(serial)
 
     ok = True
@@ -132,12 +149,24 @@ def main() -> int:
         return 0
 
     want = set(args.only.split(",")) if args.only else None
+    # Un ID inconnu (faute de frappe, entrée renommée dans le manifeste) ne doit PAS
+    # donner « TOUS OK » sur zéro test exécuté — c'est un vert parfaitement muet.
+    if want:
+        unknown = want - {e["id"] for e in entries}
+        if unknown:
+            print("ID inconnu(s) : " + ", ".join(sorted(unknown)))
+            return 2
     ok = True
+    ran = 0
     for entry in entries:
         if want and entry["id"] not in want:
             continue
+        ran += 1
         if not run_one(entry, args):
             ok = False
+    if ran == 0:
+        print("\nAUCUN auto-test exécuté — filtre trop restrictif ?")
+        return 2
     print("\n" + ("TOUS OK" if ok else "ÉCHECS — voir ci-dessus"))
     return 0 if ok else 1
 
