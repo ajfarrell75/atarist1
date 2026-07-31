@@ -78,3 +78,29 @@ marche normale. Vérifié : `--watch FF8001` (via `$8001.w`) et `--watch 10` (RA
 se déclenchent ; self-tests + glue-selftest 31/31 intacts.
 
 Toute modif future d'un fichier `Moira/` se commit **normalement** dans NeoST.
+
+## Patch local : hooks d'IACK (`iackSyncBefore` / `iackSyncAfter`)
+
+Le cycle d'interruption 68000 d'`execInterrupt<C68000>` avait ses temps d'attente codés en
+dur (`SYNC(4)` avant l'IACK, `SYNC(4)` après). NeoST doit y placer la synchro **E-Clock**
+d'Hatari (`M68000_WaitEClock`) au POINT D'IACK RÉEL — c'est ce qui fait émerger le motif
+mod-20 des positions d'IRQ mesuré côté Hatari. Ajouter le délai en amont (ancien
+`willInterrupt`) sur-comptait de +8 cycles (cf. `docs/MOIRA_WINUAE_CONVERGENCE.md`).
+
+Fichiers touchés vs upstream :
+- `Moira/Moira.h` — deux virtuelles `iackSyncBefore(u8)` / `iackSyncAfter(u8)`, valeur de
+  repli 4/4 (≡ upstream si non surchargées).
+- `Moira/MoiraExceptions_cpp.h` — `SYNC(4)` → `SYNC(iackSyncBefore(level))` et
+  `SYNC(iackSyncAfter(level))` autour du cycle d'IACK.
+
+NeoST les surcharge dans `NeostMoira` (`src/core/Cpu68k.cpp`), sous `NEOST_IACK_AT`
+(défaut ON). ⚠ **Patch STRUCTURANT** : le retirer déverrouille le beam-sync (Enchanted
+Land, Cuddly Demos, Lethal Xcess).
+
+## Patch local : diagnostic d'exception (`NEOST_EXC_DIAG`)
+
+Instrumentation OFF par défaut (`std::getenv`, `static const` → évaluée une fois) qui date
+au cycle les trois instants de la séquence d'exception : changement de la broche IPL
+(`Moira.cpp`), entrée du cycle d'IACK (`MoiraExceptions_cpp.h`) et fin de `jumpToVector`
+(`MoiraDataflow_cpp.h`, ligne `[JTV] nr=… clk=…`). Sert au diff cycle-à-cycle contre
+l'oracle Hatari instrumenté (`[HPIN]`/`[HFETCH]`/`[HEXC]`). Aucun coût en marche normale.

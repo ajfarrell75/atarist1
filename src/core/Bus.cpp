@@ -94,13 +94,18 @@ void Bus::peripheralReset() {
     if (shifter) shifter->resetGlue(mfp && !mfp->colorMonitor());   // résolution ($FF8260)
     if (psg)     psg->reset();             // PSG_Reset
     if (fdc)     fdc->reset(/*cold=*/false);   // FDC_Reset(false)
-    // ⚠ MFP_Reset_All VOLONTAIREMENT ABSENT — chantier ouvert. L'ajouter (mfp->reset())
-    // casse l'étalon ORACLE nocooper (10828 px) ; bisection puce par puce : les quatre
-    // ci-dessus passent, le MFP seul échoue. Cause probable : Mfp::reset() est le reset
-    // MACHINE de NeoST et va plus loin que MFP_Reset d'Hatari (mfp.c:519), qui ne touche
-    // QUE les registres MFP et ses échéances — NeoST y remet en plus l'USART
-    // (rxByte_/rxFull_/serialBaud_/serialUcr_) et la ligne XSINT du son DMA. Il faut donc
-    // un reset MFP *partiel*, calqué sur MFP_Reset, avant de pouvoir le brancher.
+    // ⚠ MFP_Reset_All VOLONTAIREMENT ABSENT — chantier ouvert, MESURÉ.
+    // Ajouter « if (mfp) mfp->reset(); » ici fait échouer l'étalon oracle nocooper à
+    // 26607 px — or 26607 est EXACTEMENT le diff de la trame 6798 mesuré en balayant
+    // 6796/6798/6800/6802/6804 : ce n'est donc pas un rendu cassé mais un DÉCALAGE DE
+    // PHASE de 2 trames (le reset MFP retarde le TOS, la démo arrive 2 trames plus tôt
+    // à la capture). Bisection puce par puce : IKBD, Glue, PSG et FDC passent, le MFP
+    // seul décale. Cause probable : Mfp::reset() est le reset MACHINE de NeoST et va
+    // plus loin que MFP_Reset d'Hatari (mfp.c:519), qui ne touche QUE les registres MFP
+    // et ses échéances — NeoST y remet en plus l'USART (rxByte_/rxFull_/serialBaud_/
+    // serialUcr_) et la ligne XSINT du son DMA. À reprendre ainsi : écrire un reset MFP
+    // *partiel* calqué sur MFP_Reset, puis REGÉNÉRER l'oracle nocooper (recette à appui
+    // touche, cf. la note de l'entrée dans tools/etalons.json) pour re-caler le Δ.
 }
 
 bool Bus::loadTos(const std::string& path) {

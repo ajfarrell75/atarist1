@@ -51,6 +51,13 @@ montage de disquettes, bascule couleur/mono, et **upload** de votre propre `.st`
 
 ## Démarrage rapide
 
+### Télécharger un binaire
+
+Chaque release publie **5 paquets** (avec leurs sommes SHA-256) : AppImage Linux x86_64
+(compatible glibc ≥ 2.27, donc des distributions anciennes aux plus récentes), AppImage
+Linux aarch64, AppImage Raspberry Pi, `.dmg` macOS **Universal 2** (Apple Silicon + Intel)
+et le bundle WebAssembly. Compiler depuis les sources reste possible — voir ci-dessous.
+
 ### Dépendances
 
 - **GLFW3** — `brew install glfw` (macOS) / `pacman -S glfw` (CachyOS/Arch)
@@ -104,7 +111,9 @@ jeu, envoyer des touches ou redémarrer, sans jamais quitter le plein écran.
 
 En kiosk : la souris est capturée et le curseur masqué ; l'**émulation joystick au
 clavier est activée** (flèches + Ctrl droit = feu) pour jouer sans manette ; le fichier
-`neost.cfg` n'est **jamais** réécrit.
+`neost.cfg` n'est réécrit que pour les réglages que la borne doit mémoriser et qui se
+règlent depuis son menu (dossiers ROM additionnels, affectation des manettes) — jamais
+pour la ROM, la disquette ou le modèle de machine.
 
 **Zoom adaptatif** (défaut, bascule **F10**) : la **zone active** (l'écran ST « de base »,
 hors bandes overscan) est calée sur la hauteur en gardant le ratio pixel — un jeu normal

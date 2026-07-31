@@ -3,6 +3,34 @@
 (c) 2026 VERHILLE Arnaud. Ce qui est **implémenté et validé**. Pas encore de versions
 taguées (0.1.x). Le restant est dans [`TODO.md`](TODO.md).
 
+## Bug hunt passes 1-3 + CI de release (2026-07-31)
+
+**Sécurité / crashs.** Le pont GEMDOS laissait s'ÉCHAPPER du dossier monté : `/` n'était
+pas reconnu comme séparateur Atari (seul `\` l'était), donc un `.TOS` hostile lisait,
+écrivait et listait hors du bac à sable avec les droits de l'utilisateur (Hatari a le même
+trou — durcissement assumé). Le blitter pouvait faire PLANTER l'émulateur : un blit visant
+son propre registre de contrôle se relançait à l'infini (SIGSEGV). Les deux sont prouvés
+par repro et re-testés fermés.
+
+**Le filet de test lui-même était troué** — `run_selftests.py` rendait VERT un émulateur
+qui segfaute (code de retour ignoré + dump série périmé relu) ; `--only <ID inconnu>`
+exécutait zéro test en annonçant « TOUS OK » ; une référence absente comptait comme une
+réussite. La CI de release ne lançait AUCUN palier de validation : elle lance désormais
+`run_all.py --tier fast`.
+
+**Émulation.** FPU : `normalizeSubnormal` portait la branche x87 au lieu de la branche
+68881 → tout opérande dénormal ressortait ×2 ; FSGLMUL/FSGLDIV rabattaient à tort la plage
+d'exposant et tronquaient avant les cas spéciaux (fuzz différentiel contre `softfloat.c` :
+0 écart). L'instruction 68000 **RESET** ne réinitialisait aucune puce (port de
+`customreset()` : IKBD, Glue, PSG, FDC + IRQ latchées ; `MFP_Reset_All` reste à faire).
+`Machine::liveNow()` comptait le temps DEUX FOIS pendant le dispatch du saut STOP (1208
+dispatches sur 15780, δ ≤ 112 cyc → 0). Save-states **v6 → v7** (empreinte GEMDOS +
+cartouche, `bus.cart` sérialisée). STX : les écritures faites après un formatage de piste
+étaient perdues au remontage.
+
+**Paquets.** CI de release : 5 artefacts (AppImage x86_64 glibc 2.27, AppImage aarch64,
+AppImage Raspberry Pi, `.dmg` macOS Universal 2, bundle WebAssembly) + sommes SHA-256.
+
 ## Bug hunt multi-agents (2026-07-29)
 
 Chasse à 6 lentilles parallèles (diff non commité, cœur CPU/Bus/état, vidéo, I/O disque,
@@ -1596,7 +1624,7 @@ fidèles à Hatari, pas des bugs.
   byte-identiques (divergence = 1ᵉʳ offset localisé) — PASSE sur boot ST, STE (son DMA +
   vidéo STE), Mega STE (SCC actif), démo No Cooper (overscan med-res). I/O fichier prouvée :
   save@60 → fichier 1,3 Mo → load + run → écran **diff_px=0** vs run direct (ST comme Mega
-  STE). Format `'NSTS'` v3 (v1/v2 rejetés). GUI : **F5** sauver / **F7** charger (slot
+  STE). Format `'NSTS'` versionné — **v7 actuel** (v1-v6 rejetés). GUI : **F5** sauver / **F7** charger (slot
   `neost.state`, menu Machine, overlay). Headless : `--save-state`/`--load-state`, auto-test
   `--save-state-test`. Hors-snapshot **par conception** : le CONTENU des images disquette/
   disque dur vit dans les fichiers hôtes (`writeBack` les persiste au fil de l'eau, comme

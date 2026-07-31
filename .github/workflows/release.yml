@@ -207,6 +207,15 @@ jobs:
           cmake --build build -j"$(nproc)"
           test -x build/neost   # le GUI DOIT être là (GLFW trouvé), pas juste le headless
 
+      # Le SEUL filet de validation du projet (cf. CLAUDE.md : pas de tests unitaires,
+      # tout passe par neost-headless). La CI ne lançait AUCUN palier : seul un
+      # smoke-launch tournait, donc une régression pixel pouvait être publiée en
+      # release sans que rien ne l'arrête. Palier « fast » ici (auto-tests logique
+      # glue/spec512/bus/mfp + verdicts série + cycle-bench, quelques secondes) — le
+      # palier « full » exige des disques d'étalons non embarqués dans le paquet.
+      - name: Suite de validation (palier fast)
+        run: python3 tools/run_all.py --tier fast
+
       - name: Empaqueter l'AppImage
         env:
           NEOST_VERSION: ${{ needs.version.outputs.neost_version }}
