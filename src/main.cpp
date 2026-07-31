@@ -3163,30 +3163,41 @@ int main(int argc, char** argv) {
         // rebooter (le jeu en cours continue) ; (X) REDÉMARRE la machine (bouton
         // reset) → reboot sur la disquette insérée ; (Y) quitte avec confirmation.
         if (g_kiosk) {
+            // La navigation du menu ne consulte QUE les manettes réellement affectées à
+            // un port ST (assign >= 0). Sans ce filtre, une manette explicitement mise
+            // sur OFF pilotait quand même le menu : un encodeur arcade dont l'axe Y
+            // repose de travers — le défaut même pour lequel la page JOYSTICKS existe —
+            // faisait défiler la sélection en continu, rendant le menu (et donc la page
+            // qui aurait permis de le corriger) inutilisable.
+            int8_t navRoles[GLFW_JOYSTICK_LAST + 1];
+            joyResolveRoles(navRoles);
+            int8_t navAssign[GLFW_JOYSTICK_LAST + 1];
+            stjoy::resolveAssign(navRoles, navAssign);
+            auto navUsable = [&](int j) {
+                return j >= 0 && j <= GLFW_JOYSTICK_LAST && navAssign[j] >= 0;
+            };
             auto padBtn = [&](int b) {
                 for (int j = GLFW_JOYSTICK_1; j <= GLFW_JOYSTICK_LAST; ++j) {
                     GLFWgamepadstate gs;
-                    if (glfwJoystickPresent(j) && glfwGetGamepadState(j, &gs) && gs.buttons[b])
+                    if (navUsable(j) && glfwJoystickPresent(j) && glfwGetGamepadState(j, &gs) && gs.buttons[b])
                         return true;
                 }
                 return false;
             };
-            auto padAxisY = [&]() {
+            // Zone morte de l'utilisateur (g_joyDeadzone) et non un seuil figé : un stick
+            // au repos décentré ne doit pas compter comme une direction tenue.
+            auto padAxis = [&](int axis) {
                 for (int j = GLFW_JOYSTICK_1; j <= GLFW_JOYSTICK_LAST; ++j) {
                     GLFWgamepadstate gs;
-                    if (glfwJoystickPresent(j) && glfwGetGamepadState(j, &gs))
-                        return gs.axes[GLFW_GAMEPAD_AXIS_LEFT_Y];
+                    if (navUsable(j) && glfwJoystickPresent(j) && glfwGetGamepadState(j, &gs)) {
+                        const float v = gs.axes[axis];
+                        if (std::fabs(v) > g_joyDeadzone) return v;
+                    }
                 }
                 return 0.0f;
             };
-            auto padAxisX = [&]() {
-                for (int j = GLFW_JOYSTICK_1; j <= GLFW_JOYSTICK_LAST; ++j) {
-                    GLFWgamepadstate gs;
-                    if (glfwJoystickPresent(j) && glfwGetGamepadState(j, &gs))
-                        return gs.axes[GLFW_GAMEPAD_AXIS_LEFT_X];
-                }
-                return 0.0f;
-            };
+            auto padAxisY = [&]() { return padAxis(GLFW_GAMEPAD_AXIS_LEFT_Y); };
+            auto padAxisX = [&]() { return padAxis(GLFW_GAMEPAD_AXIS_LEFT_X); };
             // Ouvrir / fermer : START manette ou F9 clavier (front montant). La liste
             // est triée par PROXIMITÉ au disque courant → les phases B/C/D du jeu en
             // cours arrivent en tête, et la sélection démarre sur le disque monté.
@@ -3323,6 +3334,18 @@ int main(int argc, char** argv) {
                     }
                     if (okNow && !pOk) {
                         if (g_browseSel == 0) {                    // valider CE dossier → l'ajoute
+                            // REFUS de la racine et du dossier personnel : kioskScanDisks
+                            // les parcourrait RÉCURSIVEMENT, sans limite de profondeur ni
+                            // de temps, DANS le thread GUI — la borne se figerait plusieurs
+                            // minutes à chaque ouverture du menu, sans aucun retour.
+                            const fs::path bp(g_browseDir);
+                            const char* home = std::getenv("HOME");
+                            const bool tooBroad = (bp == bp.root_path())
+                                || (home && *home && bp == fs::path(home));
+                            if (tooBroad) {
+                                g_stateMsg = "Dossier trop vaste (racine / maison) — refusé";
+                                g_stateMsgFrames = 180;
+                            } else {
                             if (std::find(g_kioskRomDirs.begin(), g_kioskRomDirs.end(), g_browseDir)
                                     == g_kioskRomDirs.end())
                                 g_kioskRomDirs.push_back(g_browseDir);
@@ -3331,6 +3354,7 @@ int main(int argc, char** argv) {
                             kioskScanDisks(disksDir, machine.fdc.mountedPath());
                             g_kioskDiskSel = 0; g_romDirSel = 0;
                             g_kioskPage = KIOSK_PAGE_ROMDIRS;          // retour au gestionnaire
+                            }
                         } else if (g_browseSel == 1) {             // .. parent
                             const fs::path p(g_browseDir);
                             if (p.has_parent_path() && p.parent_path() != p)
@@ -3527,13 +3551,20 @@ int main(int argc, char** argv) {
         }
         // Cart Library : branchement / éjection à chaud du port cartouche.
         if (!reqMountCart.empty()) {
-            if (machine.gemdos.active()) {  // $FA0000 occupé par la cartouche système GEMDOS
-                machine.gemdos.unmount();
-                cfg.gemdos.clear();
-            }
+            // VALIDER AVANT de libérer : loadCart échoue sur un fichier illisible ou de
+            // plus de 128 Ko (un .img volumineux dans carts/ est banal). Démonter le HD
+            // GEMDOS d'abord laissait alors la machine SANS cartouche ET SANS C:, avec
+            // cfg.gemdos vidé — donc le disque dur perdu au prochain saveConfig, sans
+            // message ni reset pour l'expliquer.
             if (machine.loadCart(reqMountCart)) {
+                if (machine.gemdos.active()) {  // $FA0000 occupé par la cartouche système GEMDOS
+                    machine.gemdos.unmount();
+                    cfg.gemdos.clear();
+                }
                 cfg.cart = reqMountCart; saveConfig(exeDir, cfg, &machine);
                 reqHardReset = true;       // le TOS sonde le port cartouche au boot
+            } else {
+                g_stateMsg = "Cartouche illisible (max 128 Ko)"; g_stateMsgFrames = 120;
             }
         }
         if (reqEjectCart) {
@@ -3544,13 +3575,19 @@ int main(int argc, char** argv) {
         // Disque dur (menu Machine → Disque dur) : GEMDOS HD et image ACSI. Chaque
         // opération force un hard reset — le TOS ne (re)sonde les disques qu'au boot.
         if (!reqMountGemdos.empty()) {
-            if (!machine.bus.mountedCartPath().empty()) {   // exclusif avec la cartouche
-                machine.ejectCart();
-                cfg.cart.clear();
-            }
-            if (machine.gemdos.setDirectory(resolvePath(reqMountGemdos))) {
+            // Même ordre que la cartouche : setDirectory échoue sur une simple faute de
+            // frappe, et retirer la cartouche AVANT la sortait du bus SANS reset — un
+            // programme qui tournait depuis $FA0000 partait alors dans le décor.
+            const std::string gemHost = resolvePath(reqMountGemdos);
+            if (machine.gemdos.setDirectory(gemHost)) {
+                if (!machine.bus.mountedCartPath().empty()) {   // exclusif avec la cartouche
+                    machine.ejectCart();
+                    cfg.cart.clear();
+                }
                 cfg.gemdos = reqMountGemdos; saveConfig(exeDir, cfg, &machine);
                 reqHardReset = true;
+            } else {
+                g_stateMsg = "Dossier GEMDOS introuvable"; g_stateMsgFrames = 120;
             }
         }
         if (reqEjectGemdos) {
@@ -3564,6 +3601,8 @@ int main(int argc, char** argv) {
                              machine.fdc.acsiPartitionCount());
                 cfg.acsi = reqMountAcsi; saveConfig(exeDir, cfg, &machine);
                 reqHardReset = true;
+            } else {
+                g_stateMsg = "Image ACSI illisible"; g_stateMsgFrames = 120;
             }
         }
         if (reqEjectAcsi) {
