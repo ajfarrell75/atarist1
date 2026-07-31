@@ -79,7 +79,7 @@ void Bus::serialize(StateArchive& ar) {
 }
 
 // Broche /RESET du 68000 (instruction RESET, $4E70). Port de customreset()
-// (cpu/hatari-glue.c:54) : IKBD, Glue vidéo, PSG, MFP et FDC repartent à zéro, le CPU
+// (cpu/hatari-glue.c:54) : IKBD, Glue vidéo, PSG et FDC repartent à zéro, le CPU
 // et l'ordonnanceur NON (seule la ligne /RESET des périphériques est assertée).
 // Sans cela, un loader de jeu/démo qui fait « reset » pour faire taire la machine
 // héritée du TOS gardait le YM en train de jouer, les timers MFP du TOS armés (IRQ
@@ -87,11 +87,14 @@ void Bus::serialize(StateArchive& ar) {
 // fréquence/résolution précédente.
 void Bus::peripheralReset() {
     if (ikbd)    ikbd->bootRom();          // IKBD_Reset(false)
-    // Video_Reset_Glue passe par IoMem_WriteByte($FF820A, 0) : une VRAIE écriture, donc
-    // vue et DATÉE par la machine à états de la Glue. Forcer le registre en direct la
-    // court-circuiterait — or c'est elle qui porte toute la précision cycle du rendu.
-    write8(0xFF820A, 0x00);
-    if (shifter) shifter->resetGlue(mfp && !mfp->colorMonitor());   // résolution ($FF8260)
+    // Fréquence + résolution posées EN DIRECT, sans repasser par le bus. C'est bien ce
+    // que fait Hatari : Video_Reset_Glue appelle IoMem_WriteByte, documenté « write 8-bit
+    // byte into IO memory space WITHOUT interception » (includes/ioMem.h:86) — un simple
+    // IoMem[addr] = v, qui n'appelle jamais Video_Sync_WriteByte. Router par Bus::write8
+    // injectait au contraire un événement freq DATÉ dans la machine d'états de la Glue
+    // (celle qui pilote la détection des retraits de bordure) à chaque « reset », plus
+    // des wait-states de bus qu'Hatari n'ajoute pas.
+    if (shifter) shifter->resetGlue(mfp && !mfp->colorMonitor());   // $FF820A = 0 + $FF8260
     if (psg)     psg->reset();             // PSG_Reset
     if (fdc)     fdc->reset(/*cold=*/false);   // FDC_Reset(false)
     // ⚠ MFP_Reset_All VOLONTAIREMENT ABSENT — chantier ouvert, MESURÉ.

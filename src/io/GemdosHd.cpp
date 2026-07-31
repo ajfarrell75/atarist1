@@ -288,7 +288,11 @@ bool GemdosHd::setDirectory(const std::string& hostDir) {
         return false;
     }
     // Installe la cartouche système ($FA0000) : le TOS exécutera son C-INIT au boot.
+    // ⚠ Écrase une éventuelle cartouche utilisateur (même stockage) : on efface donc
+    // AUSSI son chemin, sans quoi unmount() croirait plus tard qu'une cartouche
+    // fichier est branchée et laisserait la cartouche système en place.
     bus_.cart.assign(Cart_data, Cart_data + sizeof(Cart_data));
+    bus_.clearCartPath();
     bus_.gemdos = this;
     active_ = true;
     currentDrive_ = (uint16_t)bootDrive_;
@@ -308,7 +312,11 @@ void GemdosHd::unmount() {
     bootDrive_ = 0;
     currentDrive_ = 0;
     bus_.gemdos = nullptr;
-    bus_.ejectCart();                  // retire la cartouche système $FA0000
+    // Ne retirer QUE la cartouche système GEMDOS — reconnaissable à son chemin VIDE
+    // (elle est posée en mémoire par setDirectory, pas chargée d'un fichier). Vider
+    // inconditionnellement effaçait une cartouche UTILISATEUR fraîchement branchée,
+    // les deux partageant le même stockage bus_.cart ($FA0000).
+    if (bus_.mountedCartPath().empty()) bus_.ejectCart();
     active_ = false;
     std::fprintf(stderr, "[gemdos] HDD GEMDOS démonté\n");
 }

@@ -551,6 +551,22 @@ void Machine::stepInstruction() {
     if (cpu.busClockNow() >= frameEnd_) { finalizeFrame_(); frameInProgress_ = false; }
 }
 
+static uint32_t stateCrc32(const uint8_t* p, std::size_t n);   // défini plus bas
+
+// Empreinte de la cartouche montée, pour l'en-tête de save-state. Les 4 octets de
+// CART_OLDGEMDOS ($FA0024) sont EXCLUS : GemdosHd::sysInit y écrit l'ancien vecteur GEMDOS
+// au boot, si bien qu'un CRC brut comparait le contenu MUTÉ de la sauvegarde à la cartouche
+// encore VIERGE de la session qui recharge — tout état pris avec --gemdos devenait
+// définitivement irrechargeable, alors même que la v7 sérialise bus.cart pour le corriger.
+static uint32_t cartFingerprint(const std::vector<uint8_t>& cart) {
+    if (cart.empty()) return 0u;
+    std::vector<uint8_t> tmp(cart);
+    constexpr std::size_t kOldGemdosOff = 0x24;   // CART_OLDGEMDOS - $FA0000
+    for (std::size_t i = 0; i < 4 && kOldGemdosOff + i < tmp.size(); ++i)
+        tmp[kOldGemdosOff + i] = 0;
+    return stateCrc32(tmp.data(), tmp.size());
+}
+
 // --- Save-states (increment 1) : CPU + RAM + ordonnanceur + état de trame ----------
 // Méthode SYMÉTRIQUE (StateArchive gère save ET load) → l'ordre ne peut pas diverger.
 static uint32_t stateCrc32(const uint8_t* p, std::size_t n);   // défini plus bas
@@ -576,8 +592,7 @@ void Machine::serializeState(StateArchive& ar) {
     //  · empreinte de la cartouche : le port $FA0000 n'est peuplé que si une cartouche
     //    est montée, et la RAM restaurée peut y pointer.
     uint8_t flags = uint8_t(gemdos.active() ? 1u : 0u);
-    uint32_t cartFp = bus.cart.empty()
-                    ? 0u : stateCrc32(bus.cart.data(), bus.cart.size());
+    uint32_t cartFp = cartFingerprint(bus.cart);
     ar(flags); ar(cartFp);
     // CRC32 du payload (tout ce qui suit ce champ) : écrit par saveState (patch à
     // l'offset fixe 13), vérifié par loadState AVANT toute restauration. Dans le
@@ -677,8 +692,7 @@ bool Machine::loadState(const uint8_t* data, std::size_t n) {
     const uint8_t  flags  = data[13];
     uint32_t cartFp; std::memcpy(&cartFp, data + 14, 4);
     const uint8_t  curFlags  = uint8_t(gemdos.active() ? 1u : 0u);
-    const uint32_t curCartFp = bus.cart.empty()
-                             ? 0u : stateCrc32(bus.cart.data(), bus.cart.size());
+    const uint32_t curCartFp = cartFingerprint(bus.cart);
     if (flags != curFlags) {
         std::fprintf(stderr, "[state] refusé : HD GEMDOS %s à la sauvegarde et %s "
                      "maintenant (l'état du HD n'est pas sérialisable)\n",

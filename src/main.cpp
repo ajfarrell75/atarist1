@@ -3579,11 +3579,13 @@ int main(int argc, char** argv) {
             // frappe, et retirer la cartouche AVANT la sortait du bus SANS reset — un
             // programme qui tournait depuis $FA0000 partait alors dans le décor.
             const std::string gemHost = resolvePath(reqMountGemdos);
+            const bool hadCart = !machine.bus.mountedCartPath().empty();
             if (machine.gemdos.setDirectory(gemHost)) {
-                if (!machine.bus.mountedCartPath().empty()) {   // exclusif avec la cartouche
-                    machine.ejectCart();
-                    cfg.cart.clear();
-                }
+                // setDirectory a DÉJÀ remplacé $FA0000 par la cartouche système (même
+                // stockage) : appeler ejectCart ici viderait ce qu'on vient d'installer
+                // et laisserait le vecteur trap #1 pointer sur un port dépeuplé. On se
+                // contente donc d'oublier la cartouche utilisateur côté config.
+                if (hadCart) cfg.cart.clear();
                 cfg.gemdos = reqMountGemdos; saveConfig(exeDir, cfg, &machine);
                 reqHardReset = true;
             } else {
