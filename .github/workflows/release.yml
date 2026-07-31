@@ -81,9 +81,10 @@ jobs:
       contents: read
       packages: read          # tirer l'image builder depuis GHCR
     env:
-      # Après le premier build d'image, remplacer le tag :bionic par le digest
-      # imprimé par build-bionic-image.yml (reproductibilité totale, cf. POM1).
-      BUILDER_IMAGE: ghcr.io/habib256/neost-bionic-builder:bionic
+      # ÉPINGLÉE PAR DIGEST pour la reproductibilité — cette toolchain gelée
+      # précise, pas un tag mouvant. Après un rebuild via build-bionic-image.yml,
+      # ré-épingler le digest qu'il imprime (le tag :bionic continue de bouger).
+      BUILDER_IMAGE: ghcr.io/habib256/neost-bionic-builder@sha256:580175cf86701ee962e92a7bac1a95c62822be4a0bf6fc52d972730bfba318ad
     steps:
       - uses: actions/checkout@v5
         with:
