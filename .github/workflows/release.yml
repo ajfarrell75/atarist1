@@ -1,0 +1,440 @@
+# =============================================================================
+#  Artefacts NeoST — 5 paquets, calqués sur la release POM1 (jobs natifs,
+#  vérifications structurelles, smoke-launch headless, publication sur tag) :
+#
+#    1. NeoST-<ver>-x86_64.AppImage             (Linux Intel/AMD, image bionic
+#                                                gelée → plancher glibc 2.27)
+#    2. NeoST-<ver>-aarch64.AppImage            (Linux ARM64 générique)
+#    3. NeoST-<ver>-macOS-arm64.dmg             (Apple Silicon, GLFW statique)
+#    4. NeoST-<ver>-raspberry-aarch64.AppImage  (Raspberry Pi, plancher glibc
+#                                                bookworm 2.36 = Pi OS)
+#    5. NeoST-<ver>-web-wasm.zip                (WebAssembly, contenu libre)
+#
+#  Pas de job Windows : NeoST cible macOS Silicon / Linux (cf. CLAUDE.md).
+#
+#  Chaque job SMOKE-LANCE le paquet via neost-headless (déterministe, sans
+#  affichage) : --version puis boot EmuTOS 500 trames (le bureau apparaît vers
+#  la trame ~400) + capture PPM non uniforme.
+#  Les paquets n'embarquent QUE du contenu libre (packaging/stage_free_data.sh :
+#  EmuTOS GPL + diskA.st) — jamais les TOS propriétaires ni les jeux du dépôt.
+#
+#  Déclencheurs : chaque push/PR vérifie que la génération des 5 artefacts
+#  passe ; un tag de version (v1.0.0 ou 1.0.0) les attache en plus à la Release.
+#
+#  Planchers glibc : x86_64 = 2.27 (image bionic gelée neost-bionic-builder,
+#  dérivée du pom1-bionic-builder — gcc-11 car Moira exige C++20) ;
+#  Raspberry = 2.36 (conteneur debian:bookworm = Pi OS) ; arm64 générique =
+#  l'image du runner (2.39), suffisant pour les distros ARM récentes.
+# =============================================================================
+name: Artefacts (release)
+
+on:
+  push:
+    branches: [main]
+    tags:
+      - 'v[0-9]*'        # v1.0.0
+      - '[0-9]*'         # 1.0.0 (convention tag nu, comme POM1)
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write        # le job publish attache les paquets à la Release
+
+concurrency:
+  group: artefacts-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # -------------------------------------------------- normalisation version --
+  # Source unique du numéro de version : tag sans « v » de tête (1.0.0 quel
+  # que soit le format poussé), sinon dev-<sha court> pour les runs de vérif.
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      neost_version: ${{ steps.v.outputs.neost_version }}
+    steps:
+      - id: v
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -eu
+          if [ "$REF_TYPE" = "tag" ]; then
+              echo "neost_version=${REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+              echo "neost_version=dev-${SHA::7}" >> "$GITHUB_OUTPUT"
+          fi
+
+  # -------------------------------------------- Linux x86_64 (image bionic) --
+  # Bâti DANS l'image gelée neost-bionic-builder (glibc 2.27 → tourne de
+  # Mint 19.x à aujourd'hui), dérivée du pom1-bionic-builder — même squelette,
+  # mais gcc-11 car Moira exige C++20 (le g++-9 de l'image POM1 ne suffit pas).
+  # Si l'image manque : lancer d'abord le workflow « Build bionic builder
+  # image ». `docker run` et non `container:` — les actions node exigent une
+  # glibc >= 2.28 et ne tournent pas dans bionic.
+  linux-bionic:
+    needs: version
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: read          # tirer l'image builder depuis GHCR
+    env:
+      # Après le premier build d'image, remplacer le tag :bionic par le digest
+      # imprimé par build-bionic-image.yml (reproductibilité totale, cf. POM1).
+      BUILDER_IMAGE: ghcr.io/habib256/neost-bionic-builder:bionic
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - name: Log in to GHCR (tirer l'image builder)
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Build + AppImage dans l'image bionic gelée
+        env:
+          NEOST_VERSION: ${{ needs.version.outputs.neost_version }}
+        run: |
+          IMAGE="$(echo "$BUILDER_IMAGE" | tr '[:upper:]' '[:lower:]')"
+          docker pull "$IMAGE"
+          docker run --rm -v "$PWD":/work -w /work -e NEOST_VERSION \
+            "$IMAGE" bash /work/packaging/linux/build_in_bionic.sh
+
+      - name: Vérifier l'AppImage (ET_EXEC, magic, glibc <= 2.27, GLFW, contenu libre)
+        run: |
+          set -euo pipefail
+          APP=$(ls dist/*.AppImage)
+          # Runtime ELF ET_EXEC obligatoire (pas le static-pie ET_DYN) sinon
+          # AppImageLauncher rejette le paquet en « type -1 » — la régression
+          # que l'appimagetool AppImageKit gelé dans l'image corrige.
+          TYPE=$(readelf -h "$APP" | awk -F'[ :]+' '/^ *Type/ {print $3; exit}')
+          echo "Type ELF du runtime : $TYPE"
+          test "$TYPE" = "EXEC" || { echo "ERREUR : runtime $TYPE ≠ EXEC"; exit 1; }
+          # Magic AI\x02 à l'offset 8 = AppImage type 2 valide.
+          MAGIC=$(xxd -s 8 -l 3 -p "$APP")
+          test "$MAGIC" = "414902" || { echo "ERREUR : magic AppImage $MAGIC ≠ 414902"; exit 1; }
+          "$APP" --appimage-extract >/dev/null
+          BIN=squashfs-root/usr/bin/neost
+          readelf -h "$BIN" | grep -q 'X86-64' || { echo "ERREUR : pas un binaire x86_64"; exit 1; }
+          # Plancher glibc : symbole GLIBC_x.y le plus haut <= 2.27 (bionic).
+          MAX=$(objdump -T "$BIN" 2>/dev/null | grep -oE 'GLIBC_[0-9]+\.[0-9]+' | sort -V | tail -1)
+          echo "Symbole glibc le plus haut : ${MAX:-aucun}"
+          test "$(printf '%s\nGLIBC_2.27\n' "$MAX" | sort -V | tail -1)" = "GLIBC_2.27" \
+            || { echo "ERREUR : le paquet exige ${MAX} > GLIBC_2.27"; exit 1; }
+          # GLFW doit être DANS le paquet (les cibles ne l'ont pas forcément)…
+          find squashfs-root -name 'libglfw*' | grep -q . \
+            || { echo "ERREUR : libglfw absente du paquet"; exit 1; }
+          # …mais jamais libGL (règle AppImage : pilote graphique = hôte).
+          if find squashfs-root -name 'libGL.so*' -o -name 'libOpenGL.so*' | grep -q .; then
+            echo "ERREUR : libGL embarquée dans l'AppImage"; exit 1
+          fi
+          # Contenu libre uniquement : aucune ROM non-EmuTOS, aucun jeu.
+          STRAY=$(find squashfs-root/usr/roms -maxdepth 1 -name '*.img' ! -name 'etos*')
+          test -z "$STRAY" || { echo "ERREUR : ROM non libre embarquée : $STRAY"; exit 1; }
+          echo "OK : AppImage x86_64 valide (ET_EXEC, glibc <= 2.27)"
+
+      - name: Smoke-launch (boot EmuTOS headless 500 trames + capture)
+        run: |
+          set -euo pipefail
+          # glibc rétro-compatible : le binaire 2.27 tourne sur le runner.
+          # neost-headless résout roms/ depuis le cwd → se placer dans usr/.
+          cd squashfs-root/usr
+          bin/neost-headless --version
+          bin/neost-headless roms/etos192us.img --frames 500 --screenshot boot.ppm
+          # Le bureau EmuTOS doit être affiché : capture non uniforme.
+          python3 - <<'EOF'
+          data = open('boot.ppm', 'rb').read()
+          body = data.split(b'\n', 3)[3]          # P6 : 3 lignes d'en-tête
+          assert len(set(body)) > 1, "capture uniforme — le boot EmuTOS a échoué"
+          print(f"OK : capture {len(body)} octets, {len(set(body))} valeurs distinctes")
+          EOF
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: NeoST-linux-x86_64-AppImage
+          path: dist/*.AppImage
+          if-no-files-found: error
+
+  # --------------------------------------------- Linux ARM64 générique ------
+  # Bâti directement sur le runner ARM64 natif (gratuit en dépôt public) :
+  # plancher glibc = image du runner (2.39) — pour les distros ARM récentes.
+  # Le paquet Raspberry (job `raspberry`) couvre Pi OS avec son plancher 2.36.
+  linux-arm64:
+    needs: version
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - name: Installer les dépendances (GLFW dynamique, embarqué ensuite par linuxdeploy)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            cmake g++ libglfw3-dev libgl1-mesa-dev file
+
+      - name: Build (Release) — neost + neost-headless
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release \
+                -DCMAKE_EXE_LINKER_FLAGS="-static-libstdc++ -static-libgcc"
+          cmake --build build -j"$(nproc)"
+          test -x build/neost   # le GUI DOIT être là (GLFW trouvé), pas juste le headless
+
+      - name: Empaqueter l'AppImage
+        env:
+          NEOST_VERSION: ${{ needs.version.outputs.neost_version }}
+        run: packaging/linux/make_appimage.sh build
+
+      - name: Vérifier l'AppImage (ET_EXEC, magic, arch, GLFW, contenu libre)
+        run: |
+          set -euo pipefail
+          APP=$(ls dist/*.AppImage)
+          # ET_EXEC via le runtime aarch64 épinglé (AppImageKit release 12) —
+          # le `continuous` ARM est ET_DYN, rejeté par AppImageLauncher.
+          TYPE=$(readelf -h "$APP" | awk -F'[ :]+' '/^ *Type/ {print $3; exit}')
+          echo "Type ELF du runtime : $TYPE"
+          test "$TYPE" = "EXEC" || { echo "ERREUR : runtime $TYPE ≠ EXEC"; exit 1; }
+          MAGIC=$(xxd -s 8 -l 3 -p "$APP")
+          test "$MAGIC" = "414902" || { echo "ERREUR : magic AppImage $MAGIC ≠ 414902"; exit 1; }
+          "$APP" --appimage-extract >/dev/null
+          BIN=squashfs-root/usr/bin/neost
+          readelf -h "$BIN" | grep -q 'AArch64' || { echo "ERREUR : pas un binaire AArch64"; exit 1; }
+          find squashfs-root -name 'libglfw*' | grep -q . \
+            || { echo "ERREUR : libglfw absente du paquet"; exit 1; }
+          if find squashfs-root -name 'libGL.so*' -o -name 'libOpenGL.so*' | grep -q .; then
+            echo "ERREUR : libGL embarquée dans l'AppImage"; exit 1
+          fi
+          STRAY=$(find squashfs-root/usr/roms -maxdepth 1 -name '*.img' ! -name 'etos*')
+          test -z "$STRAY" || { echo "ERREUR : ROM non libre embarquée : $STRAY"; exit 1; }
+          echo "OK : AppImage aarch64 générique valide (ET_EXEC)"
+
+      - name: Smoke-launch (boot EmuTOS headless 500 trames + capture)
+        run: |
+          set -euo pipefail
+          cd squashfs-root/usr
+          bin/neost-headless --version
+          bin/neost-headless roms/etos192us.img --frames 500 --screenshot boot.ppm
+          python3 - <<'EOF'
+          data = open('boot.ppm', 'rb').read()
+          body = data.split(b'\n', 3)[3]
+          assert len(set(body)) > 1, "capture uniforme — le boot EmuTOS a échoué"
+          print(f"OK : capture {len(body)} octets, {len(set(body))} valeurs distinctes")
+          EOF
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: NeoST-linux-aarch64-AppImage
+          path: dist/*.AppImage
+          if-no-files-found: error
+
+  # ------------------------------------------------- Raspberry Pi (arm64) ----
+  # Même schéma que le job `raspberry` de POM1 : runner ARM64 natif GitHub +
+  # build DANS un conteneur debian:bookworm, car Raspberry Pi OS est Debian
+  # bookworm et une AppImage n'embarque jamais la glibc — son plancher est
+  # celui de l'image de build (2.36), pas du runner (2.39). Pas de conteneur
+  # gelé en GHCR (contrairement au bionic POM1) : bookworm est une Debian
+  # courante aux miroirs sains.
+  raspberry:
+    needs: version
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - name: Build + AppImage dans un conteneur bookworm arm64
+        env:
+          NEOST_VERSION: ${{ needs.version.outputs.neost_version }}
+        run: |
+          docker run --rm -v "$PWD":/work -w /work -e NEOST_VERSION \
+            debian:bookworm bash /work/packaging/linux/build_in_bookworm_arm64.sh
+
+      - name: Vérifier l'AppImage (nom, arch, plancher glibc <= 2.36, contenu libre)
+        run: |
+          set -euo pipefail
+          APP=$(ls dist/*.AppImage)
+          echo "Paquet : $APP"
+          # Le nom doit porter « raspberry » — le job publish aplatit tous les
+          # artefacts dans un même dossier, une collision écraserait l'arm64
+          # générique en silence.
+          case "$APP" in
+            *-raspberry-aarch64.AppImage) ;;
+            *) echo "ERREUR : $APP n'est pas nommé -raspberry-aarch64.AppImage"; exit 1 ;;
+          esac
+          # ET_EXEC via le runtime aarch64 épinglé (AppImageKit release 12) —
+          # le `continuous` ARM est ET_DYN, rejeté par AppImageLauncher.
+          TYPE=$(readelf -h "$APP" | awk -F'[ :]+' '/^ *Type/ {print $3; exit}')
+          echo "Type ELF du runtime : $TYPE"
+          test "$TYPE" = "EXEC" || { echo "ERREUR : runtime $TYPE ≠ EXEC"; exit 1; }
+          MAGIC=$(xxd -s 8 -l 3 -p "$APP")
+          test "$MAGIC" = "414902" || { echo "ERREUR : magic AppImage $MAGIC ≠ 414902"; exit 1; }
+          "$APP" --appimage-extract >/dev/null
+          BIN=squashfs-root/usr/bin/neost
+          readelf -h "$BIN" | grep -q AArch64 \
+            || { echo "ERREUR : pas un binaire AArch64"; exit 1; }
+          # Plancher glibc : le symbole GLIBC_x.y le plus haut exigé doit rester
+          # <= 2.36 (bookworm / Pi OS), sinon le paquet ne démarre sur aucun Pi.
+          MAX=$(objdump -T "$BIN" 2>/dev/null | grep -oE 'GLIBC_[0-9]+\.[0-9]+' | sort -V | tail -1)
+          echo "Symbole glibc le plus haut : ${MAX:-aucun}"
+          test "$(printf '%s\nGLIBC_2.36\n' "$MAX" | sort -V | tail -1)" = "GLIBC_2.36" \
+            || { echo "ERREUR : le paquet exige ${MAX} > GLIBC_2.36 — Pi OS ne le lancera pas"; exit 1; }
+          find squashfs-root -name 'libglfw*' | grep -q . \
+            || { echo "ERREUR : libglfw absente du paquet"; exit 1; }
+          if find squashfs-root -name 'libGL.so*' -o -name 'libOpenGL.so*' | grep -q .; then
+            echo "ERREUR : libGL embarquée dans l'AppImage"; exit 1
+          fi
+          STRAY=$(find squashfs-root/usr/roms -maxdepth 1 -name '*.img' ! -name 'etos*')
+          test -z "$STRAY" || { echo "ERREUR : ROM non libre embarquée : $STRAY"; exit 1; }
+          echo "OK : AppImage Raspberry Pi valide (glibc <= 2.36)"
+
+      - name: Smoke-launch (boot EmuTOS headless 500 trames + capture)
+        run: |
+          set -euo pipefail
+          # La glibc est rétro-compatible : le binaire bâti en 2.36 tourne sur
+          # le runner 2.39. neost-headless résout roms/ depuis le cwd.
+          cd squashfs-root/usr
+          bin/neost-headless --version
+          bin/neost-headless roms/etos192us.img --frames 500 --screenshot boot.ppm
+          python3 - <<'EOF'
+          data = open('boot.ppm', 'rb').read()
+          body = data.split(b'\n', 3)[3]
+          assert len(set(body)) > 1, "capture uniforme — le boot EmuTOS a échoué"
+          print(f"OK : capture {len(body)} octets, {len(set(body))} valeurs distinctes")
+          EOF
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: NeoST-raspberry-arm64-AppImage
+          path: dist/*.AppImage
+          if-no-files-found: error
+
+  # ----------------------------------------------------------------- macOS --
+  macos:
+    needs: version
+    runs-on: macos-15          # Apple Silicon natif
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - name: Empaqueter .app + .dmg (GLFW statique depuis les sources)
+        env:
+          NEOST_VERSION: ${{ needs.version.outputs.neost_version }}
+        run: packaging/macos/package_macos.sh
+
+      - name: Vérifier le .app (arm64, autonome, contenu libre)
+        run: |
+          set -euo pipefail
+          BIN=dist/NeoST.app/Contents/MacOS/neost
+          otool -L "$BIN"
+          lipo -info "$BIN" | grep -qw arm64 || { echo "ERREUR : pas de tranche arm64"; exit 1; }
+          # Le garde anti-chemin-brew a déjà tourné dans le packager ; re-vérifier ici.
+          LEAKED=$(otool -L "$BIN" | tail -n +2 | awk '{print $1}' \
+                   | grep -E '^(/usr/local|/opt/homebrew|/opt/local)' || true)
+          test -z "$LEAKED" || { echo "ERREUR : dylib hors bundle : $LEAKED"; exit 1; }
+          STRAY=$(find dist/NeoST.app/Contents/roms -maxdepth 1 -name '*.img' ! -name 'etos*')
+          test -z "$STRAY" || { echo "ERREUR : ROM non libre embarquée : $STRAY"; exit 1; }
+          echo "OK : .app arm64 autonome"
+
+      - name: Smoke-launch (boot EmuTOS headless 500 trames + capture)
+        run: |
+          set -euo pipefail
+          cd dist/NeoST.app/Contents
+          MacOS/neost-headless --version
+          MacOS/neost-headless roms/etos192us.img --frames 500 --screenshot boot.ppm
+          python3 - <<'EOF'
+          data = open('boot.ppm', 'rb').read()
+          body = data.split(b'\n', 3)[3]
+          assert len(set(body)) > 1, "capture uniforme — le boot EmuTOS a échoué"
+          print(f"OK : capture {len(body)} octets, {len(set(body))} valeurs distinctes")
+          EOF
+          rm boot.ppm    # ne pas laisser la capture dans le .dmg (déjà créé, ceinture)
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: NeoST-macOS-arm64-dmg
+          path: dist/*.dmg
+          if-no-files-found: error
+
+  # ------------------------------------------------------------------ WASM --
+  # Contrairement à deploy-web.yml (Pages, tout roms/ et disks/ embarqués), le
+  # paquet distribuable n'embarque QUE le contenu libre (NEOST_WEB_FREE_ONLY=ON).
+  wasm:
+    needs: version
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - name: Installer Emscripten
+        uses: mymindstorm/setup-emsdk@v14
+
+      - name: Build WASM (contenu libre uniquement)
+        run: |
+          emcmake cmake -B build-web -DCMAKE_BUILD_TYPE=Release -DNEOST_WEB_FREE_ONLY=ON
+          cmake --build build-web -j"$(nproc)" --target neost-web
+
+      - name: Vérifier le bundle (fichiers présents, taille bornée)
+        run: |
+          set -euo pipefail
+          for f in index.html index.js index.wasm index.data; do
+            test -s "wasm/$f" || { echo "ERREUR : wasm/$f absent ou vide"; exit 1; }
+          done
+          # Contenu libre → le bundle doit rester léger. Le mode « tout embarqué »
+          # pèse ~73 Mo ; une dérive au-delà de 40 Mo signale une fuite de contenu.
+          TOTAL=$(du -cb wasm/index.* | tail -1 | cut -f1)
+          echo "Taille du bundle : $TOTAL octets"
+          test "$TOTAL" -lt 40000000 \
+            || { echo "ERREUR : bundle > 40 Mo — du contenu non libre a fui dedans ?"; exit 1; }
+
+      - name: Zipper le bundle
+        env:
+          NEOST_VERSION: ${{ needs.version.outputs.neost_version }}
+        run: |
+          mkdir -p dist
+          (cd wasm && zip -9 "../dist/NeoST-$NEOST_VERSION-web-wasm.zip" index.html index.js index.wasm index.data)
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: NeoST-web-wasm
+          path: dist/*.zip
+          if-no-files-found: error
+
+  # ----------------------------------------------- attacher à la Release ----
+  publish:
+    needs: [linux-bionic, linux-arm64, raspberry, macos, wasm]
+    runs-on: ubuntu-latest
+    if: github.ref_type == 'tag'
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          path: artifacts
+
+      - name: Attacher les 5 paquets + sommes SHA-256 à la Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          # Pas de checkout ici : GH_REPO évite le « not a git repository »
+          # que POM1 a payé d'une release fantôme (cf. release.yml POM1).
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -eu
+          mkdir -p staging
+          find artifacts -type f \( -name '*.AppImage' -o -name '*.dmg' -o -name '*.zip' \) \
+               -exec cp -v {} staging/ \;
+          cd staging
+          COUNT=$(ls | wc -l)
+          test "$COUNT" -eq 5 || { echo "ERREUR : $COUNT paquet(s) au lieu de 5"; exit 1; }
+          sha256sum -- * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+          if gh release view "$TAG" >/dev/null 2>&1; then
+              gh release upload "$TAG" * --clobber
+          else
+              gh release create "$TAG" * --generate-notes --title "NeoST $TAG"
+          fi

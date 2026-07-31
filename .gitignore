@@ -1,6 +1,7 @@
 # Artefacts CMake / build local
 build/
 build-*/
+dist/
 a.out
 _site/
 cmake-build-*/
