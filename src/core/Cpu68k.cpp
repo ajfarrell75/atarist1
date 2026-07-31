@@ -187,6 +187,19 @@ public:
     // (privée, donc reproduite ici). C'est ainsi qu'EmuTOS sonde le matériel
     // optionnel — sans ça, Moira lit l'adresse fantôme et la détection HW d'EmuTOS
     // part en vrille (bureau GEM sans menu ni curseur).
+    // Instruction RESET ($4E70) : Moira ne fait qu'y brûler 132 cycles (execReset =
+    // SYNC + prefetch). Le hook didExecute, activé par MOIRA_DID_EXECUTE dans
+    // MoiraConfig.h, permet d'y brancher la broche /RESET des périphériques — ce que
+    // fait customreset() chez Hatari (cpu/hatari-glue.c:54), appelé depuis cpureset().
+    // On ne touche NI au CPU NI à l'ordonnanceur : seule la ligne /RESET est assertée.
+    void didExecute(const char* /*func*/, moira::Instr I, moira::Mode, moira::Size,
+                    moira::u16) override {
+        if (I != moira::Instr::RESET || !g_bus) return;
+        g_vblPending = g_hblPending = false;   // ≙ pendingInterrupts = 0
+        g_bus->peripheralReset();
+        neostUpdateIpl();
+    }
+
     [[noreturn]] void raiseBusError(moira::u32 addr, bool write) const {
         moira::StackFrame f{};
         const moira::u16 ird = getIRD();

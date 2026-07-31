@@ -21,6 +21,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <cstdlib>
 #include <fstream>
 
 Bus::Bus(std::size_t ramBytes) {
@@ -75,6 +76,31 @@ void Bus::serialize(StateArchive& ar) {
     // ioFaultBuilt_=false) : si la session avait déjà bâti la carte de bus-errors
     // avec l'autre valeur, $FFFA40-$FFFA5F garderait le mauvais statut → rebâtir.
     if (ar.loading()) ioFaultBuilt_ = false;
+}
+
+// Broche /RESET du 68000 (instruction RESET, $4E70). Port de customreset()
+// (cpu/hatari-glue.c:54) : IKBD, Glue vidéo, PSG, MFP et FDC repartent à zéro, le CPU
+// et l'ordonnanceur NON (seule la ligne /RESET des périphériques est assertée).
+// Sans cela, un loader de jeu/démo qui fait « reset » pour faire taire la machine
+// héritée du TOS gardait le YM en train de jouer, les timers MFP du TOS armés (IRQ
+// parasites dans son propre code), le moteur disquette en rotation et la Glue sur la
+// fréquence/résolution précédente.
+void Bus::peripheralReset() {
+    if (ikbd)    ikbd->bootRom();          // IKBD_Reset(false)
+    // Video_Reset_Glue passe par IoMem_WriteByte($FF820A, 0) : une VRAIE écriture, donc
+    // vue et DATÉE par la machine à états de la Glue. Forcer le registre en direct la
+    // court-circuiterait — or c'est elle qui porte toute la précision cycle du rendu.
+    write8(0xFF820A, 0x00);
+    if (shifter) shifter->resetGlue(mfp && !mfp->colorMonitor());   // résolution ($FF8260)
+    if (psg)     psg->reset();             // PSG_Reset
+    if (fdc)     fdc->reset(/*cold=*/false);   // FDC_Reset(false)
+    // ⚠ MFP_Reset_All VOLONTAIREMENT ABSENT — chantier ouvert. L'ajouter (mfp->reset())
+    // casse l'étalon ORACLE nocooper (10828 px) ; bisection puce par puce : les quatre
+    // ci-dessus passent, le MFP seul échoue. Cause probable : Mfp::reset() est le reset
+    // MACHINE de NeoST et va plus loin que MFP_Reset d'Hatari (mfp.c:519), qui ne touche
+    // QUE les registres MFP et ses échéances — NeoST y remet en plus l'USART
+    // (rxByte_/rxFull_/serialBaud_/serialUcr_) et la ligne XSINT du son DMA. Il faut donc
+    // un reset MFP *partiel*, calqué sur MFP_Reset, avant de pouvoir le brancher.
 }
 
 bool Bus::loadTos(const std::string& path) {
