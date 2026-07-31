@@ -1,12 +1,17 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  Fabrique dist/NeoST-<version>-macOS-arm64.dmg (build complet inclus).
+#  Fabrique dist/NeoST-<version>-macOS-universal2.dmg (build complet inclus).
 #
 #    NEOST_VERSION=1.0.0 packaging/macos/package_macos.sh
 #
-#  GLFW est compilé DEPUIS LES SOURCES en statique, pas pris chez Homebrew :
-#  la leçon POM1 — le linker bakait le chemin absolu brew (/opt/homebrew/... ou
-#  /usr/local/...) dans le binaire et chaque .dmg publié mourait au dyld chez
+#  UN SEUL .dmg Universal 2 (arm64 + x86_64) — natif sur Apple Silicon ET
+#  Intel, aucun Rosetta. On tourne sur l'image arm64 (macos-15) ; la tranche
+#  x86_64 est cross-compilée, ce que la toolchain Apple fait nativement.
+#
+#  GLFW est compilé DEPUIS LES SOURCES en statique universel, pas pris chez
+#  Homebrew — la double leçon POM1 : brew est mono-arch (DMG x86_64-only), et
+#  pire, le linker bakait le chemin absolu brew (/opt/homebrew/... ou
+#  /usr/local/...) dans le binaire → chaque .dmg publié mourait au dyld chez
 #  quiconque n'avait pas brew au même endroit. Statique = plus rien à résoudre.
 #
 #  Disposition .app (resolveData cherche exeDir/../roms) :
@@ -18,24 +23,45 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
 VERSION="${NEOST_VERSION:-dev}"
 GLFW_TAG="3.4"
+ARCHS="arm64;x86_64"                     # Universal 2
 
-# --- GLFW statique (arm64 natif ; le runner macos-15 est Apple Silicon) ------
+# Les deux tranches doivent être là, sinon la moitié du parc reçoit un paquet
+# qui ne s'exécute pas du tout.
+assert_universal() {
+    lipo -info "$1"
+    for a in arm64 x86_64; do
+        lipo -info "$1" | grep -qw "$a" \
+            || { echo "ERREUR : $1 n'a pas la tranche $a"; exit 1; }
+    done
+}
+
+# --- GLFW statique universel (cache invalidé s'il n'est pas universel) -------
+if [ -f build-deps/glfw/lib/libglfw3.a ] \
+   && ! lipo -info build-deps/glfw/lib/libglfw3.a | grep -qw x86_64; then
+    echo "[macos] cache GLFW mono-arch — reconstruction en universel"
+    rm -rf build-deps
+fi
 if [ ! -f build-deps/glfw/lib/libglfw3.a ]; then
     rm -rf build-deps/glfw-src
     git clone --depth 1 --branch "$GLFW_TAG" https://github.com/glfw/glfw.git build-deps/glfw-src
     cmake -S build-deps/glfw-src -B build-deps/glfw-build \
         -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
+        -DCMAKE_OSX_ARCHITECTURES="$ARCHS" \
         -DGLFW_BUILD_EXAMPLES=OFF -DGLFW_BUILD_TESTS=OFF -DGLFW_BUILD_DOCS=OFF \
         -DCMAKE_INSTALL_PREFIX="$ROOT/build-deps/glfw"
     cmake --build build-deps/glfw-build -j"$(sysctl -n hw.ncpu)"
     cmake --install build-deps/glfw-build
 fi
+assert_universal build-deps/glfw/lib/libglfw3.a
 
-# --- Build NeoST contre le GLFW statique -------------------------------------
+# --- Build NeoST universel contre le GLFW statique ---------------------------
 cmake -B build-macos -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_OSX_ARCHITECTURES="$ARCHS" \
       -DCMAKE_PREFIX_PATH="$ROOT/build-deps/glfw"
 cmake --build build-macos -j"$(sysctl -n hw.ncpu)"
 test -x build-macos/neost || { echo "ERREUR : le frontend GUI n'a pas été construit (GLFW introuvable ?)"; exit 1; }
+assert_universal build-macos/neost
+assert_universal build-macos/neost-headless
 
 # --- Staging .app ------------------------------------------------------------
 APP="dist/NeoST.app"
@@ -77,6 +103,6 @@ if [ -n "$LEAKED" ]; then
 fi
 
 # --- DMG ---------------------------------------------------------------------
-DMG="dist/NeoST-$VERSION-macOS-arm64.dmg"
+DMG="dist/NeoST-$VERSION-macOS-universal2.dmg"
 hdiutil create -volname "NeoST" -srcfolder "$APP" -ov -format UDZO "$DMG"
 echo "OK : $DMG"
