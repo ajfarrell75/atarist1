@@ -73,6 +73,16 @@ private:
     // Tampon de transfert de l'Operand CIR ($10-$13) : les transferts > 4
     // octets bouclent sur la même fenêtre, octet par octet, poids fort d'abord.
     uint8_t  buf_[96] = {};                // max : FMOVEM des 8 registres (8×12)
+public:
+    // Le FPU n'a pas de serialize() : Bus le copie en bloc (POD). Cette garde permet
+    // au Bus de valider les index APRÈS restauration sans changer le format du
+    // save-state. Sans elle, un état forgé passant le CRC (bufIn_, bufPos_=0,
+    // bufLen_ > 96) faisait écrire Fpu::write8 au-delà de buf_[96] — corruption du tas.
+    bool stateValid() const {
+        return bufLen_ >= 0 && bufLen_ <= int(sizeof buf_)
+            && bufPos_ >= 0 && bufPos_ <= bufLen_;
+    }
+private:
     int      bufLen_ = 0, bufPos_ = 0;
     bool     bufIn_  = false;              // true = on attend des octets du CPU
     enum class After { None, GenOp, MoveOutDone, CtrlIn, MovemIn, RestoreIn };
