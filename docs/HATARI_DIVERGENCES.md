@@ -6,7 +6,9 @@ des deux côtés, classé par sévérité (**haute** = casse logiciels/boot · *
 visible · **basse** = cas-limite/cosmétique) avec son impact connu.
 
 **Méthode.** Comparaison ligne à ligne du code NeoST (`src/`) au source C de Hatari
-(`extern/hatari/src`, cloné au commit `c9906f1`, gitignoré, **non compilé** — lu comme
+(`extern/hatari/src`, gitignoré — l'inventaire ci-dessous a été établi sur le commit
+`c9906f1` mais l'arbre PRÉSENT est `981f291` : ⚠ les numéros de ligne Hatari cités peuvent
+avoir glissé. Lu comme
 référence, cf. CLAUDE.md). Produit par un workflow de 7 sous-agents, un par sous-système.
 Cible NeoST : ST / Mega ST / STE / Mega STE, 68000 (Moira cycle-exact). Hors périmètre
 volontaire (NON comptés comme divergences) : moteur FDC `_MFM`/DPLL (IPF/SCP/KFS), TT/Falcon,
@@ -22,7 +24,8 @@ corrigés (✅ ci-dessous) : B1 (Blitter 65536), BL2 (rejet accès octet aux reg
 S1 (filtre LPF STF câblé), BU1 (miroir PSG), MIDI (master reset sans purge + RDR persistant).
 Validés : `glue-selftest` 19/0, boots ST/STE/MegaSTE **pixel-identiques** à avant. Les chantiers
 **cycle-exacts** (V1-V3 vidéo, S2 FIFO son, D3 stall FIFO) restent **différés** : leur
-validation exige l'oracle Hatari headless, **absent de ce conteneur** (cf. CLAUDE.md). Les
+validation exige l'oracle Hatari headless, désormais **BÂTI** (`extern/hatari/build/src/hatari`,
+v2.6.1) → ces chantiers sont validables, cf. `docs/HATARI_AUTOMATION.md`. Les
 points « choix de comportement » **tranchés** (SC1 loopback SCC honoré = datasheet, D1/D2 WRITE
 TRACK STX, NeoST plus correct en HD/ED — tous « NE PAS corriger ») et les marginaux (`$FF8264`,
 D4 6250, F1, M1) sont laissés documentés pour suivi.
@@ -809,14 +812,14 @@ MidiAcia, Fpu, Shifter) contre `extern/hatari/src`. **Corrigés dans la foulée*
 
 | # | Où | Divergence |
 |---|----|------------|
-| M3 | `SoftFloatX80.hpp:164` | `normalizeSubnormal` en convention x87 (`1−sc`) vs 68881 (`−shiftCount`, `SOFTFLOAT_68K`) : opérande dénormal étendu → résultat ×2 vs oracle. SYSTÉMIQUE (add/mul/div aussi), pré-existant — correction à faire d'un bloc avec étalon FPU dédié. |
+| M3 ✅ | `SoftFloatX80.hpp:170-177` | **CORRIGÉ 2026-07-31 (`7a9e03b`)** — `normalizeSubnormal` passé en convention 68881 (`−sc`, bit entier EXPLICITE) : c'est la branche `#ifdef SOFTFLOAT_68K` de `softfloat.c:1061-1065` qu'il fallait porter, pas celle du x87. Supprime le ×2 systématique sur FADD/FSUB/FMUL/FDIV/FSQRT/FREM/FMOD/FGETEXP/FGETMAN/FSCALE. Vérifié par fuzz différentiel contre `softfloat.c` d'Hatari : **0 écart** (plusieurs milliers avant). |
 | B1 | `Ikbd.cpp` flush $80,$01 | avale l'octet « en vol » (Hatari : l'octet tiré vers TDR/TSR survit). |
 | B2 | `Ikbd.cpp` bootRom | ne remet pas `mDeltaX_/Y_` (Hatari : Delta remis à 0). |
 | B4 | `Ikbd.cpp` master reset TIE | Hatari force SR=TDRE immédiatement ; NeoST à l'échéance TX. |
 | B6 | `Fdc.cpp` DMA ACSI hors plage | Hatari pose aussi `status=ERROR` en lecture ; accepte la ROM comme source en écriture. |
 | B7 | `Acsi.cpp` `dmaWrite_` | remis à false à chaque commande ; Hatari le fait persister jusqu'au transfert (refus de sens contradictoire). |
 | B8 | `Fdc.cpp`/`Acsi.cpp` | sans image ACSI, Hatari ignore l'octet ($FF8604=0) ; NeoST pose status=2 (probe TOS identique). |
-| B9 | `MidiAcia.hpp` | registres posés à la construction seulement, pas à chaque reset machine (extension de l'écart déjà consigné). |
+| B9 ✅ | `MidiAcia.hpp:44-58` | **CORRIGÉ 2026-07-31 (`e499eba`)** — `MidiAcia::reset()` ajouté et appelé par les resets CHAUD et FROID de `Machine`, comme `reset.c:111` (`ACIA_Reset`) + `:124` (`Midi_Reset`). |
 | B10 | `DmaSound.cpp` $FF8922 | octet compagnon : Hatari lit 0 (réécrit à chaque shift) ; NeoST combine avec le dernier mot latché. |
 | B11 | `Fpu.cpp` SNaN double | NeoST livre SNAN (plus fidèle au 68881 réel) ; Hatari lève OPERR à la conversion — assumé façon SC2. |
 | B14 | `Shifter.cpp` | capture `lineSnap_`/comptage palette actifs en mono (Hatari : skip hi-res) — surcoût pur, rendu inchangé. |

@@ -50,8 +50,8 @@ reconfigure. Sous macOS, pas de `timeout`.
 ## ⭐ Méthode imposée (ordre strict)
 
 `extern/hatari/src` = **la source de vérité matérielle** (sources C complètes, lues et PAS
-compilées). Avec **MAME**, c'est la référence du comportement des puces. Hatari est aussi
-installé (`/opt/homebrew/bin/hatari`) et peut être **exécuté en oracle headless** (boot →
+compilées). Avec **MAME**, c'est la référence du comportement des puces. Hatari est aussi **bâti dans le dépôt**
+(`extern/hatari/build/src/hatari` ; sous macOS, `/opt/homebrew/bin/hatari`) et peut être **exécuté en oracle headless** (boot →
 PNG, sans affichage) pour comparer à NeoST → [`docs/HATARI_AUTOMATION.md`](docs/HATARI_AUTOMATION.md).
 
 Quand un test/jeu plante, **NE PAS** désassembler ni chercher le point de divergence d'emblée.
@@ -94,7 +94,8 @@ est CORRECT** (Hatari n'émule pas le VME, FPU_NONE par défaut).
 
 ## Disquettes & ROM
 
-Lecteur A monte une image `.st` (`.msa` et `.dim` aussi, détectés par contenu). Outils : `tools/make_floppy.py` (régénère
+Lecteur A monte une image `.st`, `.msa`, `.dim` (détectés par contenu) et `.stx`
+(Pasti — image bas niveau des jeux protégés). Outils : `tools/make_floppy.py` (régénère
 `disks/diskA.st`), `tools/fetch_disk.py <url>` (télécharge depuis planetemu via scrapling — à
 n'utiliser que pour du domaine public / freeware / démos). ROMs TOS propriétaires → défaut
 **EmuTOS** (libre) dans `roms/`. ⚠ Build EmuTOS selon la machine (cf. readmes EmuTOS) :

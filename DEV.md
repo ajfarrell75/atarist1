@@ -26,7 +26,7 @@ src/
     Shifter.{hpp,cpp}       Décodage planaire basse/moyenne/haute → buffer ARGB.
     YM2149.{hpp,cpp}        PSG : registres + synthèse 3 voies + bruit + enveloppe.
     DmaSound.{hpp,cpp}      Son DMA STE + Microwire/LMC1992.
-    Blitter.{hpp,cpp}       Blitter ST (HOG).
+    Blitter.{hpp,cpp}       Blitter ST : données + partage de bus hog ET non-hog (64/64).
     Machine.{hpp,cpp}       Assemble tout + runFrame() événementiel.
     Scheduler.hpp           Ordonnanceur d'événements datés (cycles).
     Tracer.{hpp,cpp}        Trace d'instructions/IRQ.
@@ -39,7 +39,7 @@ src/
   audio/                    Backend miniaudio (Audio, DriveSound).
   headless/                 Runner déterministe + traces.
   web/main_web.cpp          Frontend WebAssembly (Emscripten + WebGL).
-extern/  moira/ imgui/ miniaudio/   (sous-modules)
+extern/  imgui/ miniaudio/ (sous-modules) · moira/ (VENDORISÉ, cf. NEOST_VENDOR.md) · hatari/ (clone gitignoré)
 extern/hatari/src           SOURCE DE VÉRITÉ matérielle (lue, pas compilée)
 ```
 
@@ -51,8 +51,11 @@ global `g_kiosk`. Points clés :
 
 - **Parsing** : les drapeaux `--*` sont filtrés ; les arguments POSITIONNELS restants
   donnent ROM (0) et disquette (1). Ne pas remettre d'accès `argv[1/2]` en dur.
-- **Config figée** : `saveConfig()` fait un `return` immédiat si `g_kiosk` → `neost.cfg`
-  intact (la borne repart identique). Un `--kiosk` de test n'écrase donc jamais la config.
+- **Config figée** : `saveConfig()` sort immédiatement si `g_kiosk` **ou** `g_kioskLaunched`
+  (invariant de DÉPLOIEMENT : une session lancée en `--kiosk` reste figée même après un
+  retour au bureau par F8), **sauf** appel explicite `force=true` — réservé aux réglages que
+  la borne DOIT mémoriser depuis son propre menu : `kiosk_romdir=` et `joymap=`. Un
+  `--kiosk` de test n'écrase donc jamais la config de jeu (rom/disk/machine).
 - **Chrome masqué** : tout le bloc ImGui (menu/toolbar/fenêtres) est sous `if (!g_kiosk)` ;
   la trame ImGui reste créée/rendue à vide (léger, pas de refonte du flux).
 - **Rendu** : `drawStKiosk()` cale la **zone active** (`Shifter::activeWidth/Height/Top`,
@@ -73,10 +76,13 @@ global `g_kiosk`. Points clés :
 
 PAL basse résolution : **313 lignes × 512 cycles CPU**. `runFrame` est désormais
 **événementiel à horloge continue** (`Scheduler`, cycles datés avec carry du dépassement) :
-vidéo au cycle (rendu/Timer B/HBL aux cycles 376/400/508), timers MFP A/C/D en mode délai
+vidéo au cycle (rendu au cycle 376, HBL en fin de ligne, **Timer B à une position DÉRIVÉE**
+du Display-Enable et de l'AER bit3 — `Machine::timerBPos` → `Shifter::timerBLinePos`, et non
+un cycle fixe), timers MFP A/C/D en mode délai
 datés par le MFP, Timer C ≈200 Hz, VBL niveau 4 au début du VBlank. Le GUI bride à 50 fps
-réels pour que le temps émulé colle au réel. Le passage au quantum **sous la ligne** (vs par
-instruction) reste le grand chantier — cf. [`docs/CYCLE_ACCURACY.md`](docs/CYCLE_ACCURACY.md).
+réels pour que le temps émulé colle au réel. Le quantum **sous la ligne** est ACQUIS
+(`Scheduler::liveNow` + préemption `Cpu68k::endTimeslice`) ; le chantier ouvert est le
+**beam-sync par-ligne** — cf. [`docs/CYCLE_ACCURACY.md`](docs/CYCLE_ACCURACY.md).
 
 ## Le Bus
 
@@ -92,7 +98,8 @@ les registres câblés du modèle (+ zones « void » silencieuses). Hors IO, `$
 
 ## Le CPU (Moira, cycle-exact)
 
-NeoST n'a qu'**un seul cœur 68000 : Moira** (vAmiga, MIT, C++20, sous-module `extern/moira`).
+NeoST n'a qu'**un seul cœur 68000 : Moira** (vAmiga, MIT, C++20, **vendorisé** dans
+`extern/moira` — NeoST le patche, cf. `extern/moira/NEOST_VENDOR.md`).
 L'ancien cœur Musashi — rapide mais **non cycle-exact** — a été retiré : il n'apportait plus
 rien face à Moira et doublait inutilement chaque chemin du wrapper. Moira est **requis** pour
 bâtir (CMake faute si `extern/moira` est absent), et compilé en mode cycle-exact
@@ -204,7 +211,10 @@ attend du matériel.
 | `Fpu` (68881 optionnel)  | (Hatari n'émule pas le socket — réf. MC68881 UM §7 + AN-947, glue SFP004 MiNTLib ; émulation fonctionnelle, test : `tools/make_fpu_testrom.py`) |
 | `Mfp`                    | `mfp.c` (timers A-D, modes, GPIP)              |
 | `Ikbd` / `MidiAcia`      | `ikbd.c`, `acia.c`, `midi.c`, `keymap.c`       |
-| `Shifter` / `Machine`    | `video.c` (HBL/VBL/Timer B, bordures, spec512), `screen.c` |
+| `Shifter` / `Machine`    | `video.c` (HBL/VBL/Timer B, bordures), `spec512.c`, `conv_st.c` |
+| `Scheduler`              | `cycInt.c`, `cycles.c` |
+| `Cpu68k` (adaptateur)    | `cpu/hatari-glue.c` (`customreset`), `cpu/newcpu.c`, `cpu/memory.c` |
+| `StxImage`               | `floppies/stx.c` ; `.msa`/`.dim` → `floppies/msa.c`, `floppies/dim.c` |
 | `Fdc`                    | `fdc.c`, `floppy.c`                            |
 | `Acsi` (disque dur ACSI) | `hdc.c` (routage DMA via `Fdc`)                |
 | `Scc` (série Z85C30 Mega STE) | `scc.c` (IRQ niv5 via `Scu`)              |

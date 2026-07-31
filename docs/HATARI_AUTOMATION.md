@@ -8,18 +8,25 @@ détection HW, IRQ). Ce doc note la recette vérifiée (Hatari v2.6.1, macOS Sil
 Binaire selon la machine :
 - **macOS** : `/opt/homebrew/bin/hatari` (Homebrew). ⚠ Pas de `timeout` — on s'appuie sur
   `--run-vbls` qui fait sortir Hatari tout seul.
-- **Linux (CachyOS / Ubuntu)** : **le sous-module est déjà compilé** →
-  `extern/hatari/build/src/hatari` (v2.6.1, aligné sur la source de vérité du repo, plus
-  récent que le `hatari` d'apt en 2.4.1). Symlinké dans `~/.local/bin/hatari` (sur le PATH,
-  pas de `sudo`). `timeout` est disponible et conseillé comme garde-fou en plus de
+- **Linux (CachyOS / Ubuntu)** : **le clone `extern/hatari` (gitignoré, ce n'est PAS un
+  sous-module) est déjà compilé** → `extern/hatari/build/src/hatari` (v2.6.1, aligné sur la
+  source de vérité du repo, plus récent que le `hatari` d'apt en 2.4.1).
+  ⚠ **Le symlink `~/.local/bin/hatari` est CASSÉ** (il pointe sur un ancien chemin
+  `src/NeoST/…`, avec une casse différente) : `hatari` n'est donc PAS sur le PATH et les
+  recettes ci-dessous doivent invoquer le binaire **par son chemin**. Pour le réparer :
+  `ln -sf "$PWD/extern/hatari/build/src/hatari" ~/.local/bin/hatari`.
+  `timeout` est disponible et conseillé comme garde-fou en plus de
   `--run-vbls`. Recompiler au besoin : `cmake -B extern/hatari/build extern/hatari &&
   cmake --build extern/hatari/build -j` (dépendances : `libsdl2-dev`, déjà présentes).
+  💡 `tools/hatari_oracle.sh` fait cette découverte de binaire toute seule — le préférer
+  aux invocations manuelles.
 
 ## Recette headless : boot → image PNG
 
 ```sh
 export SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy   # aucune fenêtre / audio (CI, headless)
-hatari --machine megaste --tos roms/etos256us.img --monitor rgb \
+HATARI=extern/hatari/build/src/hatari                # cf. ci-dessus : PAS sur le PATH
+"$HATARI" --machine megaste --tos roms/etos256us.img --monitor rgb \
        --sound off --fast-forward on --confirm-quit off --statusbar off \
        --alert-level fatal \
        --run-vbls 400 \

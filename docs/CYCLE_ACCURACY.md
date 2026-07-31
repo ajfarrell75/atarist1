@@ -108,8 +108,8 @@ sévérité + `fichier:ligne` des deux côtés dans
 | **P1** | Tricks par changement de résolution mid-ligne (V2 hi/med/lo, overscan med-res) | moyen+ | Cuddly, No Cooper |
 | **P1** | Géométrie mid-trame (V3 : 50↔60 Hz en cours de trame, `RestartVideoCounter`) | élevé | overscan plein écran, ULM Dark Side |
 | **P1** | Rendu live du retrait BAS + lignes EMPTY/BLANK/NO_DE | moyen | scroller bordure basse Cuddly |
-| **P2** | Blitter non-hog (arbitrage bus 64/64) | élevé | démos CPU+blitter simultanés |
-| **P2** | Son DMA STE : compteur d'adresse live + FIFO 8 octets | moyen | STE_Test, sync zik/raster |
+| **P2** | Blitter : interfoliage `CycInt_Process` par accès bus + `cpu_bus_rmw` (le partage 64/64 est PORTÉ) | moyen | démos CPU+blitter simultanés |
+| **P2** | Son DMA STE : `$FF8909/0B/0D` au cycle de la lecture (la FIFO 8 octets est PORTÉE) | moyen | STE_Test, sync zik/raster |
 | **P2** | Restes vidéo : `VIDEO_ENDLINE`, VBL au cycle exact, phase Timer C | moyen | démos fullscreen |
 | **P3** | Wakeup states WS1-4, jitter HBL/VBL, branche STE de la Glue | élevé | démos « extrêmes » (Closure…) |
 | **P3** | Unité interne ×256, fréquences exactes centralisées | faible | dérive long terme |
@@ -134,23 +134,29 @@ C'est le front actif. **Convergence instruction faite** ; reste la **phase d'ent
 - **`bSteBorderFlag` / mode 336 px** (`video.c:530`) : combo `$FF8265>0` puis `$FF8264=0`
   → 16 px de plus à gauche (prefetch sans scroll). Absent. *Effort moyen.* Étalon : Obsession,
   Pacemaker.
-- **`RestartVideoCounter` ligne 310/260** : ⚠ **tenté puis retiré** — pollé « compteur revenu à
-  la base », les softs posent leur bascule 50/60 Hz à la frontière de trame là où `beginFrame`
-  verrouille la géométrie → toute la trame bascule en 263 lignes. À reprendre **après** la
-  géométrie par-ligne (dépendance structurelle, = V3). Étalon : ULM Dark Side of the Spoon.
+- **`RestartVideoCounter` ligne 310/260** : ✅ **PORTÉ (2026-07-02)** — événement
+  `Scheduler::VC_RESTART` (`src/core/Machine.cpp:282-285` callback, `:344-354` planification).
+  Reste couplé à la géométrie par-ligne (V3) pour les bascules 50/60 Hz en cours de trame :
+  `beginFrame` verrouille encore la géométrie de la trame. Étalon : ULM Dark Side of the Spoon.
 
 ### P2 — Blitter non-hog (`blitter.c:251,395`)
 
-Mode non-hog : le blitter prend 64 accès bus, rend la main 64 cycles au CPU, etc. (chaque mot
-compte ; bug matériel « +1 accès CPU compté blitter » reproductible). NeoST = HOG pur (transfert
-instantané hors temps CPU). Indispensable aux démos qui calculent **pendant** un blit.
-*C'est le plus gros morceau structurant restant.* Suit : datation IRQ blitter + bit BUSY.
+✅ **PORTÉ le 2026-07-07** — le partage de bus non-hog est implémenté : tranches de 64 accès
+bus / 64 accès CPU **réels**, suspension MID-MOT (l'état du mot en cours survit à la coupure),
+et le bug matériel « +1 accès CPU compté blitter » (`busCountError_` → tranche de 63).
+Cf. `src/core/Blitter.cpp:22-26` (constantes) et `:247-304` (tranche + comptage).
+
+**Restent** : pas d'interfoliage `CycInt_Process` par accès bus pendant une tranche (le CPU est
+stallé en bloc, ses cycles internes ne recouvrent pas le blit), et `cpu_bus_rmw`.
 
 ### P2 — Son DMA STE (`dmaSnd.c:737`)
 
-`$FF8909/0B/0D` doit refléter la position **au cycle** de la lecture (`Sound_Update`,
-`DmaSnd_GetFrameCount`) ; NeoST n'avance le compteur qu'au rythme de la synthèse. Plus le FIFO
-8 octets + avance HBL (réalignement mono→stéréo, S2). Étalon : STE_Test.
+✅ **FIFO 8 octets PORTÉE** (`src/core/DmaSound.cpp:81-94` `fifoRefill`, `:115-122` `fifoPull`),
+ainsi que le gain LMC ×2 (S3, `:366-371`).
+
+**Reste** : `$FF8909/0B/0D` doit refléter la position **au cycle** de la lecture (`Sound_Update`,
+`DmaSnd_GetFrameCount`) ; NeoST n'avance le compteur qu'au rythme de la synthèse, et le refill
+FIFO est quantifié différemment. Étalon : STE_Test.
 
 ### P2 — Restes vidéo « plan »
 
@@ -176,10 +182,13 @@ exacte du tic Timer C (au cycle de programmation) ; lecture compteur à cheval s
   aujourd'hui car replanification ancrée).
 - **Fréquences exactes centralisées** (`clocks_timings.c` : CPU 8021248 Hz PAL, VBL ≈ 50,05 Hz) :
   seul impact réel = synchro audio long terme.
-- **Offsets de datation Moira vs Hatari** : les constantes empiriques (`kVideoCounterReadOffset
-  Cyc`, `kSpec512AlignCyc`) compensent la convention de datation de Moira (vs Hatari). Validées
-  pixel-identiques ; chaque nouveau mécanisme daté choisira son offset par la même méthode
-  (sweep vs oracle).
+- **Offsets de datation Moira vs Hatari** : `kVideoCounterReadOffsetCyc = −6`
+  (`Shifter.cpp:89`), `kSyncWriteOffsetCyc = +2` (`Shifter.cpp:966`) et
+  `kSpec512AlignCyc = −25` (`Shifter.cpp:34`) ne sont **pas** des constantes empiriques : ce
+  sont les valeurs fidèles dérivées de `Video_CalculateAddress` et
+  `Cycles_GetInternalCycleOn{Read,Write}Access` (2026-07-03). ⚠ **read et write se déplacent
+  PAR PAIRE** — bouger l'un seul casse Enchanted Land. Chaque nouveau mécanisme daté choisira
+  son offset par la même méthode (dérivation, puis contrôle au sweep vs oracle).
 
 ## 5. Ce qu'on ne fera PAS (décisions actées)
 
