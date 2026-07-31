@@ -31,6 +31,10 @@ void SymbolTable::finalize() {
 bool SymbolTable::load(const std::string& path, uint32_t baseOffset) {
     std::ifstream f(path, std::ios::binary);
     if (!f) return false;
+    // Repart d'une table VIDE : sans cela, recharger un fichier (ou en charger un
+    // second) CUMULAIT les symboles — le compteur affiché doublait et les doublons
+    // d'adresse résolvaient vers l'ancienne entrée (« 1er gagne » dans byName_).
+    clear();
     uint8_t magic[2] = {0, 0};
     f.read(reinterpret_cast<char*>(magic), 2);
     f.close();
