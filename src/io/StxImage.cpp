@@ -255,7 +255,10 @@ StxImage::Track* StxImage::findTrack(int track, int side) {
 StxImage::Sector* StxImage::findSectorByPosition(int track, int side, uint16_t bitPos) {
     Track* t = findTrack(track, side);
     if (!t) return nullptr;
-    for (Sector& sec : t->sectors)
+    // sectorsView() et non t->sectors : sur une piste déjà réinterprétée par un
+    // WRITE TRACK, les positions angulaires courantes sont celles de writeSectors —
+    // chercher dans les secteurs d'origine ne trouvait rien et l'overlay était jeté.
+    for (Sector& sec : t->sectorsView())
         if (sec.bitPosition == bitPos) return &sec;
     return nullptr;
 }
@@ -407,13 +410,22 @@ bool StxImage::loadWd1772(const std::string& path) {
     saveSectors.clear();
     saveTracks.clear();
 
+    // DEUX PASSES, les TRCK d'ABORD. Un WRITE SECTOR effectué APRÈS un WRITE TRACK
+    // porte la position angulaire de la piste RÉINTERPRÉTÉE ; en lisant les SECT en
+    // premier, on la cherchait parmi les secteurs d'ORIGINE, on ne la trouvait pas
+    // (« bloc SECT sans secteur »), et l'overlay était jeté — puis le TRCK
+    // reconstruisait writeSectors avec saveIndex = -1. Résultat : la sauvegarde
+    // écrite par un jeu sur une piste qu'il venait de formater disparaissait au
+    // lancement suivant, sans un mot.
+    for (int pass = 0; pass < 2; ++pass) {
+    const bool wantTrack = (pass == 0);
     std::size_t p = 16;
     while (p + 8 <= in.size()) {
         const uint32_t blockLen = rd32be(&in[p + 4]);
         const std::size_t next = p + 4 + blockLen;        // cf. Hatari : ID(4) + longueur
         if (blockLen < 4 || next > in.size()) break;      // bloc tronqué → on s'arrête là
 
-        if (std::memcmp(&in[p], "SECT", 4) == 0 && blockLen >= 16) {
+        if (std::memcmp(&in[p], "SECT", 4) == 0 && blockLen >= 16 && !wantTrack) {
             SaveSector ss;
             const uint8_t* q = &in[p + 8];
             ss.track    = q[0];
@@ -441,7 +453,7 @@ bool StxImage::loadWd1772(const std::string& path) {
                 std::fprintf(stderr, "[STX] %s : bloc SECT sans secteur (piste %d face %d "
                              "bitpos %d) — ignoré\n", path.c_str(), ss.track, ss.side, ss.bitPos);
             }
-        } else if (std::memcmp(&in[p], "TRCK", 4) == 0 && blockLen >= 8) {
+        } else if (std::memcmp(&in[p], "TRCK", 4) == 0 && blockLen >= 8 && wantTrack) {
             SaveTrack st;
             const uint8_t* q = &in[p + 8];
             st.track = q[0];
@@ -458,11 +470,13 @@ bool StxImage::loadWd1772(const std::string& path) {
                 std::fprintf(stderr, "[STX] %s : bloc TRCK sans piste (piste %d face %d) "
                              "— ignoré\n", path.c_str(), st.track, st.side);
             }
-        } else {
+        } else if (wantTrack && std::memcmp(&in[p], "SECT", 4) != 0
+                              && std::memcmp(&in[p], "TRCK", 4) != 0) {
             std::fprintf(stderr, "[STX] %s : bloc inconnu « %.4s » — ignoré\n",
                          path.c_str(), reinterpret_cast<const char*>(&in[p]));
         }
         p = next;
+    }
     }
     return !saveSectors.empty() || !saveTracks.empty();
 }

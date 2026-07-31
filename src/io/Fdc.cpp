@@ -340,6 +340,15 @@ bool Fdc::loadImage(const std::string& path, int drive) {
     f.seekg(0);
     std::vector<uint8_t> raw(static_cast<std::size_t>(n));
     f.read(reinterpret_cast<char*>(raw.data()), n);
+    // Lecture COURTE contrôlée (E/S défaillante, fichier tronqué entre le tellg et le
+    // read, support amovible retiré) : sans ce test l'image était complétée de zéros en
+    // silence et montée comme valide — le joueur voyait une disquette illisible sans
+    // savoir pourquoi. StxImage::loadWd1772 fait déjà ce contrôle.
+    if (f.gcount() != n) {
+        std::fprintf(stderr, "[FDC] lecture incomplète (%lld/%lld o) : %s\n",
+                     static_cast<long long>(f.gcount()), static_cast<long long>(n), path.c_str());
+        return false;
+    }
 
     // Format STX (Pasti, en-tête « RSY\0 ») : image disque BAS NIVEAU (pistes/secteurs
     // bruts, IDs réels, CRC, bits fuzzy, timing) qui préserve les PROTECTIONS. On la
@@ -1088,14 +1097,27 @@ uint8_t Fdc::writeSectorStx(int size) {
         ss.track = uint8_t(dk.headTrack); ss.side = side_; ss.bitPos = sec.bitPosition;
         ss.idTrack = sec.idTrack; ss.idHead = sec.idHead;       // champ ID → bloc SECT
         ss.idSector = sec.idSector; ss.idSize = sec.idSize; ss.idCrc = sec.idCrc;
-        ss.data.resize(size, 0);
+        // Dimensionné sur sec.sectorSize, PAS sur `size` : `size` vient du nextID_LEN_
+        // figé au début du transfert, alors que la cible est re-résolue ici — et la
+        // face peut avoir changé entre-temps (refreshDriveSide() relit le PSG à chaque
+        // lecture du registre de statut, ce que l'invité fait en boucle). Les relectures
+        // bouclent, elles, sur sec.sectorSize : un overlay plus court se lirait hors du
+        // vector. Même garde que le chemin de chargement (StxImage::loadWd1772).
+        ss.data.resize(sec.sectorSize, 0);
         dk.stx->saveSectors.push_back(std::move(ss));
         sec.saveIndex = int(dk.stx->saveSectors.size()) - 1;
     }
     auto& save = dk.stx->saveSectors[sec.saveIndex];
     save.used = true;
-    if (int(save.data.size()) < size) save.data.resize(size, 0);
-    for (int i = 0; i < size; ++i) save.data[i] = bufferReadBytePos(i);
+    // L'overlay fait EXACTEMENT sec.sectorSize : c'est sur cette taille que bouclent
+    // readSectorStx/readTrackStx (un overlay plus court se lirait hors du vector), et
+    // c'est la seule que loadWd1772 accepte au rechargement. `size` vient du
+    // nextID_LEN_ figé en début de transfert, alors que la cible est re-résolue ici et
+    // que la face a pu changer entre-temps (refreshDriveSide relit le PSG à chaque
+    // lecture du statut) : on borne donc la copie au lieu de dimensionner dessus.
+    const int need = int(sec.sectorSize);
+    if (int(save.data.size()) != need) save.data.assign(need, 0);
+    for (int i = 0; i < size && i < need; ++i) save.data[i] = bufferReadBytePos(i);
     stxPersist(dk);
     return 0;
 }
@@ -1120,7 +1142,12 @@ uint8_t Fdc::writeTrackStx() {
     st.side  = side_;
     st.data.assign(buf_.begin(), buf_.end());
 
-    for (StxImage::Sector& sec : t->sectors)       // invalide les 'write sector' d'origine
+    // sectorsView() : sur une piste DÉJÀ réinterprétée, les overlays vivent sur
+    // writeSectors — que reinterpretSaveTrack va effacer juste après. Ne parcourir que
+    // t->sectors laissait donc des entrées « used » devenues inatteignables, réécrites
+    // dans le .wd1772 à chaque sauvegarde (fichier qui grossit sans fin) et rejetées
+    // au chargement suivant.
+    for (StxImage::Sector& sec : t->sectorsView())   // invalide les 'write sector' précédents
         if (sec.saveIndex >= 0) {
             dk.stx->saveSectors[sec.saveIndex].used = false;
             sec.saveIndex = -1;

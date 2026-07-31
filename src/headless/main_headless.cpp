@@ -222,6 +222,7 @@ int main(int argc, char** argv) {
     // (hex) après la trame N — diff de buffers contre l'oracle Hatari (débogueur
     // « m addr len »). Lectures via bus.read8 (RAM : sans effet de bord).
     int         dumpAtFrame = -1;
+    bool        dumpDone    = false;   // le --dump-at a-t-il RÉELLEMENT eu lieu ? (cf. fin de boucle)
     uint32_t    dumpAddr = 0, dumpLen = 0;
     std::string dumpPath;
     CpuCore     cpuCore    = CpuCore::Moira;   // seul cœur disponible (cycle-exact)
@@ -293,7 +294,13 @@ int main(int argc, char** argv) {
             // options CLI placées APRÈS --from-cfg surchargent (le cfg sert de base).
             const char* p = next(a);
             std::ifstream cf(p);
-            if (!cf) { std::fprintf(stderr, "[headless] --from-cfg : %s introuvable\n", p); return 2; }
+            // peek() en plus de l'ouverture : sous Linux, ouvrir un RÉPERTOIRE réussit,
+            // et la boucle de lecture qui suit tournait alors à vide — NeoST annonçait
+            // « config reprise de … » puis démarrait sur ses valeurs par défaut.
+            if (!cf || cf.peek() == std::ifstream::traits_type::eof()) {
+                std::fprintf(stderr, "[headless] --from-cfg : %s introuvable ou illisible\n", p);
+                return 2;
+            }
             // Les chemins de neost.cfg sont relatifs à exeDir (= <racine>/build) : le GUI
             // les écrit préfixés « ./../ » (build → racine). On résout relativement au
             // DOSSIER du cfg après avoir collapsé ce préfixe, pour retomber sur la racine.
@@ -570,6 +577,7 @@ int main(int argc, char** argv) {
             }
         }
         if (dumpAtFrame >= 0 && frame == dumpAtFrame && dumpLen) {
+            dumpDone = true;
             std::FILE* df = std::fopen(dumpPath.c_str(), "wb");
             if (df) {
                 for (uint32_t k = 0; k < dumpLen; ++k) {
@@ -785,6 +793,15 @@ int main(int argc, char** argv) {
                          serialDumpPath.c_str());
             outFail = true;
         }
+    }
+
+    // --dump-at demandé mais jamais atteint (N >= --frames, ou boucle sortie plus tôt
+    // sur --break/--until-pc, ou LEN=0) : sans ce contrôle, aucun fichier n'était écrit,
+    // rien n'était dit, et le runner diffiait un dump PÉRIMÉ en croyant l'avoir refait.
+    if (dumpAtFrame >= 0 && !dumpDone) {
+        std::fprintf(stderr, "[headless] --dump-at trame %d jamais atteinte (LEN=%u) — "
+                     "aucun dump écrit\n", dumpAtFrame, dumpLen);
+        outFail = true;
     }
 
     tracer.close();

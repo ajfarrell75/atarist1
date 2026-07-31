@@ -29,13 +29,18 @@ Bus::Bus(std::size_t ramBytes) {
 
 // Save-state : la RAM (gros bloc, taille préfixée par vec → le load restaure aussi la
 // bonne taille) PUIS l'état MMIO/config RUNTIME du Bus. NE SONT PAS sérialisés :
-//  - rom / cart : images ROM/cartouche, rechargées depuis leurs fichiers (pas du state).
+//  - rom        : image ROM, rechargée depuis son fichier (pas du state).
 //  - cartPath_  : chemin fichier (rechargé par le frontend, pas de l'état machine).
 //  - ioFault_ / ioFaultMachine_ / ioFaultBuilt_ : carte de bus error PUREMENT DÉRIVÉE
 //    (reconstruite à la demande depuis `machine` + `fpu.present` via buildIoFault) → on
 //    laisse ioFaultBuilt_ à sa valeur ; le premier accès MMIO après load la régénère.
+// `cart`, EN REVANCHE, EST sérialisée depuis la v7 : ce n'est pas qu'une image immuable,
+// le HD GEMDOS y écrit l'ANCIEN vecteur GEMDOS (GemdosHd::sysInit, CART_OLDGEMDOS) —
+// donc de l'état machine runtime, sans lequel la RAM restaurée pointe sur un port
+// cartouche dépeuplé. L'empreinte d'en-tête refuse de toute façon un rechargement croisé.
 void Bus::serialize(StateArchive& ar) {
     ar.vec(ram);
+    ar.vec(cart);   // cf. en-tête : porte le vecteur GEMDOS sauvegardé, pas qu'une image
 
     // Profil machine + config ROM/TOS chargée.
     ar(machine);

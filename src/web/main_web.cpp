@@ -79,6 +79,8 @@ GLuint compileShader(GLenum type, const char* src) {
         char log[512];
         glGetShaderInfoLog(s, sizeof log, nullptr, log);
         std::fprintf(stderr, "[web] shader: %s\n", log);
+        glDeleteShader(s);
+        return 0;                 // 0, PAS le shader cassé : cf. initGl
     }
     return s;
 }
@@ -97,14 +99,39 @@ void initGl() {
     glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
     glBufferData(GL_ARRAY_BUFFER, sizeof quad, quad, GL_STATIC_DRAW);
 
+    // Statuts VÉRIFIÉS, contrairement à la version d'origine : un shader qui ne
+    // compilait pas était quand même attaché, le link échouait, et les
+    // glGetAttribLocation rendaient -1 — que drawScreen passait ensuite chaque trame
+    // à glEnableVertexAttribArray/glVertexAttribPointer (donc 0xFFFFFFFF) : erreurs GL
+    // en boucle, canvas noir, et pour seul indice un log noyé dans la console. Le
+    // frontend desktop (gui/OpenGLShader.cpp) faisait déjà tout cela correctement.
     GLuint vs = compileShader(GL_VERTEX_SHADER, kVert);
     GLuint fs = compileShader(GL_FRAGMENT_SHADER, kFrag);
+    if (!vs || !fs) {
+        std::fprintf(stderr, "[web] shaders non compilés — rendu désactivé\n");
+        if (vs) glDeleteShader(vs);
+        if (fs) glDeleteShader(fs);
+        g_prog = 0; g_locPos = g_locUV = -1;
+        return;
+    }
     g_prog = glCreateProgram();
     glAttachShader(g_prog, vs);
     glAttachShader(g_prog, fs);
     glBindAttribLocation(g_prog, 0, "aPos");
     glBindAttribLocation(g_prog, 1, "aUV");
     glLinkProgram(g_prog);
+    GLint linked = 0;
+    glGetProgramiv(g_prog, GL_LINK_STATUS, &linked);
+    if (!linked) {
+        char log[512];
+        glGetProgramInfoLog(g_prog, sizeof log, nullptr, log);
+        std::fprintf(stderr, "[web] link programme: %s\n", log);
+        glDeleteProgram(g_prog); g_prog = 0;
+    }
+    // Les shaders sont référencés par le programme : plus besoin des objets.
+    glDeleteShader(vs);
+    glDeleteShader(fs);
+    if (!g_prog) { g_locPos = g_locUV = -1; return; }
     g_locPos = glGetAttribLocation(g_prog, "aPos");
     g_locUV  = glGetAttribLocation(g_prog, "aUV");
     g_locTex = glGetUniformLocation(g_prog, "uTex");
@@ -135,6 +162,9 @@ void drawScreen() {
     glViewport(0, 0, fbw, fbh);
     glClearColor(0.10f, 0.10f, 0.12f, 1.f);
     glClear(GL_COLOR_BUFFER_BIT);
+    // Programme absent (compilation/link en échec, cf. initGl) : on s'arrête après
+    // l'effacement plutôt que d'émettre des appels GL avec des locations à -1.
+    if (!g_prog || g_locPos < 0 || g_locUV < 0) return;
 
     glUseProgram(g_prog);
     glBindBuffer(GL_ARRAY_BUFFER, g_vbo);

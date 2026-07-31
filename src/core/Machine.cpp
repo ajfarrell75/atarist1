@@ -553,9 +553,10 @@ void Machine::stepInstruction() {
 
 // --- Save-states (increment 1) : CPU + RAM + ordonnanceur + état de trame ----------
 // Méthode SYMÉTRIQUE (StateArchive gère save ET load) → l'ordre ne peut pas diverger.
+static uint32_t stateCrc32(const uint8_t* p, std::size_t n);   // défini plus bas
 void Machine::serializeState(StateArchive& ar) {
     uint32_t magic   = 0x4E535453u;   // 'NSTS'
-    uint16_t version = 6;             // v6 : + commitAnchor_ (Shifter) ; v5 : + CRC32 du payload dans l'en-tête
+    uint16_t version = 7;             // v7 : + empreinte GEMDOS/cartouche et cart sérialisée ; v6 : + commitAnchor_ (Shifter)
     ar(magic); ar(version);
     // Empreinte de configuration : un état n'est rechargeable QUE dans la même
     // config (loadState la vérifie AVANT de restaurer — sinon machine hybride :
@@ -565,6 +566,19 @@ void Machine::serializeState(StateArchive& ar) {
     uint32_t ramSz = static_cast<uint32_t>(bus.ram.size());
     uint16_t tosV  = bus.tosVersion;
     ar(mt); ar(ramSz); ar(tosV);
+    // Deux composantes d'empreinte ajoutées en v7, toutes deux nées d'un état ACCEPTÉ
+    // à tort qui produisait une machine incohérente :
+    //  · bit0 = HD GEMDOS actif. GemdosHd n'a AUCUN serialize (handles de fichiers
+    //    hôte, DTA d'énumération en cours, lecteur courant, chemin courant) : recharger
+    //    entre une session avec et une session sans laissait _drvbits annoncer C: et le
+    //    vecteur trap #1 pointer dans le port cartouche vide → premier appel GEMDOS
+    //    dans le décor. Tant que ce composant n'est pas sérialisable, on REFUSE.
+    //  · empreinte de la cartouche : le port $FA0000 n'est peuplé que si une cartouche
+    //    est montée, et la RAM restaurée peut y pointer.
+    uint8_t flags = uint8_t(gemdos.active() ? 1u : 0u);
+    uint32_t cartFp = bus.cart.empty()
+                    ? 0u : stateCrc32(bus.cart.data(), bus.cart.size());
+    ar(flags); ar(cartFp);
     // CRC32 du payload (tout ce qui suit ce champ) : écrit par saveState (patch à
     // l'offset fixe 13), vérifié par loadState AVANT toute restauration. Dans le
     // flux symétrique il vaut 0 — seul le patch post-sérialisation le remplit.
@@ -607,9 +621,10 @@ void Machine::serializeState(StateArchive& ar) {
     scc.serialize(ar);      mapAt("fin",     ar.saveSize());   // SCC Z85C30 (Mega STE)
 }
 
-// En-tête d'un .state v5 : magic(4) version(2) machine(1) ram(4) tos(2) crc32(4).
-static constexpr std::size_t kStateHeaderSize = 17;
-static constexpr std::size_t kStateCrcOffset  = 13;
+// En-tête d'un .state v7 : magic(4) version(2) machine(1) ram(4) tos(2) flags(1)
+// cartFp(4) crc32(4) — le CRC du payload reste le DERNIER champ de l'en-tête.
+static constexpr std::size_t kStateHeaderSize = 22;
+static constexpr std::size_t kStateCrcOffset  = 18;
 
 // CRC32 (IEEE, réflexe, sans table) du payload : détecte un fichier corrompu de la
 // bonne longueur AVANT de muter la machine — la seule troncature était couverte.
@@ -643,9 +658,9 @@ bool Machine::loadState(const uint8_t* data, std::size_t n) {
     uint32_t magic;   std::memcpy(&magic, data, 4);
     uint16_t version; std::memcpy(&version, data + 4, 2);
     if (magic != 0x4E535453u) return false;
-    if (version != 6) {
+    if (version != 7) {
         std::fprintf(stderr, "[state] refusé : format v%u non supporté (cette version "
-                     "de NeoST écrit du v6) — re-sauver l'état avec F5\n", version);
+                     "de NeoST écrit du v7) — re-sauver l'état avec F5\n", version);
         return false;
     }
     uint8_t  mt    = data[6];
@@ -657,6 +672,22 @@ bool Machine::loadState(const uint8_t* data, std::size_t n) {
                      "(machine %u/RAM %u Ko/TOS %03x vs session %u/%zu Ko/%03x)\n",
                      mt, ramSz / 1024u, tosV, unsigned(machineType_),
                      bus.ram.size() / 1024u, bus.tosVersion);
+        return false;
+    }
+    const uint8_t  flags  = data[13];
+    uint32_t cartFp; std::memcpy(&cartFp, data + 14, 4);
+    const uint8_t  curFlags  = uint8_t(gemdos.active() ? 1u : 0u);
+    const uint32_t curCartFp = bus.cart.empty()
+                             ? 0u : stateCrc32(bus.cart.data(), bus.cart.size());
+    if (flags != curFlags) {
+        std::fprintf(stderr, "[state] refusé : HD GEMDOS %s à la sauvegarde et %s "
+                     "maintenant (l'état du HD n'est pas sérialisable)\n",
+                     (flags & 1) ? "actif" : "inactif", curFlags ? "actif" : "inactif");
+        return false;
+    }
+    if (cartFp != curCartFp) {
+        std::fprintf(stderr, "[state] refusé : la cartouche montée n'est pas celle de "
+                     "la sauvegarde (empreinte %08x vs %08x)\n", cartFp, curCartFp);
         return false;
     }
     uint32_t crc; std::memcpy(&crc, data + kStateCrcOffset, 4);

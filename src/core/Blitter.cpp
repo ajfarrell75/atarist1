@@ -4,6 +4,7 @@
 //  (c) 2026 VERHILLE Arnaud — projet NeoST.
 // =============================================================================
 #include "core/Blitter.hpp"
+#include <algorithm>
 #include "core/Bus.hpp"
 #include "core/Cpu68k.hpp"
 #include "io/Mfp.hpp"
@@ -78,9 +79,12 @@ void Blitter::writeWord(uint32_t addr, uint16_t v) {
 // Facture le temps de bus du blitter au CPU : 4 cycles par accès + les cycles
 // d'arbitration (prise 4/8, restitution 4). Moira avance son horloge (le CPU
 // « attend » que le blitter rende le bus, cf. addBusWaitCycles).
-void Blitter::stallCpu(int busAccesses, int arbCycles) {
-    const int cycles = busAccesses * 4 + arbCycles;
-    if (busAccesses > 0 && bus_.cpu) bus_.cpu->addBusWaitCycles(cycles);
+void Blitter::stallCpu(int64_t busAccesses, int arbCycles) {
+    // Saturé : cf. sliceBus_ (Blitter.hpp) — un blit HOG dégénéré dépasse la capacité
+    // d'un int, et un produit qui déborde donnait un stall négatif, donc perdu.
+    const int64_t cycles = busAccesses * 4 + arbCycles;
+    if (busAccesses > 0 && bus_.cpu)
+        bus_.cpu->addBusWaitCycles(int(std::min<int64_t>(cycles, 0x7FFFFFFF)));
 }
 
 uint8_t Blitter::read8(uint32_t addr) {

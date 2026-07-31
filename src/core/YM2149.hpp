@@ -190,12 +190,18 @@ public:
         ar(noisePer_); ar(noiseCnt_); ar(noiseVal_);
         ar(envPer_); ar(envCnt_); ar(envPos_); ar(envShape_);
         ar.check(envPos_ < 96);     // indexe envW[..][96] ; le repli -=64 ne rattrape pas une valeur folle
+        ar.check(envShape_ >= 0 && envShape_ < 16);   // indexe envW[16] avec la valeur BRUTE
         ar(mixerT_); ar(mixerN_);
         ar(envMask3_); ar(vol3_);
         ar(rndLfsr_); ar(freqDiv2_);
         // Moteur 250 kHz + rééchantillonnage
         ar(buf250_);
         ar(buf250Wr_); ar(buf250Rd_);
+        // Le PREMIER accès de chaque fonction indexe buf250_ avec la valeur BRUTE (le
+        // masque n'est appliqué qu'à l'incrément) : un état forgé passant le CRC
+        // écrirait hors du std::array dès la trame audio suivante.
+        ar.check(buf250Wr_ >= 0 && buf250Wr_ < YM_BUF_250_SIZE);
+        ar.check(buf250Rd_ >= 0 && buf250Rd_ < YM_BUF_250_SIZE);
         ar(resampleFracN_);
         ar(envReload_);
         // Filtres de sortie + propriétés machine
