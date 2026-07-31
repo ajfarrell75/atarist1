@@ -65,8 +65,7 @@ public:
     // la palette (Video_Reset, lui, remet videoBase à 0 ; customreset() n'appelle que
     // Video_Reset_Glue). `mono` vient du bit 7 du GPIP (moniteur branché).
     void resetGlue(bool mono) {
-        // La FRÉQUENCE ($FF820A) est remise par une vraie écriture bus côté
-        // Bus::peripheralReset (pour que la Glue la date) ; ici seule la RÉSOLUTION.
+        sync = 0;                                   // $FF820A = 0 → 60 Hz
         mode = mono ? Mode::High : Mode::Low;       // ST_HIGH_RES / ST_LOW_RES
     }
 

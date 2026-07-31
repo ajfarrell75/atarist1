@@ -94,6 +94,9 @@ public:
     bool loadCart(const std::string& path);
     void ejectCart();
     const std::string& mountedCartPath() const { return cartPath_; }
+    // La cartouche SYSTÈME GEMDOS est posée en mémoire sans fichier : son chemin doit
+    // rester vide pour que GemdosHd::unmount sache qu'elle lui appartient.
+    void clearCartPath() { cartPath_.clear(); }
 
     // -------------------------------------------------------------------------
     //  Accès vus par le CPU. Le 68000 est BIG-ENDIAN ; l'hôte (x86/arm64) est

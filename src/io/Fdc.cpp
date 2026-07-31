@@ -413,10 +413,20 @@ bool Fdc::loadImage(const std::string& path, int drive) {
         // fichier .msa source et le détruirait. dk.raw = false neutralise writeBack
         // ET force dk.writeProtect (plus bas).
         const bool msaLike = looksLikeMsaHeader(raw);
+        // MÊME raisonnement pour le .dim : depuis que decodeDim exige une géométrie
+        // d'en-tête cohérente, il REJETTE des images qu'Hatari monte sans broncher
+        // (padding en queue, champs à 0 — il n'inspecte jamais ces champs). Sans cette
+        // garde, une telle image repartait en « .st brut INSCRIPTIBLE » et writeBack
+        // recopiait les secteurs invités par-dessus le fichier .dim source, DÉCALÉS de
+        // 32 octets : destruction silencieuse du fichier de l'utilisateur.
+        const bool dimLike = raw.size() >= 32u + 512u && raw[0] == 0x42 && raw[1] == 0x42;
         dk.image = std::move(raw);               // .st brut
-        dk.raw   = !msaLike;
+        dk.raw   = !msaLike && !dimLike;
         if (msaLike)
             std::fprintf(stderr, "[FDC] %s : en-tête .msa mais décompression impossible — "
+                                 "monté BRUT en LECTURE SEULE (image douteuse)\n", path.c_str());
+        else if (dimLike)
+            std::fprintf(stderr, "[FDC] %s : en-tête .dim mais géométrie incohérente — "
                                  "monté BRUT en LECTURE SEULE (image douteuse)\n", path.c_str());
     }
 

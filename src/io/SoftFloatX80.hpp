@@ -141,8 +141,14 @@ inline bool lt128(uint64_t a0, uint64_t a1, uint64_t b0, uint64_t b1) {
 }
 inline void add192(uint64_t a0,uint64_t a1,uint64_t a2,uint64_t b0,uint64_t b1,uint64_t b2,
                    uint64_t& z0,uint64_t& z1,uint64_t& z2) {
-    uint64_t c0=0,c1=0; add128(a1,a2,b1,b2,z1,z2); if(lt128(z1,z2,b1,b2)) c1=1;
-    add128(a0,c1,b0,0,z0,c0); (void)c0;
+    // La retenue sortante du 128 bits BAS doit remonter dans z0. L'ancien
+    // « add128(a0,c1,b0,0,z0,c0) » la déposait dans c0 — puis la JETAIT : z0 valait
+    // a0+b0 tout court. Seul appelant : sqrt_, où b0 == 0, si bien que le reste ne
+    // bougeait plus et que la boucle de raffinement tournait à l'infini — FSQRT gelait
+    // l'émulateur sur toute racine exactement représentable (1.0, 9.0, 100.0, 0.25…).
+    // Hatari propage en trois temps (softfloat-macros.h:433-440).
+    uint64_t c1=0; add128(a1,a2,b1,b2,z1,z2); if(lt128(z1,z2,b1,b2)) c1=1;
+    z0 = a0 + b0 + c1;
 }
 inline void sub192(uint64_t a0,uint64_t a1,uint64_t a2,uint64_t b0,uint64_t b1,uint64_t b2,
                    uint64_t& z0,uint64_t& z1,uint64_t& z2) {
