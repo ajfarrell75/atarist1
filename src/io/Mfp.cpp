@@ -482,7 +482,8 @@ bool Mfp::mfpSelfTest() {
     hasDmaSound_ = false;                 // isole bit7 = colorMonitor_ (pas de XOR XSINT)
     ddr = 0;                              // toutes les lignes en ENTRÉE
     riLine_ = fdcLine_ = aciaLineKbd_ = aciaLineMidi_ = false;
-    gpuLine_ = ctsLine_ = dcdLine_ = busyLine_ = false;   // toutes désassertées
+    gpuLine_ = busyLine_ = false;        // désassertées
+    ctsLine_ = dcdLine_  = true;         // CTS/DCD actives au repos (cf. Mfp.hpp)
     colorMonitor_ = true;
     chk("bit7 couleur (gpipInput)", (gpipInput() & 0x80) ? 1 : 0, 1);
     chk("bit7 couleur (read8 $01)", (read8(0x01) & 0x80) ? 1 : 0, 1);
