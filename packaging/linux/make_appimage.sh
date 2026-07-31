@@ -42,7 +42,9 @@ test -x "$BUILD_DIR/neost-headless" || { echo "ERREUR : $BUILD_DIR/neost-headles
 
 APPDIR="build-appimage/AppDir"
 TOOLS="${NEOST_APPIMAGE_TOOLS_DIR:-build-appimage/tools}"
-rm -rf "$APPDIR" dist/NeoST-*"$PKG_ARCH".AppImage      # garder le cache tools/
+# Nom EXACT, pas un glob : « NeoST-*aarch64.AppImage » emportait aussi le paquet
+# « …-raspberry-aarch64.AppImage » d'un empaquetage précédent, sans un mot.
+rm -rf "$APPDIR"; rm -f "dist/NeoST-$VERSION-$PKG_ARCH.AppImage"   # (cache tools/ conservé)
 mkdir -p "$APPDIR/usr/bin" "$TOOLS" dist
 
 # --- Outils AppImage (extraits → utilisables sans FUSE) ----------------------

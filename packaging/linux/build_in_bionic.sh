@@ -27,6 +27,7 @@ git config --global --add safe.directory '*'
 # impose doit être la glibc (2.27) — les symboles GLIBCXX/libgcc de gcc-11
 # relèveraient sinon le plancher au-dessus de ce que Mint 19 embarque.
 cmake -B build-bionic -DCMAKE_BUILD_TYPE=Release \
+    -DNEOST_VERSION_STR="${NEOST_VERSION:-dev}" \
     -DCMAKE_EXE_LINKER_FLAGS="-static-libstdc++ -static-libgcc"
 cmake --build build-bionic -j"$(nproc)"
 test -x build-bionic/neost || { echo "ERREUR : frontend GUI non construit (GLFW ?)"; exit 1; }

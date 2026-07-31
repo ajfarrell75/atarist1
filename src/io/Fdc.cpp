@@ -305,6 +305,19 @@ static bool decodeDim(const std::vector<uint8_t>& raw, std::vector<uint8_t>& out
     if (raw.size() < 32 + 512) return false;                  // en-tête + ≥ 1 secteur
     if (raw[0x00] != 0x42 || raw[0x01] != 0x42) return false; // ID 'BB'
     if (raw[0x03] != 0 || raw[0x0A] != 0) return false;       // toutes pistes, début piste 0
+    // Hatari se contente de ces 4 octets — mais il ne les teste QUE sur un fichier
+    // dont l'EXTENSION est .dim (DIM_FileNameIsDIM, floppy.c). NeoST, lui, détecte par
+    // CONTENU : la même signature devient alors un piège, car $4242 est aussi
+    // l'encodage de « clr.w d2 », début plausible d'un secteur de boot exécutable, et
+    // les deux autres octets tombent au milieu du nom OEM / du numéro de série. Une
+    // vraie .ST était ainsi montée amputée de 32 octets — donc décalée, de géométrie
+    // fausse et forcée en lecture seule. On exige donc en plus que les champs de
+    // géométrie soient plausibles ET qu'ils rendent compte de la taille du fichier
+    // (dim.c § « .DIM FILE FORMAT » : 0x06 faces−1, 0x08 spt, 0x0C piste de fin).
+    const int sides = raw[0x06] + 1, spt = raw[0x08], endTrack = raw[0x0C];
+    if (sides > 2 || spt < 1 || spt > 48 || endTrack > 85) return false;
+    const std::size_t expect = std::size_t(endTrack - raw[0x0A] + 1) * spt * sides * 512u;
+    if (raw.size() - 32 != expect) return false;
     out.assign(raw.begin() + 32, raw.end());
     return true;
 }

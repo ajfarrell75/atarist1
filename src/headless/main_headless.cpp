@@ -438,7 +438,11 @@ int main(int argc, char** argv) {
     if (soundDump) {
         machine.psg.setCycleClock([&machine] { return machine.frameRelCycle(); });
         machine.dmasnd.setCycleClock([&machine] { return machine.frameRelCycle(); });
-        dumpPcm.reserve(size_t(frames) * kDumpRate / 50 * 2);
+        // Plafonné : reserve() n'est qu'une optimisation, et --frames n'est borné que
+        // par le bas — « --frames 90000000 --sound-dump » demandait 320 Go et mourait
+        // sur std::bad_alloc (SIGABRT + core) avant d'émuler la moindre trame.
+        dumpPcm.reserve(std::min<std::size_t>(std::size_t(frames) * kDumpRate / 50 * 2,
+                                              64u << 20));
     }
     auto dumpFrame = [&]() {
         static constexpr double CPU_HZ = 8021248.0;
@@ -529,9 +533,15 @@ int main(int argc, char** argv) {
         else std::fprintf(stderr, "[headless] symbole inconnu : '%s'\n", s.c_str());
     }
     if (!loadStatePath.empty()) {   // restaure un état AVANT de tourner (config machine identique requise)
-        std::fprintf(stderr, machine.loadStateFile(loadStatePath)
-                     ? "[headless] état restauré depuis %s\n"
-                     : "[headless] ÉCHEC restauration état %s\n", loadStatePath.c_str());
+        // Un échec DOIT teinter le code de sortie, comme toutes les autres E/S fichier :
+        // sinon un runner d'oracle « restaurer l'état → tourner N trames → diffier »
+        // repart d'un boot à froid et rend un vert silencieux sur la mauvaise scène.
+        if (!machine.loadStateFile(loadStatePath)) {
+            std::fprintf(stderr, "[headless] ÉCHEC restauration état %s\n", loadStatePath.c_str());
+            outFail = true;
+        } else {
+            std::fprintf(stderr, "[headless] état restauré depuis %s\n", loadStatePath.c_str());
+        }
     }
     for (int frame = 0; frame < frames; ++frame) {
         // Trace fenêtrée (--trace-from N) : branche le hook d'instruction à la trame N.

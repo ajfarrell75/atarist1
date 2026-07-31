@@ -101,11 +101,14 @@ void Blitter::write8(uint32_t addr, uint8_t v) {
     // (IoMem_VoidWrite) → ignorées aussi.
     if (off < 0x3A || off >= 0x3E) return;
     reg_[off] = v & regWriteMask(off);   // bits non câblés masqués À L'ÉCRITURE (cf. regWriteMask)
-    if (off == 0x3C) {
+    if (off == 0x3C && !inSlice_) {
         // Écriture du registre contrôle ($FF8A3C) : BUSY (bit7) à 1 → démarre ou
         // REPREND ; à 0 pendant un transfert → PAUSE (le CPU peut arrêter le
         // blitter en non-hog, cf. blitter.c:88 — état conservé, reprise au
         // prochain BUSY=1).
+        // !inSlice_ : une écriture VENANT DU BLITTER lui-même (blit dont la
+        // destination est sa propre zone registre) pose les octets et rien de plus,
+        // comme chez Hatari où le contrôle ne relance jamais le transfert en direct.
         if (v & 0x80) start();
         else if (midBlit_) pauseTransfer();
     }
@@ -132,7 +135,7 @@ void Blitter::write16(uint32_t addr, uint16_t v) {
         const uint16_t y = uint16_t((reg_[0x38] << 8) | reg_[0x39]);
         yLatch_ = y ? y : 65536u;
     }
-    if (off <= 0x3C && off + 1 >= 0x3C) {
+    if (off <= 0x3C && off + 1 >= 0x3C && !inSlice_) {   // cf. write8 : pas de relance ré-entrante
         if (reg_[0x3C] & 0x80) start();
         else if (midBlit_) pauseTransfer();
     }
@@ -153,7 +156,7 @@ void Blitter::write32(uint32_t addr, uint32_t v) {
         const uint16_t y = uint16_t((reg_[0x38] << 8) | reg_[0x39]);
         yLatch_ = y ? y : 65536u;
     }
-    if (off <= 0x3C && off + 3 >= 0x3C) {
+    if (off <= 0x3C && off + 3 >= 0x3C && !inSlice_) {   // cf. write8 : pas de relance ré-entrante
         if (reg_[0x3C] & 0x80) start();
         else if (midBlit_) pauseTransfer();
     }
@@ -216,7 +219,7 @@ void Blitter::start() {
 
     if (reg_[0x3C] & 0x40) {               // mode HOG : bus gardé jusqu'à y_count=0
         sliceBus_ = 0;
-        runSlice(-1);
+        inSlice_ = true; runSlice(-1); inSlice_ = false;
         stallCpu(sliceBus_, arbIn + kArbOut);   // CPU stallé : arbitration + tout le blit
         return;
     }
@@ -251,7 +254,9 @@ void Blitter::onSlice() {
     busCountError_ = false;
     clearPreStartWindow();
     sliceBus_ = 0;
+    inSlice_ = true;
     const bool done = runSlice(budget);
+    inSlice_ = false;
     stallCpu(sliceBus_, arbIn + kArbOut);
     if (!done) {
         // Part CPU non-hog : armer le comptage des accès bus CPU (port

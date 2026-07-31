@@ -430,6 +430,12 @@ unsigned int CrtEffectStack::process(unsigned int srcTex, int srcW, int srcH,
     // ajoute le bicubique quand on agrandit davantage.
     GLint prevMinFilter = GL_NEAREST;
     GLint prevMagFilter = GL_NEAREST;
+    // Fixer l'unité AVANT le premier bind : sinon ce bind (et les glTexParameteri qui
+    // suivent) atterrissent sur l'unité de texture laissée active par l'appelant, que
+    // le nettoyage de fin ne restaure pas. Inoffensif tant que les appelants laissent
+    // l'unité 0, mais c'est la classe de fuite d'état GL qui a déjà coûté le
+    // glUseProgram(0)/glBindBuffer(0) obligatoires plus bas.
+    glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, srcTex);
     glGetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, &prevMinFilter);
     glGetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, &prevMagFilter);

@@ -28,6 +28,7 @@ apt-get install -y --no-install-recommends \
 # -static-libstdc++/-static-libgcc, même raison que le job bionic : ne faire
 # dépendre l'AppImage QUE de la glibc (2.36), pas du libstdc++ de la machine.
 cmake -B build-pi -DCMAKE_BUILD_TYPE=Release \
+    -DNEOST_VERSION_STR="${NEOST_VERSION:-dev}" \
     -DCMAKE_EXE_LINKER_FLAGS="-static-libstdc++ -static-libgcc"
 cmake --build build-pi -j"$(nproc)"
 test -x build-pi/neost || { echo "ERREUR : frontend GUI non construit (GLFW ?)"; exit 1; }

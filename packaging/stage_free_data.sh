@@ -15,6 +15,14 @@ done
 cp -r "$SRC/roms/drivesound" "$DEST/roms/"
 cp "$SRC/disks/diskA.st" "$DEST/disks/"
 
+# Polices de l'interface (resolveData cherche exeDir/../fonts) : DejaVu Sans et
+# Font Awesome Free, toutes deux librement redistribuables. SANS elles, le GUI
+# se replie EN SILENCE sur la police bitmap d'ImGui et TOUS les pictogrammes
+# deviennent des carrés vides — dont deux boutons purement iconiques (retrait de
+# breakpoint/watchpoint) qui n'ont alors plus aucun libellé. Invisible en CI
+# (le smoke est headless), très visible chez l'utilisateur.
+cp -r "$SRC/fonts" "$DEST/"
+
 # Garde-fou : rien d'autre que de l'EmuTOS ne doit se trouver dans le paquet.
 # (pas de -printf : find BSD de macOS ne le connaît pas)
 STRAY=$(find "$DEST/roms" -maxdepth 1 -name '*.img' ! -name 'etos*')
