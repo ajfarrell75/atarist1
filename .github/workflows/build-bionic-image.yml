@@ -1,0 +1,57 @@
+name: Build bionic builder image
+
+# Construit packaging/linux/Dockerfile.bionic — la toolchain glibc-2.27 GELÉE
+# (gcc-11, CMake, GLFW 3.3, outils AppImage) utilisée par le job linux-bionic
+# de release.yml — et la pousse sur ghcr.io. C'est LE seul endroit où tournent
+# les étapes fragiles (apt bionic EOL, téléchargements) ; une release fait
+# ensuite un simple `docker run`. Schéma repris du build-bionic-image de POM1.
+#
+# À lancer manuellement (Actions → Build bionic builder image → Run workflow)
+# après modification du Dockerfile, puis épingler dans release.yml le digest
+# imprimé. Se relance aussi tout seul quand le Dockerfile ou ce workflow
+# change sur main.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'packaging/linux/Dockerfile.bionic'
+      - '.github/workflows/build-bionic-image.yml'
+
+permissions:
+  contents: read
+  packages: write        # pousser l'image sur GHCR
+
+jobs:
+  build-image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Build + push the pinned builder image
+        run: |
+          set -euxo pipefail
+          # Owner en minuscules — les dépôts GHCR l'exigent.
+          OWNER="$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
+          IMAGE="ghcr.io/${OWNER}/neost-bionic-builder"
+          DATETAG="$(date +%Y%m%d)-${GITHUB_SHA::7}"
+          # Contexte = packaging/linux/ (minuscule) : le Dockerfile ne COPY rien
+          # du dépôt.
+          docker build -f packaging/linux/Dockerfile.bionic \
+            -t "${IMAGE}:bionic" -t "${IMAGE}:${DATETAG}" packaging/linux
+          docker push "${IMAGE}:bionic"
+          docker push "${IMAGE}:${DATETAG}"
+
+      - name: Report the pushed digest (pin THIS in release.yml)
+        run: |
+          OWNER="$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
+          IMAGE="ghcr.io/${OWNER}/neost-bionic-builder"
+          echo "Pushed:"
+          docker inspect --format='{{range .RepoTags}}  tag:    {{.}}{{"\n"}}{{end}}' "${IMAGE}:bionic"
+          docker inspect --format='{{range .RepoDigests}}  digest: {{.}}{{"\n"}}{{end}}' "${IMAGE}:bionic"
+          echo "À épingler : BUILDER_IMAGE du job linux-bionic dans release.yml."
