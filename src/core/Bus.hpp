@@ -176,6 +176,13 @@ public:
     uint8_t ioAccessWidth() const { return ioAccessWidth_; }
 
     // Composants branchés sur le bus (injectés par main.cpp, pas de propriété).
+    // Broche /RESET du 68000 (instruction RESET, $4E70) : réinitialise les PÉRIPHÉRIQUES
+    // sans toucher au CPU ni à l'ordonnanceur — port de customreset() d'Hatari
+    // (cpu/hatari-glue.c:54). Un loader de jeu/démo s'en sert pour faire taire la machine
+    // héritée du TOS ; sans elle, le YM continuait de jouer, les timers MFP du TOS
+    // tiraient des IRQ dans le code du jeu, et le moteur disquette restait en rotation.
+    void peripheralReset();
+
     Shifter* shifter = nullptr;
     YM2149*  psg     = nullptr;
     Glue*    glue    = nullptr;

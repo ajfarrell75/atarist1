@@ -60,6 +60,15 @@ public:
     // registres couleur survit au reset, seul TOS la reprogramme). Appelé par
     // Machine::reset() (branché par l'orchestrateur).
     void reset();
+    // Broche /RESET du 68000 (instruction RESET) : port de Video_Reset_Glue
+    // (video.c:904) — SEULEMENT la fréquence et la résolution, PAS l'adresse écran ni
+    // la palette (Video_Reset, lui, remet videoBase à 0 ; customreset() n'appelle que
+    // Video_Reset_Glue). `mono` vient du bit 7 du GPIP (moniteur branché).
+    void resetGlue(bool mono) {
+        // La FRÉQUENCE ($FF820A) est remise par une vraie écriture bus côté
+        // Bus::peripheralReset (pour que la Glue la date) ; ici seule la RÉSOLUTION.
+        mode = mono ? Mode::High : Mode::Low;       // ST_HIGH_RES / ST_LOW_RES
+    }
 
     // Auto-test DÉTERMINISTE de la machine Glue (chemin STF) : injecte des écritures
     // freq/res synthétiques à des cycles EXACTS et vérifie l'état d'affichage résultant
