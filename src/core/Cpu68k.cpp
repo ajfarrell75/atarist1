@@ -679,17 +679,21 @@ int Cpu68k::run(int cycles) {
             const int64_t nd = g_sched ? g_sched->peekNextDue() : -1;
             const int64_t jumpTo = (nd > busNow && nd < targetBus) ? nd : targetBus;
             g_moira->setClock(cpuClockForBus(jumpTo));
-            // ⚠ CHANTIER OUVERT (bug hunt passe 2) — NE PAS remonter le rebase ci-dessous
-            // AVANT ce syncTo sans recalibrer les datations vidéo. Pendant le dispatch,
-            // cyclesRunInQuantum() vaut encore (jumpTo − quantumStart), donc les callbacks
-            // lisent Machine::liveNow() = jumpTo + δ : le temps écoulé est compté DEUX
-            // FOIS. Mesuré sur un boot EmuTOS nu : 1208 dispatches HBL sur 15780 (7,7 %),
-            // δ jusqu'à 112 cycles ; Mfp::updateIrq rate alors la fenêtre irqTime_+4 et
-            // arme MFP_IRQ trop tard (retard d'IRQ Timer B visible seulement quand le CPU
-            // dort en STOP). MAIS déplacer les deux lignes ici casse l'étalon ORACLE
-            // `nocooper` (10828 px) : les datations empiriques −6/+2/−25 ont été calibrées
-            // AVEC ce double comptage et l'absorbent. Le corriger exige donc de reprendre
-            // la calibration contre l'oracle Hatari, par paire (cf. docs/CYCLE_ACCURACY.md).
+            // REBASE **AVANT** le dispatch — l'ordre compte. syncTo() exécute les
+            // callbacks, et ceux-ci lisent l'heure via Machine::liveNow() = sched.now() +
+            // cpu.cyclesRunInQuantum(). Rebaser après laissait cyclesRunInQuantum() valoir
+            // encore (jumpTo − quantumStart) pendant tout le dispatch : les callbacks
+            // voyaient liveNow() = jumpTo + δ, le temps écoulé compté DEUX FOIS. Mesuré
+            // sur un boot EmuTOS nu : 1208 dispatches HBL sur 15780 (7,7 %), δ jusqu'à
+            // 112 cycles ; ramenés à 0 par ce rebase (repro : NEOST_HBL_DIAG=1, comparer
+            // « sched= » et « live= » — ils doivent être ÉGAUX par construction, le CPU
+            // étant garé en STOP au cycle dispatché). Ce que ça corrigeait concrètement :
+            // Mfp::updateIrq comparait cet instant gonflé à irqTime_+4, ratait la fenêtre
+            // et armait MFP_IRQ trop tard — un retard d'IRQ Timer B (rasters) qui
+            // n'apparaissait QUE lorsque le CPU dormait en STOP, donc invisible des
+            // étalons qui bouclent en polling.
+            quantumStartBus_   = jumpTo;
+            quantumStartClock_ = static_cast<int64_t>(g_moira->getClock());
             if (g_sched) g_sched->syncTo(jumpTo);    // dispatche l'event au saut (peut lever l'IPL)
             // REBASE du quantum : syncTo vient d'avancer sched.now() jusqu'à jumpTo,
             // or `ran` (retour de run) et cyclesRunInQuantum() mesuraient encore depuis
@@ -701,8 +705,7 @@ int Cpu68k::run(int cycles) {
             // bus — impossible sur le vrai matériel (même horloge) ; quand δ ≡ 2 (mod 4)
             // le calibrateur beam-sync d'Enchanted Land déverrouillait (lock 47 % vs 100 %
             // Hatari). Après rebase : liveNow == horloge CPU, ran n'inclut plus le saut.
-            quantumStartBus_   = jumpTo;
-            quantumStartClock_ = static_cast<int64_t>(g_moira->getClock());
+            // (le rebase lui-même est fait AVANT le syncTo ci-dessus, cf. son commentaire)
         }
     }
     return static_cast<int>(busOfClock(g_moira->getClock()) - quantumStartBus_);
