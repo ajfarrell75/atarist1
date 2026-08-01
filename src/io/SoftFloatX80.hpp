@@ -55,6 +55,19 @@ inline f80      pack(int sign, int32_t exp, uint64_t sig) {
 inline bool isNaN(f80 a) { return (a.high & 0x7FFF) == 0x7FFF && (a.low << 1) != 0; }
 inline bool isSNaN(f80 a){ return isNaN(a) && !(a.low & 0x4000000000000000ull); }
 inline f80  defaultNaN() { return f80{ 0x7FFF, 0xFFFFFFFFFFFFFFFFull }; }     // QNaN 68881
+// Encodage INVALIDE (« unnormal ») : exposant ni 0 ni $7FFF alors que le bit entier
+// explicite du significande est à 0. Le 68881 refuse ces motifs — Hatari les garde en
+// tête de CHAQUE opération (floatx80_invalid_encoding, softfloat.c:1862, 1912, 2475,
+// 2500, 2527, 2645, 2806, 3097) et rend un NaN par défaut avec OPERR.
+// ⚠ Sans cette garde, sqrt_ GELAIT l'émulateur : estimateSqrt32 recevait une mantisse
+// dont le bit 63 est nul, l'estimation initiale partait à côté, et la boucle de
+// correction décrémentait le significande UN PAR UN — jusqu'à 1,7 MILLIARD d'itérations
+// mesurées, avec un pire cas théorique de 2^63. Atteignable depuis le code invité :
+// FMOVE.X <ea>,FP0 accepte 12 octets arbitraires, puis FSQRT.
+inline bool invalidEncoding(f80 a) {
+    const int32_t e = a.high & 0x7FFF;
+    return e != 0 && e != 0x7FFF && !(a.low & 0x8000000000000000ull);
+}
 constexpr uint64_t INF_LOW = 0x8000000000000000ull;   // MSB du SIGNIFICANDE
 // Significande canonique d'un infini GÉNÉRÉ par l'arithmétique 68881 : bit entier
 // explicite j = 0, fraction = 0 (≙ floatx80_default_infinity_low, softfloat.h:348).
@@ -326,10 +339,12 @@ aBigger:
     return normalizeRoundAndPack(st.roundingPrecision, zSign, zExp, zSig0, zSig1, st);
 }
 inline f80 add(f80 a, f80 b, Status& st) {
+    if (invalidEncoding(a) || invalidEncoding(b)) { raise(st, flag_invalid); return defaultNaN(); }
     int aS = signOf(a), bS = signOf(b);
     return (aS == bS) ? addSigs(a, b, aS, st) : subSigs(a, b, aS, st);
 }
 inline f80 sub(f80 a, f80 b, Status& st) {
+    if (invalidEncoding(a) || invalidEncoding(b)) { raise(st, flag_invalid); return defaultNaN(); }
     int aS = signOf(a), bS = signOf(b);
     return (aS == bS) ? subSigs(a, b, aS, st) : addSigs(a, b, aS, st);
 }
@@ -387,6 +402,7 @@ inline f80 roundSigAndPack(int prec, int sign, int32_t zExp, uint64_t zSig0, uin
 }
 
 inline f80 mul(f80 a, f80 b, Status& st) {
+    if (invalidEncoding(a) || invalidEncoding(b)) { raise(st, flag_invalid); return defaultNaN(); }
     int aSign = signOf(a), bSign = signOf(b), zSign = aSign ^ bSign;
     int32_t aExp = expOf(a), bExp = expOf(b), zExp; uint64_t aSig = fracOf(a), bSig = fracOf(b), zSig0, zSig1;
     if (aExp == 0x7FFF) {
@@ -408,6 +424,7 @@ inline f80 mul(f80 a, f80 b, Status& st) {
 }
 
 inline f80 div(f80 a, f80 b, Status& st) {
+    if (invalidEncoding(a) || invalidEncoding(b)) { raise(st, flag_invalid); return defaultNaN(); }
     int aSign = signOf(a), bSign = signOf(b), zSign = aSign ^ bSign;
     int32_t aExp = expOf(a), bExp = expOf(b), zExp; uint64_t aSig = fracOf(a), bSig = fracOf(b), zSig0, zSig1;
     uint64_t rem0, rem1, rem2, term0, term1, term2;
@@ -506,6 +523,7 @@ inline f80 sgldiv(f80 a, f80 b, Status& st) {
 }
 
 inline f80 sqrt_(f80 a, Status& st) {
+    if (invalidEncoding(a)) { raise(st, flag_invalid); return defaultNaN(); }
     int aSign = signOf(a); int32_t aExp = expOf(a), zExp;
     uint64_t aSig0 = fracOf(a), aSig1, zSig0, zSig1, doubleZSig0;
     uint64_t rem0, rem1, rem2, rem3, term0, term1, term2, term3;
@@ -542,6 +560,7 @@ inline f80 sqrt_(f80 a, Status& st) {
 // Reste IEEE (FREM, mod=false) ou modulo tronqué (FMOD, mod=true). `q` reçoit les 7
 // bits de poids faible du quotient + le signe (octet quotient FPSR), `s` son signe.
 inline f80 rem(f80 a, f80 b, uint64_t& q, int& s, bool mod, Status& st) {
+    if (invalidEncoding(a) || invalidEncoding(b)) { raise(st, flag_invalid); return defaultNaN(); }
     int aSign = signOf(a), bSign = signOf(b), zSign;
     int32_t aExp = expOf(a), bExp = expOf(b), expDiff;
     uint64_t aSig0 = fracOf(a), aSig1, bSig = fracOf(b), qTemp, term0, term1, altA0, altA1;
