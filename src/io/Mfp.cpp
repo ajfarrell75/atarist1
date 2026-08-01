@@ -27,20 +27,35 @@ namespace { const int g_mfpExact = []{ const char* s = std::getenv("NEOST_MFP_EX
 // timers à zéro. PRÉSERVÉ : colorMonitor_/hasDmaSound_/loopback_ (propriétés posées
 // AVANT le reset) et les lignes d'ENTRÉE des autres puces (FDC/ACIA/RS232), reforcées
 // à la lecture du GPIP et resynchronisées par leurs puces respectives.
-void Mfp::reset() {
+void Mfp::resetChip() {
     gpip = 0xFF; aer = 0; ddr = 0;        // GPIP au repos (entrées non assertées), AER/DDR neutres
     iera = ierb = 0;                      // enable
     ipra = iprb = 0;                      // pending
     imra = imrb = 0;                      // mask
     isra = isrb = 0;                      // in-service
     vr   = 0;                             // registre vecteur (mode auto, base 0)
-    // Timers : mode + recharge + compteurs vivants + backing store des données/contrôle
-    // (TACR $FFFA19, TBCR $FFFA1B, TCDCR $FFFA1D, TADR/TBDR/TCDR/TDDR…) tous remis à 0.
+    // Timers : mode + recharge + compteurs vivants + backing store des registres de
+    // contrôle/données — ET EUX SEULS (MFP_Reset ne touche PAS SCR/UCR/RSR/TSR/UDR).
     tbcr_ = tbReload_ = tbCounter_ = 0;
     taReload_ = taCounter_ = 0;
     tcCounter_ = tdCounter_ = 0;
-    tai_ = false;                         // ligne d'entrée Timer A (XSINT) au repos
-    for (uint8_t& b : timer_) b = 0;
+    tai_ = false;                         // TAI/TBI = 0 (entrées event-count)
+    timer_[0x19] = timer_[0x1B] = timer_[0x1D] = 0;                 // TACR / TBCR / TCDCR
+    timer_[0x1F] = timer_[0x21] = timer_[0x23] = timer_[0x25] = 0;  // TADR / TBDR / TCDR / TDDR
+    // Signal IRQ daté : tout retombe (Current_Interrupt/IRQ/IRQ_Time/Pending_Time).
+    irq_ = false; irqTime_ = 0; currentInt_ = -1;
+    for (int64_t& t : pendingTime_) t = kNever;
+    pendingTimeMin_ = kNever;
+    // ⚠ AUCUNE annulation d'échéance ici : customreset() n'appelle PAS CycInt_Reset
+    // (hatari-glue.c:54). Une échéance de timer déjà datée SURVIT au /RESET et se
+    // périme d'elle-même quand elle arrive (onTimerExpire voit ctrl=0 → ni IRQ ni
+    // replanification, ≙ MFP_InterruptHandler_TimerA + MFP_StartTimer_AB(ctrl=0)).
+    // Les annuler décale l'étalon nocooper d'une trame entière (mesuré).
+}
+
+void Mfp::reset() {
+    resetChip();                          // registres + timers (MFP_Reset strict)
+    for (uint8_t& b : timer_) b = 0;      // + USART (SCR/UCR/RSR/TSR/UDR) au reset MACHINE
     xsint_ = false;                       // ligne XSINT son DMA (re-synchronisée ensuite par DmaSound::reset)
     // CTS/DCD REVIENNENT à leur valeur de repos ACTIVE : ce sont des entrées, pas de
     // l'état machine. Chez Hatari elles sont recalculées à CHAQUE lecture GPIP
@@ -49,11 +64,7 @@ void Mfp::reset() {
     ctsLine_ = dcdLine_ = true;
     rxByte_ = 0; rxFull_ = false; rxOverrun_ = false;   // USART : tampon vidé (pas de RXFULL fantôme)
     serialBaud_ = 0; serialUcr_ = 0;      // suivi débit série remis (sinon serialBaud() rapporte l'avant-reset)
-    // Signal IRQ daté : tout retombe (port MFP_Reset — IRQ/IRQ_Time/Pending_Time).
-    irq_ = false; irqTime_ = 0; currentInt_ = -1;
-    for (int64_t& t : pendingTime_) t = kNever;
-    pendingTimeMin_ = kNever;
-    if (sched_) {                         // annule toute échéance de timer en attente
+    if (sched_) {   // reset MACHINE : Hatari appelle CycInt_Reset() (reset.c:76) avant MFP_Reset_All
         sched_->cancel(Scheduler::TIMER_A);
         sched_->cancel(Scheduler::TIMER_B);
         sched_->cancel(Scheduler::TIMER_B_DELAY);
@@ -220,6 +231,24 @@ void Mfp::updateSerialConfig() {
     if (baud == serialBaud_ && ucr == serialUcr_) return;   // rien de neuf → silence
     serialBaud_ = baud;
     serialUcr_  = ucr;
+    // ⚠ ZONE CHAUDE — trace PLAFONNÉE. Le Timer D cadence l'USART, mais les jeux le
+    // reprogramment en permanence pour tout autre chose (interruptions musique/raster) :
+    // chaque écriture recalculait un « nouveau débit » et écrivait sur stderr. New Zealand
+    // Story inondait ainsi le terminal de « USART : 3 bauds » à la trame, et l'écriture
+    // synchrone sur un terminal attaché coûtait des trames (underruns audio observés).
+    // Hatari ne journalise cela qu'en LOG_TRACE (rs232.c). On garde les premières lignes —
+    // celles du boot TOS sont informatives — puis on se tait. NEOST_MFP_TRACE=1 rétablit tout.
+    static const int  kMaxLogs = 8;
+    static int        nLogs    = 0;
+    static const bool traceAll = std::getenv("NEOST_MFP_TRACE") != nullptr;
+    if (!traceAll && nLogs > kMaxLogs) return;
+    if (!traceAll && nLogs == kMaxLogs) {
+        ++nLogs;
+        std::fprintf(stderr, "[mfp] USART : reconfigurations suivantes silencieuses "
+                             "(Timer D détourné par le programme ; NEOST_MFP_TRACE=1 pour tout voir)\n");
+        return;
+    }
+    ++nLogs;
     static const char* kStops[4] = {"sync", "1", "1.5", "2"};   // UCR bits 3-4
     std::fprintf(stderr, "[mfp] USART : %d bauds, %d%c%s (UCR=$%02X, TDDR=%d, prescaler /%d)\n",
                  baud, 8 - ((ucr >> 5) & 3),                    // taille du mot (bits 5-6)
@@ -398,6 +427,10 @@ void Mfp::scheduleTimerAt(int timer, int64_t anchor, bool fromCounter) {
 
 void Mfp::onTimerExpire(int timer) {
     static constexpr int kSrc[4] = {SRC_TIMERA, SRC_TIMERB, SRC_TIMERC, SRC_TIMERD};
+    // Garde « timer arrêté » (Hatari MFP_InterruptHandler_TimerA mfp.c:1741 :
+    // « if ( ( pMFP->TACR & 0xf ) != 0 ) » avant MFP_InputOnChannel, puis
+    // MFP_StartTimer_* avec ctrl=0 → TimerClockCycles=0 → pas de replanification).
+    if ((timerCtrl(timer) & 0x0F) == 0) return;
     // L'IRQ est ANTIDATÉE de l'échéance réelle du timer (et non de l'horloge live,
     // en retard de la latence de dispatch) — port d'Interrupt_Delayed_Cycles
     // (mfp.c:1741+) : le délai de visibilité de 4 cycles court depuis l'expiration
