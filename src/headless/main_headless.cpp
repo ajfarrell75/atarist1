@@ -71,6 +71,7 @@ void usage() {
         "  --spec512-selftest auto-test du re-rendu Spectrum 512 (palette/pixel) puis quitte\n"
         "  --bus-selftest    auto-test du modèle de bus error (whitelist) puis quitte\n"
         "  --mfp-selftest    auto-test du MFP (GPIP/fronts/Timer B) puis quitte\n"
+        "  --msa-selftest    auto-test du ré-encodage .msa (aller-retour) puis quitte\n"
         "  --serial-dump F   écrit les octets série RS-232 bruts dans F (verdicts NEOST-TEST)\n"
         "  --from-cfg F      rejoue la config GUI (neost.cfg) ; les options suivantes surchargent\n"
         "  --dump-at N A L F dump brut de L octets de RAM dès $A (hex) après la trame N → F\n"
@@ -191,6 +192,7 @@ int main(int argc, char** argv) {
     bool        spec512SelfTest = false; // auto-test déterministe du re-rendu Spectrum 512
     bool        busSelfTest  = false;  // auto-test déterministe du modèle de bus error
     bool        mfpSelfTest  = false;  // auto-test déterministe du MFP (GPIP/fronts/Timer B)
+    bool        msaSelfTest  = false;  // auto-test déterministe du ré-encodage .msa
     int         shotEvery   = 0;      // --shot-every N : dump une capture toutes les N trames
     std::string shotPrefix;           // --shot-every PREFIX : préfixe des captures périodiques
     int         shotFrom    = 0;      // --shot-from N : ne capture qu'à partir de la trame N
@@ -276,6 +278,7 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(a, "--spec512-selftest")) spec512SelfTest = true;
         else if (!std::strcmp(a, "--bus-selftest")) busSelfTest = true;
         else if (!std::strcmp(a, "--mfp-selftest")) mfpSelfTest = true;
+        else if (!std::strcmp(a, "--msa-selftest")) msaSelfTest = true;
         else if (!std::strcmp(a, "--shot-every"))  { shotEvery = std::atoi(next(a)); shotPrefix = next(a); }
         else if (!std::strcmp(a, "--shot-from"))   shotFrom = std::atoi(next(a));
         else if (!std::strcmp(a, "--keys-at"))     { const int f = std::atoi(next(a)); keysAtList.emplace_back(f, next(a)); }
@@ -363,6 +366,7 @@ int main(int argc, char** argv) {
     if (spec512SelfTest) return machine.shifter.spec512SelfTest() ? 0 : 1;
     if (busSelfTest) return machine.bus.busSelfTest() ? 0 : 1;
     if (mfpSelfTest) return machine.mfp.mfpSelfTest() ? 0 : 1;
+    if (msaSelfTest) return machine.fdc.msaSelfTest() ? 0 : 1;
     std::fprintf(stderr, "[headless] cœur CPU : %s | machine : %s | RAM : %s\n",
                  Cpu68k::coreName(machine.cpu.core()), machineName(machType), ramLabel(ramBytes));
     if (!machine.loadTos(romPath)) {

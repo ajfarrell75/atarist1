@@ -135,18 +135,28 @@ Machines à états type I-IV, bits de statut par type, timings (spin-up, head-lo
 `NextSectorID`, FIFO 16 o, densité `$FF860E`, fuzzy/timing STX, persistance `.wd1772`
 byte-compatible : **conformes** (vérifiés ligne à ligne).
 
-- **[D0 — moyenne]** `.MSA`/`.DIM` montées en **LECTURE SEULE**, et le bit **WPRT est
-  présenté au programme émulé** (`Fdc.cpp:472` : `writeProtect = !raw || !writable`).
-  Hatari ne dérive WPRT que du réglage et de `stat()` — **jamais du format d'image**
-  (`floppy.c:205-225` `Floppy_IsWriteProtected`) : les écritures vont dans le tampon RAM
-  et sont ré-encodées à l'éjection (`MSA_WriteDisk`, `DIM_WriteDisk`). Chez NeoST le
-  drapeau ne sert pas qu'à bloquer la recopie hôte : il pilote le statut du WD1772
-  (`Fdc.cpp:1677`, `:1896`, `:2106`). *Impact : sur toute image `.msa`/`.dim`, les
-  sauvegardes en jeu, tables de high-scores, écritures depuis le bureau TOS et les
-  protections qui écrivent-puis-relisent échouent avec « disque protégé » — alors que la
-  même disquette en `.st` fonctionne.* Le portage manquant est `MSA_WriteDisk`/
-  `DIM_WriteDisk` dans `writeBack` (le `.dim` est trivial : en-tête 32 o + secteurs
-  bruts) ; `dk.raw` doit alors cesser de forcer `writeProtect`.
+- **[D0 — moyenne] ✅ CORRIGÉ (2026-08-01)** — `.MSA`/`.DIM` étaient montées en **LECTURE
+  SEULE**, et le bit **WPRT était présenté au programme émulé** (`writeProtect = !raw ||
+  !writable`). Hatari ne dérive WPRT que du réglage et de `stat()` — **jamais du format
+  d'image** (`floppy.c:205-225` `Floppy_IsWriteProtected`) : les écritures vont dans le
+  tampon RAM et sont ré-encodées (`MSA_WriteDisk`, `DIM_WriteDisk`). Chez NeoST le
+  drapeau ne bloquait pas que la recopie hôte, il pilotait le statut du WD1772
+  (`updateWriteSectors`, `updateWriteTrack`, statut type I) : sur toute `.msa`/`.dim`,
+  sauvegardes en jeu, high-scores, écritures depuis le bureau TOS et protections
+  « écrit puis relit » échouaient « disque protégé », alors que la même disquette en
+  `.st` fonctionnait.
+  **Portage** : `encodeMsa` (port de `MSA_WriteDisk`/`MSA_FindRunOfBytes`, msa.c:275-420)
+  et dispatch de `writeBack` par `FloppyDisk::imgFormat` — écriture partielle in situ pour
+  le `.ST`, idem décalée de l'en-tête 32 o pour le `.DIM` (en-tête préservé, comme
+  dim.c:134-149), ré-encodage complet et **atomique** (tmp + rename) pour le `.MSA`.
+  `writeProtect` ne vient plus que de `stat()`. `!raw` ne subsiste que là où l'on ne SAIT
+  PAS ré-encoder (STX, ou en-tête `.msa`/`.dim` reconnu mais indécodable) — y écrire
+  détruirait le fichier. NeoST reste en **write-through** là où Hatari n'écrit qu'à
+  l'éjection (une coupure y perd la sauvegarde).
+  Couverture : `neost-headless --msa-selftest` (étalon `msa_selftest`, palier *fast*) —
+  44 cas, aller-retour byte-exact sur 6 géométries × 7 motifs (dont `$E5` isolé à
+  échapper, runs longs, incompressible qui force la piste brute) **plus** deux cas de bout
+  en bout montage → écriture → remontage sur fichier réel `.msa` et `.dim`.
   ⚠ Cette ligne affirmait auparavant que `.MSA`/`.DIM` étaient « conformes (vérifiés
   ligne à ligne) » — c'était faux, et cela a masqué l'écart (audit du 2026-08-01).
 

@@ -64,6 +64,26 @@ condition écrite dans ce même fichier (« dépôt à garder privé ») qui **n
 Basculé sur `ON` (EmuTOS + `diskA.st`). ⚠ Le dépôt lui-même suit toujours ce contenu :
 cf. `TODO.md`.
 
+**`.MSA`/`.DIM` inscriptibles — port de `MSA_WriteDisk`/`DIM_WriteDisk`.** Ces images
+étaient montées en lecture seule, et le drapeau ne bloquait pas que la recopie hôte : il
+pilotait le **bit WPRT du WD1772** vu par le programme. Sauvegardes en jeu, high-scores,
+écritures depuis le bureau TOS et protections « écrit puis relit » échouaient donc
+« disque protégé » sur toute `.msa`/`.dim`, alors que la même disquette en `.st`
+fonctionnait. Hatari, lui, ne dérive WPRT que du réglage et de `stat()` — jamais du
+format (`floppy.c:205-225`). `writeProtect` ne vient plus que de `stat()` ; `writeBack`
+dispatche désormais sur le conteneur (`FloppyDisk::imgFormat`) : écriture partielle in
+situ pour le `.ST`, idem décalée de 32 o pour le `.DIM` (en-tête préservé, comme
+`dim.c:134-149`), et ré-encodage RLE complet **atomique** (tmp + rename) pour le `.MSA` —
+reconstruire tout le fichier, une coupure en cours laisserait sinon une disquette
+illisible. Le refus d'écrire ne subsiste que là où l'on ne SAIT PAS ré-encoder (STX, ou
+en-tête `.msa`/`.dim` reconnu mais indécodable) : y écrire détruirait le fichier.
+Nouvel auto-test `neost-headless --msa-selftest` (étalon `msa_selftest`, palier *fast*) :
+44 cas — aller-retour byte-exact sur 6 géométries × 7 motifs (dont `$E5` isolé, qui doit
+être échappé même seul, et un motif incompressible qui force la branche « piste stockée
+brute »), plus deux cas de bout en bout montage → écriture → remontage sur fichiers `.msa`
+et `.dim` réels. Vérifié aussi qu'aucun disque d'étalon suivi par git n'est modifié par
+un run complet, et que les `.msa` tronquées restent en lecture seule.
+
 **Documentation.** `HATARI_DIVERGENCES.md` affirmait que `.MSA`/`.DIM` étaient « conformes
 (vérifiés ligne à ligne) » : c'est faux et cela masquait un écart réel (montage en lecture
 seule + bit WPRT présenté au programme, là où Hatari ne dérive WPRT que de `stat()`) —

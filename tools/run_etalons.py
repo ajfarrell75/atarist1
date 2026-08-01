@@ -163,7 +163,8 @@ def run_one(entry: dict, args) -> bool:
     selftest_flag = {"glue_selftest": "--glue-selftest",
                      "spec512_selftest": "--spec512-selftest",
                      "bus_selftest": "--bus-selftest",
-                     "mfp_selftest": "--mfp-selftest"}.get(entry.get("type"))
+                     "mfp_selftest": "--mfp-selftest",
+                     "msa_selftest": "--msa-selftest"}.get(entry.get("type"))
     if selftest_flag:
         rc = run_selftest(selftest_flag, entry.get("cpu", "moira"))
         if rc != 0:

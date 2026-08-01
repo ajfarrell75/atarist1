@@ -70,6 +70,11 @@ public:
     bool loadImage(const std::string& path, int drive = 0);
     void eject(int drive = 0);
 
+    // Auto-test déterministe du couple encodeMsa/decodeMsa (aucun disque requis) :
+    // le ré-encodage .MSA réécrit le fichier de l'utilisateur, un aller-retour non
+    // byte-exact détruirait sa disquette. Appelé par neost-headless --msa-selftest.
+    bool msaSelfTest();
+
     // Monte une image de disque dur ACSI (dump de secteurs brut) sur la cible
     // `target` (0-7, généralement 0). Le TOS/EmuTOS détecte le périphérique au boot,
     // lit la table de partitions et monte les partitions FAT (C:, D:…). Cf. io/Acsi.hpp.
@@ -195,7 +200,16 @@ private:
         int  density = 1;                       // densité du média : 1=DD, 2=HD, 4=ED (cf. Hatari FloppyDensity)
         int  headTrack = 0;                     // position PHYSIQUE de la tête (≠ registre TR)
         bool writeProtect = false;              // protégé en écriture
-        bool raw = true;                        // .st brut (writeBack possible) vs .msa
+        // `raw` = le fichier hôte peut être RÉ-ÉCRIT depuis `image`. Vrai pour les trois
+        // conteneurs du modèle .ST (brut, .msa, .dim, cf. imgFormat) ; faux seulement pour
+        // une image qu'on sait ne pas savoir ré-encoder (STX, ou en-tête .msa/.dim reconnu
+        // mais indécodable) — là, réécrire détruirait le fichier de l'utilisateur.
+        bool raw = true;
+        // Conteneur du fichier hôte, qui décide COMMENT writeBack le met à jour :
+        // brut = écriture partielle à l'offset ; .dim = idem décalé de l'en-tête 32 o ;
+        // .msa = ré-encodage RLE du fichier ENTIER (port de MSA_WriteDisk).
+        enum ImgFormat { FMT_ST = 0, FMT_MSA = 1, FMT_DIM = 2 };
+        int  imgFormat = FMT_ST;
 
         // Image STX (Pasti) : si présente, le FDC dispatche vers le chemin _STX
         // (champs ID réels, statut par secteur, fuzzy/timing) au lieu du modèle .ST.
