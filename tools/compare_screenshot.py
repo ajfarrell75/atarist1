@@ -20,6 +20,10 @@ from pathlib import Path
 # Zones utiles du framebuffer NeoST (overscan inclus), cf. Shifter.hpp.
 ACTIVE = (48, 29, 320, 200)   # x, y, w, h
 BUFFER = (0, 0, 416, 276)
+# Rectangle de la LED disquette incrustée par Hatari dans ses captures AVI (coin haut
+# droit, #E00000). Elle n'existe pas côté NeoST : toute comparaison couvrant le buffer
+# entier accuserait 50 px d'écart constant qui ne sont PAS une divergence de rendu.
+HATARI_LED = (403, 3, 10, 5)   # x, y, w, h
 
 
 def _read_ppm(path: Path) -> tuple[int, int, bytes]:
@@ -111,7 +115,7 @@ def _align_buffer(w: int, h: int, px: bytes) -> tuple[int, int, bytes]:
 def _region(crop: str) -> tuple[int, int, int, int]:
     if crop == "active":
         return ACTIVE
-    if crop == "buffer":
+    if crop in ("buffer", "buffer_noled"):
         return BUFFER
     if crop == "full":
         return (0, 0, 0, 0)  # spécial : pas de recadrage relatif
@@ -142,11 +146,21 @@ def compare(a_path: Path, b_path: Path, crop: str = "active",
 
     a = _crop(apx, aw, ah, x + ax, y + ay, cw, ch)
     b = _crop(bpx, bw, bh, x + bx, y + by, cw, ch)
+    # crop « buffer_noled » = tout le framebuffer SAUF la LED disquette d'Hatari. C'est
+    # le seul crop qui couvre les BORDURES tout en restant comparable à un oracle : une
+    # mutation réelle du rendu de bordure (31 616 px corrompus) passait inaperçue de bout
+    # en bout de la suite tant que tout le monde comparait en « active ».
+    skip = None
+    if crop == "buffer_noled":
+        lx, ly, lw, lh = HATARI_LED
+        skip = (lx - x, ly - y, lw, lh)
     diff = 0
     info = {"rows": [], "first": None, "w": cw, "h": ch}   # diagnostic par ligne
     for row in range(ch):
         rc = 0
         for col in range(cw):
+            if skip and skip[1] <= row < skip[1] + skip[3] and skip[0] <= col < skip[0] + skip[2]:
+                continue
             i = (row * cw + col) * 3
             if a[i : i + 3] != b[i : i + 3]:
                 diff += 1
@@ -182,7 +196,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="Diff pixel entre deux captures ST")
     ap.add_argument("a")
     ap.add_argument("b")
-    ap.add_argument("--crop", choices=("active", "buffer", "full"), default="active")
+    ap.add_argument("--crop", choices=("active", "buffer", "buffer_noled", "full"), default="active")
     ap.add_argument("--max", type=int, default=None, help="seuil max (exit 1 si dépassé)")
     ap.add_argument("--report", action="store_true",
                     help="diagnostic par scanline (localise un décalage spec512)")

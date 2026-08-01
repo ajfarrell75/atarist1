@@ -217,6 +217,16 @@ def run_one(entry: dict, args) -> bool:
         # la même chose qu'une donnée d'entrée absente, et le compter comme une
         # réussite transformait l'étalon en no-op parfaitement vert. On le RECENSE.
         SKIPPED.append(eid)
+        # `optional` n'excuse que l'absence de DONNÉE D'ENTRÉE (disque non rapatriable).
+        # Si le disque est là et que seule la référence manque, l'étalon prétend
+        # surveiller quelque chose qu'il ne surveille pas : c'est un ÉCHEC. Sans cette
+        # distinction, cuddly_demos — dont le disque EST suivi par git — restait un
+        # no-op vert permanent, et la mutation « mauvais disque + 5 trames » passait.
+        disk = entry.get("disk")
+        if entry.get("optional") and disk and (ROOT / disk).exists():
+            print(f"  ⚠ {eid}: disque présent mais référence absente — "
+                  f"« optional » ne couvre PAS ce cas")
+            return False
         return entry.get("optional", False)
     print(f"  référence : {ref.name} (ref_kind={kind})")
 
@@ -233,6 +243,27 @@ def _png_dims(path: Path):
     if d[:8] != b"\x89PNG\r\n\x1a\n":
         return None
     return struct.unpack(">II", d[16:24])
+
+
+def _ref_content(path: Path) -> tuple[int, float] | None:
+    """(nombre de couleurs plafonné à 9, part de la couleur MINORITAIRE) d'une référence.
+
+    La part minoritaire départage une image réellement porteuse d'information d'une
+    image quasi vide : un étalon de scroll est bichrome PAR CONSTRUCTION et valide
+    pourtant chaque pixel, tandis qu'un écran noir avec trois pixels parasites ne
+    valide rien. Renvoie None si l'image est illisible (ffmpeg absent, format
+    inconnu) — l'appelant traite alors le contrôle comme non concluant.
+    """
+    try:
+        sys.path.insert(0, str(Path(__file__).parent))
+        import compare_screenshot as cs
+        _w, _h, px = cs._load_image(path)
+    except Exception:
+        return None
+    from collections import Counter
+    c = Counter(px[i : i + 3] for i in range(0, len(px), 3))
+    total = sum(c.values()) or 1
+    return min(len(c), 9), (total - c.most_common(1)[0][1]) / total
 
 
 def verify_refs(entries: list[dict]) -> int:
@@ -267,6 +298,24 @@ def verify_refs(entries: list[dict]) -> int:
                 print(f"  ✗ {eid}: ref_kind=snapshot mais aucune réf ({ppm.name}/{png.name})"); bad += 1
         else:
             print(f"  ⚠ {eid}: ref_kind absent (ajouter oracle|snapshot)")
+
+        # GARDE-FOU DE VACUITÉ. Une référence UNIFORME (écran noir) valide zéro pixel
+        # tout en affichant « OK » : c'est arrivé deux fois sur cet étalon spec512, et
+        # le contrôle de provenance ne regardait que les dimensions. Une image de moins
+        # de 3 couleurs n'est pas une preuve — sauf pour les étalons dont c'est le
+        # signal voulu (trace_odd peint l'écran en vert/rouge selon le verdict,
+        # overscan_top n'a que 2 couleurs par construction) : "uniform_ok": true.
+        ref = png if png.exists() else (ppm if ppm.exists() else None)
+        if ref is not None and not e.get("uniform_ok"):
+            got = _ref_content(ref)
+            if got is None:
+                print(f"  ⚠ {eid}: vacuité non vérifiable ({ref.name} illisible — ffmpeg absent ?)")
+            else:
+                nc, minor = got
+                if nc <= 1 or minor < 0.005:
+                    print(f"  ✗ {eid}: référence {ref.name} QUASI UNIFORME "
+                          f"({nc} couleur(s), minoritaire {minor:.3%}) — "
+                          f"elle ne valide aucun pixel"); bad += 1
     print("\n" + ("RÉFS OK" if bad == 0 else f"{bad} réf(s) suspecte(s)"))
     return 0 if bad == 0 else 1
 
@@ -315,8 +364,15 @@ def main() -> int:
             return 2
     ok = True
     ran = 0
+    disabled = []
     for entry in entries:
         if want and entry["id"] not in want:
+            continue
+        # Étalon DÉSACTIVÉ : il ne valide rien et le dit. Mieux vaut l'assumer ainsi
+        # qu'un « optional » vert qui laisse croire à une couverture inexistante — la
+        # raison est obligatoire et s'affiche à chaque exécution.
+        if entry.get("disabled"):
+            disabled.append((entry["id"], entry["disabled"]))
             continue
         ran += 1
         if not run_one(entry, args):
@@ -324,6 +380,10 @@ def main() -> int:
     if ran == 0:
         print("\nAUCUN étalon exécuté — filtre trop restrictif ?")
         return 2
+    if disabled:
+        print(f"\n⛔ DÉSACTIVÉS ({len(disabled)}) — ne valident RIEN :")
+        for eid, why in disabled:
+            print(f"  · {eid} : {why}")
     if SKIPPED:
         print(f"\n⚠ NON COMPARÉS ({len(SKIPPED)}) : " + ", ".join(SKIPPED)
               + "\n  (capture faite, mais aucune référence — ces étalons ne valident RIEN)")
