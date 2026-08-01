@@ -148,7 +148,9 @@ def main() -> int:
             print(f"  {e['id']:16} {e['name']}  (attend: {', '.join(e.get('expect', []))})")
         return 0
 
-    want = set(args.only.split(",")) if args.only else None
+    # strip() : « --only "a, b" » traitait « b » (avec son espace) comme un ID inconnu
+    # et refusait de tourner, en DÉSIGNANT un identifiant pourtant valide.
+    want = {t.strip() for t in args.only.split(",") if t.strip()} if args.only else None
     # Un ID inconnu (faute de frappe, entrée renommée dans le manifeste) ne doit PAS
     # donner « TOUS OK » sur zéro test exécuté — c'est un vert parfaitement muet.
     if want:

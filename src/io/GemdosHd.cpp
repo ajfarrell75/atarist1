@@ -625,6 +625,58 @@ bool GemdosHd::addPathComponent(std::string& path, const std::string& origname, 
     return false;
 }
 
+
+// SÉCURITÉ — canonicalisation PHYSIQUE d'un chemin qui n'existe pas forcément (Fcreate
+// crée le fichier APRÈS). realpath() ne s'applique qu'à l'existant : on remonte donc au
+// plus long préfixe existant, on le canonicalise, puis on recolle le reste. Indispensable
+// face aux LIENS SYMBOLIQUES : la canonicalisation lexicale (makeAbsoluteName) les ignore,
+// si bien qu'un simple lien posé dans le dossier monté — cas courant, un raccourci vers
+// $HOME — rendait lisible ET inscriptible toute sa cible, hors du bac à sable.
+static std::string physicalCanon(const std::string& path) {
+    std::string head = path, tail;
+    for (;;) {
+        char* rp = ::realpath(head.c_str(), nullptr);
+        if (rp) { std::string res(rp); std::free(rp);
+                  if (!tail.empty()) { if (res.empty() || res.back() != PATHSEP) res.push_back(PATHSEP);
+                                       res += tail; }
+                  return res; }
+        const std::size_t sep = head.rfind(PATHSEP);
+        if (sep == std::string::npos || sep == 0) return path;   // rien d'existant : repli
+        tail = tail.empty() ? head.substr(sep + 1)
+                            : head.substr(sep + 1) + std::string(1, PATHSEP) + tail;
+        head.resize(sep);
+    }
+}
+
+// SÉCURITÉ — garde-fou terminal, INDÉPENDANT du parsing : quel que soit le chemin demandé
+// par le programme émulé, le résultat doit rester sous le dossier monté. Appelé aux TROIS
+// sorties de createHostFileName — les deux retours anticipés recopient le reste du chemin
+// BRUT (« .. » compris) et sautaient donc l'ancien garde placé en fin de fonction.
+// Comparaison sur des chemins canonicalisés PHYSIQUEMENT (liens symboliques résolus) et
+// préfixe testé SÉPARATEUR INCLUS, sans quoi un dossier frère « …/gemdosEVIL » passerait
+// pour « …/gemdos ». En cas d'évasion on rabat sur la racine du lecteur — même issue que
+// le clamp « sep >= minlen » des « ..\ » — et on le journalise TOUJOURS : NeoST lance des
+// binaires inconnus, une tentative d'évasion est un signal de sécurité, pas une trace.
+void GemdosHd::clampToSandbox(const EmuDrive& d, const std::string& gemName, std::string& out) {
+    std::string root = physicalCanon(d.hdEmuDir);
+    addSlash(root);
+    // Deux étapes, dans CET ordre : makeAbsoluteName retire d'abord les « .. » (le
+    // préfixe existant peut être suivi d'un suffixe INEXISTANT que realpath ne peut pas
+    // traiter — « SUB/NOPE/../../../X » ressortait avec ses « .. » intacts et passait le
+    // test de préfixe alors que l'OS, lui, les résout hors du bac à sable), puis
+    // physicalCanon résout les liens symboliques.
+    std::string lex = out;
+    makeAbsoluteName(lex);
+    const std::string canon = physicalCanon(lex);
+    const bool isRoot = (canon.size() + 1 == root.size() && root.compare(0, canon.size(), canon) == 0);
+    if (isRoot || canon.compare(0, root.size(), root) == 0) { out = canon; return; }
+    const std::size_t sep = canon.rfind(PATHSEP);
+    const std::string base = (sep == std::string::npos) ? canon : canon.substr(sep + 1);
+    std::fprintf(stderr, "[gemdos] REFUS : '%s' sortait du lecteur (%s) — rabattu sur la racine\n",
+                 gemName.c_str(), canon.c_str());
+    out = root + base;
+}
+
 void GemdosHd::createHostFileName(int drive, const std::string& gemNameIn, std::string& out) {
     out.clear();
     EmuDrive& d = emudrives_[drive - 2];
@@ -664,6 +716,7 @@ void GemdosHd::createHostFileName(int drive, const std::string& gemNameIn, std::
             filename = s;
             if (!addPathComponent(out, dirname, true)) {
                 addRemainingPath(filename, out);
+                clampToSandbox(d, gemNameIn, out);   // le reste du chemin est recopié BRUT (« .. » compris)
                 return;
             }
             continue;
@@ -677,33 +730,11 @@ void GemdosHd::createHostFileName(int drive, const std::string& gemNameIn, std::
             out += filename;                       // (conversion charset off)
         } else if (!addPathComponent(out, filename, false)) {
             if (trace_) std::fprintf(stderr, "[gemdos] introuvable: %s\n", out.c_str());
+            clampToSandbox(d, gemNameIn, out);
             return;
         }
     }
-    // SÉCURITÉ — garde-fou terminal, indépendant du parsing ci-dessus. Quel que soit
-    // le chemin demandé par le programme émulé, le résultat DOIT rester sous le
-    // dossier monté : on résout les « .. » lexicalement puis on compare le préfixe
-    // SÉPARATEUR INCLUS (sans lui, un dossier frère « …/gemdosEVIL » passerait pour
-    // « …/gemdos »). En cas d'évasion on rabat sur la racine du lecteur — même issue
-    // que le clamp « sep >= minlen » des « ..\ » — et on le journalise TOUJOURS :
-    // NeoST lance des binaires inconnus (cracks, démos), une tentative d'évasion est
-    // un signal de sécurité, pas une trace de mise au point.
-    {
-        std::string root = d.hdEmuDir;
-        addSlash(root);
-        std::string canon = out;
-        makeAbsoluteName(canon);
-        const bool isRoot = (canon.size() + 1 == root.size() && root.compare(0, canon.size(), canon) == 0);
-        if (!isRoot && canon.compare(0, root.size(), root) != 0) {
-            const std::size_t sep = canon.rfind(PATHSEP);
-            const std::string base = (sep == std::string::npos) ? canon : canon.substr(sep + 1);
-            std::fprintf(stderr, "[gemdos] REFUS : '%s' sortait du lecteur (%s) — rabattu sur la racine\n",
-                         gemNameIn.c_str(), canon.c_str());
-            out = root + base;
-        } else {
-            out = canon;
-        }
-    }
+    clampToSandbox(d, gemNameIn, out);
     if (trace_) std::fprintf(stderr, "[gemdos] %s -> %s\n", gemNameIn.c_str(), out.c_str());
 }
 

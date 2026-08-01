@@ -178,6 +178,8 @@ private:
 
     // ---- Conversion de chemins ST → hôte (port des helpers de gemdos.c) -------
     void createHostFileName(int drive, const std::string& gemName, std::string& out);
+    // Rabat un chemin hôte sous la racine du lecteur (cf. .cpp) — garde-fou de sécurité.
+    void clampToSandbox(const EmuDrive& d, const std::string& gemName, std::string& out);
     bool addPathComponent(std::string& path, const std::string& origname, bool isDir);
     void addRemainingPath(const std::string& src, std::string& dstpath);
     std::string matchHostDirEntry(const std::string& path, const std::string& name,

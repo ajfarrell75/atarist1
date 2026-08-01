@@ -922,10 +922,11 @@ void onKey(GLFWwindow*, int key, int scancode, int action, int /*mods*/) {
         return;
     }
     if (key == GLFW_KEY_F5 || key == GLFW_KEY_F7 || key == GLFW_KEY_F11) return;
-    // K ouvre/ferme le bandeau « KEYBOARD & MOUSE » de la borne : comme F9/F10 c'est un
-    // raccourci HÔTE, il ne doit pas partir AUSSI au ST — sinon taper ses initiales dans
-    // une table des scores ouvrait le bandeau, qui avale ensuite tout le clavier.
-    if (g_kiosk && (key == GLFW_KEY_F9 || key == GLFW_KEY_F10 || key == GLFW_KEY_K)) return;
+    // F9/F10/F12 sont des raccourcis HÔTE du kiosk : ils ne partent pas au ST. K a été
+    // ABANDONNÉ comme raccourci — c'est une lettre, donc du jeu (taper ses initiales dans
+    // une table des scores ouvrait le bandeau clavier) ; l'intercepter privait en plus le
+    // ST du K sans même supprimer l'ouverture parasite, qui venait de la scrutation.
+    if (g_kiosk && (key == GLFW_KEY_F9 || key == GLFW_KEY_F10 || key == GLFW_KEY_F12)) return;
     const uint8_t sc = stScancodeFor(key, scancode);   // symbolique (layout hôte + pays TOS) → positionnel
     if (!sc) return;
     // Suivi des touches dont le MAKE a été transmis au ST : leur BREAK doit
@@ -1377,7 +1378,20 @@ static void kioskScanDisks(const std::string& disksDir, const std::string& mount
         // un dossier illisible (EACCES — le raccourci « / » du kiosk traverse /root,
         // /proc…) : itération manuelle avec increment(ec) + skip_permission_denied.
         fs::recursive_directory_iterator it(dir, fs::directory_options::skip_permission_denied, e2), end;
+        // BORNES DURES. Ce scan tourne dans le THREAD GUI, à chaque ouverture du menu
+        // borne : sans limite, un dossier vaste fige l'interface (mesuré : /home =
+        // 2,7 M d'entrées, 4,6 s cache chaud, et c'est à une touche du raccourci
+        // « Home »). Refuser la racine et $HOME ne suffit pas — il faut borner le
+        // parcours lui-même : profondeur, nombre d'entrées, et budget de temps.
+        constexpr int  kMaxDepth   = 6;
+        constexpr long kMaxEntries = 40000;
+        const auto     tStart      = std::chrono::steady_clock::now();
+        long seen = 0;
         while (!e2 && it != end) {
+            if (++seen > kMaxEntries) break;
+            if ((seen & 0x3FF) == 0 &&
+                std::chrono::steady_clock::now() - tStart > std::chrono::milliseconds(800)) break;
+            if (it.depth() >= kMaxDepth) it.disable_recursion_pending();
             const fs::directory_entry& e = *it;
             std::error_code e3;
             if (e.is_regular_file(e3)) {
@@ -3176,10 +3190,16 @@ int main(int argc, char** argv) {
             auto navUsable = [&](int j) {
                 return j >= 0 && j <= GLFW_JOYSTICK_LAST && navAssign[j] >= 0;
             };
+            // Les BOUTONS de N'IMPORTE QUELLE manette naviguent, y compris une manette
+            // mise sur OFF. Le filtre par rôle ne s'applique qu'aux AXES (c'est un stick
+            // au repos décentré qui rend le menu fou, pas un bouton). Sans cette
+            // asymétrie, un opérateur qui passe sa seule manette sur OFF depuis la page
+            // JOYSTICKS — page dont c'est précisément la fonction — perdait TOUT contrôle,
+            // et le réglage étant persisté, la borne redémarrait verrouillée.
             auto padBtn = [&](int b) {
                 for (int j = GLFW_JOYSTICK_1; j <= GLFW_JOYSTICK_LAST; ++j) {
                     GLFWgamepadstate gs;
-                    if (navUsable(j) && glfwJoystickPresent(j) && glfwGetGamepadState(j, &gs) && gs.buttons[b])
+                    if (glfwJoystickPresent(j) && glfwGetGamepadState(j, &gs) && gs.buttons[b])
                         return true;
                 }
                 return false;
@@ -3187,9 +3207,12 @@ int main(int argc, char** argv) {
             // Zone morte de l'utilisateur (g_joyDeadzone) et non un seuil figé : un stick
             // au repos décentré ne doit pas compter comme une direction tenue.
             auto padAxis = [&](int axis) {
+                // Sur la page JOYSTICKS elle-même, toute manette peut bouger la sélection :
+                // sinon on ne pourrait pas RÉ-ACTIVER une manette qu'on vient de couper.
+                const bool anyPad = (g_kioskPage == KIOSK_PAGE_JOY);
                 for (int j = GLFW_JOYSTICK_1; j <= GLFW_JOYSTICK_LAST; ++j) {
                     GLFWgamepadstate gs;
-                    if (navUsable(j) && glfwJoystickPresent(j) && glfwGetGamepadState(j, &gs)) {
+                    if ((anyPad || navUsable(j)) && glfwJoystickPresent(j) && glfwGetGamepadState(j, &gs)) {
                         const float v = gs.axes[axis];
                         if (std::fabs(v) > g_joyDeadzone) return v;
                     }
@@ -3226,7 +3249,7 @@ int main(int argc, char** argv) {
             // dessous → la touche envoyée agit tout de suite.
             static bool pSelect = false;
             const bool selNow = padBtn(GLFW_GAMEPAD_BUTTON_BACK) ||
-                                glfwGetKey(window, GLFW_KEY_K) == GLFW_PRESS;
+                                glfwGetKey(window, GLFW_KEY_F12) == GLFW_PRESS;   // F12, pas K (cf. onKey)
             if (selNow && !pSelect) {
                 if (g_kioskDiskMenu && g_kioskPage == KIOSK_PAGE_KEYS) {
                     g_kioskDiskMenu = false;               // referme le clavier → reprise

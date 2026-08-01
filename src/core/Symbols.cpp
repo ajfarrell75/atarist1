@@ -31,16 +31,21 @@ void SymbolTable::finalize() {
 bool SymbolTable::load(const std::string& path, uint32_t baseOffset) {
     std::ifstream f(path, std::ios::binary);
     if (!f) return false;
-    // Repart d'une table VIDE : sans cela, recharger un fichier (ou en charger un
-    // second) CUMULAIT les symboles — le compteur affiché doublait et les doublons
-    // d'adresse résolvaient vers l'ancienne entrée (« 1er gagne » dans byName_).
-    clear();
+    // ⚠ On ne vide PAS ici : un parsing qui échoue détruirait une table valide sans que
+    // l'appelant (la GUI ignore le retour) puisse le dire. On charge dans une table
+    // TEMPORAIRE et on n'échange qu'en cas de succès — cf. plus bas.
+
     uint8_t magic[2] = {0, 0};
     f.read(reinterpret_cast<char*>(magic), 2);
     f.close();
     // $601A = branche courte de tête d'un exécutable TOS → symboles DRI/GST embarqués.
-    if (magic[0] == 0x60 && magic[1] == 0x1A) return loadTosProgram(path, baseOffset);
-    return loadSymText(path);
+    SymbolTable tmp;
+    const bool ok = (magic[0] == 0x60 && magic[1] == 0x1A)
+                  ? tmp.loadTosProgram(path, baseOffset)
+                  : tmp.loadSymText(path);
+    if (!ok) return false;              // table courante intacte
+    *this = std::move(tmp);             // remplace (ne CUMULE pas : recharger doublait le compte)
+    return true;
 }
 
 // nm-style : « ADDR [TYPE] NAME ». On lit le 1er token comme adresse hex (accepte le

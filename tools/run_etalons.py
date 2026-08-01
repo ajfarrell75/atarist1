@@ -292,7 +292,9 @@ def main() -> int:
         cmd = [sys.executable, str(ROOT / "tools" / "fetch_etalons.py")] + ids
         subprocess.run(cmd, cwd=ROOT, check=False)
 
-    want = set(args.only.split(",")) if args.only else None
+    # strip() : « --only "a, b" » traitait « b » (avec son espace) comme un ID inconnu
+    # et refusait de tourner, en DÉSIGNANT un identifiant pourtant valide.
+    want = {t.strip() for t in args.only.split(",") if t.strip()} if args.only else None
     # Un ID inconnu ne doit PAS rendre « TOUS OK » sur zéro étalon exécuté : run_all.py
     # passe au palier P0 une liste d'IDs CODÉE EN DUR, donc un simple renommage dans le
     # manifeste viderait le garde-fou logique du hook pre-push sans un mot.
