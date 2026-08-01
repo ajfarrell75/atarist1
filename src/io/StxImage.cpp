@@ -4,6 +4,7 @@
 //
 //  (c) 2026 VERHILLE Arnaud — projet NeoST.
 // =============================================================================
+#include <filesystem>
 #include "io/StxImage.hpp"
 
 #include <cstdio>
@@ -390,14 +391,25 @@ bool StxImage::saveWd1772(const std::string& path) const {
 }
 
 bool StxImage::loadWd1772(const std::string& path) {
+    // ⚠ Ce fichier n'est JAMAIS nommé par l'utilisateur : Fdc::loadImage le déduit du
+    // .stx monté (« .stx » → « .wd1772 »). Il doit donc être le plus défensif du lot.
+    // Il manquait les deux garde-fous que les cinq autres chargeurs ont déjà :
+    //  - refus des non-fichiers : sous Linux, ifstream OUVRE un répertoire et tellg()
+    //    rend 2^63−1 → vector géant → std::bad_alloc non rattrapé → l'émulateur entier
+    //    mourait au simple montage de la disquette (Hatari, lui, refuse les répertoires
+    //    dans File_Exists et se contente d'un message d'erreur) ;
+    //  - borne HAUTE de taille : un .wd1772 creux de 200 Go faisait la même fin.
+    std::error_code fec;
+    if (!std::filesystem::is_regular_file(path, fec)) return false;
     std::ifstream f(path, std::ios::binary | std::ios::ate);
     if (!f) return false;                                 // pas de fichier compagnon : normal
     const std::streamsize n = f.tellg();
-    if (n < 16) return false;
+    constexpr std::streamsize kMaxWd1772 = 8 * 1024 * 1024;   // overlays d'écriture : quelques dizaines de Ko
+    if (n < 16 || n > kMaxWd1772) return false;
     f.seekg(0);
     std::vector<uint8_t> in(static_cast<std::size_t>(n));
     f.read(reinterpret_cast<char*>(in.data()), n);
-    if (!f) return false;
+    if (!f || f.gcount() != n) return false;              // lecture courte : image douteuse
 
     if (std::memcmp(in.data(), "WD1772", 6) != 0) return false;
     if (in[6] != 1 || in[7] != 0) {                       // version/révision inconnues

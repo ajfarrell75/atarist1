@@ -203,7 +203,19 @@ public:
 
     // Save-state : échéances par source + horloges. Les callbacks (cb_), la liveClock_
     // et l'endSlice_ sont re-liés à la construction de Machine → PAS sérialisés.
-    void serialize(StateArchive& ar) { ar(due_); ar(now_); ar(nextDue_); ar(runTarget_); }
+    void serialize(StateArchive& ar) {
+        ar(due_); ar(now_); ar(nextDue_); ar(runTarget_);
+        // ⚠ L'horloge du scheduler pilote des boucles de rattrapage (syncTo, et côté FDC
+        // le rattrapage d'impulsion index) : forgée absurde, elle les rend non bornées —
+        // gel définitif reproduit. Une échéance doit être soit inactive, soit dans une
+        // fenêtre plausible autour de `now_` (le passé récent existe : une échéance déjà
+        // due mais pas encore servie).
+        ar.check(now_ >= 0);
+        for (int64_t d : due_)
+            ar.check(d == kInactive || (d >= now_ - (1LL << 32) && d <= now_ + (1LL << 40)));
+        ar.check(nextDue_   == kInactive || (nextDue_   >= now_ - (1LL << 32) && nextDue_   <= now_ + (1LL << 40)));
+        ar.check(runTarget_ == kInactive || (runTarget_ >= now_ - (1LL << 32) && runTarget_ <= now_ + (1LL << 40)));
+    }
 
 private:
     static bool isMfpTimer(int s) {              // sources dont le retard dépend de la préemption

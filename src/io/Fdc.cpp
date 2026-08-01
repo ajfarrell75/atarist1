@@ -686,6 +686,17 @@ void Fdc::indexCheckUpdate() {
     if (driveSel_ < 0 || !drive_[driveSel_].present()) return;   // pas de lecteur/disque
     if (indexTime_ == 0) indexInit();
     const int64_t rev = cyclesPerRev();
+    if (rev <= 0) return;
+    // Rattrapage BORNÉ. Hatari fait un simple `if` ici (FDC_IndexPulse_CheckUpdate,
+    // fdc.c:2016) — la fonction est appelée toutes les 200-500 cycles FDC, donc au plus
+    // une impulsion par appel, et la boucle y est structurellement impossible. NeoST
+    // boucle, et chaque tour émet un son et peut lever une IRQ : un indexTime_ très en
+    // retard sur l'horloge (save-state forgé, ou horloge recalée) demandait des milliers
+    // de MILLIARDS d'itérations — gel définitif à 100 % de CPU. Au-delà de quelques
+    // révolutions de retard, on se recale d'un coup : les impulsions manquées sont de
+    // toute façon sans consommateur.
+    const int64_t late = nowCyc() - indexTime_;
+    if (late >= 8 * rev) { indexTime_ = nowCyc() - (late % rev); return; }
     while (nowCyc() - indexTime_ >= rev)
         indexIncrease(indexTime_ + rev);
 }
@@ -1047,7 +1058,7 @@ int Fdc::nextSectorIDStx(int* pFdcCycles) {
 uint8_t Fdc::readSectorStx(int* pSize) {
     FloppyDisk& dk = drive_[driveSel_];
     StxImage::Track* t = dk.stx->findTrack(dk.headTrack, side_);
-    if (!t || stxNextSector_ >= t->sectorsCountView()) return STR_RNF;
+    if (!t || stxNextSector_ < 0 || stxNextSector_ >= t->sectorsCountView()) return STR_RNF;
     StxImage::Sector& sec = t->sectorsView()[stxNextSector_];
     if (sec.fdcStatus & StxImage::FLAG_RNF) return STR_RNF;
 
@@ -1102,7 +1113,7 @@ uint8_t Fdc::readSectorStx(int* pSize) {
 uint8_t Fdc::writeSectorStx(int size) {
     FloppyDisk& dk = drive_[driveSel_];
     StxImage::Track* t = dk.stx->findTrack(dk.headTrack, side_);
-    if (!t || stxNextSector_ >= t->sectorsCountView()) return STR_RNF;
+    if (!t || stxNextSector_ < 0 || stxNextSector_ >= t->sectorsCountView()) return STR_RNF;
     StxImage::Sector& sec = t->sectorsView()[stxNextSector_];
     if (sec.fdcStatus & StxImage::FLAG_RNF) return STR_RNF;
     if (sec.fdcStatus & StxImage::FLAG_CRC) return STR_CRC;
@@ -1191,7 +1202,7 @@ void Fdc::stxPersist(FloppyDisk& dk) {
 uint8_t Fdc::readAddressStx() {
     FloppyDisk& dk = drive_[driveSel_];
     StxImage::Track* t = dk.stx->findTrack(dk.headTrack, side_);
-    if (!t || stxNextSector_ >= t->sectorsCountView()) return STR_RNF;
+    if (!t || stxNextSector_ < 0 || stxNextSector_ >= t->sectorsCountView()) return STR_RNF;
     const StxImage::Sector& sec = t->sectorsView()[stxNextSector_];
     bufferAdd(sec.idTrack);
     bufferAdd(sec.idHead);

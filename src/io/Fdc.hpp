@@ -141,6 +141,13 @@ public:
         ar(nextID_LEN_);
         ar(nextID_CRCOK_);
         ar(stxNextSector_);
+        // ⚠ Borne BASSE indispensable : les trois sites STX (readSectorStx,
+        // writeSectorStx, readAddressStx) ne testent que `>= sectorsCountView()`.
+        // Négatif, l'index indexait AVANT le vecteur — lecture hors bornes, et
+        // ÉCRITURE pour writeSectorStx (sec.saveIndex). Chez Hatari le champ
+        // homologue est un uint8_t, donc structurellement positif ; NeoST l'a
+        // élargi en int sans reposer la borne.
+        ar.check(stxNextSector_ >= 0 && stxNextSector_ < 256);
 
         // --- Modèle rotationnel (impulsion d'index + PRNG de phase) ---
         ar(indexTime_);
