@@ -42,6 +42,11 @@ void Mfp::reset() {
     tai_ = false;                         // ligne d'entrée Timer A (XSINT) au repos
     for (uint8_t& b : timer_) b = 0;
     xsint_ = false;                       // ligne XSINT son DMA (re-synchronisée ensuite par DmaSound::reset)
+    // CTS/DCD REVIENNENT à leur valeur de repos ACTIVE : ce sont des entrées, pas de
+    // l'état machine. Chez Hatari elles sont recalculées à CHAQUE lecture GPIP
+    // (RS232_Get_DCD_CTS) et ne peuvent donc pas rester coincées ; ici, sans cette
+    // remise, une désassertion sous --loopback survivait à tous les resets.
+    ctsLine_ = dcdLine_ = true;
     rxByte_ = 0; rxFull_ = false; rxOverrun_ = false;   // USART : tampon vidé (pas de RXFULL fantôme)
     serialBaud_ = 0; serialUcr_ = 0;      // suivi débit série remis (sinon serialBaud() rapporte l'avant-reset)
     // Signal IRQ daté : tout retombe (port MFP_Reset — IRQ/IRQ_Time/Pending_Time).

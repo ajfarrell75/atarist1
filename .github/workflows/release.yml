@@ -103,6 +103,16 @@ jobs:
           docker run --rm -v "$PWD":/work -w /work -e NEOST_VERSION \
             "$IMAGE" bash /work/packaging/linux/build_in_bionic.sh
 
+      # Même garde que le job arm64 : sans elle, le paquet x86_64 — celui que la
+      # plupart des utilisateurs téléchargent — partait en release sans qu'aucun étalon
+      # n'ait tourné. Le binaire bâti dans le conteneur bionic (glibc 2.27) s'exécute
+      # sans problème sur le runner hôte, la glibc étant compatible ascendante.
+      - name: Suite de validation (palier full — inclut les étalons PIXEL)
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build -j"$(nproc)" --target neost-headless
+          python3 tools/run_all.py --tier full
+
       - name: Vérifier l'AppImage (ET_EXEC, magic, glibc <= 2.27, GLFW, contenu libre)
         run: |
           set -euo pipefail
@@ -208,13 +218,14 @@ jobs:
           test -x build/neost   # le GUI DOIT être là (GLFW trouvé), pas juste le headless
 
       # Le SEUL filet de validation du projet (cf. CLAUDE.md : pas de tests unitaires,
-      # tout passe par neost-headless). La CI ne lançait AUCUN palier : seul un
-      # smoke-launch tournait, donc une régression pixel pouvait être publiée en
-      # release sans que rien ne l'arrête. Palier « fast » ici (auto-tests logique
-      # glue/spec512/bus/mfp + verdicts série + cycle-bench, quelques secondes) — le
-      # palier « full » exige des disques d'étalons non embarqués dans le paquet.
-      - name: Suite de validation (palier fast)
-        run: python3 tools/run_all.py --tier fast
+      # tout passe par neost-headless). Palier **FULL** — et non « fast » : c'est le
+      # palier P2 qui porte les comparaisons PIXEL (nocooper, spec512, scroll, overscan,
+      # trace_odd). « fast » ne contient que des auto-tests de logique et des verdicts
+      # série ; s'en contenter laissait publiable exactement la régression que cette
+      # garde est censée arrêter. Tous les disques d'étalons et les références sont
+      # suivis par git, donc « full » tourne sans rien télécharger (~2 min).
+      - name: Suite de validation (palier full — inclut les étalons PIXEL)
+        run: python3 tools/run_all.py --tier full
 
       - name: Empaqueter l'AppImage
         env:

@@ -52,6 +52,11 @@ public:
 
     // Vrai si au moins un lecteur GEMDOS est mappé.
     bool active() const { return active_; }
+    // PUBLIQUES : l'empreinte de cartouche des save-states (Machine.cpp) doit masquer
+    // les octets que sysInit mute ici — la valeur ne doit pas être dupliquée en dur.
+    static constexpr uint32_t CART_OLDGEMDOS = 0xFA0024u;
+    static constexpr uint32_t CART_GEMDOS    = 0xFA002Au;
+
 
     // Reset du système de fichiers GEMDOS (ferme les fichiers ouverts, ré-init des
     // chemins courants). Appelé au reset machine. Port de GemDOS_Reset.
@@ -102,8 +107,6 @@ private:
     static constexpr uint32_t DTA_MAGIC_NUMBER = 0x12983476u;
     static constexpr int DTA_CACHE_INC = 256;
     static constexpr int DTA_CACHE_MAX = 16 * 1024;   // == DTA_CACHE_MAX_SIZE d'Hatari (gemdos.c:118)
-    static constexpr uint32_t CART_OLDGEMDOS = 0xFA0024u;
-    static constexpr uint32_t CART_GEMDOS    = 0xFA002Au;
 
     struct EmuDrive {
         std::string hdEmuDir;     // racine hôte du lecteur
@@ -180,6 +183,8 @@ private:
     void createHostFileName(int drive, const std::string& gemName, std::string& out);
     // Rabat un chemin hôte sous la racine du lecteur (cf. .cpp) — garde-fou de sécurité.
     void clampToSandbox(const EmuDrive& d, const std::string& gemName, std::string& out);
+    // Test à BLANC : combien de lecteurs seraient mappés, sans aucun effet de bord.
+    int  countMappableDrives(const std::string& hostDir);
     bool addPathComponent(std::string& path, const std::string& origname, bool isDir);
     void addRemainingPath(const std::string& src, std::string& dstpath);
     std::string matchHostDirEntry(const std::string& path, const std::string& name,

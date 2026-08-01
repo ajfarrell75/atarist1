@@ -240,9 +240,13 @@ public:
     // Ligne BUSY Centronics (GPIP0, active BAS). Sous fixture de bouclage, recopie
     // (inversée) le bit7 du port parallèle (cf. Machine, test « Printer/Joystick »).
     void setBusyLine(bool a) { busyLine_ = a; }
-    void setRs232Cts(bool a) { if (a != ctsLine_) raise(SRC_CTS); ctsLine_ = a; }
-    void setRs232Dcd(bool a) { if (a != dcdLine_) raise(SRC_DCD); dcdLine_ = a; }
-    void setRs232Ri (bool a) { if (a != riLine_)  raise(SRC_RI);  riLine_  = a; }
+    // gpipSetLine (et non raise() direct) : il n'y a de front actif QUE dans le sens
+    // choisi par l'AER, et seulement si la ligne est en ENTRÉE. Lever le canal sur les
+    // DEUX fronts, comme le faisait ce code, donnait une IRQ sur la mauvaise transition
+    // à tout programme qui arme IERB bit1/2 puis bascule RTS/DTR sous --loopback.
+    void setRs232Cts(bool a) { gpipSetLine(ctsLine_, a); }
+    void setRs232Dcd(bool a) { gpipSetLine(dcdLine_, a); }
+    void setRs232Ri (bool a) { gpipSetLine(riLine_, a); }   // cf. CTS/DCD : front selon l'AER
 
     // Déclenche une source : positionne le bit IPR si le canal est activé (IER), sinon
     // l'EFFACE (port MFP_InputOnChannel). Date l'événement à l'horloge live ; raiseAt
