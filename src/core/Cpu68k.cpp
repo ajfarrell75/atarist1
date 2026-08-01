@@ -218,8 +218,17 @@ public:
     // fault pendant l'empilement de trame) → on halte le CPU comme le vrai 68000,
     // au lieu de relancer une exception (qui aborterait l'hôte). Renvoie true si
     // halté (l'appelant doit alors fournir une valeur neutre).
+    //
+    // ⚠ Il faut LEVER DoubleFault, pas seulement poser le drapeau HALTED : poser un
+    // drapeau ne dérobine pas la séquence en cours. execBusError poursuivait ses 7
+    // empilements (absorbés en silence), puis jumpToVector<C>(2) lisait RÉELLEMENT le
+    // vecteur et préfetchait — soit 3 accès bus APRÈS la faute, là où le vrai 68000
+    // assère /HALT au deuxième échec et ne fait plus un seul cycle. Le throw remonte
+    // jusqu'au catch(DoubleFault) de Moira::processException, qui appelle le vrai
+    // halt() — lequel restaure aussi reg.pc = reg.pc0 et notifie cpuDidHalt(), deux
+    // choses que le drapeau posé à la main sautait.
     bool faultOrHalt(moira::u32 a, bool write) const {
-        if (g_inBusError) { const_cast<NeostMoira*>(this)->flags |= moira::State::HALTED; return true; }
+        if (g_inBusError) throw moira::DoubleFault();
         g_bus->megaSteCacheFlushIfEnabled();   // une bus error invalide le cache Mega STE (Hatari)
         g_inBusError = true;
         raiseBusError(a, write);            // [[noreturn]] : lève moira::BusError

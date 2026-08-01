@@ -106,9 +106,12 @@ sf::Status Fpu::sfStatus() const {
     sf::Status s;
     s.roundingMode = rm[(fpcr_ >> 4) & 3];
     switch ((fpcr_ >> 6) & 3) {
-        case 1:  s.roundingPrecision = sf::prec_single; break;   // simple
-        case 2:  s.roundingPrecision = sf::prec_double; break;   // double
-        default: s.roundingPrecision = sf::prec_extended; break; // étendu (00) / réservé (11)
+        case 0:  s.roundingPrecision = sf::prec_extended; break; // étendu
+        case 1:  s.roundingPrecision = sf::prec_single;   break; // simple
+        // Le motif RÉSERVÉ (11) tombe sur DOUBLE, pas sur étendu : c'est là qu'Hatari
+        // place son `default:` (fpp_softfloat.c:56-66), et le silicium 6888x se comporte
+        // ainsi. NeoST rendait 80 bits là où la référence en rend 64.
+        default: s.roundingPrecision = sf::prec_double;   break; // double (10) / réservé (11)
     }
     return s;
 }
