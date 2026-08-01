@@ -197,6 +197,13 @@ public:
         ar(chaosIgnore_);
         ar(chaosIndex_);
         ar(chaosCount_);
+        // chaosWrite() indexe key[8] avec la valeur BRUTE : le masque « & 0x07 » n'est
+        // appliqué qu'à l'INCRÉMENT, donc le premier octet décodé après un load lirait
+        // hors du tableau si l'état a été forgé (même classe que les gardes YM/SCC/FPU).
+        ar.check(chaosIndex_ >= 0 && chaosIndex_ < 8);
+        ar.check(chaosIgnore_ >= 0 && chaosIgnore_ <= 8);
+        ar.check(chaosCount_ >= 0);
+        ar.check(customWrite_ >= CW_NONE && customWrite_ <= CW_AS);
         ar(asMagic_);
         ar(asReadCount_);
     }
