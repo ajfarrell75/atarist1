@@ -53,6 +53,13 @@ public:
     // pilotées par les autres puces (reforcées à la lecture, puces resynchronisées).
     void reset();
 
+    // RESET *partiel* du MFP — port STRICT de MFP_Reset (mfp.c:519-569), celui que
+    // la broche /RESET du 68000 déclenche (customreset → MFP_Reset_All). Ne touche
+    // QUE les registres MFP + les échéances de timers ; l'USART (RSR/UDR/UCR/débit),
+    // la ligne XSINT et les lignes RS232 en entrée ne sont PAS remises (Hatari ne les
+    // touche pas dans MFP_Reset). reset() (reset MACHINE) l'appelle puis élargit.
+    void resetChip();
+
     // Période en CYCLES CPU d'un timer (0..3 = A/B/C/D) en mode délai, ou 0 s'il
     // est arrêté ou en event-count. `fromCounter` : période calculée depuis le
     // COMPTEUR courant (démarrage/continuation, cf. MFP_StartTimer_AB qui part de

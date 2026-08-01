@@ -86,7 +86,7 @@ void Bus::serialize(StateArchive& ar) {
 // parasites dans son propre code), le moteur disquette en rotation et la Glue sur la
 // fréquence/résolution précédente.
 void Bus::peripheralReset() {
-    if (ikbd)    ikbd->bootRom();          // IKBD_Reset(false)
+    if (ikbd)    ikbd->resetHw();          // IKBD_Reset(false) : SCI + boot ROM
     // Fréquence + résolution posées EN DIRECT, sans repasser par le bus. C'est bien ce
     // que fait Hatari : Video_Reset_Glue appelle IoMem_WriteByte, documenté « write 8-bit
     // byte into IO memory space WITHOUT interception » (includes/ioMem.h:86) — un simple
@@ -96,19 +96,8 @@ void Bus::peripheralReset() {
     // des wait-states de bus qu'Hatari n'ajoute pas.
     if (shifter) shifter->resetGlue(mfp && !mfp->colorMonitor());   // $FF820A = 0 + $FF8260
     if (psg)     psg->reset();             // PSG_Reset
+    if (mfp)     mfp->resetChip();         // MFP_Reset_All
     if (fdc)     fdc->reset(/*cold=*/false);   // FDC_Reset(false)
-    // ⚠ MFP_Reset_All VOLONTAIREMENT ABSENT — chantier ouvert, MESURÉ.
-    // Ajouter « if (mfp) mfp->reset(); » ici fait échouer l'étalon oracle nocooper à
-    // 26607 px — or 26607 est EXACTEMENT le diff de la trame 6798 mesuré en balayant
-    // 6796/6798/6800/6802/6804 : ce n'est donc pas un rendu cassé mais un DÉCALAGE DE
-    // PHASE de 2 trames (le reset MFP retarde le TOS, la démo arrive 2 trames plus tôt
-    // à la capture). Bisection puce par puce : IKBD, Glue, PSG et FDC passent, le MFP
-    // seul décale. Cause probable : Mfp::reset() est le reset MACHINE de NeoST et va
-    // plus loin que MFP_Reset d'Hatari (mfp.c:519), qui ne touche QUE les registres MFP
-    // et ses échéances — NeoST y remet en plus l'USART (rxByte_/rxFull_/serialBaud_/
-    // serialUcr_) et la ligne XSINT du son DMA. À reprendre ainsi : écrire un reset MFP
-    // *partiel* calqué sur MFP_Reset, puis REGÉNÉRER l'oracle nocooper (recette à appui
-    // touche, cf. la note de l'entrée dans tools/etalons.json) pour re-caler le Δ.
 }
 
 bool Bus::loadTos(const std::string& path) {

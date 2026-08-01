@@ -90,7 +90,7 @@ public:
         shifter.reset();           // Video_Reset : scroll/linewidth/offset différé STE, glue
         fdc.reset(/*cold=*/false); // FDC_Reset : commande/DMA en vol annulés
         blitter.reset();           // Blitter_Reset : blit en vol annulé, BUSY retombe
-        ikbd.bootRom();            // IKBD_Reset (chaud) : modes aux défauts, $F1 différé
+        ikbd.resetHw();            // IKBD_Reset (chaud) : SCI + modes aux défauts, $F1 différé
         bus.megaSteReset(); cpu.setMegaSteSpeed(false); bus.fpu.reset(); bus.scu.reset(/*cold=*/false);
         gemdos.reset();    // ferme les fichiers HD GEMDOS ouverts (no-op si inactif)
         scc.reset();       // SCC série (Mega STE) au repos
@@ -109,7 +109,7 @@ public:
         shifter.reset();           // cf. reset() : couverture Hatari reset.c
         fdc.reset(/*cold=*/true);
         blitter.reset();
-        ikbd.bootRom();
+        ikbd.resetHw();
         bus.megaSteReset(); cpu.setMegaSteSpeed(false); bus.fpu.reset(); bus.scu.reset(/*cold=*/true);
         gemdos.reset();    // ferme les fichiers HD GEMDOS ouverts (no-op si inactif)
         scc.reset();       // SCC série (Mega STE) au repos
