@@ -87,22 +87,39 @@ bool SymbolTable::loadTosProgram(const std::string& path, uint32_t base) {
     if (!f) return false;
     const std::streamoff sz = f.tellg();
     if (sz < 28) return false;
-    std::vector<uint8_t> buf(static_cast<size_t>(sz));
-    f.seekg(0);
-    f.read(reinterpret_cast<char*>(buf.data()), sz);
 
-    if (be16(&buf[0]) != 0x601A) return false;
-    const uint32_t textSize = be32(&buf[2]);
-    const uint32_t dataSize = be32(&buf[6]);
-    const uint32_t symSize  = be32(&buf[14]);
+    // On lit d'abord le SEUL en-tête, puis la seule table des symboles — jamais le fichier
+    // entier. Auparavant un `vector<uint8_t> buf(sz)` avalait tout avant même de vérifier
+    // le magic : un exécutable TOS de 3 Go (ou un fichier creux commençant par $601A)
+    // faisait 3,1 Go de RSS et 9,5 s de gel du thread GUI, et sous quota mémoire le
+    // std::bad_alloc n'était rattrapé par personne (SIGABRT).
+    uint8_t hdr[28];
+    f.seekg(0);
+    f.read(reinterpret_cast<char*>(hdr), 28);
+    if (f.gcount() != 28) return false;
+
+    if (be16(&hdr[0]) != 0x601A) return false;
+    const uint32_t textSize = be32(&hdr[2]);
+    const uint32_t dataSize = be32(&hdr[6]);
+    const uint32_t symSize  = be32(&hdr[14]);
     if (symSize == 0) return true;                    // pas de symboles : succès « à vide »
 
     const uint64_t symStart = uint64_t(28) + textSize + dataSize;
     if (symStart + symSize > uint64_t(sz)) return false;   // en-tête incohérent
+    // Plafond de bon sens : 14 octets par symbole, donc 64 Mo ≈ 4,8 millions de symboles.
+    // Au-delà, l'en-tête est fantaisiste — on refuse plutôt que d'allouer sur sa parole.
+    static constexpr uint32_t kMaxSymTable = 64u * 1024u * 1024u;
+    if (symSize > kMaxSymTable) return false;
+
+    std::vector<uint8_t> sym_(static_cast<size_t>(symSize));
+    f.seekg(static_cast<std::streamoff>(symStart));
+    f.read(reinterpret_cast<char*>(sym_.data()), static_cast<std::streamsize>(symSize));
+    if (static_cast<uint64_t>(f.gcount()) != symSize) return false;   // lecture courte
+    const uint8_t* const symBase = sym_.data();
 
     size_t added = 0;
     for (uint32_t off = 0; off + 14 <= symSize; off += 14) {
-        const uint8_t* e = &buf[size_t(symStart) + off];
+        const uint8_t* e = symBase + off;
         const uint16_t type = be16(e + 8);
         const uint32_t val  = be32(e + 10);
         // Nom : 8 caractères, complétés d'espaces/zéros.
@@ -112,7 +129,7 @@ bool SymbolTable::loadTosProgram(const std::string& path, uint32_t base) {
         std::string sym(name);
         // Nom étendu GST : l'entrée suivante (14 o) donne 14 caractères de plus.
         if ((type & 0x0048) == 0x0048 && off + 28 <= symSize) {
-            const uint8_t* n2 = &buf[size_t(symStart) + off + 14];
+            const uint8_t* n2 = symBase + off + 14;
             char ext[15] = {0};
             std::memcpy(ext, n2, 14);
             for (int i = 13; i >= 0 && (ext[i] == ' ' || ext[i] == '\0'); --i) ext[i] = '\0';

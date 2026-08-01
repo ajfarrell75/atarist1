@@ -231,7 +231,9 @@ void Ikbd::write8(uint32_t addr, uint8_t v) {
         return;
     }
     // Commande en cours : on accumule les octets de paramètre.
-    if (inBufLen_ < static_cast<int>(inBuf_.size()))
+    // Borne BASSE autant que haute : ceinture et bretelles derrière l'invariant de
+    // save-state (cf. Ikbd::serialize) — cet index a déjà servi d'écriture arbitraire.
+    if (inBufLen_ >= 0 && inBufLen_ < static_cast<int>(inBuf_.size()))
         inBuf_[inBufLen_] = v;
     ++inBufLen_;
     if (inBufLen_ >= cmdExpected_) {
@@ -543,6 +545,16 @@ void Ikbd::dispatchCommand() {
             // paramètre.
             break;
     }
+}
+
+void Ikbd::resetHw() {
+    // « Reset the SCI » (ikbd.c:503-513) : SCI_TX_State = IDLE, TSR = 0,
+    // SCI_TX_Size/Delay = 0, SCI_RX_State = IDLE, RSR = 0, SCI_RX_Size = 0.
+    // Côté NeoST le shift register de sortie du 6301 est matérialisé par
+    // l'échéance IKBD_RX (octet en cours d'acheminement vers l'ACIA).
+    rxPending_ = false;
+    if (sched_) sched_->cancel(Scheduler::IKBD_RX);
+    bootRom();                       // IKBD_Boot_ROM(false) — reset à chaud
 }
 
 void Ikbd::bootRom() {

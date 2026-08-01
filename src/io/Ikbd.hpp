@@ -44,6 +44,13 @@ public:
     // MACHINE (Machine::reset — Hatari reset.c appelle IKBD_Reset).
     void    bootRom();
 
+    // RESET MATÉRIEL de l'IKBD (port d'IKBD_Reset, ikbd.c:499-522) : remet d'abord
+    // le SCI (la liaison série 6301 → ACIA) — l'octet EN VOL sur la ligne est perdu,
+    // son échéance de livraison annulée — PUIS boote la ROM. bootRom() seul (≙
+    // IKBD_Boot_ROM) ne vide que le tampon de sortie du firmware : un octet déjà
+    // engagé dans le registre à décalage arrivait quand même APRÈS le reset.
+    void    resetHw();
+
     // Échéance : le registre d'émission de l'ACIA s'est vidé (~1 octet série après
     // une écriture $FFFC02 sous TIE) → TDRE repasse à 1 et ré-arme l'IRQ TX. Datée
     // par write8 seulement quand l'IRQ d'émission est armée (cf. raiseIfReady).
@@ -127,6 +134,14 @@ public:
         ar(inBuf_);        // std::array<uint8_t, 8>
         ar(inBufLen_);
         ar(cmdExpected_);
+        // ⚠ INVARIANTS OBLIGATOIRES. write8 n'éprouve que la borne HAUTE avant
+        // `inBuf_[inBufLen_] = v` : un save-state forgé avec un inBufLen_ NÉGATIF
+        // donnait au programme émulé une écriture d'octet à un offset arbitraire
+        // (±2 Go autour de inBuf_) — et comme l'état porte aussi la RAM invitée,
+        // la primitive était complète. Les autres composants (YM, DmaSound, Scc,
+        // Acsi, Shifter, Fdc) gardent déjà leurs index ; ces deux-ci avaient été oubliés.
+        ar.check(inBufLen_    >= 0 && inBufLen_    <= int(inBuf_.size()));
+        ar.check(cmdExpected_ >= 0 && cmdExpected_ <= int(inBuf_.size()));
 
         // --- Joystick hôte ---
         ar.arr(hostJoy_);  // uint8_t[2]

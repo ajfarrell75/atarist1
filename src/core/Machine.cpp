@@ -628,6 +628,19 @@ void Machine::serializeState(StateArchive& ar) {
     ar(lineCarry_); ar(v2ShortLine_); ar(v2_);
     ar(lineLenOn_); ar(curLineLen_);
     ar(cpl_); ar(lpf_); ar(disp_); ar(deEnd_); ar(dispStart_);
+    // ⚠ INVARIANTS DE GÉOMÉTRIE ET D'HORLOGE. runFrame boucle sur
+    // `while (cpu.busClockNow() < frameEnd)` et finalizeFrame_ fait `sched.syncTo(frameEnd_)` :
+    // une horloge maître incohérente rend ces boucles NON BORNÉES — gel définitif à 100 %
+    // de CPU, terminable au seul SIGKILL (reproduit avec frameStart_, lineCarry_ ou
+    // Scheduler::now_ forgés). Aucun `ar.check` ne couvrait cette section.
+    // Bornes larges à dessein : elles ne visent que l'absurde, pas la validation fine.
+    ar.check(cpl_ > 0 && cpl_ <= 4096 && lpf_ > 0 && lpf_ <= 4096);
+    ar.check(renderLine_ >= 0 && tbLine_ >= 0 && hblLine_ >= 0);
+    ar.check(disp_ >= 0 && deEnd_ >= 0 && dispStart_ >= 0);
+    ar.check(frameStart_ >= 0 && frameEnd_ >= frameStart_
+             && frameEnd_ - frameStart_ <= 8 * int64_t(lpf_) * int64_t(cpl_));
+    ar.check(lineCarry_ >= -int64_t(lpf_) * int64_t(cpl_)
+             && lineCarry_ <=  int64_t(lpf_) * int64_t(cpl_));
     // Composants. Ordre quelconque mais IDENTIQUE save/load (même méthode). Le SCC
     // (Mega STE) et l'état de commande ACSI (dans `fdc`) sont sérialisés ; seul le
     // CONTENU des images disque/disque dur reste hors-snapshot (il vit dans les
