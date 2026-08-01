@@ -1,5 +1,5 @@
 {
- "_comment": "Logiciels étalons NeoST — freeware / domaine public uniquement. Voir docs/TEST_SOFTWARE.md.",
+ "_comment": "Logiciels étalons NeoST — freeware / domaine public uniquement. Voir docs/TEST_SOFTWARE.md. ⚠ COUVERTURE (12 étalons machine) : st ×8 / ste ×4 ; tos102uk ×8 (PAL 50 Hz), tos162us ×3 + etos256us ×1 (NTSC 60 Hz) ; 512k ×10 / 1m ×2. MegaST, MegaSTE, TOS 1.00/1.04/1.06/2.06 et EmuTOS PAL ne sont couverts par AUCUN étalon — une suite verte ne prouve RIEN hors de ces configs. La ROM fixe la fréquence de balayage (suffixe us = 60 Hz, uk/fr/de/es = 50 Hz) et cela CHANGE l'image des démos : les images Spectrum 512 sont calculées pour le 50 Hz et sortent déchirées en NTSC, sur ST comme sur STE, identiquement sous Hatari (fidèle, pas un bug).",
  "etalons": [
   {
    "id": "glue_selftest",
@@ -39,7 +39,7 @@
    "cpu": "moira",
    "frames": 250,
    "frame": 240,
-   "crop": "active",
+   "crop": "buffer_noled",
    "max_diff_px": 64,
    "ref_kind": "snapshot"
   },
@@ -55,7 +55,7 @@
    "fastfdc": true,
    "frames": 1200,
    "frame": 1199,
-   "crop": "active",
+   "crop": "buffer_noled",
    "max_diff_px": 0,
       "oracle_fastfdc": true,
    "ref_kind": "oracle"
@@ -72,14 +72,14 @@
    "fastfdc": true,
    "frames": 1651,
    "frame": 1650,
-   "crop": "active",
+   "crop": "buffer_noled",
    "max_diff_px": 0,
    "oracle_fastfdc": true,
    "ref_kind": "oracle"
   },
   {
    "id": "spectrum512_diapo_ste",
-   "name": "Spectrum 512 auto diapo sur STE (scramble FIDÈLE — viewer ST-only, == Hatari STE)",
+   "name": "Spectrum 512 auto diapo en NTSC 60 Hz (déchirement FIDÈLE — cause = 60 Hz, PAS le STE)",
    "subsystem": "shifter/spec512",
    "rom": "roms/tos162us.img",
    "disk": "disks/etalons/spectrum_512_auto_diapo.st",
@@ -89,14 +89,15 @@
    "fastfdc": true,
    "frames": 1651,
    "frame": 1650,
-   "crop": "active",
+   "crop": "buffer_noled",
    "max_diff_px": 0,
    "oracle_fastfdc": true,
-   "note": "Le viewer spec512 est calibré timing STF → sur STE il se désynchronise et scramble les palettes SUR VRAI MATÉRIEL AUSSI. NeoST reproduit ce scramble byte-exact (0 px vs oracle Hatari STE, plage f1645-1660). Cet étalon PROUVE que le scramble STE est fidèle, pas un bug NeoST — évite de rechasser un faux bug. Référence = oracle Hatari STE (spectrum512_diapo_ste.png), PAS une self-capture.",
+   "note": "ATTRIBUTION CORRIGÉE le 2026-08-01 : le déchirement des palettes n'est PAS un effet du STE — c'est le 60 Hz. La ROM tos162us démarre en NTSC 60 Hz, or les images spec512 de ce disque sont calculées pour le 50 Hz. Contre-épreuve : MÊME machine STE avec tos162uk (PAL) → image PARFAITE (dégradé lisse, 0 px vs oracle Hatari STE PAL). Et symétriquement, un ST avec tos102us (60 Hz) déchire exactement pareil. L'étalon reste valide tel quel (NeoST == oracle Hatari byte-exact sur la plage f1645-1660) : il verrouille le rendu 60 Hz. Référence = oracle Hatari STE (spectrum512_diapo_ste.png), PAS une self-capture. Cf. docs/TEST_SOFTWARE.md § Configuration : PAL/NTSC.",
    "ref_kind": "oracle"
   },
   {
    "id": "overscan_top",
+   "uniform_ok": true,
    "name": "Overscan retrait bordure HAUTE (make_overscan_test)",
    "subsystem": "shifter/glue",
    "rom": "roms/tos102uk.img",
@@ -113,6 +114,7 @@
   },
   {
    "id": "trace_odd",
+   "uniform_ok": true,
    "name": "Vecteur TRACE impair → address error (fuite d'exception CPU)",
    "subsystem": "cpu/exceptions",
    "rom": "roms/tos102uk.img",
@@ -124,12 +126,13 @@
    "fastfdc": true,
    "frames": 300,
    "frame": 290,
-   "crop": "active",
+   "crop": "buffer_noled",
    "max_diff_px": 0,
    "ref_kind": "snapshot"
   },
   {
    "id": "cuddly_demos",
+   "disabled": "Référence à CALIBRER : le titre s'affiche bien des deux côtés, mais l'animation centrale (zoom pyramide) est à une PHASE différente. Balayage des trames oracle 3380-3460 par pas de 5 contre la capture NeoST : minimum 16023 px à 3410, jamais 0 — ce n'est donc pas un simple décalage de trame, il faut trouver le point de divergence de l'animation. Tant que ce n'est pas fait, cet étalon ne valide RIEN : il est DÉSACTIVÉ plutôt que laissé vert à tort (2026-08-01).",
    "name": "The Cuddly Demos (boot menu)",
    "subsystem": "shifter/borders",
    "rom": "roms/tos102uk.img",
@@ -140,7 +143,7 @@
    "fastfdc": true,
    "frames": 3500,
    "frame": 3400,
-   "crop": "active",
+   "crop": "buffer_noled",
    "max_diff_px": 500,
    "fetch": {
     "url": "https://ftp.untergrund.net/users/ltk_tscc/fujiology/ST/T/TCB/CUDDLY_P.ZIP",
@@ -162,7 +165,7 @@
    "fastfdc": true,
    "frames": 4000,
    "frame": 3900,
-   "crop": "active",
+   "crop": "buffer_noled",
    "max_diff_px": 800,
    "fetch": {
     "url": "https://www.planetemu.net/roms/atari-st-demos",
@@ -183,7 +186,7 @@
    "cpu": "moira",
    "frames": 400,
    "frame": 380,
-   "crop": "active",
+   "crop": "buffer_noled",
    "max_diff_px": 0,
    "ref_kind": "snapshot"
   },
@@ -199,7 +202,7 @@
    "cpu": "moira",
    "frames": 400,
    "frame": 380,
-   "crop": "active",
+   "crop": "buffer_noled",
    "max_diff_px": 0,
    "ref_kind": "snapshot"
   },
@@ -219,7 +222,7 @@
    ],
    "frames": 6801,
    "frame": 6790,
-   "crop": "active",
+   "crop": "buffer_noled",
    "max_diff_px": 0,
    "fetch": {
     "url": "https://ftp.untergrund.net/users/ltk_tscc/fujiology/ST/0_9/1984/NOCOOPER.ZIP",
@@ -264,7 +267,7 @@
    ],
    "frames": 29500,
    "frame": 29200,
-   "crop": "active",
+   "crop": "buffer_noled",
    "max_diff_px": 0,
    "fetch": {
     "url": "https://ftp.untergrund.net/users/ltk_tscc/fujiology/ST/0_9/1984/NOCOOPER.ZIP",
