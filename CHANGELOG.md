@@ -3,6 +3,93 @@
 (c) 2026 VERHILLE Arnaud. Ce qui est **implémenté et validé**. Pas encore de versions
 taguées (0.1.x). Le restant est dans [`TODO.md`](TODO.md).
 
+## Relecture adversariale pré-release (2026-08-01)
+
+Cinq audits parallèles (zone chaude des 8 derniers commits, sécurité des entrées non
+fiables, mémoire/UB, fidélité vs Hatari, préparation de release), chaque constat
+re-vérifié dans le code avant correction. Suite `--tier full` verte avant ET après
+(14 étalons, étalons pixel byte-identiques) ; 51 images disque corrompues et
+**240 save-states forgés à CRC valide** rejoués sous ASan/UBSan.
+
+**Save-states — 5 corruptions mémoire refermées.** Le chargement d'un `.state` forgé
+restait une frontière de confiance trouée :
+- `Shifter::liveGlueLine_` n'était pas borné et sert d'index à `startHBL` : le
+  `borderMask |= …` devenait un read-modify-write à un offset **négatif arbitraire** du
+  tas, répété sur toute la plage rattrapée. Garde de bornes dans `startHBL` + invariant.
+- `Shifter::colorWrites_[].index` (registre palette) alimente `pal[index] = …` sur un
+  `array<uint16_t,16>` **de pile** : jusqu'à 510 octets écrits au-delà, offset ET valeur
+  choisis. Borné à la relecture comme `YM2149::RegEvent::reg`, et re-testé à l'écriture.
+- `Fdc::lsnOffset` calculait l'offset image en **uint32 qui rebouclait** : un secteur 0
+  donnait `$FFFFFE00`, et la garde « `off + 512 <= image.size()` » se calculant elle aussi
+  en uint32 valait `0 <= size` — elle PASSAIT, et l'accès indexait ~4 Go plus loin (en
+  lecture *et* en écriture, `writeBack` allant jusqu'à `seekp` dans le `.st` de
+  l'utilisateur). Passé en 64 bits de bout en bout.
+- `Fdc::bufferReadByte/Timing/BytePos` déréférençaient `buf_[bufPos_]` sans borne ; un
+  état forgé entre directement dans un `TRANSFER_LOOP` sans passer par le `TRANSFER_START`
+  qui teste le tampon vide (`buf_` vide → déréférencement nul).
+- Gels à 100 % de CPU : `vcLineY_` et `renderLine_/tbLine_/hblLine_` n'étaient bornés
+  qu'en bas (ou pas du tout) alors qu'ils pilotent des boucles de rattrapage.
+
+**Comportements indéfinis (trouvés par fuzzing sous UBSan).** Un `bool` restauré à 63 et
+une énumération `MouseMode` à 173 : dans les deux cas le chargement lui-même est un UB (un
+`bool` non-0/1 peut rendre `if (b)` et `if (!b)` vrais tous les deux). Les booléens sont
+désormais **normalisés dans `StateArchive`** — donc pour tous les composants d'un coup — et
+`mouseMode_` transite par son type sous-jacent. Format de fichier **inchangé**.
+`StateArchive::check()` prend en outre une étiquette : un état refusé dit maintenant PAR
+QUOI (sans elle, une garde trop stricte est indiscernable d'un fichier corrompu — c'est ce
+qui a permis de rattraper une des gardes de cette passe, qui refusait l'overscan légitime).
+
+**GUI.** La bascule F8 vers le mode borne persistait les préférences de la séance, puis
+n'importe quel `saveConfig(force)` ultérieur de la borne les écrasait avec la config du
+LANCEMENT (`g_cfgPristine` figé au démarrage) — y compris sur simple auto-purge d'un
+dossier ROM disparu. `drawCartLibrary` a reçu les deux durcissements de son jumeau
+`drawDiskLibrary` : retour anticipé sur `Begin()` faux, et itération manuelle du dossier
+(le range-for lève `filesystem_error` non rattrapée → `std::terminate`).
+
+**CI de release — le chemin de publication ne pouvait pas aboutir.** Le job `linux-arm64`
+compilait sans `-DNEOST_VERSION_STR` (les trois autres le posent), donc son binaire
+annonçait le `project(VERSION)` figé `0.1.0` tandis que la garde exigeait la version du
+paquet : job rouge à tous les coups, et `publish` en dépendant, **aucune release n'aurait
+pu sortir**. `ffmpeg`, dépendance non déclarée de `compare_screenshot.py`, est désormais
+installé par les deux jobs Linux (sans lui les 5 étalons à référence PNG échouent).
+
+**Le garde-fou de vacuité des références échouait « en mode ça passe »** : sans ffmpeg il
+imprimait un simple ⚠ et sortait 0, laissant 6 références non contrôlées — dont les trois
+oracles spec512, précisément l'étalon dont la référence a été noire deux fois. Un contrôle
+non concluant est maintenant un ÉCHEC.
+
+**Diffusion.** Le workflow GitHub Pages construisait le bundle WASM avec
+`NEOST_WEB_FREE_ONLY=OFF`, c'est-à-dire tout `roms/` et `disks/` embarqués — sous une
+condition écrite dans ce même fichier (« dépôt à garder privé ») qui **n'est pas remplie**.
+Basculé sur `ON` (EmuTOS + `diskA.st`). ⚠ Le dépôt lui-même suit toujours ce contenu :
+cf. `TODO.md`.
+
+**`.MSA`/`.DIM` inscriptibles — port de `MSA_WriteDisk`/`DIM_WriteDisk`.** Ces images
+étaient montées en lecture seule, et le drapeau ne bloquait pas que la recopie hôte : il
+pilotait le **bit WPRT du WD1772** vu par le programme. Sauvegardes en jeu, high-scores,
+écritures depuis le bureau TOS et protections « écrit puis relit » échouaient donc
+« disque protégé » sur toute `.msa`/`.dim`, alors que la même disquette en `.st`
+fonctionnait. Hatari, lui, ne dérive WPRT que du réglage et de `stat()` — jamais du
+format (`floppy.c:205-225`). `writeProtect` ne vient plus que de `stat()` ; `writeBack`
+dispatche désormais sur le conteneur (`FloppyDisk::imgFormat`) : écriture partielle in
+situ pour le `.ST`, idem décalée de 32 o pour le `.DIM` (en-tête préservé, comme
+`dim.c:134-149`), et ré-encodage RLE complet **atomique** (tmp + rename) pour le `.MSA` —
+reconstruire tout le fichier, une coupure en cours laisserait sinon une disquette
+illisible. Le refus d'écrire ne subsiste que là où l'on ne SAIT PAS ré-encoder (STX, ou
+en-tête `.msa`/`.dim` reconnu mais indécodable) : y écrire détruirait le fichier.
+Nouvel auto-test `neost-headless --msa-selftest` (étalon `msa_selftest`, palier *fast*) :
+44 cas — aller-retour byte-exact sur 6 géométries × 7 motifs (dont `$E5` isolé, qui doit
+être échappé même seul, et un motif incompressible qui force la branche « piste stockée
+brute »), plus deux cas de bout en bout montage → écriture → remontage sur fichiers `.msa`
+et `.dim` réels. Vérifié aussi qu'aucun disque d'étalon suivi par git n'est modifié par
+un run complet, et que les `.msa` tronquées restent en lecture seule.
+
+**Documentation.** `HATARI_DIVERGENCES.md` affirmait que `.MSA`/`.DIM` étaient « conformes
+(vérifiés ligne à ligne) » : c'est faux et cela masquait un écart réel (montage en lecture
+seule + bit WPRT présenté au programme, là où Hatari ne dérive WPRT que de `stat()`) —
+consigné en D0. L'écart `$FFFA01` GPIP bits 3/6 vs Hatari est consigné, attendu, et à
+connaître avant toute chasse différentielle.
+
 ## Bug hunt passes 1-3 + CI de release (2026-07-31)
 
 **Sécurité / crashs.** Le pont GEMDOS laissait s'ÉCHAPPER du dossier monté : `/` n'était

@@ -20,6 +20,57 @@ jeux, démos et utilitaires.
 
 ---
 
+## 🚨 BLOQUANT RELEASE — contenu sous copyright suivi par le dépôt (2026-08-01)
+
+Le dépôt `habib256/neost` est **public** (GPL-3.0, GitHub Pages actif) et `git ls-files`
+suit :
+
+| Chemin | Contenu | Volume |
+|--------|---------|--------|
+| `roms/` | **44 images TOS Atari propriétaires** (`tos100*` → `tos404`, `TOS v1.02 …[MEGA TOS]`) | ~11 Mo |
+| `disks/st/`, `disks/stx/` | ~80 images de **jeux commerciaux**, majoritairement CRACKÉS (mentions `[cr Replicants]`, `[cr Elite]`, `[cr Medway Boys]`…) | ~51 Mo |
+| `carts/` | cartouches **Atari Field Service** (`ST_Diagnostic_v4.4`, `MegaSTE_Diagnostic_v1.5`, `STE_Test_v1.9`) | |
+| `wasm/index.data` | **artefact de build commis** qui ré-embarque les 122 fichiers ci-dessus | 73 Mo |
+
+Conséquences : cloner le dépôt (ou télécharger le tarball GitHub) livre une archive de
+logiciels sous copyright. `README.md` affirme par ailleurs que « les TOS Atari d'origine
+… **ne sont pas redistribués** ici » — démenti par le contenu, ce qui aggrave la position
+plutôt que de la protéger.
+
+✅ **Déjà fait** : `deploy-web.yml` est repassé à `NEOST_WEB_FREE_ONLY=ON`, donc Pages ne
+sert plus que EmuTOS + `diskA.st`. Les paquets bureau étaient déjà propres
+(`stage_free_data.sh` + gardes `STRAY` dans les 4 jobs).
+
+❌ **Reste à trancher (décision du mainteneur — implique une réécriture d'historique)** :
+1. `git rm --cached` sur `roms/tos*`, `disks/st`, `disks/stx`, `carts/`, `wasm/index.*`,
+   les ajouter au `.gitignore`, puis **purger l'historique** (`git filter-repo`) — sans
+   quoi le contenu reste téléchargeable dans les commits antérieurs.
+2. ⚠ **Couplage à traiter EN MÊME TEMPS** : `tools/etalons.json` fait dépendre 8 étalons de
+   `roms/tos102uk.img` et `roms/tos162us.img`, et `run_all.py --tier full` garde les deux
+   jobs Linux de la release. Retirer les ROMs **casse mécaniquement la CI** → basculer ces
+   étalons sur EmuTOS ou les marquer `optional` AVANT le retrait, sinon le correctif
+   juridique sera annulé pour « refaire passer le vert ».
+3. Rendre l'affirmation de `README.md:192` vraie plutôt que de la retoucher.
+
+Autres points de conformité relevés à la même passe (non bloquants mais à traiter) :
+- Les paquets publiés (AppImage, `.dmg`) n'embarquent **aucun texte de licence** :
+  `stage_free_data.sh` copie EmuTOS (**GPLv2**) et le binaire NeoST (**GPLv3**) sans
+  `LICENSE`, sans COPYING EmuTOS ni offre de source → non-conformité GPL.
+- `dev/` (52 Mo de tiers commis) contient `dev/agt` — dont le `NEOST_VENDOR.md` écrit
+  lui-même « aucun fichier LICENSE explicite … vérifier les conditions de l'auteur avant
+  toute redistribution » — et `dev/reservoir-gods/` sans licence, avec des `.exe`
+  précompilés et une `license.txt` **UnRAR** (non libre). Rien de tout cela n'apparaît au
+  tableau des composants tiers du README.
+- `packaging/linux/make_appimage.sh` tire `linuxdeploy`/`appimagetool` depuis le tag
+  mouvant `continuous` sans somme de contrôle pour arm64/Raspberry, alors que le
+  `Dockerfile.bionic` les épingle par SHA256.
+- `.dmg` macOS ni signé ni notarisé : Gatekeeper affichera « NeoST est endommagé » sans
+  que rien ne l'explique à l'utilisateur (documenter `xattr -dr com.apple.quarantine`).
+- `build-ref/` (26 fichiers générés) est suivi alors que `.gitignore` contient `build-*/`.
+- Le GUI n'a pas de `--help` et avale en silence toute option inconnue commençant par `-`.
+
+---
+
 ## Catalogue logiciels — bugs en cours
 
 Rapports terrain. TOS 1.02fr sauf mention contraire. Chemins sous `disks/st/` (`.st`) ou

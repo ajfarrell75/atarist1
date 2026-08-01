@@ -1077,6 +1077,12 @@ bool Shifter::liveLineDisplayed(int line) {
 // (port de Hatari Video_StartHBL). DisplayStartCycle n'est posé que s'il vaut -1
 // (une écriture de la ligne précédente a pu le pré-positionner : right-off full).
 void Shifter::startHBL(int line, int curRes, int freqHz) {
+    // ⚠ GARDE DE BORNES. `line` vient soit du curseur live liveGlueLine_ (restauré
+    // d'un save-state), soit de la boucle de replay bornée par lpf — deux valeurs
+    // qu'un fichier forgé désynchronise de glueLines_. Sans cette garde, le
+    // « L.borderMask |= … » ci-dessous est un read-modify-write à un offset
+    // arbitraire du tas (12 octets par unité), répété sur toute la plage rattrapée.
+    if (line < 0 || static_cast<std::size_t>(line) >= glueLines_.size()) return;
     const glue::Timing& T = glue::timing(bus_);
     GlueLine& L = glueLines_[line];
     if (curRes == 2) {                                   // haute résolution (71 Hz)
@@ -1851,7 +1857,11 @@ void Shifter::renderGlueFrame() {
             const int cyc = visFirst + x / ppc;            // cycle du pixel balayé à cette colonne
             const int64_t limit = static_cast<int64_t>(sl) * cpl + cyc - glueAlignCyc;
             while (cur < n && colorWrites_[cur].frameCycle <= limit) {
-                pal[colorWrites_[cur].index] = colorWrites_[cur].colour;
+                // `index` est borné à la relecture d'un save-state (cf. serialize) ;
+                // on le re-teste ici car c'est ICI que l'écriture a lieu, sur un
+                // tableau de PILE de 16 entrées.
+                const uint8_t ci = colorWrites_[cur].index;
+                if (ci < pal.size()) pal[ci] = colorWrites_[cur].colour;
                 ++cur;
             }
             if (lineHasDE && !lineBlank && cyc >= ds && cyc < de) {

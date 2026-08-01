@@ -21,6 +21,7 @@
 #include <cstring>
 #include <cmath>
 #include <fstream>
+#include <functional>
 
 #include <sys/stat.h>
 
@@ -180,9 +181,19 @@ static uint8_t cmdType(uint8_t cr) {
 }
 
 // Numéro de secteur logique → offset image (.st : piste, puis face, puis secteur).
-static inline uint32_t lsnOffset(int track, int side, int sector, int spt, int sides) {
-    const int lsn = (track * sides + side) * spt + (sector - 1);
-    return uint32_t(lsn) * 512u;
+// ⚠ Renvoie un offset 64 bits : en uint32 le produit REBOUCLAIT. Un secteur 0
+// (registre SR_ restauré d'un save-state forgé, ou géométrie absurde) donne
+// lsn = −1 → off = $FFFFFE00, et la garde « off + 512 <= image.size() » se
+// calculait ALORS en uint32 : $FFFFFE00 + 512 = 0, donc la garde PASSAIT et
+// l'accès indexait l'image ~4 Go plus loin. Le 64 bits rend les gardes exactes.
+// Sentinelle « pas d'offset » : assez grande pour être refusée par toutes les
+// gardes, assez petite pour qu'un « off + longueur » ne reboucle pas à son tour.
+static constexpr uint64_t kNoLsn = uint64_t(1) << 62;
+
+static inline uint64_t lsnOffset(int track, int side, int sector, int spt, int sides) {
+    const int64_t lsn = (int64_t(track) * sides + side) * spt + (sector - 1);
+    if (lsn < 0) return kNoLsn;                          // secteur 0 / géométrie absurde
+    return uint64_t(lsn) * 512u;
 }
 
 // -----------------------------------------------------------------------------
@@ -322,6 +333,222 @@ static bool decodeDim(const std::vector<uint8_t>& raw, std::vector<uint8_t>& out
     return true;
 }
 
+// -----------------------------------------------------------------------------
+//  Ré-encodage .MSA — port de MSA_WriteDisk / MSA_FindRunOfBytes
+//  (extern/hatari/src/floppies/msa.c:275-420). Symétrique de decodeMsa ci-dessus.
+// -----------------------------------------------------------------------------
+
+// Longueur du run d'octets identiques en tête de [p, p+n). 0 = « pas de run » →
+// l'appelant émet l'octet tel quel. Port littéral de MSA_FindRunOfBytes : un run de
+// moins de 4 ne vaut pas ses 4 octets d'encodage et est donc refusé… SAUF si l'octet
+// est le marqueur $E5, qui doit être échappé même isolé (sinon la relecture le prendrait
+// pour un début de run).
+static int msaFindRun(const uint8_t* p, int n) {
+    const bool marker = (*p == 0xE5);
+    if (n < 2) return (n == 1 && marker) ? 1 : 0;
+    int run = 1;
+    const uint8_t b = *p++;
+    for (int i = 1; i < n; ++i) { if (*p++ != b) break; ++run; }
+    if (run < 4 && !marker) run = 0;
+    return run;
+}
+
+// Comprime `image` (secteurs bruts) au format .MSA complet, en-tête 10 o inclus.
+// Renvoie false si la géométrie ne rend pas compte de la taille de l'image.
+static bool encodeMsa(const std::vector<uint8_t>& image, int spt, int sides,
+                      std::vector<uint8_t>& out) {
+    if (spt < 1 || spt > 56 || sides < 1 || sides > 2) return false;
+    const std::size_t trackBytes = static_cast<std::size_t>(spt) * 512u;
+    if (trackBytes == 0 || image.empty()) return false;
+    const std::size_t tracks = image.size() / (trackBytes * static_cast<std::size_t>(sides));
+    // L'image doit être un nombre ENTIER de pistes : sinon la dernière serait tronquée
+    // et le fichier réécrit ne se relirait pas.
+    if (tracks == 0 || tracks > 86 ||
+        tracks * trackBytes * static_cast<std::size_t>(sides) != image.size()) return false;
+
+    out.clear();
+    out.reserve(image.size() + image.size() / 8 + 16);
+    auto put16 = [&out](std::size_t at, unsigned v) {         // big-endian, en place
+        out[at]     = static_cast<uint8_t>(v >> 8);
+        out[at + 1] = static_cast<uint8_t>(v);
+    };
+    auto push16 = [&out](unsigned v) {
+        out.push_back(static_cast<uint8_t>(v >> 8));
+        out.push_back(static_cast<uint8_t>(v));
+    };
+    push16(0x0E0F);                                           // ID
+    push16(static_cast<unsigned>(spt));
+    push16(static_cast<unsigned>(sides - 1));
+    push16(0);                                                // piste de début
+    push16(static_cast<unsigned>(tracks - 1));                // piste de fin
+
+    for (std::size_t track = 0; track < tracks; ++track)
+        for (int side = 0; side < sides; ++side) {
+            const uint8_t* src = image.data()
+                               + trackBytes * static_cast<std::size_t>(side)
+                               + trackBytes * static_cast<std::size_t>(sides) * track;
+            const std::size_t lenAt = out.size();             // longueur remplie après coup
+            push16(0);
+            const std::size_t dataAt = out.size();
+            int toGo = static_cast<int>(trackBytes);
+            const uint8_t* q = src;
+            while (toGo > 0) {
+                int run = msaFindRun(q, toGo);
+                if (run == 0) { out.push_back(*q++); run = 1; }
+                else {
+                    out.push_back(0xE5);                      // marqueur
+                    out.push_back(*q);                        // octet répété
+                    push16(static_cast<unsigned>(run));       // compteur 16 bits
+                    q += run;
+                }
+                toGo -= run;
+            }
+            // Comprimée plus grosse que l'originale ? On stocke la piste TELLE QUELLE
+            // (msa.c:388-402) — c'est la longueur == trackBytes qui le signale au lecteur.
+            if (out.size() - dataAt >= trackBytes) {
+                out.resize(dataAt);
+                out.insert(out.end(), src, src + trackBytes);
+                put16(lenAt, static_cast<unsigned>(trackBytes));
+            } else {
+                put16(lenAt, static_cast<unsigned>(out.size() - dataAt));
+            }
+        }
+    return true;
+}
+
+// Auto-test DÉTERMINISTE du couple encodeMsa/decodeMsa (aucun disque ni oracle requis).
+// Le ré-encodage .MSA écrit PAR-DESSUS le fichier de l'utilisateur : si l'aller-retour
+// n'est pas byte-exact, on détruit sa disquette en silence. On vérifie donc, sur des
+// motifs qui couvrent chaque branche de l'encodeur, que decodeMsa(encodeMsa(x)) == x.
+bool Fdc::msaSelfTest() {
+    int ok = 0, fail = 0;
+    // (spt, sides, tracks, nom, générateur d'octet) — les motifs visent : incompressible
+    // (pire cas, force la branche « piste stockée telle quelle »), runs longs, marqueur
+    // $E5 isolé (doit être échappé même seul), $E5 en run, alternance qui interdit tout
+    // run, et run à cheval sur la fin de piste.
+    struct Motif { const char* nom; std::function<uint8_t(std::size_t)> f; };
+    const Motif motifs[] = {
+        { "zeros",           [](std::size_t)   -> uint8_t { return 0x00; } },
+        { "0xE5 partout",    [](std::size_t)   -> uint8_t { return 0xE5; } },
+        { "0xE5 isolés",     [](std::size_t i) -> uint8_t { return (i % 7 == 0) ? 0xE5 : uint8_t(i); } },
+        { "alternance",      [](std::size_t i) -> uint8_t { return (i & 1) ? 0xAA : 0x55; } },
+        { "runs courts",     [](std::size_t i) -> uint8_t { return uint8_t((i / 3) & 0xFF); } },
+        { "runs longs",      [](std::size_t i) -> uint8_t { return uint8_t((i / 977) & 0xFF); } },
+        // Pseudo-aléatoire déterministe : incompressible, la piste doit ressortir BRUTE.
+        { "incompressible",  [](std::size_t i) -> uint8_t {
+              uint32_t x = uint32_t(i) * 2654435761u; x ^= x >> 13; x *= 1274126177u;
+              return uint8_t(x >> 24); } },
+    };
+    const struct { int spt, sides, tracks; } geos[] = {
+        { 9, 2, 80 },     // 720 Ko standard
+        { 9, 1, 80 },     // simple face
+        { 10, 2, 82 },    // 820 Ko (démos)
+        { 18, 2, 80 },    // HD 1,44 Mo
+        { 36, 2, 80 },    // ED
+        { 9, 2, 1 },      // cas limite : une seule piste
+    };
+    for (const auto& g : geos)
+        for (const auto& m : motifs) {
+            const std::size_t n = std::size_t(g.spt) * 512u * std::size_t(g.sides)
+                                * std::size_t(g.tracks);
+            std::vector<uint8_t> src(n);
+            for (std::size_t i = 0; i < n; ++i) src[i] = m.f(i);
+            std::vector<uint8_t> enc, dec;
+            if (!encodeMsa(src, g.spt, g.sides, enc)) {
+                std::fprintf(stderr, "[msa-selftest] FAIL encode %d spt/%d faces/%d pistes « %s »\n",
+                             g.spt, g.sides, g.tracks, m.nom); ++fail; continue;
+            }
+            if (!decodeMsa(enc, dec)) {
+                std::fprintf(stderr, "[msa-selftest] FAIL decode %d spt/%d faces/%d pistes « %s » "
+                                     "(%zu o encodés)\n", g.spt, g.sides, g.tracks, m.nom, enc.size());
+                ++fail; continue;
+            }
+            if (dec != src) {
+                std::size_t at = 0; while (at < dec.size() && at < src.size() && dec[at] == src[at]) ++at;
+                std::fprintf(stderr, "[msa-selftest] FAIL aller-retour %d spt/%d faces/%d pistes "
+                                     "« %s » : %zu o != %zu o, 1er écart à %zu\n",
+                             g.spt, g.sides, g.tracks, m.nom, dec.size(), src.size(), at);
+                ++fail; continue;
+            }
+            ++ok;
+        }
+    // --- Phase 2 : le VRAI chemin fichier (montage → écriture → remontage) ---------
+    // La phase 1 ne teste que le codec en mémoire. Ici on vérifie ce qui casse pour de
+    // bon : qu'une .msa/.dim se monte INSCRIPTIBLE (le bit WPRT ne doit plus dépendre du
+    // format), que writeBack met le fichier à jour dans son conteneur, et qu'un
+    // remontage relit bien l'octet écrit.
+    {
+        const char* td = std::getenv("TMPDIR");
+        const std::string dir = (td && *td) ? std::string(td) : std::string("/tmp");
+        const int spt = 9, sides = 2, tracks = 80;
+        std::vector<uint8_t> src(std::size_t(spt) * 512u * sides * tracks);
+        for (std::size_t i = 0; i < src.size(); ++i) src[i] = uint8_t((i / 512) ^ (i & 0xFF));
+
+        struct Cas { const char* nom; int format; };
+        const Cas cas[] = { { ".msa", FloppyDisk::FMT_MSA }, { ".dim", FloppyDisk::FMT_DIM } };
+        for (const Cas& c : cas) {
+            const std::string path = dir + "/neost_selftest" + c.nom;
+            std::vector<uint8_t> file;
+            if (c.format == FloppyDisk::FMT_MSA) {
+                if (!encodeMsa(src, spt, sides, file)) {
+                    std::fprintf(stderr, "[msa-selftest] FAIL fichier %s : encodage\n", c.nom);
+                    ++fail; continue;
+                }
+            } else {                                   // .dim : en-tête 32 o + secteurs bruts
+                file.assign(32, 0);
+                file[0x00] = file[0x01] = 0x42; file[0x03] = 0; file[0x06] = uint8_t(sides - 1);
+                file[0x08] = uint8_t(spt); file[0x0A] = 0; file[0x0C] = uint8_t(tracks - 1);
+                file.insert(file.end(), src.begin(), src.end());
+            }
+            { std::ofstream o(path, std::ios::binary | std::ios::trunc);
+              o.write(reinterpret_cast<const char*>(file.data()), std::streamsize(file.size())); }
+
+            // Sur le lecteur B, pour ne pas déranger un éventuel disque en A.
+            if (!loadImage(path, 1)) {
+                std::fprintf(stderr, "[msa-selftest] FAIL %s : montage refusé\n", c.nom);
+                ++fail; std::remove(path.c_str()); continue;
+            }
+            FloppyDisk& dk = drive_[1];
+            if (dk.writeProtect) {                     // LE bug d'origine
+                std::fprintf(stderr, "[msa-selftest] FAIL %s : monté PROTÉGÉ EN ÉCRITURE "
+                                     "(le format ne doit plus forcer WPRT)\n", c.nom);
+                ++fail;
+            } else if (dk.image != src) {
+                std::fprintf(stderr, "[msa-selftest] FAIL %s : contenu monté != source\n", c.nom);
+                ++fail;
+            } else {
+                // Écriture d'un secteur au milieu de l'image, puis recopie hôte.
+                const uint64_t off = 40ull * spt * sides * 512ull + 3ull * 512ull;
+                for (int i = 0; i < 512; ++i) dk.image[off + i] = uint8_t(0xA0 + (i & 0x0F));
+                writeBack(dk, off, 512u);
+                std::vector<uint8_t> attendu = dk.image;
+                eject(1);
+                if (!loadImage(path, 1)) {
+                    std::fprintf(stderr, "[msa-selftest] FAIL %s : remontage refusé\n", c.nom);
+                    ++fail;
+                } else if (drive_[1].image != attendu) {
+                    std::size_t at = 0; const auto& g = drive_[1].image;
+                    while (at < g.size() && at < attendu.size() && g[at] == attendu[at]) ++at;
+                    std::fprintf(stderr, "[msa-selftest] FAIL %s : écriture non persistée "
+                                         "(1er écart à %zu, attendu %02x lu %02x)\n", c.nom, at,
+                                 at < attendu.size() ? attendu[at] : 0,
+                                 at < g.size() ? g[at] : 0);
+                    ++fail;
+                } else {
+                    std::fprintf(stderr, "[msa-selftest] fichier %s : montage inscriptible + "
+                                         "écriture persistée OK\n", c.nom);
+                    ++ok;
+                }
+            }
+            eject(1);
+            std::remove(path.c_str());
+        }
+    }
+
+    std::fprintf(stderr, "[msa-selftest] %d OK, %d FAIL\n", ok, fail);
+    return fail == 0;
+}
+
 bool Fdc::loadImage(const std::string& path, int drive) {
     FloppyDisk& dk = drive_[drive & 1];
     const bool wasPresent = dk.present();   // disque déjà monté → échange à chaud
@@ -394,17 +621,24 @@ bool Fdc::loadImage(const std::string& path, int drive) {
     // Image .ST/.msa/.dim → on (re)bascule en modèle logique (annule un éventuel STX).
     dk.imgType = FloppyDisk::IMG_ST;
     dk.stx.reset();
+    // Remise à l'état « conteneur .ST inscriptible » : `dk` est RÉUTILISÉ d'un montage
+    // à l'autre, et sans ça un précédent STX (raw=false) ou .dim (imgFormat=FMT_DIM)
+    // laissait son format à l'image suivante — écriture décalée de 32 o, ou disquette
+    // muette en écriture sans raison.
+    dk.raw       = true;
+    dk.imgFormat = FloppyDisk::FMT_ST;
 
     // .msa (compressé) ou .dim (en-tête 32 o) → conversion en .st brut ; sinon image
-    // .st telle quelle. .msa/.dim sont marquées NON raw (pas de recopie d'écritures).
+    // .st telle quelle. Les trois conteneurs sont INSCRIPTIBLES : writeBack sait
+    // ré-encoder le .msa (MSA_WriteDisk) et décaler l'écriture .dim de l'en-tête.
     std::vector<uint8_t> conv;
     if (decodeMsa(raw, conv)) {
         dk.image = std::move(conv);
-        dk.raw = false;                          // .msa : pas de recopie d'écritures
+        dk.imgFormat = FloppyDisk::FMT_MSA;
         std::fprintf(stderr, "[FDC] image .msa décompressée : %s\n", path.c_str());
     } else if (decodeDim(raw, conv)) {
         dk.image = std::move(conv);
-        dk.raw = false;                          // .dim : en-tête 32 o à préserver
+        dk.imgFormat = FloppyDisk::FMT_DIM;
         std::fprintf(stderr, "[FDC] image .dim (en-tête 32 o retiré) : %s\n", path.c_str());
     } else {
         // Un en-tête .msa PLAUSIBLE (mêmes contrôles que decodeMsa) qui ne se décode
@@ -454,9 +688,16 @@ bool Fdc::loadImage(const std::string& path, int drive) {
     }
 
     // Write-protect auto-détecté d'après les permissions du fichier (cf. Hatari
-    // floppy.c:Floppy_IsWriteProtected, mode « automatic »). Une .msa/.dim est
-    // TOUJOURS protégée (writeBack ne sait pas réencoder le format → dk.raw == false),
-    // de même qu'une .msa reconnue mais indécodable (cf. looksLikeMsaHeader).
+    // floppy.c:Floppy_IsWriteProtected, mode « automatic » : le réglage et stat(),
+    // JAMAIS le format d'image). Les .msa/.dim ne sont donc plus protégées du seul
+    // fait de leur format : writeBack sait désormais les ré-écrire (MSA_WriteDisk /
+    // en-tête .dim préservé). Auparavant ce drapeau ne bloquait pas que la recopie
+    // hôte — il pilote le bit WPRT du WD1772 (updateWriteSectors/updateWriteTrack et
+    // le statut type I) — si bien que sur toute .msa/.dim les sauvegardes en jeu, les
+    // high-scores et les écritures depuis le bureau échouaient « disque protégé »
+    // alors que la même disquette en .st fonctionnait.
+    // `!dk.raw` subsiste pour le seul cas où l'on ne SAIT PAS ré-encoder : STX, ou
+    // en-tête .msa/.dim reconnu mais indécodable. Y écrire détruirait le fichier.
     struct stat st;
     const bool writable = (::stat(path.c_str(), &st) == 0) && (st.st_mode & S_IWUSR);
     dk.writeProtect = !dk.raw || !writable;
@@ -871,12 +1112,12 @@ uint8_t Fdc::readSectorST(uint8_t track, uint8_t sector, uint8_t side, int* pSiz
     // n'existent pas → RNF (port de Floppy_ReadSectors, floppy.c:907 Side >=
     // nSides). Sans cette garde, lsnOffset replierait sur la piste suivante.
     if (side >= dk.sides) return STR_RNF;
-    const uint32_t off = lsnOffset(track, side, sector, dk.spt, dk.sides);
+    const uint64_t off = lsnOffset(track, side, sector, dk.spt, dk.sides);
     if (off + 512u <= dk.image.size()) {
         static const bool fdcDebug = getenv("NEOST_FDC_DEBUG") != nullptr;
         if (fdcDebug)
-            std::fprintf(stderr, "[fdc-rd] tr=%d sr=%d side=%d off=%u data=%02x%02x%02x%02x\n",
-                         track, sector, side, off, dk.image[off], dk.image[off+1],
+            std::fprintf(stderr, "[fdc-rd] tr=%d sr=%d side=%d off=%llu data=%02x%02x%02x%02x\n",
+                         track, sector, side, (unsigned long long)off, dk.image[off], dk.image[off+1],
                          dk.image[off+2], dk.image[off+3]);
         for (int i = 0; i < 512; ++i) bufferAdd(dk.image[off + i]);
         *pSize = 512;
@@ -890,10 +1131,10 @@ uint8_t Fdc::writeSectorST(uint8_t track, uint8_t sector, uint8_t side, int size
     FloppyDisk& dk = drive_[driveSel_];
     // Face au-delà de l'image → RNF (même garde que readSectorST, Floppy_WriteSectors).
     if (side >= dk.sides) return STR_RNF;
-    const uint32_t off = lsnOffset(track, side, sector, dk.spt, dk.sides);
-    if (off + uint32_t(size) <= dk.image.size()) {
+    const uint64_t off = lsnOffset(track, side, sector, dk.spt, dk.sides);
+    if (size >= 0 && off + uint64_t(size) <= dk.image.size()) {
         for (int i = 0; i < size; ++i) dk.image[off + i] = bufferReadBytePos(i);
-        writeBack(dk, off, uint32_t(size));   // Flopwr : recopie dans le .st
+        writeBack(dk, off, uint64_t(size));   // Flopwr : recopie dans le .st
         return 0;
     }
     return STR_RNF;
@@ -932,9 +1173,9 @@ uint8_t Fdc::readTrackST(uint8_t track, uint8_t side) {
         for (int i = 0; i < 4; ++i) bufferAdd(dam[i]);
         uint8_t crcbuf[4 + 512];
         std::memcpy(crcbuf, dam, 4);
-        const uint32_t off = lsnOffset(track, side, sec, dk.spt, dk.sides);
+        const uint64_t off = lsnOffset(track, side, sec, dk.spt, dk.sides);
         for (int i = 0; i < 512; ++i) {
-            const uint8_t v = (off + uint32_t(i) < dk.image.size()) ? dk.image[off + i] : 0;
+            const uint8_t v = (off + uint64_t(i) < dk.image.size()) ? dk.image[off + i] : 0;
             bufferAdd(v);
             crcbuf[4 + i] = v;
         }
@@ -980,7 +1221,7 @@ uint8_t Fdc::writeTrackBuffer() {
 
     // 2de passe : géométrie standard confirmée → écriture des secteurs.
     for (const Found& f : found) {
-        const uint32_t off = lsnOffset(f.tr, f.sd, f.sec, dk.spt, dk.sides);
+        const uint64_t off = lsnOffset(f.tr, f.sd, f.sec, dk.spt, dk.sides);
         if (off + 512u > dk.image.size()) return STR_LOST;     // garde-fou (ne devrait pas arriver)
         for (int j = 0; j < 512; ++j) dk.image[off + j] = buf_[f.dataPos + j];
         writeBack(dk, off, 512u);
@@ -988,13 +1229,54 @@ uint8_t Fdc::writeTrackBuffer() {
     return 0;
 }
 
-// Recopie une zone modifiée de l'image en mémoire vers le fichier .st monté.
-void Fdc::writeBack(FloppyDisk& dk, uint32_t off, uint32_t len) {
-    if (!dk.raw || dk.path.empty() || off + len > dk.image.size()) return;  // .msa : pas de recopie
+// Recopie une zone modifiée de l'image en mémoire vers le fichier monté, selon son
+// conteneur (cf. FloppyDisk::imgFormat) : écriture partielle pour les secteurs bruts,
+// ré-encodage complet pour le .msa.
+void Fdc::writeBack(FloppyDisk& dk, uint64_t off, uint64_t len) {
+    if (!dk.raw || dk.path.empty() || off + len > dk.image.size()) return;
+
+    if (dk.imgFormat == FloppyDisk::FMT_MSA) {
+        // .MSA : format COMPRIMÉ par piste — aucune correspondance entre un offset de
+        // secteur et une position dans le fichier. Il faut donc tout ré-encoder
+        // (port de MSA_WriteDisk). Coût : une passe RLE sur ~720 Ko, négligeable
+        // devant la rareté des écritures secteur, et ça préserve la sémantique
+        // « write-through » que NeoST applique déjà aux .st (Hatari, lui, ne sauve
+        // qu'à l'éjection — une coupure y perd la partie sauvegardée).
+        std::vector<uint8_t> enc;
+        if (!encodeMsa(dk.image, dk.spt, dk.sides, enc)) {
+            std::fprintf(stderr, "[FDC] %s : ré-encodage .msa impossible (géométrie "
+                                 "%d spt × %d faces incompatible avec %zu o) — "
+                                 "écriture NON persistée\n",
+                         dk.path.c_str(), dk.spt, dk.sides, dk.image.size());
+            return;
+        }
+        // Écriture ATOMIQUE (tmp + rename) : réécrire un .msa en place, c'est le
+        // reconstruire ENTIÈREMENT. Une coupure à mi-course laisserait un fichier
+        // tronqué — donc une disquette définitivement illisible, là où le .st ne
+        // perdrait qu'un secteur. Même précaution que l'écriture de neost.cfg.
+        const std::string tmp = dk.path + ".tmp";
+        {
+            std::ofstream o(tmp, std::ios::binary | std::ios::trunc);
+            if (!o) return;                       // dossier non inscriptible : on renonce
+            o.write(reinterpret_cast<const char*>(enc.data()),
+                    static_cast<std::streamsize>(enc.size()));
+            o.flush();
+            if (!o.good()) { o.close(); std::remove(tmp.c_str()); return; }
+        }
+        if (std::rename(tmp.c_str(), dk.path.c_str()) != 0) std::remove(tmp.c_str());
+        return;
+    }
+
+    // .ST brut, et .DIM dont seul l'en-tête de 32 o décale les données : écriture
+    // partielle in situ. L'en-tête .dim déjà présent dans le fichier est PRÉSERVÉ tel
+    // quel — c'est aussi ce que fait Hatari, qui relit l'ancien en-tête pour ne pas
+    // perdre ses champs non documentés (dim.c:134-149) ; la géométrie, elle, ne change
+    // pas en cours de session.
+    const uint64_t fileOff = off + (dk.imgFormat == FloppyDisk::FMT_DIM ? 32u : 0u);
     std::fstream f(dk.path, std::ios::binary | std::ios::in | std::ios::out);
     if (!f) return;                  // image en lecture seule / FS virtuel non inscriptible
-    f.seekp(off);
-    f.write(reinterpret_cast<const char*>(dk.image.data() + off), len);
+    f.seekp(static_cast<std::streamoff>(fileOff));
+    f.write(reinterpret_cast<const char*>(dk.image.data() + off), static_cast<std::streamsize>(len));
 }
 
 // =============================================================================
