@@ -16,6 +16,37 @@ HW) sont rapatriables via `tools/fetch_disk.py` (domaine public / freeware). Les
 commerciaux (Dungeon Master, Xenon 2, Arkanoid, Enchanted Land, Turrican) ne le sont PAS —
 tester avec ses propres images.
 
+## ⚠ Configuration : PAL/NTSC et couverture de la suite
+
+**C'est la ROM TOS qui fixe la fréquence de balayage au boot**, et cela change l'image
+affichée par les démos :
+
+| ROM | Fréquence |
+|-----|-----------|
+| suffixes **`uk` / `fr` / `de` / `es`** (`tos102uk`, `tos162uk`, `tos206fr`, `etos192fr`, `etos256fr`…) | **50 Hz — PAL** |
+| suffixe **`us`** (`tos102us`, `tos162us`, `tos206us`, `etos192us`, `etos256us`) | **60 Hz — NTSC** |
+
+Vérification en une commande — `./build/neost-headless roms/<rom>.img --frames 120`
+affiche `[headless] vidéo : 416x276 @ NN Hz`.
+
+**Conséquence mesurée (2026-08-01)** : les images **Spectrum 512** de
+`spectrum_512_auto_diapo.st` sont calculées pour le 50 Hz. Sous une ROM NTSC, les
+commutations de palette par ligne ne tombent plus au bon endroit : l'image sort
+**déchirée/tramée** au lieu du dégradé 512 couleurs — **sur ST comme sur STE**, et
+**à l'identique sous Hatari (0 px des deux côtés)**. C'est donc FIDÈLE, pas un bug ;
+le remède est une ROM européenne. Repères d'aire non-noire pour la diapo « coucher de
+soleil » : **0,555 = rendu correct (PAL)**, **0,475 = déchiré (NTSC)**.
+
+**Couverture de la suite** (12 étalons « machine », hors auto-tests) : `st` ×8 et
+`ste` ×4 ; `tos102uk` ×8 (50 Hz), `tos162us` ×3 + `etos256us` ×1 (60 Hz) ; 512 Ko ×10
+et 1 Mo ×2 ; `fastfdc` ×8. Donc **MegaST, MegaSTE, TOS 1.00/1.04/1.06/2.06 et EmuTOS
+PAL ne sont couverts par AUCUN étalon**. Une suite verte ne prouve rien hors de ces
+configurations : devant un rapport « ça plante dans le GUI », commencer par lire
+`neost.cfg` et rejouer la scène avec `--from-cfg neost.cfg --disk <image>`
+(+ `--shot-every N PRÉFIXE` pour voir *où* ça casse) avant de soupçonner une
+régression. Vérifié le 2026-08-01 : No Cooper, Cuddly Demos, Enchanted Land et
+Lethal Xcess « en panne » tournaient en `machine=megast` — tous corrects en `st`.
+
 ## Ordre de débogage affichage conseillé
 
 Du plus simple au plus violent, chaque étape suppose la précédente acquise :
@@ -42,6 +73,11 @@ Hatari : `video.c`, `spec512.c`.
 | **The Cuddly Demos** | The Carebears (TCB), 1989 | 1ʳᵉ démo à ouvrir les **4 bordures** (haut/bas/gauche/droite) simultanément : boucles de NOP calibrées qui commutent la fréquence au moment où le canon atteint les limites de l'affichage standard. Le robot du menu est dessiné puis **effacé en course avec le faisceau** (un seul buffer) : seul un rendu échantillonné PAR LIGNE le voit (cf. `lineSnap_`, commit 08b58e1) | Précision des timings de génération HSYNC/VSYNC + tampons internes Shifter | « Suppression de bordures » (BORDERMASK_*) |
 
 ### Quirk connu — PAS un bug d'émulation
+
+- **Spectrum 512 sous ROM NTSC** : images déchirées/tramées au lieu du dégradé 512
+  couleurs, parce que la ROM `…us` démarre la machine en 60 Hz (cf. § *Configuration :
+  PAL/NTSC* en tête de document). Identique sous Hatari (0 px), sur ST **et** sur STE.
+  Lancer ces disques avec `tos102uk`/`tos102fr`/`tos162uk`…
 
 - **Captain Blood** (ERE, crack 42-Crew anglais) : au chargement, le jeu scanne la ROM
   TOS à la recherche de la chaîne `AZER` (table clavier AZERTY, code en RAM `$1d69a`).
