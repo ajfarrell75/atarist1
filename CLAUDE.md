@@ -104,3 +104,14 @@ n'utiliser que pour du domaine public / freeware / démos). ROMs TOS propriétai
 « STe/Mega STe », TOS 2-like) = **STE / Mega STE** (programme le SCU). NeoST bascule
 automatiquement en mode ST si on lance un TOS ≤ 1.04 sur STE/MegaSTE (`adjustMachineForTos`,
 comme Hatari). Pour STE/MegaSTE → `etos256*` ou TOS 1.62/2.06.
+
+⚠ **La ROM fixe la fréquence de balayage** : suffixe **`us` → 60 Hz NTSC**
+(`tos102us`, `tos162us`, `tos206us`, `etos192us`, `etos256us`), suffixes **`uk`/`fr`/
+`de`/`es` → 50 Hz PAL**. Le contrôler d'une commande : `neost-headless roms/<rom>.img
+--frames 120` affiche `vidéo : … @ NN Hz`. Ça **change l'image des démos** : les
+images Spectrum 512 sont calculées pour le 50 Hz et sortent **déchirées** en NTSC (sur
+ST comme sur STE, à l'identique sous Hatari = fidèle). Les vieilles démos ST veulent
+une ROM PAL sur `machine=st`. Avant de soupçonner une régression sur un rapport « ça
+plante dans le GUI » : lire `neost.cfg`, rejouer avec `--from-cfg neost.cfg --disk
+<image> --shot-every N PRÉFIXE`. Couverture des étalons et détails →
+[`docs/TEST_SOFTWARE.md`](docs/TEST_SOFTWARE.md) § *Configuration : PAL/NTSC*.
