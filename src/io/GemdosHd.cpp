@@ -280,13 +280,16 @@ bool GemdosHd::setDirectory(const std::string& hostDir) {
     // headless (« --gemdos ../rel/dir »).
     std::string absDir = hostDir;
     makeAbsoluteName(absDir);
-    initDrives(absDir);
-    int mapped = 0;
-    for (auto& d : emudrives_) if (d.used) ++mapped;
-    if (mapped == 0) {
-        std::fprintf(stderr, "[gemdos] aucun lecteur GEMDOS mappé depuis %s\n", hostDir.c_str());
+    // VALIDER AVANT DE DÉTRUIRE : initDrives ferme les fichiers ouverts, purge les DTA
+    // et vide la table de lecteurs. L'appeler puis constater « aucun lecteur mappé »
+    // laissait le montage PRÉCÉDENT en miettes — un simple dossier disparu (clé USB
+    // retirée) suffisait à tuer le C: de la session, sans reset ni retour en arrière.
+    if (countMappableDrives(absDir) == 0) {
+        std::fprintf(stderr, "[gemdos] aucun lecteur GEMDOS mappé depuis %s "
+                     "(montage courant conservé)\n", hostDir.c_str());
         return false;
     }
+    initDrives(absDir);
     // Installe la cartouche système ($FA0000) : le TOS exécutera son C-INIT au boot.
     // ⚠ Écrase une éventuelle cartouche utilisateur (même stockage) : on efface donc
     // AUSSI son chemin, sans quoi unmount() croirait plus tard qu'une cartouche
@@ -419,6 +422,24 @@ static bool determineMaxPartitions(const std::string& dir, int& maxDrives) {
     }
     maxDrives = (last > 24) ? 24 : last;
     return multi;
+}
+
+// Combien de lecteurs `hostDir` mapperait-il ? MÊMES règles qu'initDrives, mais SANS
+// aucun effet de bord — indispensable pour valider AVANT de détruire : initDrives ferme
+// les fichiers ouverts, purge les DTA et vide la table de lecteurs, PUIS seulement on
+// découvrait qu'aucun lecteur n'était mappable. Un setDirectory en échec (dossier
+// disparu, clé USB retirée, faute de frappe) tuait donc le C: en cours de session.
+int GemdosHd::countMappableDrives(const std::string& hostDir) {
+    int nMaxDrives = 0;
+    const bool multi = determineMaxPartitions(hostDir, nMaxDrives);
+    int n = 0;
+    for (int i = 0; i < nMaxDrives && i < MAX_HARDDRIVES; i++) {
+        std::string dir = hostDir;
+        cleanFileName(dir);
+        if (multi) { dir.push_back(PATHSEP); dir.push_back((char)('C' + i)); }
+        if (hostDriveFolderExists(dir, 2 + i)) ++n;
+    }
+    return n;
 }
 
 void GemdosHd::initDrives(const std::string& hostDir) {

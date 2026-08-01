@@ -574,7 +574,7 @@ static uint32_t stateCrc32(const uint8_t* p, std::size_t n);   // défini plus b
 static uint32_t cartFingerprint(const std::vector<uint8_t>& cart) {
     if (cart.empty()) return 0u;
     std::vector<uint8_t> tmp(cart);
-    constexpr std::size_t kOldGemdosOff = 0x24;   // CART_OLDGEMDOS - $FA0000
+    constexpr std::size_t kOldGemdosOff = GemdosHd::CART_OLDGEMDOS - 0xFA0000u;
     for (std::size_t i = 0; i < 4 && kOldGemdosOff + i < tmp.size(); ++i)
         tmp[kOldGemdosOff + i] = 0;
     return stateCrc32(tmp.data(), tmp.size());
@@ -585,7 +585,11 @@ static uint32_t cartFingerprint(const std::vector<uint8_t>& cart) {
 static uint32_t stateCrc32(const uint8_t* p, std::size_t n);   // défini plus bas
 void Machine::serializeState(StateArchive& ar) {
     uint32_t magic   = 0x4E535453u;   // 'NSTS'
-    uint16_t version = 7;             // v7 : + empreinte GEMDOS/cartouche et cart sérialisée ; v6 : + commitAnchor_ (Shifter)
+    uint16_t version = 8;             // v8 : empreinte cartouche INSENSIBLE aux octets mutés par
+                                      // le HD GEMDOS + CTS/DCD actives au repos (le CONTENU d'un
+                                      // v7 a changé de sens : le refuser explicitement vaut mieux
+                                      // qu'un « cartouche différente » faux) ; v7 : + empreinte
+                                      // GEMDOS/cartouche et cart sérialisée ; v6 : + commitAnchor_
     ar(magic); ar(version);
     // Empreinte de configuration : un état n'est rechargeable QUE dans la même
     // config (loadState la vérifie AVANT de restaurer — sinon machine hybride :
@@ -686,9 +690,9 @@ bool Machine::loadState(const uint8_t* data, std::size_t n) {
     uint32_t magic;   std::memcpy(&magic, data, 4);
     uint16_t version; std::memcpy(&version, data + 4, 2);
     if (magic != 0x4E535453u) return false;
-    if (version != 7) {
+    if (version != 8) {
         std::fprintf(stderr, "[state] refusé : format v%u non supporté (cette version "
-                     "de NeoST écrit du v7) — re-sauver l'état avec F5\n", version);
+                     "de NeoST écrit du v8) — re-sauver l'état avec F5\n", version);
         return false;
     }
     uint8_t  mt    = data[6];

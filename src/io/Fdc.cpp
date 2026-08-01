@@ -419,7 +419,12 @@ bool Fdc::loadImage(const std::string& path, int drive) {
         // garde, une telle image repartait en « .st brut INSCRIPTIBLE » et writeBack
         // recopiait les secteurs invités par-dessus le fichier .dim source, DÉCALÉS de
         // 32 octets : destruction silencieuse du fichier de l'utilisateur.
-        const bool dimLike = raw.size() >= 32u + 512u && raw[0] == 0x42 && raw[1] == 0x42;
+        // Les QUATRE octets d'identité d'Hatari (dim.c:75), pas seulement « BB » : $4242
+        // est aussi l'encodage de « clr.w d2 », début plausible d'un secteur de boot —
+        // sniffer 2 octets mettait des .ST parfaitement valides en LECTURE SEULE, et les
+        // sauvegardes en jeu cessaient de persister sans le moindre message.
+        const bool dimLike = raw.size() >= 32u + 512u && raw[0] == 0x42 && raw[1] == 0x42
+                          && raw[0x03] == 0 && raw[0x0A] == 0;
         dk.image = std::move(raw);               // .st brut
         dk.raw   = !msaLike && !dimLike;
         if (msaLike)
