@@ -572,6 +572,12 @@ public:
         ar(liveGlueLen_);
         ar(nScreenRefreshRate_);
         ar(liveGlueLine_);
+        // liveGlueLine_ indexe glueLines_ via startHBL (curseur de rattrapage) :
+        // −1 = trame pas encore commencée, sinon une ligne existante. Une valeur
+        // négative forgée faisait écrire AVANT le tampon (cf. garde de startHBL).
+        ar.check(liveGlueLine_ >= -1
+                 && liveGlueLine_ < static_cast<int>(glueLines_.size()),
+                 "Shifter::liveGlueLine_ hors de glueLines_");
         ar(liveGlueWi_);            // std::size_t
         ar(liveGlueRes_);
         ar(liveGlueFreq50_);
@@ -579,6 +585,13 @@ public:
         // --- Spec512 : palette intra-ligne ---
         ar.objVec(colorWrites_, 11, [](StateArchive& a, ColorWrite& c) {
             a(c.frameCycle); a(c.colour); a(c.index); a(c.pc);
+            // `index` désigne un des 16 registres palette, et le replay spec512
+            // en fait un INDICE D'ÉCRITURE : « pal[c.index] = c.colour » sur un
+            // std::array<uint16_t,16> de la pile (renderGlueFrame). Non borné, un
+            // .state forgé écrivait jusqu'à 510 octets au-delà, à un offset ET
+            // avec une valeur choisis. Le chemin live pose toujours 0..15
+            // (recordColorWrite) — même garde que YM2149 sur RegEvent::reg.
+            a.check(c.index < 16, "Shifter::colorWrites_[].index >= 16");
         });
         ar(frameStartPalette_);
         ar(leftBorderPal0_);
@@ -604,6 +617,20 @@ public:
         ar.check(frame_.size() == static_cast<std::size_t>(curW_) * static_cast<std::size_t>(curH_));
         ar.check(curAH_ >= 0 && activeX_ >= 0 && activeY_ >= 0 &&
                  activeY_ + curAH_ <= curH_ && activeX_ + activeWidth() <= curW_);
+        // vcLineY_ est le curseur de ligne active, rattrapé par des boucles
+        // « while (vcLineY_ < cible) endVideoLine(); » (videoCounter, endFrame).
+        // Une valeur très négative forgée les rend praticables mais interminables
+        // (~2³¹ tours à ~200 accès bus chacun) : gel à 100 % de CPU, SIGKILL seul
+        // recours — même classe que les gels refermés sur frameStart_/lineCarry_.
+        // C'est la borne BASSE qui ferme le gel ; l'indexation de lineSnap_ par
+        // commitAnchor_ + vcLineY_ est déjà gardée sur place (endVideoLine).
+        // ⚠ La borne haute n'est PAS curAH_ : bordure BASSE retirée, commitScanline
+        // pousse volontairement vcLineY_ au-delà de curAH_ jusqu'à glueEndHBL_
+        // (overscan_top.st le fait) — un plafond curAH_ refusait cet état LÉGITIME.
+        // On plafonne donc au nombre de lignes de la trame, seule absurdité visée.
+        ar.check(vcLineY_ >= 0
+                 && vcLineY_ <= static_cast<int>(glueLines_.size()) + curAH_,
+                 "Shifter::vcLineY_ hors bornes");
     }
 };
 

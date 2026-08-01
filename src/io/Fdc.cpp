@@ -180,9 +180,19 @@ static uint8_t cmdType(uint8_t cr) {
 }
 
 // Numéro de secteur logique → offset image (.st : piste, puis face, puis secteur).
-static inline uint32_t lsnOffset(int track, int side, int sector, int spt, int sides) {
-    const int lsn = (track * sides + side) * spt + (sector - 1);
-    return uint32_t(lsn) * 512u;
+// ⚠ Renvoie un offset 64 bits : en uint32 le produit REBOUCLAIT. Un secteur 0
+// (registre SR_ restauré d'un save-state forgé, ou géométrie absurde) donne
+// lsn = −1 → off = $FFFFFE00, et la garde « off + 512 <= image.size() » se
+// calculait ALORS en uint32 : $FFFFFE00 + 512 = 0, donc la garde PASSAIT et
+// l'accès indexait l'image ~4 Go plus loin. Le 64 bits rend les gardes exactes.
+// Sentinelle « pas d'offset » : assez grande pour être refusée par toutes les
+// gardes, assez petite pour qu'un « off + longueur » ne reboucle pas à son tour.
+static constexpr uint64_t kNoLsn = uint64_t(1) << 62;
+
+static inline uint64_t lsnOffset(int track, int side, int sector, int spt, int sides) {
+    const int64_t lsn = (int64_t(track) * sides + side) * spt + (sector - 1);
+    if (lsn < 0) return kNoLsn;                          // secteur 0 / géométrie absurde
+    return uint64_t(lsn) * 512u;
 }
 
 // -----------------------------------------------------------------------------
@@ -871,12 +881,12 @@ uint8_t Fdc::readSectorST(uint8_t track, uint8_t sector, uint8_t side, int* pSiz
     // n'existent pas → RNF (port de Floppy_ReadSectors, floppy.c:907 Side >=
     // nSides). Sans cette garde, lsnOffset replierait sur la piste suivante.
     if (side >= dk.sides) return STR_RNF;
-    const uint32_t off = lsnOffset(track, side, sector, dk.spt, dk.sides);
+    const uint64_t off = lsnOffset(track, side, sector, dk.spt, dk.sides);
     if (off + 512u <= dk.image.size()) {
         static const bool fdcDebug = getenv("NEOST_FDC_DEBUG") != nullptr;
         if (fdcDebug)
-            std::fprintf(stderr, "[fdc-rd] tr=%d sr=%d side=%d off=%u data=%02x%02x%02x%02x\n",
-                         track, sector, side, off, dk.image[off], dk.image[off+1],
+            std::fprintf(stderr, "[fdc-rd] tr=%d sr=%d side=%d off=%llu data=%02x%02x%02x%02x\n",
+                         track, sector, side, (unsigned long long)off, dk.image[off], dk.image[off+1],
                          dk.image[off+2], dk.image[off+3]);
         for (int i = 0; i < 512; ++i) bufferAdd(dk.image[off + i]);
         *pSize = 512;
@@ -890,10 +900,10 @@ uint8_t Fdc::writeSectorST(uint8_t track, uint8_t sector, uint8_t side, int size
     FloppyDisk& dk = drive_[driveSel_];
     // Face au-delà de l'image → RNF (même garde que readSectorST, Floppy_WriteSectors).
     if (side >= dk.sides) return STR_RNF;
-    const uint32_t off = lsnOffset(track, side, sector, dk.spt, dk.sides);
-    if (off + uint32_t(size) <= dk.image.size()) {
+    const uint64_t off = lsnOffset(track, side, sector, dk.spt, dk.sides);
+    if (size >= 0 && off + uint64_t(size) <= dk.image.size()) {
         for (int i = 0; i < size; ++i) dk.image[off + i] = bufferReadBytePos(i);
-        writeBack(dk, off, uint32_t(size));   // Flopwr : recopie dans le .st
+        writeBack(dk, off, uint64_t(size));   // Flopwr : recopie dans le .st
         return 0;
     }
     return STR_RNF;
@@ -932,9 +942,9 @@ uint8_t Fdc::readTrackST(uint8_t track, uint8_t side) {
         for (int i = 0; i < 4; ++i) bufferAdd(dam[i]);
         uint8_t crcbuf[4 + 512];
         std::memcpy(crcbuf, dam, 4);
-        const uint32_t off = lsnOffset(track, side, sec, dk.spt, dk.sides);
+        const uint64_t off = lsnOffset(track, side, sec, dk.spt, dk.sides);
         for (int i = 0; i < 512; ++i) {
-            const uint8_t v = (off + uint32_t(i) < dk.image.size()) ? dk.image[off + i] : 0;
+            const uint8_t v = (off + uint64_t(i) < dk.image.size()) ? dk.image[off + i] : 0;
             bufferAdd(v);
             crcbuf[4 + i] = v;
         }
@@ -980,7 +990,7 @@ uint8_t Fdc::writeTrackBuffer() {
 
     // 2de passe : géométrie standard confirmée → écriture des secteurs.
     for (const Found& f : found) {
-        const uint32_t off = lsnOffset(f.tr, f.sd, f.sec, dk.spt, dk.sides);
+        const uint64_t off = lsnOffset(f.tr, f.sd, f.sec, dk.spt, dk.sides);
         if (off + 512u > dk.image.size()) return STR_LOST;     // garde-fou (ne devrait pas arriver)
         for (int j = 0; j < 512; ++j) dk.image[off + j] = buf_[f.dataPos + j];
         writeBack(dk, off, 512u);
@@ -989,12 +999,12 @@ uint8_t Fdc::writeTrackBuffer() {
 }
 
 // Recopie une zone modifiée de l'image en mémoire vers le fichier .st monté.
-void Fdc::writeBack(FloppyDisk& dk, uint32_t off, uint32_t len) {
+void Fdc::writeBack(FloppyDisk& dk, uint64_t off, uint64_t len) {
     if (!dk.raw || dk.path.empty() || off + len > dk.image.size()) return;  // .msa : pas de recopie
     std::fstream f(dk.path, std::ios::binary | std::ios::in | std::ios::out);
     if (!f) return;                  // image en lecture seule / FS virtuel non inscriptible
-    f.seekp(off);
-    f.write(reinterpret_cast<const char*>(dk.image.data() + off), len);
+    f.seekp(static_cast<std::streamoff>(off));
+    f.write(reinterpret_cast<const char*>(dk.image.data() + off), static_cast<std::streamsize>(len));
 }
 
 // =============================================================================

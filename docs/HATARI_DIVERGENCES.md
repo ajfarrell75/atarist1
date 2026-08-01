@@ -133,7 +133,22 @@ spec512, scroll fin STE de base, masquage palette par machine : **conformes**.
 ### FDC WD1772 + DMA + STX — `Fdc.cpp`, `StxImage.cpp` ↔ `fdc.c`, `floppies/stx.c`
 Machines à états type I-IV, bits de statut par type, timings (spin-up, head-load, index),
 `NextSectorID`, FIFO 16 o, densité `$FF860E`, fuzzy/timing STX, persistance `.wd1772`
-byte-compatible, `.MSA`/`.DIM` : **conformes** (vérifiés ligne à ligne).
+byte-compatible : **conformes** (vérifiés ligne à ligne).
+
+- **[D0 — moyenne]** `.MSA`/`.DIM` montées en **LECTURE SEULE**, et le bit **WPRT est
+  présenté au programme émulé** (`Fdc.cpp:472` : `writeProtect = !raw || !writable`).
+  Hatari ne dérive WPRT que du réglage et de `stat()` — **jamais du format d'image**
+  (`floppy.c:205-225` `Floppy_IsWriteProtected`) : les écritures vont dans le tampon RAM
+  et sont ré-encodées à l'éjection (`MSA_WriteDisk`, `DIM_WriteDisk`). Chez NeoST le
+  drapeau ne sert pas qu'à bloquer la recopie hôte : il pilote le statut du WD1772
+  (`Fdc.cpp:1677`, `:1896`, `:2106`). *Impact : sur toute image `.msa`/`.dim`, les
+  sauvegardes en jeu, tables de high-scores, écritures depuis le bureau TOS et les
+  protections qui écrivent-puis-relisent échouent avec « disque protégé » — alors que la
+  même disquette en `.st` fonctionne.* Le portage manquant est `MSA_WriteDisk`/
+  `DIM_WriteDisk` dans `writeBack` (le `.dim` est trivial : en-tête 32 o + secteurs
+  bruts) ; `dk.raw` doit alors cesser de forcer `writeProtect`.
+  ⚠ Cette ligne affirmait auparavant que `.MSA`/`.DIM` étaient « conformes (vérifiés
+  ligne à ligne) » — c'était faux, et cela a masqué l'écart (audit du 2026-08-01).
 
 - **[D1 — moyenne]** WRITE TRACK STX : NeoST parse le flux MFM écrit (`$FE`→ID, `$FB/$F8`→data)
   et le rend visible aux lectures, **régénère un CRC valide + `fdcStatus=0`** (`StxImage.cpp:254-300`).
@@ -327,6 +342,13 @@ par le présent document :
   dit l'inverse de son code).
 - **SCU $FF8E07** (SC3) : NeoST renvoie le VME Interrupter ; Hatari renvoie le Sys Interrupter
   (copier-coller `scu_vme.c:282-286`).
+- **GPIP bits 3 (blitter) et 6 (RI)** : NeoST les recalcule depuis l'état vivant des lignes
+  (`Mfp.cpp:570-583`), Hatari les traite en VERROU que `MFP_Reset` met à 0 et que rien ne
+  relève ensuite (bit 6 n'a **aucun** appelant dans tout son arbre ; bit 3 attend le premier
+  `Blitter_Start`). Sur vrai matériel ces entrées sont tirées haut au repos → NeoST est plus
+  proche du matériel. ⚠ **Conséquence pour les chasses différentielles** : `$FFFA01` au repos
+  vaut **$F9** chez NeoST contre **$B1** chez Hatari — un diff de trace sur ce registre est
+  ATTENDU et n'est pas une régression.
 
 ---
 

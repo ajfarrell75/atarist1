@@ -635,7 +635,13 @@ void Machine::serializeState(StateArchive& ar) {
     // Scheduler::now_ forgés). Aucun `ar.check` ne couvrait cette section.
     // Bornes larges à dessein : elles ne visent que l'absurde, pas la validation fine.
     ar.check(cpl_ > 0 && cpl_ <= 4096 && lpf_ > 0 && lpf_ <= 4096);
-    ar.check(renderLine_ >= 0 && tbLine_ >= 0 && hblLine_ >= 0);
+    // Bornées EN HAUT aussi : ces trois compteurs de ligne servent de cible aux
+    // boucles de rattrapage du Shifter (« while (vcLineY_ < y) endVideoLine(); »
+    // dans commitScanline/videoCounter). Un hblLine_ forgé à ~2³¹ les rend
+    // interminables — gel à 100 % de CPU, comme frameStart_/lineCarry_ ci-dessus.
+    ar.check(renderLine_ >= 0 && tbLine_ >= 0 && hblLine_ >= 0
+             && renderLine_ <= lpf_ && tbLine_ <= lpf_ && hblLine_ <= lpf_,
+             "Machine::renderLine_/tbLine_/hblLine_ hors [0,lpf_]");
     ar.check(disp_ >= 0 && deEnd_ >= 0 && dispStart_ >= 0);
     ar.check(frameStart_ >= 0 && frameEnd_ >= frameStart_
              && frameEnd_ - frameStart_ <= 8 * int64_t(lpf_) * int64_t(cpl_));

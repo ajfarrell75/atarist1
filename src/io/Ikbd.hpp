@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <deque>
 #include <functional>
+#include <type_traits>
 
 #include "core/Scheduler.hpp"
 #include "core/StateArchive.hpp"
@@ -147,7 +148,18 @@ public:
         ar.arr(hostJoy_);  // uint8_t[2]
 
         // --- Mode souris ---
-        ar(mouseMode_);
+        // Transité par le TYPE SOUS-JACENT, jamais par l'énumération elle-même :
+        // matérialiser dans une enum une valeur hors de son domaine est un
+        // COMPORTEMENT INDÉFINI (UBSan sur un .state forgé : « load of value 173,
+        // which is not a valid value for type MouseMode »), et mouseMode_ pilote
+        // ensuite des comparaisons dans tout le traitement souris. Même taille que
+        // l'enum → format de fichier INCHANGÉ (pas de bump de version).
+        std::underlying_type_t<MouseMode> mm =
+            static_cast<std::underlying_type_t<MouseMode>>(mouseMode_);
+        ar(mm);
+        const bool mmOk = (mm >= REL && mm <= CURSOR);
+        ar.check(mmOk, "Ikbd::mouseMode_ hors domaine");
+        if (ar.loading() && mmOk) mouseMode_ = static_cast<MouseMode>(mm);
         ar(absX_);
         ar(absY_);
         ar(absMaxX_);

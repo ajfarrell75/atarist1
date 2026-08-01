@@ -109,6 +109,9 @@ jobs:
       # sans problème sur le runner hôte, la glibc étant compatible ascendante.
       - name: Suite de validation (palier full — inclut les étalons PIXEL)
         run: |
+          # ffmpeg : cf. le job arm64 — compare_screenshot.py décode les références
+          # .png via ffmpeg, sans quoi les 5 étalons à référence PNG échouent.
+          sudo apt-get install -y --no-install-recommends ffmpeg
           cmake -B build -DCMAKE_BUILD_TYPE=Release
           cmake --build build -j"$(nproc)" --target neost-headless
           python3 tools/run_all.py --tier full
@@ -207,12 +210,25 @@ jobs:
       - name: Installer les dépendances (GLFW dynamique, embarqué ensuite par linuxdeploy)
         run: |
           sudo apt-get update -qq
+          # ffmpeg : dépendance NON ÉVIDENTE du palier « full » — compare_screenshot.py
+          # décode les références .png en passant par ffmpeg. Sans lui, les 5 étalons à
+          # référence PNG (nocooper, nocooper_greetings, spec512 ×3) lèvent une
+          # FileNotFoundError et la garde de validation tombe.
           sudo apt-get install -y --no-install-recommends \
-            cmake g++ libglfw3-dev libgl1-mesa-dev file
+            cmake g++ libglfw3-dev libgl1-mesa-dev file ffmpeg
 
       - name: Build (Release) — neost + neost-headless
+        env:
+          NEOST_VERSION: ${{ needs.version.outputs.neost_version }}
         run: |
+          # ⚠ -DNEOST_VERSION_STR est OBLIGATOIRE : ce job compile en direct (les
+          # autres passent par build_in_bionic.sh / build_in_bookworm_arm64.sh /
+          # package_macos.sh, qui le posent tous). Sans lui le binaire garde le
+          # project(VERSION) de CMake (0.1.0) et la garde « --version | grep
+          # $NEOST_VERSION » plus bas échoue à TOUS les coups — or `publish` a
+          # besoin de ce job, donc aucune release ne pouvait sortir.
           cmake -B build -DCMAKE_BUILD_TYPE=Release \
+                -DNEOST_VERSION_STR="${NEOST_VERSION}" \
                 -DCMAKE_EXE_LINKER_FLAGS="-static-libstdc++ -static-libgcc"
           cmake --build build -j"$(nproc)"
           test -x build/neost   # le GUI DOIT être là (GLFW trouvé), pas juste le headless

@@ -309,7 +309,16 @@ def verify_refs(entries: list[dict]) -> int:
         if ref is not None and not e.get("uniform_ok"):
             got = _ref_content(ref)
             if got is None:
-                print(f"  ⚠ {eid}: vacuité non vérifiable ({ref.name} illisible — ffmpeg absent ?)")
+                # ÉCHEC, pas avertissement : un contrôle qui ne peut pas s'exécuter ne
+                # prouve RIEN, et il échouait jusqu'ici « en mode ça passe ». Sans
+                # ffmpeg, les 6 références .png — dont les TROIS oracles spec512,
+                # justement l'étalon dont la référence a été noire deux fois — sortaient
+                # « RÉFS OK », code 0. Une référence noircie repassait donc verte sur
+                # toute machine sans ffmpeg. Le remède est d'installer ffmpeg, pas de
+                # laisser le garde-fou s'auto-désarmer.
+                print(f"  ✗ {eid}: vacuité NON VÉRIFIABLE ({ref.name} illisible — "
+                      f"ffmpeg absent ?) — contrôle non concluant, donc refusé")
+                bad += 1
             else:
                 nc, minor = got
                 if nc <= 1 or minor < 0.005:
