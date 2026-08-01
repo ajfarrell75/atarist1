@@ -141,6 +141,15 @@ static Config loadConfig(const std::string& exeDir) {
     if (!f) f.open("neost.cfg");
     std::string line;
     while (std::getline(f, line)) {
+        // Fin de ligne CRLF (fichier passé par Windows, un éditeur, un partage réseau) :
+        // getline ne retire que le \n, et TOUTES les valeurs sont comparées EXACTEMENT
+        // (parseMachine, parseRamBytes, == "1"). Un \r collé faisait donc tomber chaque
+        // clé sur son défaut SILENCIEUX — machine ST demandée, STE démarrée ; 4 Mo
+        // demandés, 512 Ko alloués — et rendait tout chemin introuvable. Pire : saveConfig
+        // réécrivait ensuite le fichier avec les \r intacts, donc la panne était définitive.
+        // Même rognage que SymbolTable (Symbols.cpp). On retire aussi les espaces de fin.
+        while (!line.empty() && (line.back() == '\r' || line.back() == ' ' || line.back() == '\t'))
+            line.pop_back();
         if      (line.rfind("rom=", 0)  == 0) c.rom  = line.substr(4);
         else if (line.rfind("disk=", 0) == 0) c.disk = line.substr(5);
         else if (line.rfind("cart=", 0) == 0) c.cart = line.substr(5);
@@ -259,47 +268,101 @@ static std::vector<std::string> g_browseSubdirs;
 static std::vector<std::string> g_browseShortcutPaths;   // cibles des raccourcis
 static std::vector<std::string> g_browseShortcutLabels;  // libellés (icône FA + nom)
 static int g_browseSel = 0;
+// Image PRISTINE de la configuration, telle que lue au démarrage : c'est elle que le
+// mode borne réécrit (cf. saveConfig), et non la structure de travail salie en séance.
+static Config g_cfgPristine;
 // force=true : écrit la config MÊME en kiosk (normalement figé). Utilisé pour le seul
 // réglage que la borne a le droit de persister : le dossier ROM additionnel choisi via
 // le menu in-game (le reste de la config kiosk reste identique à ce qui a été chargé).
 static void saveConfig(const std::string& exeDir, Config& c, Machine* machine = nullptr, bool force = false) {
     if ((g_kiosk || g_kioskLaunched) && !force) return;   // kiosk : configuration figée — la borne repart toujours identique
     if (machine) snapshotRtc(*machine, c);
-    std::ofstream f(cfgPath(exeDir));
-    if (!f) f.open("neost.cfg");
-    if (f) f << "rom=" << c.rom << "\ndisk=" << c.disk << "\ncart=" << c.cart
-             << "\ngemdos=" << c.gemdos << "\nacsi=" << c.acsi
-             << "\nmono=" << (c.mono ? 1 : 0)
-             << "\ncpu=" << c.cpu << "\nmachine=" << c.machine << "\nmem=" << c.mem
-             << "\nfpu=" << (c.fpu ? 1 : 0)
-             << "\njoyport=" << c.joyport
-             << "\njoymap=" << c.joymap
-             << "\njoydeadzone=" << c.joydeadzone << "\nfastfdc=" << (c.fastfdc ? 1 : 0)
-             << "\nvolume=" << c.volume
-             << "\nshowDisk=" << (c.showDisk ? 1 : 0)
-             << "\nshowCart=" << (c.showCart ? 1 : 0)
-             << "\nshowHex=" << (c.showHex ? 1 : 0)
-             << "\nshowCpu=" << (c.showCpu ? 1 : 0)
-             << "\nshowJoy=" << (c.showJoy ? 1 : 0)
-             << "\ndock=" << (c.dock ? 1 : 0)
-             << "\nautozoom=" << (c.autoZoom ? 1 : 0)
-             << "\ncrt=" << (c.crt ? 1 : 0)
-             << "\ncrt_bright=" << c.crtParams.brightness
-             << "\ncrt_contrast=" << c.crtParams.contrast
-             << "\ncrt_sat=" << c.crtParams.saturation
-             << "\ncrt_hue=" << c.crtParams.hue
-             << "\ncrt_sharp=" << c.crtParams.sharpness
-             << "\ncrt_persist=" << c.crtParams.persistence
-             << "\ncrt_scanlines=" << c.crtParams.scanlines
-             << "\ncrt_barrel=" << c.crtParams.barrel
-             << "\ncrt_mask=" << static_cast<int>(c.crtParams.shadowMask)
-             << "\ncrt_maskstr=" << c.crtParams.shadowMaskStrength
-             << "\ncrt_lumgain=" << c.crtParams.luminanceGain
-             << "\ncrt_center=" << c.crtParams.centerLighting
-             << "\ncrt_gamma=" << c.crtParams.phosphorGamma
-             << "\nrtc=" << c.rtc << "\nrtc_saved=" << c.rtcSaved << "\n";
+    // MODE BORNE : la configuration est FIGÉE, et `force` ne lève ce gel que pour deux
+    // réglages d'exploitation — les dossiers ROM et l'affectation des manettes. Mais
+    // `force` réécrivait TOUT le fichier depuis la structure en mémoire, or celle-ci a
+    // été salie entre-temps (F10 pose cfg.autoZoom sans passer par ici, et un aller-retour
+    // par le bureau rend tous les menus atteignables). La borne repartait donc avec les
+    // réglages du dernier visiteur — exactement l'invariant que le gel doit garantir.
+    // On repart donc de l'image PRISTINE lue au démarrage, en n'y reportant que les deux
+    // champs autorisés. Le déclencheur n'a même pas besoin d'être volontaire : un dossier
+    // ROM disparu suffit (auto-purge → saveConfig(force=true)).
+    const Config* src = &c;
+    Config kioskOut;
+    if ((g_kiosk || g_kioskLaunched) && force) {
+        kioskOut         = g_cfgPristine;
+        kioskOut.romDirs = c.romDirs;
+        kioskOut.joymap  = c.joymap;
+        kioskOut.rtc     = c.rtc;          // horloge : état machine, pas un réglage d'expo
+        kioskOut.rtcSaved = c.rtcSaved;
+        src = &kioskOut;
+    }
+    const Config& w = *src;
+    // Écriture ATOMIQUE : on rédige un fichier temporaire à côté, on vérifie que tout
+    // s'est bien écrit, PUIS on renomme par-dessus. Auparavant, ouvrir le flux tronquait
+    // (O_TRUNC) le fichier AVANT de savoir si on saurait le réécrire, et aucun retour
+    // n'était testé : disque plein, quota atteint ou coupure au mauvais moment laissaient
+    // un neost.cfg amputé — réglages CRT, horloge, joymap et TOUS les kiosk_romdir perdus,
+    // sans le moindre message. L'échec survenait dans le destructeur du flux, hors de
+    // portée de tout point de contrôle.
+    const std::string finalPath = cfgPath(exeDir);
+    std::string tmpPath = finalPath + ".tmp";
+    std::ofstream f(tmpPath);
+    if (!f) { tmpPath = "neost.cfg.tmp"; f.open(tmpPath); }
+    if (f) f << "rom=" << w.rom << "\ndisk=" << w.disk << "\ncart=" << w.cart
+             << "\ngemdos=" << w.gemdos << "\nacsi=" << w.acsi
+             << "\nmono=" << (w.mono ? 1 : 0)
+             << "\ncpu=" << w.cpu << "\nmachine=" << w.machine << "\nmem=" << w.mem
+             << "\nfpu=" << (w.fpu ? 1 : 0)
+             << "\njoyport=" << w.joyport
+             << "\njoymap=" << w.joymap
+             << "\njoydeadzone=" << w.joydeadzone << "\nfastfdc=" << (w.fastfdc ? 1 : 0)
+             << "\nvolume=" << w.volume
+             << "\nshowDisk=" << (w.showDisk ? 1 : 0)
+             << "\nshowCart=" << (w.showCart ? 1 : 0)
+             << "\nshowHex=" << (w.showHex ? 1 : 0)
+             << "\nshowCpu=" << (w.showCpu ? 1 : 0)
+             << "\nshowJoy=" << (w.showJoy ? 1 : 0)
+             << "\ndock=" << (w.dock ? 1 : 0)
+             << "\nautozoom=" << (w.autoZoom ? 1 : 0)
+             << "\ncrt=" << (w.crt ? 1 : 0)
+             << "\ncrt_bright=" << w.crtParams.brightness
+             << "\ncrt_contrast=" << w.crtParams.contrast
+             << "\ncrt_sat=" << w.crtParams.saturation
+             << "\ncrt_hue=" << w.crtParams.hue
+             << "\ncrt_sharp=" << w.crtParams.sharpness
+             << "\ncrt_persist=" << w.crtParams.persistence
+             << "\ncrt_scanlines=" << w.crtParams.scanlines
+             << "\ncrt_barrel=" << w.crtParams.barrel
+             << "\ncrt_mask=" << static_cast<int>(w.crtParams.shadowMask)
+             << "\ncrt_maskstr=" << w.crtParams.shadowMaskStrength
+             << "\ncrt_lumgain=" << w.crtParams.luminanceGain
+             << "\ncrt_center=" << w.crtParams.centerLighting
+             << "\ncrt_gamma=" << w.crtParams.phosphorGamma
+             << "\nrtc=" << w.rtc << "\nrtc_saved=" << w.rtcSaved << "\n";
     // Dossiers ROM additionnels (0..N) : une ligne kiosk_romdir= par dossier.
-    if (f) for (const auto& d : c.romDirs) f << "kiosk_romdir=" << d << "\n";
+    if (f) for (const auto& d : w.romDirs) f << "kiosk_romdir=" << d << "\n";
+    if (!f) { std::fprintf(stderr, "[cfg] écriture impossible (%s) — configuration NON enregistrée\n",
+                           tmpPath.c_str());
+              f.close(); std::error_code rmec; fs::remove(tmpPath, rmec); return; }
+    f.flush();
+    const bool ok = f.good();
+    f.close();
+    if (!ok) {   // le flush a échoué : on garde l'ANCIEN fichier intact
+        std::fprintf(stderr, "[cfg] écriture incomplète (%s) — ancienne configuration conservée\n",
+                     tmpPath.c_str());
+        std::error_code rmec; fs::remove(tmpPath, rmec);
+        return;
+    }
+    // Le nom de destination est celui du .tmp amputé de son suffixe : si l'ouverture est
+    // retombée sur le dossier courant, le rename doit y rester aussi.
+    const std::string dest = tmpPath.substr(0, tmpPath.size() - 4);
+    std::error_code mvec;
+    fs::rename(tmpPath, dest, mvec);
+    if (mvec) {
+        std::fprintf(stderr, "[cfg] remplacement impossible (%s → %s) : %s\n",
+                     tmpPath.c_str(), dest.c_str(), mvec.message().c_str());
+        std::error_code rmec; fs::remove(tmpPath, rmec);
+    }
 }
 
 #if defined(NEOST_WITH_IMGUI)
@@ -1992,7 +2055,10 @@ void drawStScreen(const GlScreen& s, bool captured, bool& reqCapture, float topO
 // reqEject = éjection.
 void drawDiskLibrary(const std::string& disksDir, const std::string& mounted,
                      std::string& reqMount, bool& reqEject) {
-    ImGui::Begin("Disk Library");
+    // Fenêtre repliée ou onglet non sélectionné : Begin() rend false et TOUT ce qui suit
+    // est invisible. Sans ce retour anticipé on payait quand même le scan complet du
+    // dossier à chaque trame — pour rien.
+    if (!ImGui::Begin("Disk Library")) { ImGui::End(); return; }
     const std::string curName = mounted.empty() ? "(vide)"
                                                  : fs::path(mounted).filename().string();
     // Bouton Éjecter COMPLÈTEMENT À GAUCHE, puis le nom du disque monté à sa droite.
@@ -2010,44 +2076,65 @@ void drawDiskLibrary(const std::string& disksDir, const std::string& mounted,
         const std::string mountedName = mounted.empty() ? "" : fs::path(mounted).filename().string();
         // Récolte RÉCURSIVE des images .st/.msa/.dim/.stx, triées par ordre alphabétique de
         // DOSSIER puis de FICHIER (insensible à la casse) sur le chemin relatif à disks/.
-        std::vector<fs::path> images;
-        // Itération manuelle : le range-for lancerait filesystem_error sur un
-        // sous-dossier/symlink illisible — et ce scan tourne À CHAQUE frame.
-        fs::recursive_directory_iterator dit(base, fs::directory_options::skip_permission_denied, ec), dend;
-        while (!ec && dit != dend) {
-            const fs::directory_entry& e = *dit;
-            std::error_code ec2;
-            if (e.is_regular_file(ec2)) {
-                std::string ext = e.path().extension().string();
-                for (auto& ch : ext) ch = (char)std::tolower((unsigned char)ch);
-                if (ext == ".st" || ext == ".msa" || ext == ".dim" || ext == ".stx")
-                    images.push_back(e.path());
+        //
+        // ⚠ MISE EN CACHE OBLIGATOIRE. Ce scan tournait à CHAQUE trame, et sa clé de tri
+        // appelait fs::relative() — un weakly_canonical(), donc un readlink par composant —
+        // DEPUIS le comparateur de std::sort, soit O(n log n) fois. Mesuré : 21 ms par trame
+        // (le budget PAL entier) sur les 77 images du dépôt, et l'émulateur tombait de 50 à
+        // 0,9 trame/s sur une ludothèque de 3000 images, la fenêtre étant ouverte par défaut.
+        // Le chemin relatif est ici purement lexical : lexically_relative() ne touche pas le
+        // disque. On calcule la clé UNE fois par image (décorer-trier-dévorer).
+        struct Entry { std::string path, rel, key; };
+        static std::vector<Entry> cache;
+        static std::string  cacheDir;
+        static double       cacheTime = -1.0;
+        const double now = ImGui::GetTime();
+        bool refresh = (cacheDir != disksDir) || cacheTime < 0.0 || (now - cacheTime) > 2.0;
+        if (ImGui::SmallButton("Rafraîchir")) refresh = true;
+        ImGui::SameLine();
+        ImGui::TextDisabled("(%zu images)", cache.size());
+        if (refresh) {
+            cache.clear();
+            cacheDir  = disksDir;
+            cacheTime = now;
+            // Itération manuelle : le range-for lancerait filesystem_error sur un
+            // sous-dossier/symlink illisible.
+            fs::recursive_directory_iterator dit(base, fs::directory_options::skip_permission_denied, ec), dend;
+            while (!ec && dit != dend) {
+                const fs::directory_entry& e = *dit;
+                std::error_code ec2;
+                if (e.is_regular_file(ec2)) {
+                    std::string ext = e.path().extension().string();
+                    for (auto& ch : ext) ch = (char)std::tolower((unsigned char)ch);
+                    if (ext == ".st" || ext == ".msa" || ext == ".dim" || ext == ".stx") {
+                        Entry en;
+                        en.path = e.path().string();
+                        en.rel  = e.path().lexically_relative(base).generic_string();
+                        en.key  = en.rel;
+                        for (auto& ch : en.key) ch = (char)std::tolower((unsigned char)ch);
+                        cache.push_back(std::move(en));
+                    }
+                }
+                dit.increment(ec);
             }
-            dit.increment(ec);
+            ec.clear();
+            std::sort(cache.begin(), cache.end(),
+                      [](const Entry& a, const Entry& b) { return a.key < b.key; });
         }
-        ec.clear();
-        auto sortKey = [&](const fs::path& p) {
-            std::string rel = fs::relative(p, base, ec).generic_string();   // "sous-dossier/fichier"
-            for (auto& ch : rel) ch = (char)std::tolower((unsigned char)ch);
-            return rel;
-        };
-        std::sort(images.begin(), images.end(),
-                  [&](const fs::path& a, const fs::path& b) { return sortKey(a) < sortKey(b); });
 
-        for (const auto& p : images) {
-            const std::string rel = fs::relative(p, base, ec).generic_string();  // affiché (montre le dossier)
-            ImGui::PushID(p.string().c_str());
+        for (const auto& en : cache) {
+            ImGui::PushID(en.path.c_str());
             // Chemin COMPLET et non nom de fichier : le scan est récursif, et deux
             // dumps homonymes dans deux sous-dossiers (« Xenon/DISK1.ST », « Gods/
             // DISK1.ST » — nommage très courant) étaient tous deux marqués « montée »,
             // aucun n'offrant plus le bouton Monter : le second devenait inaccessible.
-            if (!mounted.empty() && p.string() == mounted) {
+            if (!mounted.empty() && en.path == mounted) {
                 ImGui::TextDisabled("●");                  // montée
             } else if (ImGui::SmallButton("Monter")) {
-                reqMount = p.string();
+                reqMount = en.path;
             }
             ImGui::SameLine();
-            ImGui::TextUnformatted(rel.c_str());
+            ImGui::TextUnformatted(en.rel.c_str());        // affiché (montre le dossier)
             ImGui::PopID();
         }
     } else {
@@ -2127,6 +2214,7 @@ int main(int argc, char** argv) {
     }();
     // Préférences mémorisées (dernier ROM + type de moniteur).
     Config cfg = loadConfig(exeDir);
+    g_cfgPristine = cfg;      // référence figée pour le mode borne (cf. saveConfig)
     g_showDisk = cfg.showDisk; g_showCart = cfg.showCart; g_showHex = cfg.showHex;
     g_showCpu  = cfg.showCpu;  g_showJoy  = cfg.showJoy;
     g_dockOn   = cfg.dock;     // mode ancré mémorisé (cf. renderDockSpace)
@@ -3361,10 +3449,25 @@ int main(int argc, char** argv) {
                             // les parcourrait RÉCURSIVEMENT, sans limite de profondeur ni
                             // de temps, DANS le thread GUI — la borne se figerait plusieurs
                             // minutes à chaque ouverture du menu, sans aucun retour.
-                            const fs::path bp(g_browseDir);
+                            // Comparaison CANONIQUE des deux côtés : l'égalité de chemins
+                            // brute se contournait par une simple barre oblique finale
+                            // (« /home/x/ » ≠ « /home/x »), et /home — le PARENT de tous
+                            // les dossiers personnels, donc pire encore — passait tout droit.
+                            // On refuse donc aussi tout ANCÊTRE du dossier personnel.
+                            std::error_code cec;
+                            fs::path bp = fs::weakly_canonical(fs::path(g_browseDir), cec);
+                            if (cec) bp = fs::path(g_browseDir).lexically_normal();
                             const char* home = std::getenv("HOME");
-                            const bool tooBroad = (bp == bp.root_path())
-                                || (home && *home && bp == fs::path(home));
+                            bool tooBroad = (bp == bp.root_path());
+                            if (!tooBroad && home && *home) {
+                                std::error_code hec;
+                                fs::path hp = fs::weakly_canonical(fs::path(home), hec);
+                                if (hec) hp = fs::path(home).lexically_normal();
+                                // bp == hp, ou bp est un ancêtre de hp (/home, /) → refus.
+                                const std::string relToHome = hp.lexically_relative(bp).generic_string();
+                                tooBroad = (bp == hp)
+                                        || (!relToHome.empty() && relToHome.rfind("..", 0) != 0);
+                            }
                             if (tooBroad) {
                                 g_stateMsg = "Dossier trop vaste (racine / maison) — refusé";
                                 g_stateMsgFrames = 180;
