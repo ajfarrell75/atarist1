@@ -97,14 +97,24 @@ def run_hatari_oracle(entry: dict, out_png: Path) -> int:
         return 1
     rom = str(ROOT / entry.get("rom", "roms/etos192us.img"))
     disk = str(ROOT / entry["disk"])
-    vbls = str(entry.get("frames", 400))
-    frame = str(entry.get("frame", int(vbls) - 10))
+    frames = int(entry.get("frames", 400))
+    frame = int(entry.get("frame", frames - 10))
+    # MARGE obligatoire : Hatari doit tourner AU-DELÀ de la trame extraite. Avec
+    # run-vbls == frame, l'image demandée est la toute dernière de l'AVI — souvent
+    # absente ou incomplète, et ffmpeg rend alors une image NOIRE. C'est ainsi que la
+    # référence « oracle » de spectrum512_diapo était devenue entièrement noire : le
+    # premier étalon spec512 du projet ne validait plus AUCUN pixel de rendu.
+    vbls = str(max(frames, frame + 25))
+    frame = str(frame)
     machine = entry.get("machine", "st")
+    # Traduction de « mem » vers --memsize d'Hatari (0 = 512 Ko, sinon la taille en Mo).
+    memTxt = str(entry.get("mem", "512k")).lower()
+    memArg = "0" if memTxt.startswith("512") else memTxt.rstrip("m")
     cmd = ["bash", str(HATARI_ORACLE), rom, disk, vbls, frame, str(out_png), machine]
     # oracle_fastfdc : aligne la timeline Hatari sur le run NeoST --fastfdc (sans quoi
     # les numéros de trame divergent — le FDC réel charge chaque image bien plus tard).
-    if entry.get("oracle_fastfdc"):
-        cmd.append("fastfdc")
+    cmd.append("fastfdc" if entry.get("oracle_fastfdc") else "-")   # 7e arg positionnel
+    cmd.append(memArg)                                             # 8e : taille RAM
     print("  $", " ".join(cmd))
     return subprocess.run(cmd, cwd=ROOT).returncode
 

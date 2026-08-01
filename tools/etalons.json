@@ -53,10 +53,11 @@
    "mem": "512k",
    "cpu": "moira",
    "fastfdc": true,
-   "frames": 810,
-   "frame": 800,
+   "frames": 1200,
+   "frame": 1199,
    "crop": "active",
    "max_diff_px": 0,
+      "oracle_fastfdc": true,
    "ref_kind": "oracle"
   },
   {

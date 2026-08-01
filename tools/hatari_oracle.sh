@@ -13,6 +13,11 @@ else
 fi
 TOS=${1:?tos}; DISK=${2:?disk}; VBLS=${3:-1400}; FRAME=${4:-1300}; OUT=${5:-/tmp/hatari_frame.png}
 MACHINE=${6:-st}
+# 8ᵉ arg : taille RAM en Mo au format Hatari (--memsize : 0 = 512 Ko, 1 = 1 Mo…).
+# SANS elle, Hatari bootait avec sa taille par défaut alors que NeoST utilise celle de
+# l'étalon : timeline de boot différente, donc numéros de trame décalés — c'est ce qui
+# rendait l'oracle de spectrum512_diapo inexploitable (image noire).
+MEMSIZE=${8:-0}
 # 7ᵉ arg optionnel « fastfdc » : aligne la timeline oracle sur un run NeoST --fastfdc
 # (sinon FDC vitesse réelle — les numéros de trame ne correspondent PAS entre les deux).
 FASTFDC=()
@@ -25,6 +30,7 @@ mkdir -p /tmp/hatari_home
 # refusé par le binaire Homebrew macOS (flag nu). On tente « on », repli flag nu.
 run_hatari() {
   "$HATARI" --machine "$MACHINE" --tos "$TOS" --monitor rgb \
+    --memsize "$MEMSIZE" \
     --disk-a "$DISK" \
     --sound off --fast-forward on --confirm-quit off --statusbar off \
     --frameskips 0 --alert-level fatal \
