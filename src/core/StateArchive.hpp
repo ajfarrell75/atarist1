@@ -10,6 +10,7 @@
 // =============================================================================
 #pragma once
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <type_traits>
 #include <vector>
@@ -29,7 +30,16 @@ public:
     // Valide un invariant AU CHARGEMENT (no-op en save) : un champ restauré hors
     // bornes (fichier forgé/corrompu passé le CRC) met l'archive en échec →
     // Machine::loadState rejoue le backup au lieu de servir des index toxiques.
-    void check(bool cond) { if (loading_ && !cond) ok_ = false; }
+    // `what` : étiquette de l'invariant, affichée sur stderr au premier échec —
+    // sans elle, un save-state refusé ne dit RIEN sur la garde qui l'a rejeté
+    // (et une garde trop stricte, qui refuse un état légitime, est indiscernable
+    // d'un fichier réellement corrompu).
+    void check(bool cond, const char* what = nullptr) {
+        if (!loading_ || cond) return;
+        if (ok_) std::fprintf(stderr, "[save-state] invariant refusé : %s\n",
+                              what ? what : "(non étiqueté)");
+        ok_ = false;
+    }
 
     // Taille écrite jusqu'ici (mode save uniquement — diagnostic NEOST_STATE_MAP).
     size_t saveSize() const { return out_ ? out_->size() : 0; }
@@ -52,6 +62,21 @@ public:
     void operator()(T& v) {
         static_assert(std::is_trivially_copyable_v<T>, "StateArchive : type non trivial");
         raw(&v, sizeof v);
+        if constexpr (std::is_same_v<T, bool>) {
+            // NORMALISATION DES BOOLÉENS. Un `bool` dont l'octet vaut autre chose que
+            // 0 ou 1 est un COMPORTEMENT INDÉFINI : le compilateur teste souvent le bit
+            // 0 dans un `if (b)` et l'octet entier dans un `if (!b)`, si bien que les
+            // deux branches peuvent être prises. Un .state forgé posait par exemple
+            // Machine::frameInProgress_ à 63 (détecté par UBSan). Sanitisé ICI, donc
+            // pour TOUS les booléens du projet d'un coup — il y en a des dizaines, et
+            // les garder un par un serait illusoire. Format de fichier inchangé.
+            static_assert(sizeof(bool) == 1, "bool non tenu sur 1 octet : format à revoir");
+            if (loading_) {
+                unsigned char b;                 // relire la représentation objet est
+                std::memcpy(&b, &v, 1);          // défini, contrairement à lire le bool
+                v = (b != 0);
+            }
+        }
     }
 
     // Un tableau C d'éléments POD (ex. due_[SRC_COUNT], reg.d[8]).

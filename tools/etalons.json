@@ -30,6 +30,13 @@
    "max_diff_px": 0
   },
   {
+   "id": "msa_selftest",
+   "name": "Ré-encodage .msa/.dim (aller-retour + persistance fichier)",
+   "subsystem": "fdc/images",
+   "type": "msa_selftest",
+   "max_diff_px": 0
+  },
+  {
    "id": "etos_ste_boot",
    "name": "Boot EmuTOS STE (bureau)",
    "subsystem": "integration",
@@ -57,7 +64,7 @@
    "frame": 1199,
    "crop": "buffer_noled",
    "max_diff_px": 0,
-      "oracle_fastfdc": true,
+   "oracle_fastfdc": true,
    "ref_kind": "oracle"
   },
   {

@@ -2149,7 +2149,10 @@ void drawDiskLibrary(const std::string& disksDir, const std::string& mounted,
 // port $FA0000. Un reset reste nécessaire pour que le TOS relise le magic de boot.
 void drawCartLibrary(const std::string& cartsDir, const std::string& mounted,
                      std::string& reqMount, bool& reqEject) {
-    ImGui::Begin("Cart Library");
+    // Même retour anticipé que drawDiskLibrary : fenêtre repliée ou onglet non
+    // sélectionné → Begin() rend false et tout ce qui suit est invisible ; sans ça on
+    // payait quand même le scan du dossier à chaque trame.
+    if (!ImGui::Begin("Cart Library")) { ImGui::End(); return; }
     const std::string curName = mounted.empty() ? "(vide)"
                                                  : fs::path(mounted).filename().string();
     ImGui::Text("Port cartouche : %s", curName.c_str());
@@ -2163,23 +2166,33 @@ void drawCartLibrary(const std::string& cartsDir, const std::string& mounted,
     std::error_code ec;
     if (fs::is_directory(cartsDir, ec)) {
         const std::string mountedName = mounted.empty() ? "" : fs::path(mounted).filename().string();
-        for (const auto& e : fs::directory_iterator(cartsDir, ec)) {
+        // Itération MANUELLE, comme drawDiskLibrary : l'error_code passé au constructeur
+        // ne couvre QUE la construction — l'incrément du range-for, lui, lève
+        // filesystem_error si le dossier devient illisible en cours de parcours (carts/
+        // sur une clé USB retirée), et personne ne l'attrape ici → std::terminate.
+        fs::directory_iterator it(cartsDir, fs::directory_options::skip_permission_denied, ec), end;
+        while (!ec && it != end) {
+            const fs::directory_entry& e = *it;
             // is_regular_file() SANS error_code LANCE sur un symlink dont la cible est devenue
             // illisible (clé USB débranchée) : rien ne l'attrape ici → std::terminate.
-            std::error_code ec2; if (!e.is_regular_file(ec2)) continue;
-            std::string ext = e.path().extension().string();
-            for (auto& ch : ext) ch = (char)std::tolower((unsigned char)ch);
-            if (ext != ".bin" && ext != ".img" && ext != ".rom") continue;
-            const std::string name = e.path().filename().string();
-            ImGui::PushID(name.c_str());
-            if (name == mountedName) {
-                ImGui::TextDisabled("●");                  // branchée
-            } else if (ImGui::SmallButton("Brancher")) {
-                reqMount = e.path().string();
+            std::error_code ec2;
+            if (e.is_regular_file(ec2)) {
+                std::string ext = e.path().extension().string();
+                for (auto& ch : ext) ch = (char)std::tolower((unsigned char)ch);
+                if (ext == ".bin" || ext == ".img" || ext == ".rom") {
+                    const std::string name = e.path().filename().string();
+                    ImGui::PushID(name.c_str());
+                    if (name == mountedName) {
+                        ImGui::TextDisabled("●");          // branchée
+                    } else if (ImGui::SmallButton("Brancher")) {
+                        reqMount = e.path().string();
+                    }
+                    ImGui::SameLine();
+                    ImGui::TextUnformatted(name.c_str());
+                    ImGui::PopID();
+                }
             }
-            ImGui::SameLine();
-            ImGui::TextUnformatted(name.c_str());
-            ImGui::PopID();
+            it.increment(ec);
         }
     } else {
         ImGui::TextDisabled("(dossier carts/ introuvable)");
@@ -2574,6 +2587,15 @@ int main(int argc, char** argv) {
             cfg.showDisk = g_showDisk; cfg.showCart = g_showCart; cfg.showHex = g_showHex;
             cfg.showCpu  = g_showCpu;  cfg.showJoy  = g_showJoy;  cfg.dock = g_dockOn;
             saveConfig(exeDir, cfg, &machine);
+            // ⚠ La référence PRISTINE doit devenir CE qui vient d'être persisté, pas la
+            // config lue au démarrage. Sinon le gel kiosk se retourne contre la ligne
+            // ci-dessus : plus tard, n'importe quel saveConfig(force=true) de la borne
+            // (ajout/retrait d'un dossier ROM, réaffectation manette, ou simple
+            // auto-purge d'un dossier ROM disparu) reconstruit le fichier depuis
+            // g_cfgPristine et RÉÉCRIT par-dessus machine/mem/rom/disk/crt/dock/show*
+            // avec les valeurs du lancement — les préférences de la séance, que ce
+            // saveConfig venait d'enregistrer, sont perdues sans le moindre message.
+            g_cfgPristine = cfg;
 #if defined(NEOST_WITH_IMGUI)
             // Disposition des fenêtres écrite MAINTENANT : en kiosk plus aucune n'est
             // soumise, une sauvegarde automatique plus tard n'aurait rien à dire d'elles.

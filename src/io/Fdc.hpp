@@ -70,6 +70,11 @@ public:
     bool loadImage(const std::string& path, int drive = 0);
     void eject(int drive = 0);
 
+    // Auto-test déterministe du couple encodeMsa/decodeMsa (aucun disque requis) :
+    // le ré-encodage .MSA réécrit le fichier de l'utilisateur, un aller-retour non
+    // byte-exact détruirait sa disquette. Appelé par neost-headless --msa-selftest.
+    bool msaSelfTest();
+
     // Monte une image de disque dur ACSI (dump de secteurs brut) sur la cible
     // `target` (0-7, généralement 0). Le TOS/EmuTOS détecte le périphérique au boot,
     // lit la table de partitions et monte les partitions FAT (C:, D:…). Cf. io/Acsi.hpp.
@@ -195,7 +200,16 @@ private:
         int  density = 1;                       // densité du média : 1=DD, 2=HD, 4=ED (cf. Hatari FloppyDensity)
         int  headTrack = 0;                     // position PHYSIQUE de la tête (≠ registre TR)
         bool writeProtect = false;              // protégé en écriture
-        bool raw = true;                        // .st brut (writeBack possible) vs .msa
+        // `raw` = le fichier hôte peut être RÉ-ÉCRIT depuis `image`. Vrai pour les trois
+        // conteneurs du modèle .ST (brut, .msa, .dim, cf. imgFormat) ; faux seulement pour
+        // une image qu'on sait ne pas savoir ré-encoder (STX, ou en-tête .msa/.dim reconnu
+        // mais indécodable) — là, réécrire détruirait le fichier de l'utilisateur.
+        bool raw = true;
+        // Conteneur du fichier hôte, qui décide COMMENT writeBack le met à jour :
+        // brut = écriture partielle à l'offset ; .dim = idem décalé de l'en-tête 32 o ;
+        // .msa = ré-encodage RLE du fichier ENTIER (port de MSA_WriteDisk).
+        enum ImgFormat { FMT_ST = 0, FMT_MSA = 1, FMT_DIM = 2 };
+        int  imgFormat = FMT_ST;
 
         // Image STX (Pasti) : si présente, le FDC dispatche vers le chemin _STX
         // (champs ID réels, statut par secteur, fuzzy/timing) au lieu du modèle .ST.
@@ -275,7 +289,7 @@ private:
     uint8_t  readAddressST(uint8_t track, uint8_t sector, uint8_t side);
     uint8_t  readTrackST(uint8_t track, uint8_t side);
     uint8_t  writeTrackBuffer();                // WRITE TRACK : extrait les secteurs du flux écrit
-    void     writeBack(FloppyDisk& dk, uint32_t off, uint32_t len);  // recopie dans le .st
+    void     writeBack(FloppyDisk& dk, uint64_t off, uint64_t len);  // recopie dans le .st
 
     // --- Chemin STX (cf. Hatari FDC_*_STX) : champs ID réels, statut par secteur,
     //     bits fuzzy, timing variable. Utilise stxNextSector_ posé par nextSectorIDStx.
@@ -293,9 +307,24 @@ private:
     void     bufferReset() { buf_.clear(); bufTiming_.clear(); bufPos_ = 0; }
     void     bufferAdd(uint8_t b);              // timing = transferDelay(1)
     void     bufferAddTiming(uint8_t b, uint16_t t) { buf_.push_back(b); bufTiming_.push_back(t); }
-    uint8_t  bufferReadByte() { return buf_[bufPos_++]; }
-    uint16_t bufferReadTiming() const { return bufTiming_[bufPos_]; }
-    uint8_t  bufferReadBytePos(int i) const { return buf_[i]; }
+    // Les trois lectures sont BORNÉES : bufPos_ est restauré d'un save-state (où
+    // bufPos_ == buf_.size() est un état LÉGITIME — tampon entièrement consommé,
+    // ou vidé par bufferReset), et un état forgé peut entrer directement dans un
+    // TRANSFER_LOOP sans passer par le TRANSFER_START qui teste bufferSize() == 0.
+    // Hors tampon on rend l'octet d'une piste non formatée ($ff) : la machine à
+    // états enchaîne alors sur son état CRC/COMPLETE comme en fin de transfert.
+    uint8_t  bufferReadByte() {
+        if (bufPos_ < 0 || static_cast<std::size_t>(bufPos_) >= buf_.size()) { ++bufPos_; return 0xff; }
+        return buf_[bufPos_++];
+    }
+    uint16_t bufferReadTiming() const {
+        if (bufPos_ < 0 || static_cast<std::size_t>(bufPos_) >= bufTiming_.size()) return 0;
+        return bufTiming_[bufPos_];
+    }
+    uint8_t  bufferReadBytePos(int i) const {
+        if (i < 0 || static_cast<std::size_t>(i) >= buf_.size()) return 0xff;
+        return buf_[i];
+    }
     int      bufferSize() const { return int(buf_.size()); }
 
     // --- DMA FIFO 16 octets (cf. Hatari FDC_DMA_FIFO_Push/Pull) ----------------
