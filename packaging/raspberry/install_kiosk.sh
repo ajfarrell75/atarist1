@@ -129,6 +129,7 @@ if [ "$UNINSTALL" = 1 ]; then
     systemctl disable --now neost-perf.service 2>/dev/null || true
     systemctl disable --now neost-bt-connect.timer 2>/dev/null || true
     rm -f /etc/systemd/system/neost-bt-connect.{service,timer}
+    rm -rf /etc/systemd/system/neost-kiosk@.service.d
     rm -f /etc/systemd/system/neost-kiosk@.service /etc/systemd/system/neost-perf.service
     systemctl enable getty@tty1.service 2>/dev/null || true
     write_block "$BOOTDIR/config.txt"
@@ -256,6 +257,24 @@ EOF
         2>/dev/null || true
     usermod -aG bluetooth "$KIOSK_USER" 2>/dev/null || true
 
+    # ORDRE DE DÉMARRAGE — sans ça, tout le Bluetooth est vain : si le service
+    # kiosk démarre avant que pipewire-pulse de l'utilisateur ait ouvert sa
+    # socket, miniaudio échoue sur le backend PulseAudio et RETOMBE SUR ALSA
+    # (il essaie les backends dans l'ordre). NeoST serait alors branché en dur
+    # sur l'HDMI pour toute la session, et l'enceinte ne recevrait jamais rien.
+    # Drop-in et pas modification de l'unité : l'unité de base reste maigre, et
+    # repasser en mode HDMI se contente de supprimer ce fichier.
+    install -d /etc/systemd/system/neost-kiosk@.service.d
+    cat > /etc/systemd/system/neost-kiosk@.service.d/10-pipewire.conf <<'EOF'
+# Écrit par NeoST install_kiosk.sh --bluetooth-audio
+[Service]
+# pam_systemd le pose déjà via PAMName=login ; on le fige pour ne pas dépendre
+# de cet effet de bord.
+Environment=XDG_RUNTIME_DIR=/run/user/%U
+# Attente BORNÉE, et qui n'échoue jamais : une borne doit démarrer même sans son.
+ExecStartPre=/bin/sh -c 'i=0; while [ $i -lt 20 ] && [ ! -S /run/user/%U/pulse/native ]; do sleep 1; i=$((i+1)); done; exit 0'
+EOF
+
     install -m 755 "$HERE/neost-bt.sh" "$PREFIX/bin/" 2>/dev/null || {
         install -d "$PREFIX/bin"; install -m 755 "$HERE/neost-bt.sh" "$PREFIX/bin/"; }
     install -m 644 "$HERE/neost-bt-connect.service" "$HERE/neost-bt-connect.timer" \
@@ -265,6 +284,9 @@ EOF
 
 elif [ "$KEEP_AUDIO_SERVER" = 0 ]; then
     log "suppression des serveurs de son (miniaudio → ALSA en direct)…"
+    # Repasser de Bluetooth à HDMI : sans ça, l'attente de la socket PipeWire
+    # resterait et retarderait chaque démarrage de 20 s pour rien.
+    rm -f /etc/systemd/system/neost-kiosk@.service.d/10-pipewire.conf
     for p in pipewire pipewire-pulse pipewire-alsa wireplumber pulseaudio pulseaudio-utils; do
         dpkg-query -W -f='${Status}' "$p" 2>/dev/null | grep -q "install ok installed" \
             && apt-get "${APT_OPTS[@]}" purge -y "$p" || true
@@ -409,6 +431,13 @@ NEOST_CRT_PRESET=""
 NEOST_EXTRA_ARGS=""
 EOF
 fi
+
+# neost-bt.sh doit savoir SOUS QUEL UTILISATEUR tourne pipewire-pulse (il lui
+# parle via sudo -u + XDG_RUNTIME_DIR). Cette clé est ajoutée même quand le
+# fichier existait déjà — sinon le script devinerait, et se tromperait sur toute
+# borne dont l'utilisateur n'est pas celui du modèle.
+grep -q '^NEOST_KIOSK_USER=' /etc/neost-kiosk.conf \
+    || printf 'NEOST_KIOSK_USER="%s"\n' "$KIOSK_USER" >> /etc/neost-kiosk.conf
 
 # ---------------------------------------------------------------------------
 #  7. Le service

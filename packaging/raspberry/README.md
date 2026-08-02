@@ -101,9 +101,25 @@ cp packaging/raspberry/provision.sh /media/$USER/bootfs/neost-provision.sh
 déclare la cible `neost-stx-test` (même en `EXCLUDE_FROM_ALL`), et **la
 configuration CMake échoue entièrement** si le fichier manque.
 
+**Binaires pré-compilés (recommandé)** — compiler sur un Pi 4 prend 20 à 40
+minutes. Le workflow `.github/workflows/pi-borne.yml` fait le même travail sur
+un runner ARM64 natif, dans un conteneur `debian:bookworm`, avec
+`-mcpu=cortex-a72`, et vérifie que le plancher glibc reste ≤ 2.36. Pousser la
+branche `borne-raspberry` le déclenche ; ensuite :
+
+```sh
+gh run download <run-id> -n neost-borne-aarch64
+cp neost-borne-cortex-a72-aarch64.tar.gz /media/$USER/bootfs/
+```
+
+`provision.sh` **préfère ce paquet** s'il le trouve sur la partition de
+démarrage (et vérifie qu'il s'exécute avant d'aller plus loin) ; sinon il
+compile sur place. La borne est alors prête en quelques secondes au lieu d'une
+demi-heure.
+
 Au premier démarrage, le Pi installe les paquets, déballe l'archive dans
-`/usr/local/src/neost`, compile en natif (~20-40 min sur Pi 4), installe la
-borne et la démarre. Suivre :
+`/usr/local/src/neost`, met les binaires en place, installe la borne et la
+démarre. Suivre :
 
 ```sh
 ssh <utilisateur>@<hôte>.local
@@ -152,9 +168,12 @@ dans `src/main.cpp`, qui cherchent les données relativement à `exeDir/..`.
 
 | Fichier                  | Rôle                                                                    |
 |--------------------------|--------------------------------------------------------------------------|
-| `provision.sh`           | premier démarrage clé en main (déballe, compile, installe, lance)         |
+| `provision.sh`           | premier démarrage clé en main (déballe, installe, lance)                  |
 | `install_kiosk.sh`       | tout le système (idempotent, `--uninstall` pour revenir en arrière)       |
-| `build_native_pi.sh`     | compilation `-mcpu=<cœur réel>`, `--install` vers `/opt/neost`            |
+| `build_native_pi.sh`     | compilation SUR le Pi, `-mcpu=<cœur réel>`, `--install` vers `/opt/neost` |
+| `build_in_bookworm_pi.sh`| compilation en conteneur bookworm arm64 (utilisé par la CI)               |
+| `neost-bt.sh`            | enceinte Bluetooth : `scan` / `pair` / `connect` / `status`               |
+| `neost-bt-connect.{service,timer}` | reconnexion de l'enceinte toutes les 30 s                       |
 | `neost-kiosk@.service`   | unité systemd **modèle** (`neost-kiosk@pi.service`)                       |
 | `neost-kiosk.sh`         | démarre X nu sur le VT 1                                                  |
 | `neost-session.sh`       | dans X : coupe DPMS/économiseur, fond noir, `exec neost --kiosk`          |
@@ -191,6 +210,64 @@ borne ne démarrerait pas. Échappatoire : mettre `NEOST_AUDIO_LATENCY=""`
 (vide ⇒ `neost-session.sh` n'émet pas l'option du tout).
 
 ---
+
+## 3bis. La sortie son — HDMI ou Bluetooth
+
+**Le Pi 400 n'a pas de prise jack.** Le son sort donc par HDMI ou par Bluetooth,
+et ces deux voies ne demandent pas la même pile logicielle.
+
+### HDMI (défaut, `install_kiosk.sh` sans option)
+
+Aucun serveur de son : miniaudio ouvre ALSA directement. C'est la voie la plus
+sobre et la seule sans latence ajoutée. Le Pi 400 ayant **deux ports HDMI**, le
+script choisit la carte `vc4hdmi*` dont l'**ELD** est valide — c'est-à-dire
+celle où un écran répond réellement — et l'écrit dans `/etc/asound.conf`.
+Écran branché après coup ? Relancer le script, ou forcer : `--alsa-card N`
+(`aplay -l` pour les numéros).
+
+### Bluetooth (`install_kiosk.sh --bluetooth-audio`)
+
+L'A2DP **n'existe pas en ALSA nu** : il faut un serveur de son. Le mode installe
+donc PipeWire + WirePlumber + BlueZ — c'est-à-dire qu'il réintroduit
+délibérément la couche que le § 1 avait retirée. Ce qui rend l'opération
+acceptable, et ce qui la rend possible sans toucher au code de NeoST :
+
+- **miniaudio classe PulseAudio avant ALSA** (`ma_backend` est ordonné par
+  priorité). NeoST se branche donc sur `pipewire-pulse` — et comme PipeWire
+  déplace les flux vers le nouveau puits par défaut, l'enceinte qui se connecte
+  **en pleine partie** récupère le son. Sans cela, rien ne serait possible :
+  `Audio::start` ouvre UN périphérique au démarrage et n'en change jamais.
+- **48 kHz verrouillé** (`default.clock.allowed-rates`) : NeoST synthétise déjà
+  en 48 kHz, donc zéro rééchantillonnage. C'est là qu'un serveur de son coûte
+  d'habitude cher.
+- **Quantum large** (1024) : sur un Pi 400 à pleine charge, mieux vaut peu de
+  gros réveils que beaucoup de petits.
+- **Profils HSP/HFP coupés** (`bluez5.roles = [ a2dp_sink ]`) : une enceinte qui
+  bascule en profil casque passe en 8-16 kHz mono avec le micro ouvert — le son
+  devient un talkie-walkie. C'est la panne Bluetooth la plus fréquente.
+
+L'HDMI reste disponible dans ce mode : WirePlumber bascule sur l'enceinte quand
+elle arrive et revient à l'HDMI quand elle s'éteint.
+
+```sh
+sudo /opt/neost/bin/neost-bt.sh scan              # 20 s de découverte
+sudo /opt/neost/bin/neost-bt.sh pair AA:BB:…      # appaire + fait confiance + mémorise
+sudo /opt/neost/bin/neost-bt.sh status
+```
+
+`pair` mémorise l'adresse dans `/etc/neost-kiosk.conf` (`NEOST_BT_MAC`) et arme
+`neost-bt-connect.timer`, qui rappelle `connect` toutes les 30 s : **l'enceinte
+allumée après la borne est rattrapée toute seule** — le cas normal en
+exposition. `trust` est posé avant `connect` : sans confiance, BlueZ redemande
+une autorisation à chaque reconnexion, et sur une borne personne ne répondra.
+
+⚠ **L'A2DP ajoute 150 à 250 ms de retard**, inhérents au Bluetooth et
+irréductibles. Avec `NEOST_AUDIO_LATENCY=120` on approche les 300 ms entre
+l'image et le son : jouable pour de la musique de démo, gênant pour un jeu
+d'action. Pour une borne où l'on joue, **l'HDMI reste très supérieur** ; le
+Bluetooth se justifie quand l'écran n'a pas de haut-parleurs. En Bluetooth, on
+peut descendre `NEOST_AUDIO_LATENCY` vers 85 pour ne pas empiler — en
+surveillant le compteur d'underruns.
 
 ## 4. Exploitation
 

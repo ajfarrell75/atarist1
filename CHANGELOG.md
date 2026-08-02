@@ -18,7 +18,25 @@ l'émulateur, sans bureau. `install_kiosk.sh` (idempotent, `--uninstall`) monte 
 purge les serveurs de son (miniaudio → ALSA en direct), passe le gouverneur en
 `performance`, épingle les IRQ sur le cœur 0, coupe Wi-Fi/BT/swap et le boot bavard.
 `build_native_pi.sh` compile avec le `-mcpu` du cœur réel (l'AppImage livrée est aarch64
-générique). Deux pièges refermés dans le script plutôt que dans un ticket : miniaudio
+générique), et `pi-borne.yml` fait le même travail en CI sur runner ARM64 natif dans un
+conteneur bookworm (plancher glibc ≤ 2.36 vérifié) pour éviter les 20-40 min de
+compilation sur le Pi.
+
+**Son : HDMI ou Bluetooth — le Pi 400 n'a pas de jack.** Par défaut, aucun serveur de
+son et détection de la sortie HDMI *réellement branchée* via l'ELD (le Pi 400 a deux
+ports). `--bluetooth-audio` installe PipeWire, seul chemin vers l'A2DP : miniaudio ne
+sait pas parler Bluetooth. Ce qui rend le mode possible **sans toucher au code**, c'est
+que miniaudio classe PulseAudio AVANT ALSA (`ma_backend` est ordonné par priorité) —
+NeoST se branche donc sur `pipewire-pulse`, qui déplace le flux vers l'enceinte quand
+elle se connecte, même en pleine partie ; sans cela `Audio::start` ouvre UN périphérique
+au démarrage et n'en change jamais. Réglé pour ne pas coûter cher : 48 kHz verrouillé
+(NeoST sort déjà en 48 kHz → aucun rééchantillonnage), quantum 1024, et profils HSP/HFP
+coupés (une enceinte qui bascule en HSP passe en 8 kHz mono avec le micro ouvert —
+la panne Bluetooth la plus fréquente). `neost-bt.sh` + un timer de 30 s rattrapent
+l'enceinte allumée APRÈS la borne. ⚠ l'A2DP ajoute 150-250 ms irréductibles : pour
+jouer, l'HDMI reste très supérieur.
+
+Deux pièges refermés dans le script plutôt que dans un ticket : miniaudio
 demande `SCHED_FIFO` pour son thread ALSA et **échoue silencieusement** sans
 `LimitRTPRIO=` (le thread audio reste préemptible → underruns), et le `libglfw3` de
 bookworm est **X11 uniquement**, ce qui exclut un kiosk Wayland (`cage`) sans recompiler
