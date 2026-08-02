@@ -29,6 +29,18 @@ on:
         default: cortex-a72
         type: choice
         options: [cortex-a72, cortex-a76, cortex-a53]
+  # `workflow_dispatch` n'est utilisable QUE si le fichier existe sur la branche
+  # par défaut — or on ne veut pas imposer ce workflow à `main` pour préparer une
+  # borne. D'où ce déclencheur sur la branche de préparation elle-même : y
+  # pousser suffit à obtenir les binaires.
+  push:
+    branches: [borne-raspberry]
+    paths:
+      - 'src/**'
+      - 'extern/**'
+      - 'CMakeLists.txt'
+      - 'packaging/raspberry/**'
+      - '.github/workflows/pi-borne.yml'
 
 jobs:
   borne:
@@ -41,7 +53,7 @@ jobs:
 
       - name: Build dans un conteneur bookworm arm64
         env:
-          NEOST_MCPU: ${{ inputs.mcpu }}
+          NEOST_MCPU: ${{ inputs.mcpu || 'cortex-a72' }}
           NEOST_VERSION: borne-${{ github.sha }}
         run: |
           docker run --rm -v "$PWD":/work -w /work \
