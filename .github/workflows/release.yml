@@ -16,8 +16,9 @@
 #  Chaque job SMOKE-LANCE le paquet via neost-headless (déterministe, sans
 #  affichage) : --version puis boot EmuTOS 500 trames (le bureau apparaît vers
 #  la trame ~400) + capture PPM non uniforme.
-#  Les paquets n'embarquent QUE du contenu libre (packaging/stage_free_data.sh :
-#  EmuTOS GPL + diskA.st) — jamais les TOS propriétaires ni les jeux du dépôt.
+#  Les paquets embarquent la liste autorisée (packaging/stage_free_data.sh :
+#  EmuTOS GPL + tos162uk.img du profil 1040 STE + diskA.st) — jamais les autres
+#  TOS ni les jeux du dépôt.
 #
 #  Déclencheurs : chaque push/PR vérifie que la génération des 5 artefacts
 #  passe ; un tag de version (v1.0.0 ou 1.0.0) les attache en plus à la Release.
@@ -150,9 +151,11 @@ jobs:
           if find squashfs-root -name 'libGL.so*' -o -name 'libOpenGL.so*' | grep -q .; then
             echo "ERREUR : libGL embarquée dans l'AppImage"; exit 1
           fi
-          # Contenu libre uniquement : aucune ROM non-EmuTOS, aucun jeu.
-          STRAY=$(find squashfs-root/usr/roms -maxdepth 1 -name '*.img' ! -name 'etos*')
-          test -z "$STRAY" || { echo "ERREUR : ROM non libre embarquée : $STRAY"; exit 1; }
+          # Liste autorisée : EmuTOS + tos162uk (profil 1040 STE), aucun autre TOS/jeu.
+          test -s squashfs-root/usr/roms/tos162uk.img \
+            || { echo "ERREUR : tos162uk.img absent du paquet"; exit 1; }
+          STRAY=$(find squashfs-root/usr/roms -maxdepth 1 -name '*.img' ! -name 'etos*' ! -name 'tos162uk.img')
+          test -z "$STRAY" || { echo "ERREUR : ROM non autorisée embarquée : $STRAY"; exit 1; }
           # …et rien d'autre que diskA.st côté disquettes : le dépôt contient des jeux
           # sous copyright, la garde ROM seule ne les aurait jamais vus.
           STRAYD=$(find squashfs-root/usr/disks -type f ! -name 'diskA.st')
@@ -267,8 +270,10 @@ jobs:
           if find squashfs-root -name 'libGL.so*' -o -name 'libOpenGL.so*' | grep -q .; then
             echo "ERREUR : libGL embarquée dans l'AppImage"; exit 1
           fi
-          STRAY=$(find squashfs-root/usr/roms -maxdepth 1 -name '*.img' ! -name 'etos*')
-          test -z "$STRAY" || { echo "ERREUR : ROM non libre embarquée : $STRAY"; exit 1; }
+          test -s squashfs-root/usr/roms/tos162uk.img \
+            || { echo "ERREUR : tos162uk.img absent du paquet"; exit 1; }
+          STRAY=$(find squashfs-root/usr/roms -maxdepth 1 -name '*.img' ! -name 'etos*' ! -name 'tos162uk.img')
+          test -z "$STRAY" || { echo "ERREUR : ROM non autorisée embarquée : $STRAY"; exit 1; }
           # …et rien d'autre que diskA.st côté disquettes : le dépôt contient des jeux
           # sous copyright, la garde ROM seule ne les aurait jamais vus.
           STRAYD=$(find squashfs-root/usr/disks -type f ! -name 'diskA.st')
@@ -364,8 +369,10 @@ jobs:
           if find squashfs-root -name 'libGL.so*' -o -name 'libOpenGL.so*' | grep -q .; then
             echo "ERREUR : libGL embarquée dans l'AppImage"; exit 1
           fi
-          STRAY=$(find squashfs-root/usr/roms -maxdepth 1 -name '*.img' ! -name 'etos*')
-          test -z "$STRAY" || { echo "ERREUR : ROM non libre embarquée : $STRAY"; exit 1; }
+          test -s squashfs-root/usr/roms/tos162uk.img \
+            || { echo "ERREUR : tos162uk.img absent du paquet"; exit 1; }
+          STRAY=$(find squashfs-root/usr/roms -maxdepth 1 -name '*.img' ! -name 'etos*' ! -name 'tos162uk.img')
+          test -z "$STRAY" || { echo "ERREUR : ROM non autorisée embarquée : $STRAY"; exit 1; }
           # …et rien d'autre que diskA.st côté disquettes : le dépôt contient des jeux
           # sous copyright, la garde ROM seule ne les aurait jamais vus.
           STRAYD=$(find squashfs-root/usr/disks -type f ! -name 'diskA.st')
@@ -441,8 +448,10 @@ jobs:
           LEAKED=$(otool -L "$BIN" | tail -n +2 | awk '{print $1}' \
                    | grep -E '^(/usr/local|/opt/homebrew|/opt/local)' || true)
           test -z "$LEAKED" || { echo "ERREUR : dylib hors bundle : $LEAKED"; exit 1; }
-          STRAY=$(find dist/NeoST.app/Contents/roms -maxdepth 1 -name '*.img' ! -name 'etos*')
-          test -z "$STRAY" || { echo "ERREUR : ROM non libre embarquée : $STRAY"; exit 1; }
+          test -s dist/NeoST.app/Contents/roms/tos162uk.img \
+            || { echo "ERREUR : tos162uk.img absent du paquet"; exit 1; }
+          STRAY=$(find dist/NeoST.app/Contents/roms -maxdepth 1 -name '*.img' ! -name 'etos*' ! -name 'tos162uk.img')
+          test -z "$STRAY" || { echo "ERREUR : ROM non autorisée embarquée : $STRAY"; exit 1; }
           STRAYD=$(find dist/NeoST.app/Contents/disks -type f ! -name 'diskA.st')
           test -z "$STRAYD" || { echo "ERREUR : disquette non libre embarquée : $STRAYD"; exit 1; }
           for f in DejaVuSans.ttf fa-solid-900.ttf; do
@@ -485,8 +494,8 @@ jobs:
           if-no-files-found: error
 
   # ------------------------------------------------------------------ WASM --
-  # Contrairement à deploy-web.yml (Pages, tout roms/ et disks/ embarqués), le
-  # paquet distribuable n'embarque QUE le contenu libre (NEOST_WEB_FREE_ONLY=ON).
+  # Même liste autorisée que les paquets bureau (NEOST_WEB_FREE_ONLY=ON :
+  # EmuTOS + tos162uk + diskA), jamais le reste de roms/ ni disks/.
   wasm:
     needs: version
     runs-on: ubuntu-latest

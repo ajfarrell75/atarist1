@@ -9,7 +9,7 @@
 #
 #  Disposition (resolveData cherche exeDir/../roms) :
 #    AppDir/usr/bin/neost, neost-headless
-#    AppDir/usr/roms/ (EmuTOS seulement), AppDir/usr/disks/diskA.st
+#    AppDir/usr/roms/ (EmuTOS + tos162uk), AppDir/usr/disks/diskA.st
 #
 #  Mécanique reprise de POM1 (packaging/linux/build_appimage.sh) :
 #    1. linuxdeploy met en place l'AppDir : libs non-blacklist embarquées
