@@ -30,6 +30,16 @@ public:
     void stop();
     bool ok() const { return started_; }
 
+    // Coussin d'amorçage visé, en MILLISECONDES (défaut 85). À appeler AVANT start() :
+    // c'est start() qui convertit en échantillons une fois la fréquence réelle négociée.
+    // Monter cette valeur absorbe la gigue d'ordonnancement des machines lentes (borne
+    // Raspberry Pi) au prix d'une latence perçue ; la descendre rapproche le son de
+    // l'image mais rend l'underrun probable dès le moindre à-coup. Borné à [20, 250] ms :
+    // au-delà, le coussin s'approcherait de la capacité de l'anneau (341 ms à 48 kHz
+    // stéréo) et le producteur jetterait des échantillons à chaque trame.
+    void setLatencyMs(uint32_t ms) { latencyMs_ = ms < 20 ? 20 : (ms > 250 ? 250 : ms); }
+    uint32_t latencyMs() const { return latencyMs_; }
+
     // Consommateur (thread audio miniaudio) : recopie l'anneau dans `out`, silence si
     // underrun. Ne synthétise plus rien — toute la génération est faite en amont par
     // produceFrame sur le thread d'émulation (modèle « push » de la Phase C).
@@ -74,6 +84,7 @@ private:
     std::function<bool()> dmaGate_;      // cf. setDmaGate (nul = branche DMA dès que dma_ existe)
     int                devLostFrames_ = 0; // trames depuis la détection « périphérique arrêté »
     double             sampleCarry_ = 0.0; // report fractionnaire (nb d'échantillons/trame exact à long terme)
+    uint32_t           latencyMs_ = 85;      // coussin visé en ms (cf. setLatencyMs) — lu par start()
     uint32_t           primeSamples_ = 4000; // coussin cible (≈ latence visée, ~85 ms) — amorçage + asservissement
     bool               primed_ = false;  // (thread audio) : l'anneau a-t-il atteint le coussin ? sinon → silence
 

@@ -108,6 +108,14 @@ jeu, envoyer des touches ou redémarrer, sans jamais quitter le plein écran.
 - **`--kiosk`** : vrai plein écran **exclusif** — reste au-dessus de tout (panneaux/dock
   inclus, impossible à recouvrir), garde le focus clavier.
 - **`--kiosk-monitor N`** : écran cible (0 = principal).
+- **`--audio-latency MS`** : coussin audio visé (défaut 85, borné `[20, 250]`, persisté en
+  `audio_latency_ms=`). Le monter (120-150) sur une machine juste — un underrun coûte un
+  **trou audible**, une latence un peu plus haute non. Le diagnostic est dans la sortie
+  d'erreur : `[Audio] underrun anneau … boucle émulation : XX trames/s réelles`.
+
+**Borne Raspberry Pi** — démarrage direct sur l'émulateur (Pi OS Lite, X nu sans
+compositeur, ALSA en direct, build natif `-mcpu`) : voir
+[`packaging/raspberry/README.md`](packaging/raspberry/README.md).
 
 En kiosk : la souris est capturée et le curseur masqué ; l'**émulation joystick au
 clavier est activée** (flèches + Ctrl droit = feu) pour jouer sans manette ; le fichier

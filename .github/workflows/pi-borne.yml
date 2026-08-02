@@ -1,0 +1,65 @@
+# =============================================================================
+#  Binaires de la BORNE Raspberry Pi — compilation à la demande.
+#
+#  Pourquoi un workflow séparé de `release.yml` :
+#   · il est déclenché À LA MAIN (workflow_dispatch), quand on prépare une borne,
+#     pas à chaque tag ;
+#   · il produit un simple tar.gz de binaires compilés pour UN cœur précis
+#     (-mcpu=cortex-a72 pour Pi 4/400), là où la release publie une AppImage
+#     aarch64 générique qui doit tourner du Pi 3 au Pi 5 ;
+#   · il ne touche pas au pipeline de release — le casser n'empêche pas de
+#     publier.
+#
+#  Le build a lieu DANS un conteneur debian:bookworm, pas sur le runner :
+#  Raspberry Pi OS EST bookworm (glibc 2.36), et le runner ubuntu-24.04-arm
+#  estampillerait GLIBC_2.39 — le binaire ne démarrerait sur aucun Pi. Le script
+#  vérifie ce plancher et échoue s'il est dépassé.
+#
+#  Récupérer l'artefact :
+#      gh run download <run-id> -n neost-borne-aarch64
+# =============================================================================
+name: Borne Raspberry Pi (aarch64, -mcpu natif)
+
+on:
+  workflow_dispatch:
+    inputs:
+      mcpu:
+        description: "Cœur cible : cortex-a72 (Pi 4 / Pi 400) ou cortex-a76 (Pi 5)"
+        required: true
+        default: cortex-a72
+        type: choice
+        options: [cortex-a72, cortex-a76, cortex-a53]
+
+jobs:
+  borne:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - name: Build dans un conteneur bookworm arm64
+        env:
+          NEOST_MCPU: ${{ inputs.mcpu }}
+          NEOST_VERSION: borne-${{ github.sha }}
+        run: |
+          docker run --rm -v "$PWD":/work -w /work \
+            -e NEOST_MCPU -e NEOST_VERSION \
+            debian:bookworm bash /work/packaging/raspberry/build_in_bookworm_pi.sh
+
+      - name: Résumé
+        run: |
+          set -euo pipefail
+          TGZ=$(ls dist/neost-borne-*-aarch64.tar.gz)
+          echo "### Binaires de borne prêts" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "paquet : $TGZ ($(du -h "$TGZ" | cut -f1))" >> "$GITHUB_STEP_SUMMARY"
+          tar -tzf "$TGZ" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: neost-borne-aarch64
+          path: dist/neost-borne-*-aarch64.tar.gz
+          if-no-files-found: error

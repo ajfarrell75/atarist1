@@ -1,0 +1,12 @@
+[Unit]
+Description=NeoST — surveillance de l'enceinte Bluetooth (reconnexion)
+
+[Timer]
+# 25 s après le démarrage : laisse BlueZ et PipeWire se lever d'abord.
+OnBootSec=25s
+OnUnitActiveSec=30s
+AccuracySec=5s
+Unit=neost-bt-connect.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,43 @@
+[Unit]
+# =============================================================================
+#  neost-kiosk.service — La borne NeoST : de la mise sous tension à l'écran ST.
+#
+#  Conflicts=getty@tty1 : on PREND le VT 1 au getty. Sans ça, deux processus se
+#  disputent /dev/tty1 et X sort avec « Cannot open virtual console 1 ».
+#  On garde volontairement les getty 2-6 : Ctrl+Alt+F2 reste une porte de
+#  service pour l'exploitant si la borne part en vrille (à retirer si le public
+#  a accès à un clavier complet — cf. README § Verrouillage).
+# =============================================================================
+Description=NeoST — borne Atari ST (kiosk plein écran)
+After=systemd-user-sessions.service sound.target
+Conflicts=getty@tty1.service
+
+[Service]
+Type=simple
+User=%i
+PAMName=login
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+StandardInput=tty
+StandardOutput=journal
+StandardError=journal
+ExecStart=/opt/neost/bin/neost-kiosk.sh
+
+# Un plantage de l'émulateur ne doit JAMAIS laisser la borne sur un écran noir.
+Restart=always
+RestartSec=2
+
+# miniaudio demande SCHED_FIFO pour son thread de sortie ALSA
+# (extern/miniaudio/miniaudio.h : pthread_attr_setschedpolicy(SCHED_FIFO)).
+# Sans LimitRTPRIO, l'appel ÉCHOUE SILENCIEUSEMENT et le thread audio reste en
+# SCHED_OTHER : il se fait alors préempter par n'importe quoi et l'anneau part
+# en underrun — précisément le « son qui saute ».
+LimitRTPRIO=99
+LimitMEMLOCK=infinity
+# Priorité du reste du processus (boucle d'émulation, rendu GL). -5 et pas -20 :
+# à -20 le processus peut affamer les threads noyau de l'USB/HDMI.
+Nice=-5
+
+[Install]
+WantedBy=multi-user.target

@@ -3,6 +3,27 @@
 (c) 2026 VERHILLE Arnaud. Ce qui est **implémenté et validé**. Pas encore de versions
 taguées (0.1.x). Le restant est dans [`TODO.md`](TODO.md).
 
+## Borne Raspberry Pi : démarrage direct + latence audio réglable (2026-08-02)
+
+**`--audio-latency MS`** (persisté `audio_latency_ms=` dans `neost.cfg`) : le coussin
+d'amorçage de l'anneau audio était figé à 85 ms dans `Audio::start`. Il est maintenant
+réglable et borné à `[20, 250]` ms par `Audio::setLatencyMs` — au-delà, le coussin
+s'approcherait de la capacité de `SampleRing{32768}` (341 ms à 48 kHz stéréo) et le
+producteur jetterait des échantillons à chaque trame. Vérifié bout en bout : `--audio-latency
+130` → `coussin 6240 frames` = 48000 × 130/1000, et `latence ~130 ms` au démarrage.
+
+**`packaging/raspberry/`** — déploiement d'une borne qui démarre *directement* sur
+l'émulateur, sans bureau. `install_kiosk.sh` (idempotent, `--uninstall`) monte un X **nu**
+(ni gestionnaire de fenêtres ni compositeur) sur le VT 1 via une unité systemd modèle,
+purge les serveurs de son (miniaudio → ALSA en direct), passe le gouverneur en
+`performance`, épingle les IRQ sur le cœur 0, coupe Wi-Fi/BT/swap et le boot bavard.
+`build_native_pi.sh` compile avec le `-mcpu` du cœur réel (l'AppImage livrée est aarch64
+générique). Deux pièges refermés dans le script plutôt que dans un ticket : miniaudio
+demande `SCHED_FIFO` pour son thread ALSA et **échoue silencieusement** sans
+`LimitRTPRIO=` (le thread audio reste préemptible → underruns), et le `libglfw3` de
+bookworm est **X11 uniquement**, ce qui exclut un kiosk Wayland (`cage`) sans recompiler
+GLFW. ⚠ Scripts **non encore exécutés sur un Pi réel** — cf. leur README.
+
 ## Relecture adversariale pré-release (2026-08-01)
 
 Cinq audits parallèles (zone chaude des 8 derniers commits, sécurité des entrées non

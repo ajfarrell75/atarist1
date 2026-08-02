@@ -183,7 +183,7 @@ bool Audio::start() {
     // initialisé (data race). La fréquence réelle négociée est connue dès
     // ma_device_init.
     rate_    = dev->sampleRate ? dev->sampleRate : cfg.sampleRate;  // fréquence réelle négociée
-    primeSamples_ = rate_ * 85 / 1000;        // coussin ≈ 85 ms (latence visée) à la fréquence réelle
+    primeSamples_ = rate_ * latencyMs_ / 1000; // coussin ≈ latencyMs_ (défaut 85 ms) à la fréquence réelle
     ring_.clear();
     primed_      = false;                     // ré-amorçage propre
     sampleCarry_ = 0.0;
