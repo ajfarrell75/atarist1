@@ -71,6 +71,18 @@ global `g_kiosk`. Points clés :
   reste un moyen de sortie).
 - **Attract** : autostart via `#Z` d'un `DESKTOP.INF`/`NEWDESK.INF` dans le dossier GEMDOS
   monté (aucun code dédié — data-driven).
+- **Latence audio** : `--audio-latency MS` (persisté `audio_latency_ms=`) fixe le coussin
+  d'amorçage de l'anneau (`Audio::setLatencyMs`, défaut 85, borné `[20,250]` — au-delà on
+  s'approche de la capacité de `SampleRing{32768}` = 341 ms à 48 kHz stéréo et le
+  producteur jetterait des échantillons à chaque trame). À appeler AVANT `start()` :
+  c'est `start()` qui convertit en échantillons, la fréquence réelle n'étant connue
+  qu'après `ma_device_init`.
+- **Borne Raspberry Pi** : `packaging/raspberry/` (Pi OS Lite + X nu sur VT1 par systemd,
+  ALSA sans serveur de son, gouverneur `performance`, `irqaffinity=0`, build natif
+  `-mcpu=cortex-a72/a76`). Deux contraintes non évidentes : miniaudio demande `SCHED_FIFO`
+  pour son thread ALSA et **échoue silencieusement** sans `LimitRTPRIO=` dans l'unité
+  systemd ; le `libglfw3` de Debian bookworm est **X11 uniquement**, donc pas de kiosk
+  Wayland (`cage`) sans recompiler GLFW.
 
 ## Modèle d'horloge (`Machine::runFrame`)
 

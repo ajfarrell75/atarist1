@@ -102,6 +102,7 @@ struct Config { std::string rom; std::string disk; std::string cart; bool mono =
                 std::string joymap;
                 float joydeadzone = 0.30f; bool fastfdc = false;
                 float volume = 1.0f;   // volume maître de la sortie audio (0..1, barre de menu)
+                int audioLatencyMs = 85; // coussin audio visé (cf. Audio::setLatencyMs, --audio-latency)
                 bool showDisk = true, showCart = true, showHex = true, showCpu = true;
                 bool showJoy = false;
                 bool dock = true;              // mode ancré (dockspace ImGui) — cf. renderDockSpace
@@ -169,6 +170,7 @@ static Config loadConfig(const std::string& exeDir) {
             if (c.volume < 0.0f) c.volume = 0.0f;
             if (c.volume > 1.0f) c.volume = 1.0f;
         }
+        else if (line.rfind("audio_latency_ms=", 0) == 0) c.audioLatencyMs = std::atoi(line.substr(17).c_str());
         else if (line.rfind("showDisk=", 0) == 0) c.showDisk = (line.substr(9) == "1");
         else if (line.rfind("showCart=", 0) == 0) c.showCart = (line.substr(9) == "1");
         else if (line.rfind("showHex=", 0) == 0) c.showHex = (line.substr(8) == "1");
@@ -317,6 +319,7 @@ static void saveConfig(const std::string& exeDir, Config& c, Machine* machine = 
              << "\njoymap=" << w.joymap
              << "\njoydeadzone=" << w.joydeadzone << "\nfastfdc=" << (w.fastfdc ? 1 : 0)
              << "\nvolume=" << w.volume
+             << "\naudio_latency_ms=" << w.audioLatencyMs
              << "\nshowDisk=" << (w.showDisk ? 1 : 0)
              << "\nshowCart=" << (w.showCart ? 1 : 0)
              << "\nshowHex=" << (w.showHex ? 1 : 0)
@@ -2240,6 +2243,7 @@ int main(int argc, char** argv) {
     //                        tout, ne peut pas être recouvert par une autre fenêtre).
     //   --kiosk-monitor N  : moniteur cible (0 = principal ; défaut 0).
     int  kioskMonitor = 0;
+    int  audioLatencyCli = 0;   // 0 = pas d'override CLI (on garde la valeur du neost.cfg)
     std::vector<std::string> pos;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i] ? argv[i] : "";
@@ -2253,6 +2257,10 @@ int main(int argc, char** argv) {
         }
         if      (a == "--kiosk")           g_kiosk = g_kioskLaunched = true;
         else if (a == "--kiosk-monitor" && i + 1 < argc) kioskMonitor = std::atoi(argv[++i]);
+        //   --audio-latency MS : coussin audio visé (défaut 85, borné [20,250] par Audio).
+        //   Monter à 120-150 sur une machine juste (borne Raspberry Pi) : un underrun coûte
+        //   un trou audible le temps de ré-amorcer, une latence un peu plus haute non.
+        else if (a == "--audio-latency" && i + 1 < argc) audioLatencyCli = std::atoi(argv[++i]);
         //   --crt              : active les effets CRT (façade moniteur).
         //   --crt-preset NAME  : preset (off|leger|arcade|phosphor) ; implique --crt.
         else if (a == "--crt")             g_crtOn = true;
@@ -2267,6 +2275,7 @@ int main(int argc, char** argv) {
     // Les overrides CLI priment sur le cfg (et resteront cohérents si le panneau
     // déclenche un save ultérieur en mode fenêtré).
     cfg.crt = g_crtOn; cfg.crtParams = g_crtParams;
+    if (audioLatencyCli > 0) cfg.audioLatencyMs = audioLatencyCli;
     // Sans argument positionnel, ./neost recharge le dernier ROM (ou EmuTOS US).
     const std::string romLogical = !pos.empty() ? pos[0] : defRom;
     const std::string tosPath  = resolveData(romLogical, exeDir);
@@ -2390,6 +2399,7 @@ int main(int argc, char** argv) {
     DriveSound drive;
     bool driveSoundOn = drive.init(resolveData("roms/drivesound/epson_smd480l", exeDir), 48000);
     Audio audio(machine.psg, driveSoundOn ? &drive : nullptr, &machine.dmasnd);
+    audio.setLatencyMs(uint32_t(cfg.audioLatencyMs < 0 ? 0 : cfg.audioLatencyMs));  // AVANT start (borné dans Audio)
     audio.start();   // échec silencieux possible (CI / pas de carte son)
     // Sink FdcSound armé SEULEMENT si la sortie audio existe : sans elle, produceFrame ne
     // draine jamais DriveSound et chaque Step/Seek/Index allouait un son miniaudio jamais

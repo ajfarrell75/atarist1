@@ -1,0 +1,14 @@
+[Unit]
+# Rattrape l'enceinte Bluetooth allumée APRÈS la borne — le cas normal en
+# exposition : on met la borne sous tension, puis l'enceinte. Déclenché par
+# neost-bt-connect.timer, pas par un WantedBy : inutile de retenter en boucle
+# serrée, un passage toutes les 30 s suffit et ne coûte rien.
+Description=NeoST — (re)connexion de l'enceinte Bluetooth
+After=bluetooth.service
+Requires=bluetooth.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/neost/bin/neost-bt.sh connect
+# `connect` sort en 0 même si l'enceinte est absente (ce n'est pas une panne) :
+# le timer repassera. Une vraie erreur reste visible dans le journal.
