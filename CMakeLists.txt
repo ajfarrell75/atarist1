@@ -175,11 +175,11 @@ if(EMSCRIPTEN)
         "SHELL:--shell-file ${CMAKE_SOURCE_DIR}/web/shell.html")
 
     # Choix des données embarquées dans le FS virtuel (--preload-file). Pour un
-    # déploiement PUBLIC (GitHub Pages, cf. .github/workflows/deploy-web.yml), on
-    # n'embarque que des contenus LIBRES (EmuTOS GPL + diskA généré) afin de ne pas
-    # redistribuer le TOS propriétaire ni les jeux sous copyright. En local
+    # déploiement PUBLIC (GitHub Pages / artefact web-wasm), on n'embarque que la
+    # liste autorisée des paquets (EmuTOS GPL + TOS 1.62 UK du profil 1040 STE +
+    # diskA généré) — jamais les autres TOS ni les jeux sous copyright. En local
     # (défaut), on embarque tout roms/ et disks/ pour le confort de test.
-    option(NEOST_WEB_FREE_ONLY "WASM : n'embarquer que les ROM/disquettes libres" OFF)
+    option(NEOST_WEB_FREE_ONLY "WASM : n'embarquer que les ROM/disquettes du paquet" OFF)
     if(NEOST_WEB_FREE_ONLY)
         target_link_options(neost-web PRIVATE
             "SHELL:--preload-file ${CMAKE_SOURCE_DIR}/roms/etos192us.img@/roms/etos192us.img"
@@ -192,6 +192,8 @@ if(EMSCRIPTEN)
             # entre les deux listes qui était le bug. Coût : +512 Ko sur 40 Mo de marge.
             "SHELL:--preload-file ${CMAKE_SOURCE_DIR}/roms/etos256us.img@/roms/etos256us.img"
             "SHELL:--preload-file ${CMAKE_SOURCE_DIR}/roms/etos256fr.img@/roms/etos256fr.img"
+            # TOS 1.62 UK : profil 1040 STE (1 Mo) par défaut, aussi dans les AppImage/DMG.
+            "SHELL:--preload-file ${CMAKE_SOURCE_DIR}/roms/tos162uk.img@/roms/tos162uk.img"
             "SHELL:--preload-file ${CMAKE_SOURCE_DIR}/roms/drivesound@/roms/drivesound"
             "SHELL:--preload-file ${CMAKE_SOURCE_DIR}/disks/diskA.st@/disks/diskA.st")
     else()

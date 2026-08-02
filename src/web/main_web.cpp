@@ -398,14 +398,15 @@ int main(int argc, char** argv) {
     }, memBuf);
     const std::size_t ramBytes = parseRamBytes(memBuf);
 
-    // ROM par défaut adaptée à la machine : EmuTOS 256 Ko (« STe/Mega STe »,
-    // programme le SCU) pour STE/Mega STE, EmuTOS 192 Ko pour ST/Mega ST
-    // (cf. CLAUDE.md § Disquettes & ROM). Repli sur 192 Ko si la 256 Ko n'est
-    // pas embarquée (déploiement NEOST_WEB_FREE_ONLY réduit).
-    const bool wantsSteTos = (machType == MachineType::Ste ||
-                              machType == MachineType::MegaSte);
+    // ROM par défaut adaptée à la machine : TOS 1.62 UK (profil 1040 STE) pour
+    // STE, EmuTOS 256 Ko pour Mega STE, EmuTOS 192 Ko pour ST/Mega ST. Repli
+    // EmuTOS 256/192 si la ROM cible n'est pas embarquée.
+    const bool wantsSte   = (machType == MachineType::Ste);
+    const bool wantsMegaSte = (machType == MachineType::MegaSte);
     const std::string romPath = (argc > 1) ? argv[1]
-        : (wantsSteTos ? "/roms/etos256us.img" : "/roms/etos192us.img");
+        : (wantsSte     ? "/roms/tos162uk.img"
+         : wantsMegaSte ? "/roms/etos256us.img"
+                        : "/roms/etos192us.img");
 
     if (!glfwInit()) { std::fprintf(stderr, "[web] glfwInit a échoué\n"); return 1; }
 
