@@ -124,8 +124,10 @@ un runner ARM64 natif, dans un conteneur `debian:bookworm`, avec
 branche `borne-raspberry` le déclenche ; ensuite :
 
 ```sh
-gh run download <run-id> -n neost-borne-aarch64
-cp neost-borne-cortex-a72-aarch64.tar.gz /media/$USER/bootfs/
+gh run download <run-id> -n neost-pi400-aarch64
+# Deux paquets, MÊME build : l'AppImage (Pi OS avec bureau, un fichier
+# cliquable) et le tar.gz (borne sans bureau, à déballer dans /opt/neost).
+cp neost-pi400-aarch64.tar.gz /media/$USER/bootfs/
 ```
 
 `provision.sh` **préfère ce paquet** s'il le trouve sur la partition de
