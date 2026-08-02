@@ -41,7 +41,8 @@ DO_PGO="${NEOST_PGO:-1}"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get install -y --no-install-recommends \
-    cmake g++ make binutils file ca-certificates libglfw3-dev libgl1-mesa-dev
+    cmake g++ make binutils file ca-certificates libglfw3-dev libgl1-mesa-dev \
+    curl desktop-file-utils
 
 echo "[build_in_bookworm_pi] cible : -mcpu=$MCPU"
 echo 'int main(){}' | g++ -x c++ -mcpu="$MCPU" -o /dev/null - \
@@ -125,12 +126,39 @@ echo "[build_in_bookworm_pi] symbole glibc le plus haut : ${MAX:-aucun}"
 test "$(printf '%s\nGLIBC_2.36\n' "$MAX" | sort -V | tail -1)" = "GLIBC_2.36" \
     || { echo "ERREUR : le binaire exige $MAX > GLIBC_2.36"; exit 1; }
 
-# --- Paquet ------------------------------------------------------------------
+# --- Nom des paquets ----------------------------------------------------------
+# Le paquet porte le MODÈLE DE MACHINE, pas le nom d'un usage : c'est du binaire
+# taillé pour un cœur, et il sert aussi bien à la borne sans bureau qu'à un Pi OS
+# de bureau. « pi400 » dit à qui il s'adresse ; « borne » ne le disait pas.
+case "$MCPU" in
+    cortex-a72) PKG_TAG=pi400 ;;      # Pi 4 / Pi 400
+    cortex-a76) PKG_TAG=pi5   ;;
+    cortex-a53) PKG_TAG=pi3   ;;
+    *)          PKG_TAG="$MCPU" ;;
+esac
+
+# --- Paquet 1 : tar.gz --------------------------------------------------------
 # Disposition = celle qu'attend la borne : $PREFIX/bin/<binaires>, déballable
-# directement par `tar -xzf … -C /opt/neost`.
-rm -rf dist/borne && mkdir -p dist/borne/bin dist
-install -m 755 "$BUILD_DIR/neost" "$BUILD_DIR/neost-headless" dist/borne/bin/
-OUT="dist/neost-borne-${MCPU}-aarch64.tar.gz"
-tar -czf "$OUT" -C dist/borne bin
+# directement par `tar -xzf … -C /opt/neost`. C'est le format de la borne sans
+# bureau : pas de FUSE, pas de montage, le service systemd lance le binaire nu.
+rm -rf "dist/$PKG_TAG" && mkdir -p "dist/$PKG_TAG/bin" dist
+install -m 755 "$BUILD_DIR/neost" "$BUILD_DIR/neost-headless" "dist/$PKG_TAG/bin/"
+OUT="dist/neost-${PKG_TAG}-aarch64.tar.gz"
+tar -czf "$OUT" -C "dist/$PKG_TAG" bin
 echo "[build_in_bookworm_pi] OK : $OUT"
 ls -lh "$OUT"
+
+# --- Paquet 2 : AppImage ------------------------------------------------------
+# MÊME build (aucune recompilation) empaqueté en AppImage : c'est le format utile
+# sur Raspberry Pi OS **avec bureau**, où l'on veut un fichier unique cliquable
+# plutôt qu'une arborescence dans /opt. Elle embarque les données libres
+# (EmuTOS, TOS 1.62 UK, polices, disquette de démarrage) via stage_free_data.sh.
+#
+# ⚠ Elle NE REMPLACE PAS l'AppImage de release (`-raspberry-aarch64`, aarch64
+# GÉNÉRIQUE, Pi 3 → Pi 5) : celle-ci est compilée pour UN cœur précis. D'où un
+# nom distinct — le job `publish` d'une release aplatit tous les artefacts dans
+# un même dossier, deux paquets homonymes s'y écraseraient en silence.
+echo "[build_in_bookworm_pi] AppImage (tag $PKG_TAG)…"
+NEOST_PKG_TAG="$PKG_TAG" NEOST_VERSION="${NEOST_VERSION:-dev}" \
+    packaging/linux/make_appimage.sh "$BUILD_DIR"
+ls -lh dist/*.AppImage

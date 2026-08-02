@@ -68,7 +68,10 @@ apt-get "${APT_OPTS[@]}" install -y --no-install-recommends cmake g++ make libgl
 # natif dans un conteneur bookworm, -mcpu=cortex-a72) a été déposé sur la
 # partition de démarrage → rien à compiler, la borne est prête en secondes.
 # Chemin de SECOURS : compilation sur place (~20-40 min sur Pi 4).
-PREBUILT="$(ls "$BOOTDIR"/neost-borne-*-aarch64.tar.gz 2>/dev/null | head -1 || true)"
+# `neost-pi400-*` est le nom actuel ; `neost-borne-*` est celui d'avant le
+# renommage — accepté pour ne pas invalider une carte SD déjà préparée.
+PREBUILT="$(ls "$BOOTDIR"/neost-pi*-aarch64.tar.gz "$BOOTDIR"/neost-borne-*-aarch64.tar.gz \
+            2>/dev/null | head -1 || true)"
 if [ -n "$PREBUILT" ]; then
     echo "[provision] binaires pré-compilés : $PREBUILT"
     install -d "$PREFIX"
