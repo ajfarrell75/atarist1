@@ -16,7 +16,7 @@
 #
 #  Disposition .app (resolveData cherche exeDir/../roms) :
 #    NeoST.app/Contents/MacOS/neost, neost-headless
-#    NeoST.app/Contents/roms/ (EmuTOS seulement), Contents/disks/diskA.st
+#    NeoST.app/Contents/roms/ (EmuTOS + tos162uk), Contents/disks/diskA.st
 # =============================================================================
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"

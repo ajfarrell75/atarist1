@@ -3084,7 +3084,7 @@ int main(int argc, char** argv) {
                                 const char* rom; const char* gemdos; };
                 static const Profil profils[] = {
                     { "520 ST (512 Ko, TOS 1.02 US)",             "st",      "512k", "roms/tos102us.img", ""       },
-                    { "1040 STE (1 Mo, TOS 1.62 FR, disque dur)", "ste",     "1m",   "roms/tos162fr.img", "gemdos" },
+                    { "1040 STE (1 Mo, TOS 1.62 UK, disque dur)", "ste",     "1m",   "roms/tos162uk.img", "gemdos" },
                     { "Mega STE (4 Mo, TOS 2.06 FR, disque dur)", "megaste", "4m",   "roms/tos206fr.img", "gemdos" },
                 };
                 for (const auto& p : profils) {

@@ -102,7 +102,7 @@ jeu, envoyer des touches ou redémarrer, sans jamais quitter le plein écran.
 
 ```sh
 ./build/neost --kiosk roms/tos102uk.img "disks/Jeu.stx"              # plein écran EXCLUSIF
-./build/neost --kiosk --kiosk-monitor 1 roms/tos162fr.img            # sur le 2ᵉ écran
+./build/neost --kiosk --kiosk-monitor 1 roms/tos162uk.img            # sur le 2ᵉ écran
 ```
 
 - **`--kiosk`** : vrai plein écran **exclusif** — reste au-dessus de tout (panneaux/dock
@@ -179,7 +179,7 @@ un vieux macOS — l'écran est présenté **brut**, passthrough).
 ```sh
 ./build/neost --crt                         # active les effets (réglages du neost.cfg)
 ./build/neost --crt-preset arcade           # preset : off | leger | arcade | phosphor
-./build/neost --kiosk --crt-preset phosphor roms/tos162fr.img "disks/Jeu.stx"
+./build/neost --kiosk --crt-preset phosphor roms/tos162uk.img "disks/Jeu.stx"
 ```
 
 En **fenêtré**, le menu **Affichage → Effets CRT** ouvre un panneau de réglages en direct
@@ -187,20 +187,23 @@ En **fenêtré**, le menu **Affichage → Effets CRT** ouvre un panneau de régl
 peut ensuite tout ajuster. En **kiosk**, la config est figée → les effets viennent du
 `neost.cfg` (ou de `--crt` / `--crt-preset`).
 
-## ROM : EmuTOS par défaut (libre)
+## ROM : EmuTOS par défaut (+ TOS 1.62 UK pour le profil 1040 STE)
 
-Les TOS Atari d'origine sont propriétaires et **ne sont pas redistribués** ici. NeoST
-utilise par défaut **[EmuTOS](https://emutos.sourceforge.io/)** (GPL), dans `roms/` :
+NeoST démarre par défaut sur **[EmuTOS](https://emutos.sourceforge.io/)** (GPL).
+Les paquets (AppImage / DMG / WASM) embarquent aussi **TOS 1.62 UK**, utilisé par le
+profil **1040 STE (1 Mo)** ; les autres TOS Atari du dépôt ne sont **pas** redistribués.
 
 ```
 roms/etos192fr.img   EmuTOS 192 Ko, français  (mappé à $FC0000, par défaut) — ST / Mega ST
 roms/etos192us.img   EmuTOS 192 Ko, US        — ST / Mega ST
 roms/etos256fr.img   EmuTOS 256 Ko, français  (mappé à $E00000) — STE / Mega STE
 roms/etos256us.img   EmuTOS 256 Ko, US        — STE / Mega STE
+roms/tos162uk.img    TOS 1.62 UK (PAL 50 Hz)  — profil 1040 STE (embarqué dans les dist)
 ```
 
 Le build 192 Ko se présente « Atari ST » (pas d'autodétection du matériel additionnel) ;
-pour un profil STE/Mega STE, utiliser un build 256 Ko (qui programme le SCU).
+pour un profil STE/Mega STE, utiliser un TOS STE (1.62 / 2.06) ou un EmuTOS 256 Ko
+(qui programme le SCU).
 
 ## Disquettes
 
