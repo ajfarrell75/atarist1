@@ -19,6 +19,7 @@
 #include "io/Scc.hpp"
 
 #include <algorithm>
+#include <cassert>
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
@@ -257,6 +258,59 @@ int64_t Bus::mmuTranslate(uint32_t addr) const {
     return phys < ram.size() ? static_cast<int64_t>(phys) : -1;
 }
 
+// -----------------------------------------------------------------------------
+//  Reconstruction du cache de décodage MMU (cf. Bus.hpp § Cache de décodage MMU).
+//
+//  POURQUOI la traduction est l'identité quand une banque est annoncée à sa taille
+//  réelle — le raisonnement, pour que personne n'ait à le refaire :
+//
+//   · Banque 0, mmuB0 == ramB0 : bankStart = 0, et les deux remappages RAS/CAS se
+//     réduisent au cas « ramSz == mmuSz », c'est-à-dire à `a & (ramSz-1)`. Comme
+//     a < mmuB0 = ramSz, cela vaut `a`. Traduction = identité sur [0, ramB0).
+//   · Banque 1, mmuB1 == ramB1 (et banque réellement peuplée) : même réduction,
+//     `a & (ramB1-1)`, puis `+ bankStart` avec bankStart = ramB0 = mmuB0. Or
+//     ramB1 <= ramB0 = mmuB0 et toutes les tailles sont des puissances de deux :
+//     mmuB0 est donc un multiple de ramB1, et `a & (ramB1-1)` vaut `a - mmuB0`.
+//     Le recollage redonne `a`. Identité étendue à [0, ramB0 + ramB1).
+//
+//  Dès qu'une banque est SUR-déclarée (ce que font les tests de RAM en réglant
+//  $FF8001 au maximum) ou vide alors que la config l'annonce, l'égalité tombe et on
+//  laisse mmuTranslate faire le décodage complet — la limite est alors réduite à la
+//  banque 0, voire à zéro. Aucun comportement n'est perdu, seul le raccourci l'est.
+// -----------------------------------------------------------------------------
+void Bus::rebuildMmuCache(uint8_t conf) const {
+    mmuCacheConf_ = conf;
+    mmuCacheRam_  = ram.size();
+    mmuFastLimit_ = 0;
+
+    const uint32_t mmuB0 = mmuConfSize(static_cast<uint8_t>((conf >> 2) & 3));
+    // Même règle que mmuTranslate : seuls ST / Mega ST utilisent les bits 0-1 pour
+    // la banque 1 ; les STE (MMU « IMP ») calquent la banque 1 sur la banque 0.
+    const uint32_t mmuB1 = (machine == MachineType::St || machine == MachineType::MegaSt)
+                               ? mmuConfSize(static_cast<uint8_t>(conf & 3))
+                               : mmuB0;
+    uint32_t ramB0, ramB1; ramBanks(ram.size(), ramB0, ramB1);
+
+    if (mmuB0 != ramB0 || ramB0 == 0) return;          // banque 0 non identitaire
+    uint64_t lim = ramB0;
+    if (mmuB1 == ramB1 && ramB1 != 0) lim += ramB1;     // banque 1 aussi
+    lim = std::min<uint64_t>(lim, ram.size());
+    mmuFastLimit_ = static_cast<uint32_t>(std::min<uint64_t>(lim, 0x400000u));
+
+    // Garde-fou de développement : le raccourci DOIT rendre exactement ce que rend
+    // le décodage complet, aux bornes comme au milieu. Une divergence ici serait une
+    // corruption mémoire silencieuse — on la fait échouer bruyamment en debug.
+#ifndef NDEBUG
+    if (mmuFastLimit_ > 0) {
+        const uint32_t probes[] = { 0u, ramB0 - 1u, ramB0, mmuFastLimit_ - 1u,
+                                    mmuFastLimit_ / 2u };
+        for (uint32_t p : probes)
+            if (p < mmuFastLimit_) assert(mmuTranslate(p) == static_cast<int64_t>(p)
+                                          && "cache MMU incohérent avec mmuTranslate");
+    }
+#endif
+}
+
 // Pointeur hôte contigu dans ram[] pour [addr, addr+len) — cf. Bus.hpp. On traduit
 // le premier et le dernier octet : la plage n'est utilisable que si elle reste dans
 // la MÊME puce sans aliasing (octets physiques consécutifs), ce qui est le cas des
@@ -277,7 +331,10 @@ uint8_t* Bus::hostRamPtr(uint32_t addr, uint32_t len) {
 // -----------------------------------------------------------------------------
 //  Lecture / écriture 8 bits — point d'aiguillage central du bus.
 // -----------------------------------------------------------------------------
-uint8_t Bus::read8(uint32_t addr) {
+// Décodage COMPLET. Le cas ultra-majoritaire (RAM ordinaire) est traité en ligne
+// par Bus::read8 dans l'en-tête ; on arrive ici pour tout le reste — et aussi pour
+// la RAM quand la config MMU n'est pas en traduction identité.
+uint8_t Bus::read8Slow(uint32_t addr) {
     addr &= stmap::ADDR_MASK;
 
     // Overlay de boot : les 8 premiers octets ($0-$7) proviennent de la ROM
@@ -320,7 +377,7 @@ uint8_t Bus::read8(uint32_t addr) {
     return 0xFF;
 }
 
-void Bus::write8(uint32_t addr, uint8_t v) {
+void Bus::write8Slow(uint32_t addr, uint8_t v) {
     addr &= stmap::ADDR_MASK;
 
     // Espace RAM ($0-$3FFFFF) : décodé par le MMU (banques + aliasing). Une banque
@@ -501,7 +558,7 @@ bool Bus::busSelfTest() {
     return fail == 0;
 }
 
-bool Bus::busFaultN(uint32_t addr, unsigned n, bool write) const {
+bool Bus::busFaultNSlow(uint32_t addr, unsigned n, bool write) const {
     addr &= stmap::ADDR_MASK;
 
     // 1) Écritures TOUJOURS fautives, même en superviseur (cf. Bus.hpp) : la ROM
@@ -643,7 +700,7 @@ void Bus::seedResetVectors() {
 }
 
 // --- Accès 16/32 bits : le 68000 est big-endian, on assemble octet par octet --
-uint16_t Bus::read16(uint32_t addr) {
+uint16_t Bus::read16Slow(uint32_t addr) {
     const uint8_t saved = ioAccessWidth_;
     ioAccessWidth_ = 2;
     // Séquencement EXPLICITE octet fort puis octet faible : les opérandes de « | »

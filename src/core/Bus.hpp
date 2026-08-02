@@ -9,6 +9,10 @@
 // =============================================================================
 #pragma once
 #include "core/MachineType.hpp"
+// Glue.hpp est inclus (et non seulement déclaré) pour que le CHEMIN CHAUD du bus
+// puisse lire `glue->memConfig_` en ligne — cf. mmuFastLimit(). C'est un en-tête
+// autonome de 30 lignes sans dépendance : aucun cycle d'inclusion possible.
+#include "core/Glue.hpp"
 #include "io/Fpu.hpp"
 #include "io/Scu.hpp"
 #include "io/StePads.hpp"
@@ -19,7 +23,6 @@
 
 class Shifter;
 class YM2149;
-class Glue;
 class Mfp;
 class Ikbd;
 class Fdc;
@@ -103,10 +106,46 @@ public:
     //  little-endian. On assemble donc les mots octet par octet : la RAM/ROM
     //  est stockée dans l'ordre natif ST, sans surprise pour le débogueur hexa.
     // -------------------------------------------------------------------------
-    uint8_t  read8 (uint32_t addr);
-    uint16_t read16(uint32_t addr);
+    //
+    //  CHEMIN CHAUD. Le décodage complet (overlay de boot, banques MMU, ROM,
+    //  cartouche, MMIO) vit dans les variantes *Slow, hors ligne. Ici on ne traite
+    //  que le cas ultra-majoritaire — RAM ordinaire en traduction identité — pour
+    //  qu'il s'inline chez l'appelant (Moira, blitter, DMA). Cf. mmuFastLimit().
+    uint8_t read8(uint32_t addr) {
+        addr &= stmap::ADDR_MASK;
+        // L'overlay de boot ne concerne QUE $0-$7 et ne vit que le temps de la
+        // lecture SSP/PC au reset : il est exclu du chemin rapide, pas ignoré.
+        if (addr < mmuFastLimit() && !(bootOverlay && addr < 8)) return ram[addr];
+        // ROM TOS : deuxième source d'accès en volume — le code du TOS (et du GEM)
+        // s'EXÉCUTE depuis la ROM, chaque mot d'opcode passe donc ici. `addr-romBase`
+        // en arithmétique non signée : sous romBase le décalage déborde et le test
+        // échoue, pas besoin d'une seconde comparaison.
+        const uint32_t off = addr - romBase;
+        if (off < rom.size()) return rom[off];
+        return read8Slow(addr);
+    }
+    void write8(uint32_t addr, uint8_t v) {
+        addr &= stmap::ADDR_MASK;
+        // (pas de garde overlay : write8 n'en a jamais eu — l'overlay est une
+        //  redirection de LECTURE, l'écriture va bien en RAM.)
+        if (addr < mmuFastLimit()) { ram[addr] = v; return; }
+        write8Slow(addr, v);
+    }
+    // read16 a son propre chemin rapide plutôt que deux read8 : c'est l'accès le
+    // plus fréquent de tous (chaque mot de code lu par le 68000 y passe), et la
+    // revalidation du cache MMU n'est ainsi payée qu'une fois au lieu de deux.
+    // ⚠ ioAccessWidth_ n'est PAS posé ici : il n'est consulté que par les
+    // gestionnaires MMIO et par la zone RAM « void », deux chemins que ce raccourci
+    // ne peut pas atteindre par construction.
+    uint16_t read16(uint32_t addr) {
+        addr &= stmap::ADDR_MASK;
+        if (addr + 1 < mmuFastLimit() && !(bootOverlay && addr < 8))
+            return uint16_t((ram[addr] << 8) | ram[addr + 1]);
+        const uint32_t off = addr - romBase;             // cf. read8 : non signé
+        if (off + 1 < rom.size()) return uint16_t((rom[off] << 8) | rom[off + 1]);
+        return read16Slow(addr);
+    }
     uint32_t read32(uint32_t addr);
-    void     write8 (uint32_t addr, uint8_t  v);
     void     write16(uint32_t addr, uint16_t v);
     void     write32(uint32_t addr, uint32_t v);
 
@@ -164,7 +203,22 @@ public:
     //  3. Carte par octet (whitelist) : un accès word/long ne FAUTE que si TOUS ses
     //     octets tombent en zone bus error. Ainsi `move.w $FF8204` fonctionne (octet
     //     pair fautif + octet impair valide) alors que `move.b $FF8204` faute.
-    bool busFaultN(uint32_t addr, unsigned n, bool write) const;
+    //  CHEMIN CHAUD : le CPU appelle busFaultN à CHAQUE accès (~5,5 % des
+    //  instructions au profil callgrind, presque entièrement pour rien). La RAM
+    //  ordinaire — au-dessus des variables système, sous les 4 Mo — ne faute JAMAIS,
+    //  ni en lecture ni en écriture, ni en mode utilisateur : aucun des trois étages
+    //  ci-dessous ne la concerne (étage 1 = ROM/cartouche/$0-$7, étage 2 = $0-$7FF et
+    //  espace IO, étage 3 = busFault(), dont la toute première ligne renvoie false
+    //  pour tout `addr < $400000`). On court-circuite donc l'appel hors ligne.
+    bool busFaultN(uint32_t addr, unsigned n, bool write) const {
+        addr &= stmap::ADDR_MASK;
+        if (addr >= stmap::VECTORS_END && addr < 0x400000) return false;
+        // LECTURE en ROM TOS : jamais fautive sur toute la fenêtre décodée (étage 3
+        // → busFault). L'ÉCRITURE, elle, faute toujours (étage 1) → chemin complet.
+        if (!write && addr >= romBase && addr < romBase + romWindowSize()) return false;
+        return busFaultNSlow(addr, n, write);
+    }
+    bool busFaultNSlow(uint32_t addr, unsigned n, bool write) const;
 
     // Auto-test DÉTERMINISTE du modèle de bus error (whitelist par octet) : vérifie
     // que RAM/ROM/cartouche ne fautent pas, que $FF0000-$FF7FFF et les trous fautent,
@@ -308,12 +362,54 @@ public:
     StePads stePads;
 
 private:
+    uint8_t  read8Slow (uint32_t addr);          // décodage complet (cf. read8)
+    uint16_t read16Slow(uint32_t addr);
+    void     write8Slow(uint32_t addr, uint8_t v);
+
     uint8_t  mmioRead8 (uint32_t addr);
     void     mmioWrite8(uint32_t addr, uint8_t v);
     // Décodage de banques MMU ($FF8001) : adresse logique RAM (<4Mo) → index
     // physique dans ram[], ou -1 si la banque visée n'est pas peuplée (void).
     // Port fidèle de Hatari stMemory.c (RAS/CAS + aliasing). Cf. Bus.cpp.
     int64_t  mmuTranslate(uint32_t addr) const;
+
+    // -------------------------------------------------------------------------
+    //  Cache de décodage MMU — le gain le plus gros du chemin chaud.
+    //
+    //  mmuTranslate() refaisait le décodage COMPLET de $FF8001 à chaque octet :
+    //  lecture de la config, deux `switch` de taille de banque, une division pour
+    //  la taille de RAM posée, puis le remappage RAS/CAS. Le profil callgrind d'un
+    //  boot TOS le mesurait à ~7 % des instructions du programme, pour 12,8 millions
+    //  d'appels en 300 trames — alors que le résultat ne dépend QUE de deux
+    //  entrées : l'octet de config et la taille de ram[].
+    //
+    //  On mémorise donc le décodage et on le REVALIDE par comparaison de ces deux
+    //  entrées, plutôt que par une invalidation explicite posée aux sites d'écriture :
+    //  impossible d'en oublier un (écriture $FF8001, changement de taille RAM,
+    //  reset, chargement de save-state…), au prix de deux comparaisons.
+    //
+    //  mmuFastLimit_ = longueur du préfixe [0, limite) sur lequel la traduction est
+    //  l'IDENTITÉ. C'est le cas dès qu'une banque est annoncée à sa taille réelle
+    //  (ce que fait tout TOS après son sizing mémoire) : les remappages RAS/CAS se
+    //  réduisent alors à `addr & (taille-1)` recollé au début de banque, soit `addr`.
+    //  Config exotique (banque sur-déclarée pour un test de RAM, banque vide) →
+    //  limite 0 ou réduite à la banque 0, et le décodage complet reprend la main.
+    // -------------------------------------------------------------------------
+    mutable uint32_t    mmuFastLimit_ = 0;
+    mutable uint8_t     mmuCacheConf_ = 0xFF;               // 0xFF = jamais bâti
+    mutable std::size_t mmuCacheRam_  = static_cast<std::size_t>(-1);
+    void rebuildMmuCache(uint8_t conf) const;
+
+    // Config mémoire effective. Sans Glue branchée (tests unitaires du Bus seul),
+    // on la dérive de la RAM posée — exactement ce que faisait mmuTranslate.
+    uint8_t mmuConfNow() const {
+        return glue ? glue->memConfig_ : memConfigForBytes(ram.size());
+    }
+    uint32_t mmuFastLimit() const {
+        const uint8_t conf = mmuConfNow();
+        if (conf != mmuCacheConf_ || ram.size() != mmuCacheRam_) rebuildMmuCache(conf);
+        return mmuFastLimit_;
+    }
 
     // Carte de bus error de l'espace IO ($FF8000-$FFFFFF), 1 octet par adresse
     // (1 = bus error, 0 = registre câblé ou « void »). Construite à la demande

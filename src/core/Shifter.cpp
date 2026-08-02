@@ -504,6 +504,28 @@ void Shifter::liveGlueCatchUp(int targetLine) {
 
 // Décode les index de palette (ou bit mono) d'UNE scanline dans `idx`, selon la
 // résolution VERROUILLÉE de la trame. Renvoie le décalage scroll fin STE.
+// Table d'éclatement d'un octet de bitplane en 8 octets « 0 ou 1 », dans l'ordre
+// d'affichage (bit 7 = pixel le plus à gauche = premier octet en mémoire).
+// Construite par memcpy depuis un tableau d'octets : la table a donc, quel que soit
+// le boutisme de l'hôte, exactement la disposition mémoire que decodeLineIndices
+// recopie ensuite dans `idx`. 2 Ko, résidents en L1 (une ligne de cache par 8 octets).
+namespace {
+    struct SpreadTable {
+        uint64_t v[256];
+        SpreadTable() {
+            for (int b = 0; b < 256; ++b) {
+                uint8_t bytes[8];
+                for (int k = 0; k < 8; ++k) bytes[k] = uint8_t((b >> (7 - k)) & 1);
+                std::memcpy(&v[b], bytes, 8);
+            }
+        }
+    };
+    const SpreadTable g_spread;
+    // Raccourci de lecture. Initialisé APRÈS g_spread (ordre d'initialisation garanti
+    // au sein d'une même unité de compilation).
+    const uint64_t* const kSpread = g_spread.v;
+}
+
 int Shifter::decodeLineIndices(int y, uint8_t* idx) const {
     const int  W      = activeWidth();             // pixels de l'écran actif (hors bordures)
     const bool hi     = (frameMode_ == Mode::High);
@@ -547,9 +569,23 @@ int Shifter::decodeLineIndices(int y, uint8_t* idx) const {
         const uint16_t p1 = planes > 1 ? bus_.read16(a + 2) : 0;
         const uint16_t p2 = planes > 2 ? bus_.read16(a + 4) : 0;
         const uint16_t p3 = planes > 3 ? bus_.read16(a + 6) : 0;
-        for (int bit = 15; bit >= 0; --bit)
-            idx[px++] = static_cast<uint8_t>(((p0 >> bit) & 1) | (((p1 >> bit) & 1) << 1)
-                                           | (((p2 >> bit) & 1) << 2) | (((p3 >> bit) & 1) << 3));
+        // Dé-entrelacement des plans par TABLE, 8 pixels d'un coup (cf. kSpread) :
+        // la boucle bit à bit qu'il y avait ici pesait ~10 % des instructions du
+        // programme au profil callgrind — c'est le point chaud n°1 de la vidéo, appelé
+        // pour chaque groupe de 16 px de chaque ligne affichée de chaque trame.
+        // Chaque octet de kSpread[b] vaut 0 ou 1 : les décalages de 1, 2 et 3 restent
+        // donc CONFINÉS à leur octet (valeur max 8), sans retenue d'un octet sur
+        // l'autre — c'est ce qui permet de composer les quatre plans en une seule
+        // opération 64 bits, et ce qui la rend indépendante du boutisme de l'hôte.
+        for (int half = 0; half < 2; ++half) {
+            const int sh = half ? 0 : 8;               // octet fort d'abord (px croissants)
+            const uint64_t v = kSpread[(p0 >> sh) & 0xFF]
+                             | (kSpread[(p1 >> sh) & 0xFF] << 1)
+                             | (kSpread[(p2 >> sh) & 0xFF] << 2)
+                             | (kSpread[(p3 >> sh) & 0xFF] << 3);
+            std::memcpy(idx + px, &v, 8);
+            px += 8;
+        }
     }
     if (scroll && !prefetch)
         std::memset(idx, 0, static_cast<std::size_t>(16 + scroll));   // bord gauche couleur 0
@@ -602,8 +638,15 @@ void Shifter::renderLine(int y) {
         for (int c = 0; c < W; ++c)
             dst[c] = (idx[c + scroll] & 1) ? 0xFF000000u : 0xFFFFFFFFu;
     } else {
-        for (int c = 0; c < W; ++c)
-            dst[c] = stColorToArgb(palette[idx[c + scroll]]);
+        // Conversion $0RGB → ARGB8888 SORTIE de la boucle : elle était refaite pour
+        // chacun des 320 à 640 pixels de chaque ligne, alors que `palette` ne peut
+        // pas changer pendant l'émission (aucune émulation ne tourne ici — les
+        // changements en cours de ligne passent par le re-rendu spec512, qui rappelle
+        // renderLine). 16 conversions par ligne au lieu de W.
+        uint32_t argb[16];
+        for (int i = 0; i < 16; ++i) argb[i] = stColorToArgb(palette[i]);
+        const uint8_t* src = idx + scroll;
+        for (int c = 0; c < W; ++c) dst[c] = argb[src[c]];
     }
 
     // Bordures latérales de CETTE ligne. Le registre 0 (couleur de bordure) est écrit

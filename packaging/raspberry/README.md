@@ -35,6 +35,22 @@ vcgencmd get_throttled     # ≠ 0x0 → sous-tension ou throttling thermique :
 cat /sys/devices/system/cpu/cpufreq/policy0/scaling_governor   # `ondemand` → à passer en `performance`
 ```
 
+### Le binaire compte autant que le système
+
+Avant de dégraisser le système, prendre le bon binaire : **l'AppImage publiée est
+aarch64 générique**, elle doit tourner du Pi 3 au Pi 5. Un binaire taillé pour le
+cœur du Pi 400 (`-mcpu=cortex-a72`) **et compilé en deux passes guidées par profil
++ LTO** va nettement plus vite sur exactement le même code — mesuré **−34 %** de
+temps d'émulation pour la seule recette de compilation, en plus de ~−37 % obtenus
+par l'optimisation du cœur lui-même.
+
+```sh
+packaging/raspberry/build_native_pi.sh --pgo --install   # sur le Pi, ~1 h
+```
+
+…ou, sans rien compiler sur le Pi, récupérer l'artefact de la CI (déjà PGO+LTO,
+cf. § 2.a). Méthode, mesures et pièges : **[`docs/PERFORMANCE.md`](../../docs/PERFORMANCE.md)**.
+
 ---
 
 ## 1. Ce que la borne enlève, et ce que ça rapporte

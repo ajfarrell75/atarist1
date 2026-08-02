@@ -144,6 +144,13 @@ namespace {
     // Pré-armement des broches IRQ vidéo (cf. Cpu68k::armHblPinAt/.hpp) : cycle BUS
     // auquel la broche doit monter, appliqué par sync() en cours d'instruction.
     // −1 = inactif. g_pinNextDue = min des deux (chemin chaud O(1) dans sync()).
+    // DIAG (NEOST_BUS_DIAG=<préfixe PC sur 8 bits, hexa>) — cf. busDiag. Drapeau
+    // NAMESPACE et pas statique LOCAL : en statique local, chaque accès bus du CPU
+    // franchissait la garde d'initialisation du singleton ET évaluait getClock() pour
+    // l'argument, alors que le diagnostic est désactivé en exploitation. Ici, le test
+    // se réduit à la lecture d'un global et les sites d'appel peuvent l'éviter en amont.
+    long    g_busDiagPage = []{ const char* s = std::getenv("NEOST_BUS_DIAG");
+                                return s ? std::strtol(s, nullptr, 16) : -1L; }();
     int64_t g_hblPinDue   = -1;
     int64_t g_vblPinDue   = -1;
     int64_t g_pinNextDue  = -1;
@@ -311,16 +318,14 @@ public:
     // DIAG (NEOST_BUS_DIAG=<pc-hex-préfixe-8bits>) : séquence bus (addr, horloge mod 4)
     // de chaque accès CPU quand PC0 est dans la page donnée — traque de phase créneau.
     void busDiag(char k, moira::u32 a, moira::i64 c) const {
-        static const long page = []{ const char* s = std::getenv("NEOST_BUS_DIAG");
-                                     return s ? std::strtol(s, nullptr, 16) : -1L; }();
-        if (page < 0) return;
+        if (g_busDiagPage < 0) return;
         const moira::u32 pc = getPC0() & 0xFFFFFFu;
-        if ((pc >> 8) != (moira::u32)page) return;
+        if ((pc >> 8) != (moira::u32)g_busDiagPage) return;
         std::fprintf(stderr, "[BUS] %c pc=%06x a=%06x c=%lld m4=%d\n",
                      k, pc, a & 0xFFFFFFu, (long long)c, (int)(c & 3));
     }
-    moira::u8  read8 (moira::u32 a) const override { if (g_bus->blitterWinEnd >= 0 || g_bus->blitterCountCpu) noteBlitterPreStart(); if (g_bus->busFaultN(a, 1, false) && faultOrHalt(a, false)) return 0; moira::u8 v; if (g_cpuMul == 2) v = moira::u8(readMste16Mhz(a, 1)); else { chipWait8(a); busDiag('r', a, getClock()); v = g_bus->read8(a); } latchDb8(v); return v; }
-    moira::u16 read16(moira::u32 a) const override { if (g_bus->blitterWinEnd >= 0 || g_bus->blitterCountCpu) noteBlitterPreStart(); if (g_bus->busFaultN(a, 2, false) && faultOrHalt(a, false)) return 0; moira::u16 v; if (g_cpuMul == 2) v = readMste16Mhz(a, 2); else { chipWait8(a); busDiag('R', a, getClock()); v = g_bus->read16(a); } latchDb(v); return v; }
+    moira::u8  read8 (moira::u32 a) const override { if (g_bus->blitterWinEnd >= 0 || g_bus->blitterCountCpu) noteBlitterPreStart(); if (g_bus->busFaultN(a, 1, false) && faultOrHalt(a, false)) return 0; moira::u8 v; if (g_cpuMul == 2) v = moira::u8(readMste16Mhz(a, 1)); else { chipWait8(a); if (g_busDiagPage >= 0) busDiag('r', a, getClock()); v = g_bus->read8(a); } latchDb8(v); return v; }
+    moira::u16 read16(moira::u32 a) const override { if (g_bus->blitterWinEnd >= 0 || g_bus->blitterCountCpu) noteBlitterPreStart(); if (g_bus->busFaultN(a, 2, false) && faultOrHalt(a, false)) return 0; moira::u16 v; if (g_cpuMul == 2) v = readMste16Mhz(a, 2); else { chipWait8(a); if (g_busDiagPage >= 0) busDiag('R', a, getClock()); v = g_bus->read16(a); } latchDb(v); return v; }
     void write8 (moira::u32 a, moira::u8  v) const override { if (g_bus->blitterWinEnd >= 0 || g_bus->blitterCountCpu) noteBlitterPreStart(); if (g_bus->busFaultN(a, 1, true)) { if (faultOrHalt(a, true)) return; } latchDb8(v); if (g_cpuMul == 2) { writeMste16Mhz(a, 1, v); return; } chipWait8(a); g_bus->write8(a, v); }
     void write16(moira::u32 a, moira::u16 v) const override { if (g_bus->blitterWinEnd >= 0 || g_bus->blitterCountCpu) noteBlitterPreStart(); if (g_bus->busFaultN(a, 2, true)) { if (faultOrHalt(a, true)) return; } latchDb(v); if (g_cpuMul == 2) { writeMste16Mhz(a, 2, v); return; } chipWait8(a); g_bus->write16(a, v); }
     // Débogueur : watchpoint mémoire atteint (appelé par la couche dataflow de Moira

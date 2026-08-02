@@ -16,6 +16,7 @@
 // =============================================================================
 #pragma once
 #include <array>
+#include <cassert>
 #include <cstdint>
 #include <functional>
 #include "core/StateArchive.hpp"
@@ -91,17 +92,29 @@ public:
     void reset() {
         now_ = 0;
         for (auto& d : due_) d = kInactive;
+        armed_     = 0;
         runTarget_ = kInactive;
         nextDue_   = kInactive;
     }
 
     // Programme (ou reprogramme) l'événement `s` au cycle absolu `atCycle`.
     void schedule(Source s, int64_t atCycle) {
+        const int64_t old = due_[s];
         due_[s] = atCycle;
-        // Cache O(1) du plus proche événement dû (cf. nextDue_/syncTo) : un nouvel
-        // événement plus tôt avance le cache ; sinon il reste valide (recalculé au
-        // dispatch ou au cancel de l'échéance minimale).
-        if (nextDue_ == kInactive || atCycle < nextDue_) nextDue_ = atCycle;
+        // Miroir binaire (cf. armed_). Le test explicite contre kInactive garde
+        // l'invariant vrai même si un appelant planifie « à l'inactif » — l'ancien
+        // code, qui relisait due_ à chaque balayage, y était insensible.
+        if (atCycle != kInactive) armed_ |= 1u << s; else armed_ &= ~(1u << s);
+        // Cache du plus proche événement dû (cf. nextDue_). Il est tenu EXACT, et pas
+        // seulement minorant : un événement plus tôt l'avance ; un événement REPOUSSÉ
+        // alors qu'il PORTAIT le minimum le fait reculer, et il faut alors rebalayer.
+        // Ce dernier cas est rare — une source périodique qui se replanifie depuis son
+        // propre callback a déjà été remise à kInactive par runTo, donc `old` y vaut
+        // kInactive et aucun balayage n'a lieu. L'exactitude est ce qui permet à
+        // nextDue() de répondre en O(1) : c'est lui que Machine::runFrame appelle pour
+        // borner chaque bloc CPU, et il pesait à lui seul ~5 % des instructions.
+        if (nextDue_ == kInactive || atCycle < nextDue_)      nextDue_ = atCycle;
+        else if (old != kInactive && old == nextDue_)          nextDue_ = scanNextDue();
         // Si on est en plein bloc CPU (runTarget_ armé) et que cet événement tombe
         // AVANT la cible du bloc, on préempte : le CPU rend la main à la prochaine
         // frontière d'instruction et la boucle d'horloge ré-évaluera nextDue().
@@ -115,6 +128,7 @@ public:
     void cancel(Source s) {
         const bool wasMin = (due_[s] != kInactive && due_[s] == nextDue_);
         due_[s] = kInactive;
+        armed_ &= ~(1u << s);
         if (wasMin) nextDue_ = scanNextDue();   // l'échéance minimale disparaît → recalcul
     }
 
@@ -154,9 +168,12 @@ public:
         return due_[s] - liveNow();
     }
 
-    // Cycle du prochain événement dû (>= now), ou -1 si aucun n'est armé.
-    // (Scan complet ; pour le chemin chaud sync() utiliser peekNextDue() — O(1).)
-    int64_t nextDue() const { return scanNextDue(); }
+    // Cycle du prochain événement dû (>= now), ou -1 si aucun n'est armé. O(1) : le
+    // cache nextDue_ est tenu EXACT par schedule/cancel/runTo (cf. schedule).
+    int64_t nextDue() const {
+        assert(nextDue_ == scanNextDue() && "cache nextDue_ désynchronisé");
+        return nextDue_;
+    }
 
     // Avance l'horloge jusqu'à `cycle` puis déclenche les événements échus (due <=
     // cycle) DANS L'ORDRE CHRONOLOGIQUE de leurs échéances (comme la liste triée
@@ -167,13 +184,33 @@ public:
     // callback peut replanifier (échéance > now : re-déclenchée au tour suivant).
     void runTo(int64_t cycle) {
         now_ = cycle;
+        assert(armedInvariant() && "armed_ désynchronisé de due_");
         uint32_t fired = 0;
         static_assert(SRC_COUNT <= 32, "masque fired sur 32 bits");
+        // Minimum de TOUTES les échéances armées, tenu à jour par la passe ci-dessous.
+        // À la passe qui ne trouve plus rien à déclencher — donc après que tous les
+        // callbacks ont replanifié — il vaut exactement ce que rendrait scanNextDue().
+        // On économise ainsi un balayage complet par appel à runTo (1,8 M par 300
+        // trames au profil), qui pesait à lui seul ~7 % des instructions du programme.
+        int64_t minAll = kNever;
         for (;;) {
             int best = -1;
-            for (int s = 0; s < SRC_COUNT; ++s)
-                if (!(fired & (1u << s)) && due_[s] != kInactive && due_[s] <= now_
-                    && (best < 0 || due_[s] < due_[best])) best = s;
+            minAll = kNever;
+            // Balayage des seules sources ARMÉES (cf. armed_) : le profil callgrind
+            // montrait ce triple test répété sur les 19 sources — dont plusieurs
+            // inactives — à chaque dispatch. L'ordre de visite reste croissant en `s`
+            // (ctz sur le bit de poids faible) : le tie-break à échéance ÉGALE
+            // (comparaison STRICTE ci-dessous) désigne donc la même source qu'avant.
+            // ⚠ Le minimum se calcule sur armed_ ENTIER, pas sur `armed_ & ~fired` :
+            // une source déjà tirée que son callback a replanifiée est bien la
+            // prochaine échéance, même si elle ne peut plus tirer dans ce runTo.
+            for (uint32_t m = armed_; m; m &= m - 1) {
+                const int s = ctz32(m);
+                const int64_t d = due_[s];
+                if (d < minAll) minAll = d;
+                if (!((fired >> s) & 1u) && d <= now_
+                    && (best < 0 || d < due_[best])) best = s;
+            }
             if (best < 0) break;
             // Métrique cycle-accuracy : retard d'un timer MFP daté (now - échéance).
             // Piloté par sync(), il reste ~1 accès (sous-instruction en PRECISE_TIMING).
@@ -184,10 +221,14 @@ public:
             fired |= 1u << best;
             firingDue_ = due_[best];             // échéance servie (pour replanif. anti-dérive)
             due_[best] = kInactive;              // consommé avant l'appel…
+            armed_ &= ~(1u << best);
             if (cb_[best]) cb_[best]();           // …le callback peut replanifier
         }
         firingDue_ = kInactive;
-        nextDue_ = scanNextDue();                    // les callbacks ont pu (re)planifier
+        // Les callbacks ont pu (re)planifier : minAll, calculé par la DERNIÈRE passe,
+        // porte déjà le résultat du balayage complet (cf. sa déclaration).
+        nextDue_ = (minAll == kNever) ? kInactive : minAll;
+        assert(nextDue_ == scanNextDue() && "minAll incohérent avec scanNextDue");
     }
 
     // Échéance de l'événement en cours de dispatch (valide PENDANT son callback),
@@ -205,6 +246,14 @@ public:
     // et l'endSlice_ sont re-liés à la construction de Machine → PAS sérialisés.
     void serialize(StateArchive& ar) {
         ar(due_); ar(now_); ar(nextDue_); ar(runTarget_);
+        // armed_ est PUREMENT DÉRIVÉ de due_ : on le reconstruit au chargement plutôt
+        // que de le sérialiser (un état ancien ou forgé ne peut donc pas désynchroniser
+        // l'invariant, et le format de save-state ne change pas).
+        if (ar.loading()) {
+            armed_ = 0;
+            for (int s = 0; s < SRC_COUNT; ++s)
+                if (due_[s] != kInactive) armed_ |= 1u << s;
+        }
         // ⚠ L'horloge du scheduler pilote des boucles de rattrapage (syncTo, et côté FDC
         // le rattrapage d'impulsion index) : forgée absurde, elle les rend non bornées —
         // gel définitif reproduit. Une échéance doit être soit inactive, soit dans une
@@ -221,17 +270,44 @@ private:
     static bool isMfpTimer(int s) {              // sources dont le retard dépend de la préemption
         return s == TIMER_A || s == TIMER_B_DELAY || s == TIMER_C || s == TIMER_D;
     }
-    // Scan complet du plus proche événement dû (-1 si aucun). Sert à RAFRAÎCHIR le
-    // cache nextDue_ aux rares points où l'échéance minimale peut disparaître (après
-    // dispatch — les callbacks replanifient — et au cancel de l'échéance minimale).
+    // Scan complet du plus proche événement dû (-1 si aucun). N'est plus sur le chemin
+    // chaud : runTo calcule désormais ce minimum au passage (cf. minAll). Il ne reste
+    // appelé que par cancel() de l'échéance minimale et par le nextDue() public.
     int64_t scanNextDue() const {
-        int64_t best = -1;
-        for (int s = 0; s < SRC_COUNT; ++s)
-            if (due_[s] != kInactive && (best < 0 || due_[s] < best)) best = due_[s];
+        int64_t best = kInactive;
+        for (uint32_t m = armed_; m; m &= m - 1) {
+            const int64_t d = due_[ctz32(m)];
+            if (best < 0 || d < best) best = d;
+        }
         return best;
     }
+    // Index du bit de poids faible. GCC/Clang uniquement (les deux seuls compilateurs
+    // ciblés par NeoST) ; `m` est TOUJOURS non nul aux points d'appel.
+    static int ctz32(uint32_t m) { return __builtin_ctz(m); }
+
+    // Contrôle de l'invariant armed_ ⟺ due_ (compilé hors NDEBUG uniquement) : c'est
+    // le seul risque introduit par le masque — un site d'écriture de due_ ajouté plus
+    // tard sans mettre armed_ à jour rendrait un événement invisible du dispatch.
+    bool armedInvariant() const {
+        for (int s = 0; s < SRC_COUNT; ++s) {
+            if (((armed_ >> s) & 1u) != (due_[s] != kInactive ? 1u : 0u)) return false;
+        }
+        return true;
+    }
+
     static constexpr int64_t kInactive = -1;
+    // Sentinelle « aucune échéance » du minimum courant de runTo (cf. minAll) : une
+    // valeur plus grande que toute échéance plausible, pour n'avoir aucun cas
+    // particulier dans la boucle.
+    static constexpr int64_t kNever = INT64_MAX;
     std::array<int64_t, SRC_COUNT>  due_{};      // (rempli à kInactive au ctor)
+    // Miroir binaire de « due_[s] != kInactive », maintenu par schedule/cancel/runTo/
+    // reset/serialize. Raison d'être : le dispatch et le recalcul du plus proche dû
+    // pesaient ~18 % des instructions du cœur (callgrind, boot TOS comme en jeu) en
+    // balayant les 19 sources ; ici on ne visite que celles réellement armées (~6).
+    // INVARIANT : (armed_ >> s) & 1  ⟺  due_[s] != kInactive. Vérifié en debug par
+    // armedInvariant().
+    uint32_t armed_ = 0;
     std::array<Callback, SRC_COUNT> cb_{};
     int64_t now_ = 0;
     int64_t nextDue_ = kInactive;                // cache O(1) du plus proche dû (cf. syncTo)
