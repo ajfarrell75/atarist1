@@ -16,6 +16,14 @@
 #   · pas d'AppImage : un simple tar.gz de binaires. Une AppImage v2 réclame
 #     libfuse2, absent de Pi OS Lite bookworm — la borne devrait l'extraire à
 #     chaque démarrage pour rien.
+#   · compilation en DEUX PASSES guidée par profil (PGO) + LTO. Mesuré sur les
+#     mêmes charges (boot TOS 500 trames, Enchanted Land 900 trames), à code
+#     identique : -O3 seul → PGO −20 %, PGO+LTO −34 %. C'est le plus gros gain
+#     disponible sans toucher une ligne d'émulation, et il est GRATUIT ici :
+#     l'entraînement tourne sur le runner, pas sur le Pi. Sorties vérifiées
+#     OCTET-IDENTIQUES à celles du binaire -O3 nu (captures de 6801 et 29500
+#     trames sur l'étalon overscan No Cooper) — le PGO ne change que la
+#     disposition du code, jamais la sémantique.
 #
 #  Pourquoi bookworm : Raspberry Pi OS EST Debian bookworm (glibc 2.36). Bâtir
 #  sur le runner ubuntu-24.04-arm estampillerait GLIBC_2.39 et le binaire ne
@@ -27,6 +35,8 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 
 MCPU="${NEOST_MCPU:-cortex-a72}"     # cortex-a72 = Pi 4 / Pi 400 ; cortex-a76 = Pi 5
+# NEOST_PGO=0 pour retomber sur une passe unique (débogage du script, build rapide).
+DO_PGO="${NEOST_PGO:-1}"
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
@@ -41,21 +51,76 @@ echo 'int main(){}' | g++ -x c++ -mcpu="$MCPU" -o /dev/null - \
 # dernier sans condition, un override en ligne de commande y serait perdu.
 # -static-libstdc++/-static-libgcc : ne dépendre QUE de la glibc de bookworm,
 # pas du libstdc++ de l'image de build.
-cmake -B build-borne -DCMAKE_BUILD_TYPE=Release \
-    -DNEOST_VERSION_STR="${NEOST_VERSION:-borne}" \
-    -DCMAKE_C_FLAGS="-mcpu=$MCPU -mtune=$MCPU" \
-    -DCMAKE_CXX_FLAGS="-mcpu=$MCPU -mtune=$MCPU" \
-    -DCMAKE_EXE_LINKER_FLAGS="-static-libstdc++ -static-libgcc"
-cmake --build build-borne -j"$(nproc)"
+ARCH_FLAGS="-mcpu=$MCPU -mtune=$MCPU"
+BUILD_DIR=build-borne
+PROFDIR="$PWD/build-borne-profile"
 
-test -x build-borne/neost || { echo "ERREUR : frontend GUI non construit (GLFW ?)"; exit 1; }
+configure() {                # configure <drapeaux-supplémentaires> [IPO]
+    cmake -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE=Release \
+        -DNEOST_VERSION_STR="${NEOST_VERSION:-borne}" \
+        -DCMAKE_INTERPROCEDURAL_OPTIMIZATION="${2:-OFF}" \
+        -DCMAKE_C_FLAGS="$ARCH_FLAGS $1" \
+        -DCMAKE_CXX_FLAGS="$ARCH_FLAGS $1" \
+        -DCMAKE_EXE_LINKER_FLAGS="-static-libstdc++ -static-libgcc $1"
+}
+
+if [ "$DO_PGO" = "1" ]; then
+    # ⚠ LES DEUX PASSES DOIVENT PARTAGER LE MÊME RÉPERTOIRE DE BUILD. GCC nomme
+    # chaque fichier .gcda d'après le CHEMIN ABSOLU de l'objet compilé : instrumenter
+    # dans build-A puis relire depuis build-B ne trouve AUCUN profil, et
+    # -Wno-missing-profile rend l'échec parfaitement silencieux (le binaire sort
+    # sans le moindre gain, sans le moindre message). D'où le compteur de contrôle
+    # plus bas, qui fait ÉCHOUER le build si le profil n'a pas été relu.
+    rm -rf "$PROFDIR"; mkdir -p "$PROFDIR"
+
+    echo "[build_in_bookworm_pi] PGO passe 1/2 — binaire instrumenté"
+    configure "-fprofile-generate=$PROFDIR"
+    cmake --build "$BUILD_DIR" -j"$(nproc)" --target neost-headless
+
+    echo "[build_in_bookworm_pi] PGO — parcours d'entraînement"
+    # Seul le headless est entraîné : il partage tout le cœur d'émulation avec le
+    # frontend GUI (neost_core), et lui seul tourne sans serveur graphique.
+    packaging/raspberry/pgo_train.sh "$BUILD_DIR/neost-headless" "$PWD"
+
+    NGCDA=$(find "$PROFDIR" -name '*.gcda' | wc -l)
+    echo "[build_in_bookworm_pi] profils collectés : $NGCDA"
+    # Les quatre fichiers qui portent la boucle chaude. S'ils manquent, le parcours
+    # d'entraînement n'a rien exécuté d'utile et le PGO serait un placebo.
+    for must in Cpu68k Bus Shifter Moira; do
+        find "$PROFDIR" -name "*${must}*.gcda" | grep -q . \
+            || { echo "ERREUR : aucun profil pour $must — parcours d'entraînement muet"; exit 1; }
+    done
+
+    echo "[build_in_bookworm_pi] PGO passe 2/2 — build final (profil + LTO)"
+    # -fprofile-partial-training : les objets NON entraînés (main.cpp du GUI, ImGui,
+    # miniaudio) sont optimisés normalement au lieu d'être traités comme du code
+    # froid — sans lui, le frontend fenêtré sortirait dégradé.
+    # -fprofile-correction : les compteurs d'un programme multi-thread peuvent être
+    # légèrement incohérents ; on répare au lieu d'échouer.
+    configure "-fprofile-use=$PROFDIR -fprofile-correction -fprofile-partial-training -Wno-missing-profile" ON
+    cmake --build "$BUILD_DIR" -j"$(nproc)" 2>&1 | tee /tmp/neost-pgo-build.log
+    # Contrôle final : si les profils n'avaient PAS été trouvés, GCC l'aurait dit
+    # (l'avertissement est neutralisé pour les objets du GUI, jamais pour le cœur —
+    # on regarde donc explicitement les sources du cœur).
+    if grep -E "src/(core|io)/.*(profile count data file not found|missing-profile)" \
+            /tmp/neost-pgo-build.log >/dev/null 2>&1; then
+        echo "ERREUR : profil non relu pour une source du cœur (chemins de build désaccordés ?)"
+        exit 1
+    fi
+else
+    echo "[build_in_bookworm_pi] PGO désactivé (NEOST_PGO=0) — passe unique"
+    configure "" ON
+    cmake --build "$BUILD_DIR" -j"$(nproc)"
+fi
+
+test -x "$BUILD_DIR/neost" || { echo "ERREUR : frontend GUI non construit (GLFW ?)"; exit 1; }
 
 # --- Vérifications qui doivent échouer ICI, pas sur la borne -----------------
-readelf -h build-borne/neost | grep -q AArch64 \
+readelf -h "$BUILD_DIR/neost" | grep -q AArch64 \
     || { echo "ERREUR : pas un binaire AArch64"; exit 1; }
 # Plancher glibc : le symbole GLIBC_x.y le plus haut exigé doit rester <= 2.36,
 # sinon Pi OS refusera de lancer le binaire (« version `GLIBC_2.39' not found »).
-MAX=$(objdump -T build-borne/neost 2>/dev/null | grep -oE 'GLIBC_[0-9]+\.[0-9]+' | sort -V | tail -1)
+MAX=$(objdump -T "$BUILD_DIR/neost" 2>/dev/null | grep -oE 'GLIBC_[0-9]+\.[0-9]+' | sort -V | tail -1)
 echo "[build_in_bookworm_pi] symbole glibc le plus haut : ${MAX:-aucun}"
 test "$(printf '%s\nGLIBC_2.36\n' "$MAX" | sort -V | tail -1)" = "GLIBC_2.36" \
     || { echo "ERREUR : le binaire exige $MAX > GLIBC_2.36"; exit 1; }
@@ -64,7 +129,7 @@ test "$(printf '%s\nGLIBC_2.36\n' "$MAX" | sort -V | tail -1)" = "GLIBC_2.36" \
 # Disposition = celle qu'attend la borne : $PREFIX/bin/<binaires>, déballable
 # directement par `tar -xzf … -C /opt/neost`.
 rm -rf dist/borne && mkdir -p dist/borne/bin dist
-install -m 755 build-borne/neost build-borne/neost-headless dist/borne/bin/
+install -m 755 "$BUILD_DIR/neost" "$BUILD_DIR/neost-headless" dist/borne/bin/
 OUT="dist/neost-borne-${MCPU}-aarch64.tar.gz"
 tar -czf "$OUT" -C dist/borne bin
 echo "[build_in_bookworm_pi] OK : $OUT"

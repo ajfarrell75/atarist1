@@ -3,6 +3,67 @@
 (c) 2026 VERHILLE Arnaud. Ce qui est **implémenté et validé**. Pas encore de versions
 taguées (0.1.x). Le restant est dans [`TODO.md`](TODO.md).
 
+## Performance du cœur : ~2,4× sur la même machine, à sortie octet-identique (2026-08-02)
+
+Campagne menée **au callgrind**, sur un profil de boot TOS et un profil en jeu (les deux
+ont la même forme : les points chauds du cœur ne dépendent pas du logiciel émulé).
+Méthode, mesures ligne à ligne, fausses pistes et pièges → **[`docs/PERFORMANCE.md`](docs/PERFORMANCE.md)**.
+**Aucune valeur émulée ne change** : les 15 étalons pixel-exacts sont restés à 0 pixel
+d'écart après chaque étape, et les variantes de compilation ont été vérifiées
+octet-identiques sur des captures de 6801 et 29500 trames.
+
+**Bus — le décodage MMU était refait à chaque octet.** `mmuTranslate()` relisait la
+config `$FF8001`, retraversait deux `switch` de taille de banque, divisait pour obtenir
+la taille de RAM posée, puis rejouait le remappage RAS/CAS : 12,8 M d'appels pour
+300 trames de boot, ~39 instructions pièce, ~20 % du programme avec ses appelants. Le
+résultat ne dépend pourtant que de deux entrées (l'octet de config, la taille de `ram[]`)
+— il est désormais mémorisé et *revalidé par comparaison de ces deux entrées*, ce qui
+rend impossible l'oubli d'un site d'invalidation. Le cache ne retient qu'une chose : la
+longueur du préfixe où la traduction est l'**identité** (le cas dès qu'une banque est
+annoncée à sa taille réelle, ce que fait tout TOS après son sizing) — démonstration en
+commentaire dans `Bus::rebuildMmuCache`, plus un contrôle en debug contre le décodage
+complet. `read8`/`read16`/`write8` passent dans l'en-tête et s'inlinent chez l'appelant.
+⚠ La première version ne couvrait que la RAM et ne rendait que −4,4 % : **le code du TOS
+s'exécute depuis la ROM**, donc chaque mot d'opcode repassait par le chemin lent. La
+fenêtre ROM ajoutée au chemin rapide a porté le gain à −20 %.
+
+**Ordonnanceur — le balayage chaud n'était pas celui qu'on croyait.** Le profil
+l'attribuait à `Machine::runFrame` : l'appelant est `sched.nextDue()`, une fois par bloc
+CPU. Plutôt que d'accélérer le balayage, on l'a supprimé — `runTo` calcule le minimum des
+échéances *pendant* sa passe de dispatch (qui parcourt déjà les mêmes sources), et
+`schedule()` tient `nextDue_` **exact** au lieu de simplement minorant, si bien que
+`nextDue()` répond en O(1). Un `assert` compare le cache au balayage complet en debug.
+Une variante intermédiaire — minimum sans branche sur tableau plein — a été **essayée
+puis retirée** : elle coûtait +1,4 % d'instructions (parcourir 19 entrées coûte plus que
+d'en sauter 5).
+
+**Shifter — deux tables au lieu de deux boucles.** Le dé-entrelacement des bitplanes se
+faisait bit à bit (4 décalages + 4 masques par pixel) : remplacé par une table de 256
+entrées qui éclate un octet de plan en 8 octets, les quatre plans se composant en **une
+opération 64 bits**, 8 pixels d'un coup (indépendant du boutisme : chaque octet valant 0
+ou 1, les décalages de 1-3 restent confinés). Et `stColorToArgb` était appelée pour
+*chacun* des 320 à 640 pixels d'une ligne alors que la palette ne peut pas changer
+pendant l'émission — 16 conversions par ligne désormais.
+
+**Deux appels gratuits sur le chemin chaud** : `busFaultN` court-circuite la RAM ordinaire
+et la lecture en ROM, qui ne fautent jamais ; et `busDiag`, diagnostic éteint, franchissait
+la garde d'un statique local **et** évaluait `getClock()` à chaque accès bus.
+
+**Compilation guidée par profil (PGO) + LTO — le plus gros gain unitaire, sans toucher au
+code.** La boucle chaude est l'interpréteur Moira : un branchement indirect sur l'opcode
+puis beaucoup de branches rarement prises. Avec le profil, GCC range les blocs pour que le
+cas fréquent tombe en séquence — ce qui compte double sur un Cortex-A72 (32 Ko de L1i).
+`build_native_pi.sh --pgo`, `pgo_train.sh` (parcours volontairement large : ST et STE,
+50 et 60 Hz, mono, un jeu, une démo à retraits de bordure, les auto-tests — un profil
+étroit fait déclarer « froid » du code qui ne l'est pas) et la CI `pi-borne.yml`, qui
+entraîne sur le runner ARM64 pour que le Pi n'en paie rien. ⚠ **Piège qui coûte tout le
+gain en silence** : GCC nomme les `.gcda` d'après le chemin absolu de l'objet, donc
+instrumenter dans un répertoire et relire depuis un autre ne trouve **aucun** profil — et
+`-Wno-missing-profile`, indispensable pour les objets du GUI non entraînés, rend l'échec
+totalement muet. Une première mesure annonçait ainsi « PGO = −4 % », qui n'était que du
+bruit. Les deux passes partagent désormais le même répertoire, et les scripts **échouent**
+si aucun profil n'a été collecté pour `Cpu68k`, `Bus`, `Shifter` et `Moira`.
+
 ## Borne Raspberry Pi : démarrage direct + latence audio réglable (2026-08-02)
 
 **`--audio-latency MS`** (persisté `audio_latency_ms=` dans `neost.cfg`) : le coussin

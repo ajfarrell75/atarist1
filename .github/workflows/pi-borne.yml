@@ -7,6 +7,9 @@
 #   · il produit un simple tar.gz de binaires compilés pour UN cœur précis
 #     (-mcpu=cortex-a72 pour Pi 4/400), là où la release publie une AppImage
 #     aarch64 générique qui doit tourner du Pi 3 au Pi 5 ;
+#   · il compile en DEUX PASSES guidées par profil (PGO) puis avec LTO — mesuré
+#     −34 % de temps d'émulation à code identique. L'entraînement tourne ICI, sur
+#     le runner ARM64, donc le Pi n'en paie rien. Cf. docs/PERFORMANCE.md ;
 #   · il ne touche pas au pipeline de release — le casser n'empêche pas de
 #     publier.
 #
@@ -45,7 +48,10 @@ on:
 jobs:
   borne:
     runs-on: ubuntu-24.04-arm
-    timeout-minutes: 60
+    # 90 et non 60 : depuis le passage au PGO, le job fait DEUX compilations
+    # complètes (instrumentée puis guidée par profil, cette dernière avec LTO) plus
+    # le parcours d'entraînement entre les deux. Cf. docs/PERFORMANCE.md § 5.
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v5
         with:

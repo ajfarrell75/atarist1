@@ -26,6 +26,7 @@ macOS Silicon / CachyOS Linux. **Commentaires en français.**
 | [`HATARI_DIVERGENCES.md`](docs/HATARI_DIVERGENCES.md)   | **Inventaire maître** des écarts NeoST↔Hatari (4 passes d'audit, sévérité + `fichier:ligne`). |
 | [`HATARI_AUTOMATION.md`](docs/HATARI_AUTOMATION.md)     | Exécuter Hatari en **oracle headless** (boot → PNG, traces, `--cmd-fifo`). |
 | [`TEST_SOFTWARE.md`](docs/TEST_SOFTWARE.md)             | Catalogue des **logiciels étalons** (jeux/démos limites) par sous-système. |
+| [`PERFORMANCE.md`](docs/PERFORMANCE.md)                 | **Vitesse** : recette callgrind, points chauds du cœur, optimisations faites (et une écartée), build PGO+LTO et son piège. |
 
 Architecture en deux mots : **le `Bus` *est* le plan mémoire** (route read8/write8 vers les
 puces) et **le cœur `neost_core` ne dépend pas du GUI**. Détails → `DEV.md`.
