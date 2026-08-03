@@ -195,17 +195,19 @@ En **fenêtré**, le menu **Affichage → Effets CRT** ouvre un panneau de régl
 peut ensuite tout ajuster. En **kiosk**, la config est figée → les effets viennent du
 `neost.cfg` (ou de `--crt` / `--crt-preset`).
 
-## ROM : EmuTOS par défaut (+ TOS 1.62 UK pour le profil 1040 STE)
+## ROM : EmuTOS par défaut (+ TOS UK pour les profils 520 ST / 1040 STE)
 
 NeoST démarre par défaut sur **[EmuTOS](https://emutos.sourceforge.io/)** (GPL).
-Les paquets (AppImage / DMG / WASM) embarquent aussi **TOS 1.62 UK**, utilisé par le
-profil **1040 STE (1 Mo)** ; les autres TOS Atari du dépôt ne sont **pas** redistribués.
+Les paquets (AppImage / DMG / WASM) embarquent aussi **TOS 1.02 UK** et **TOS 1.62 UK**,
+choisis par les profils **520 ST** et **1040 STE** ; les autres TOS Atari du dépôt
+ne sont **pas** redistribués.
 
 ```
 roms/etos192fr.img   EmuTOS 192 Ko, français  (mappé à $FC0000, par défaut) — ST / Mega ST
 roms/etos192us.img   EmuTOS 192 Ko, US        — ST / Mega ST
 roms/etos256fr.img   EmuTOS 256 Ko, français  (mappé à $E00000) — STE / Mega STE
 roms/etos256us.img   EmuTOS 256 Ko, US        — STE / Mega STE
+roms/tos102uk.img    TOS 1.02 UK (PAL 50 Hz)  — profil 520 ST (embarqué dans les dist)
 roms/tos162uk.img    TOS 1.62 UK (PAL 50 Hz)  — profil 1040 STE (embarqué dans les dist)
 ```
 
