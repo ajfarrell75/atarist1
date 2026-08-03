@@ -98,8 +98,11 @@ jobs:
           squashfs-root/usr/bin/neost-headless --version
           rm -rf squashfs-root
           # tar.gz borne : mêmes ROM (stage_free_data), pas seulement bin/.
+          # ⚠ pas de `tar | grep -q` sous pipefail : grep ferme le pipe tôt →
+          # « tar: stdout: write error » et exit 1 faux négatif.
+          LIST=$(tar tzf "$TGZ")
           for rom in tos102uk.img tos162uk.img; do
-            tar tzf "$TGZ" | grep -q "roms/$rom" \
+            printf '%s\n' "$LIST" | grep -q "roms/$rom" \
               || { echo "ERREUR : $rom absent du tar.gz"; exit 1; }
           done
           echo "OK : AppImage + tar.gz embarquent tos102uk et tos162uk"
