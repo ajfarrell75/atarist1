@@ -138,13 +138,16 @@ case "$MCPU" in
 esac
 
 # --- Paquet 1 : tar.gz --------------------------------------------------------
-# Disposition = celle qu'attend la borne : $PREFIX/bin/<binaires>, déballable
-# directement par `tar -xzf … -C /opt/neost`. C'est le format de la borne sans
-# bureau : pas de FUSE, pas de montage, le service systemd lance le binaire nu.
+# Disposition = celle qu'attend la borne : $PREFIX/bin/<binaires> + roms/disks/
+# fonts (même liste que les AppImage), déballable par `tar -xzf … -C /opt/neost`.
+# C'est le format de la borne sans bureau : pas de FUSE, pas de montage, le
+# service systemd lance le binaire nu. Sans les ROM, le profil 520 ST / 1040 STE
+# et le défaut kiosk (tos162uk) seraient introuvables après déballage.
 rm -rf "dist/$PKG_TAG" && mkdir -p "dist/$PKG_TAG/bin" dist
 install -m 755 "$BUILD_DIR/neost" "$BUILD_DIR/neost-headless" "dist/$PKG_TAG/bin/"
+packaging/stage_free_data.sh "dist/$PKG_TAG"
 OUT="dist/neost-${PKG_TAG}-aarch64.tar.gz"
-tar -czf "$OUT" -C "dist/$PKG_TAG" bin
+tar -czf "$OUT" -C "dist/$PKG_TAG" .
 echo "[build_in_bookworm_pi] OK : $OUT"
 ls -lh "$OUT"
 
