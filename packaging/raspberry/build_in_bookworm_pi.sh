@@ -152,7 +152,7 @@ ls -lh "$OUT"
 # MÊME build (aucune recompilation) empaqueté en AppImage : c'est le format utile
 # sur Raspberry Pi OS **avec bureau**, où l'on veut un fichier unique cliquable
 # plutôt qu'une arborescence dans /opt. Elle embarque les données libres
-# (EmuTOS, TOS 1.62 UK, polices, disquette de démarrage) via stage_free_data.sh.
+# (EmuTOS, TOS 1.02/1.62 UK, polices, disquette de démarrage) via stage_free_data.sh.
 #
 # ⚠ Elle NE REMPLACE PAS l'AppImage de release (`-raspberry-aarch64`, aarch64
 # GÉNÉRIQUE, Pi 3 → Pi 5) : celle-ci est compilée pour UN cœur précis. D'où un
