@@ -398,15 +398,15 @@ int main(int argc, char** argv) {
     }, memBuf);
     const std::size_t ramBytes = parseRamBytes(memBuf);
 
-    // ROM par défaut adaptée à la machine : TOS 1.62 UK (profil 1040 STE) pour
-    // STE, EmuTOS 256 Ko pour Mega STE, EmuTOS 192 Ko pour ST/Mega ST. Repli
-    // EmuTOS 256/192 si la ROM cible n'est pas embarquée.
-    const bool wantsSte   = (machType == MachineType::Ste);
+    // ROM par défaut adaptée à la machine : TOS 1.02 UK (profil 520 ST) pour
+    // ST/Mega ST, TOS 1.62 UK (profil 1040 STE) pour STE, EmuTOS 256 Ko pour
+    // Mega STE. Repli EmuTOS si la ROM cible n'est pas embarquée.
+    const bool wantsSte     = (machType == MachineType::Ste);
     const bool wantsMegaSte = (machType == MachineType::MegaSte);
     const std::string romPath = (argc > 1) ? argv[1]
         : (wantsSte     ? "/roms/tos162uk.img"
          : wantsMegaSte ? "/roms/etos256us.img"
-                        : "/roms/etos192us.img");
+                        : "/roms/tos102uk.img");
 
     if (!glfwInit()) { std::fprintf(stderr, "[web] glfwInit a échoué\n"); return 1; }
 

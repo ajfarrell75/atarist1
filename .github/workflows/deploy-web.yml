@@ -2,8 +2,8 @@
 #  Déploiement de la version WebAssembly de NeoST sur GitHub Pages.
 #
 #  Construit le frontend web (Emscripten) avec la liste autorisée des paquets
-#  (NEOST_WEB_FREE_ONLY=ON) : EmuTOS 192/256 US+FR, TOS 1.62 UK (profil STE),
-#  les sons de lecteur et diskA.st.
+#  (NEOST_WEB_FREE_ONLY=ON) : EmuTOS 192/256 US+FR, TOS 1.02/1.62 UK (profils
+#  ST/STE), les sons de lecteur et diskA.st.
 #
 #  ⚠ NE PAS repasser à OFF sur un dépôt PUBLIC. OFF embarque tout roms/ et
 #  disks/ dans index.data, que Pages sert ensuite en clair : soit 44 images TOS
