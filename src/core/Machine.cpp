@@ -243,6 +243,10 @@ Machine::Machine(std::size_t ramBytes, CpuCore cpuCore, MachineType machine)
     // Filtre de sortie YM (cf. Hatari Sound_Update_Filters) : ST/Mega ST utilisent le
     // passe-bas analogique (C10, LPF_STF) ; STE/Mega STE le PWM (front montant passe-tout).
     psg.setStfLowPass(!machineIsSte(machineType_));
+    // HPF sous-sonique : sur ST il est DANS la chaîne YM (sound.c:1744) ; sur STE le YM
+    // entre BRUT dans le mix et c'est le MÉLANGE YM+DMA qui est filtré par la chaîne
+    // LMC (dmaSnd.c:699,706 → DmaSound::applyHpfStereo, appelé par le rendu audio).
+    psg.setHpfBypass(machineIsSte(machineType_));
 
     installSchedulerCallbacks();
 }

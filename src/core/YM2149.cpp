@@ -329,6 +329,10 @@ void YM2149::synthBlock(const uint8_t* r, float* out, uint32_t frames, uint32_t 
         ensureMargin(sampleRate);
         const float s = nextResampleWeightedN(sampleRate);
 
+        // STE (hpfBypass_) : YM BRUT — le HPF sous-sonique s'applique en aval au MIX
+        // YM+DMA (DmaSound::applyHpfStereo ≙ dmaSnd.c:699,706), comme sound.c:1730-1735
+        // qui n'appelle PAS Subsonic_IIR_HPF sur le chemin STE/TT.
+        if (hpfBypass_) { out[i] = s * outScale_; continue; }
         const double hp = double(s) - hpfX1_ + kHpfPole * hpfY0_;
         hpfX1_ = s;
         hpfY0_ = hp;

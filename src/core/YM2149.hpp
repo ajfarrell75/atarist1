@@ -156,6 +156,8 @@ public:
     // 1.0 sur ST/Mega ST (pas de son DMA). Posée par `Machine` selon le type machine ;
     // NON remise à zéro par reset() (c'est une propriété figée du matériel, pas de l'état).
     void setOutputScale(float s) { outScale_ = s; }
+    // STE : bypass du HPF interne — le mix YM+DMA est filtré en aval (DmaSound).
+    void setHpfBypass(bool b) { hpfBypass_ = b; }
 
     // Choix du filtre de sortie selon la machine (port Hatari sound.c:1945-1952) :
     //  • STF/Mega ST  → LowPassFilter (condensateur C10 réel : filtre LES DEUX fronts),
@@ -254,7 +256,10 @@ private:
     // Moteur interne 250 kHz (YM2149_DoSamples_250, port sound.c).
     static constexpr int   YM_BUF_250_SIZE = 32768;
     static constexpr int   YM_BUF_250_MASK = YM_BUF_250_SIZE - 1;
-    static constexpr int   YM_250_HZ       = 250'000;
+    // Cadence RÉELLE du compteur YM = MCLK 32084988 ÷ 2 ÷ 2 ÷ 4 ÷ 8 = 250 663 Hz
+    // (Hatari YM_ATARI_CLOCK_COUNTER, clocks_timings.c : MÊME MCLK sur ST et STE).
+    // L'ancien 250 000 rond jouait ~4,6 cents trop bas sur toutes les machines.
+    static constexpr int   YM_250_HZ       = 250'663;
     static constexpr uint32_t YM_SQUARE_UP = 0x1f;
 
     std::array<uint16_t, 3> tonePer_{}, toneCnt_{};
@@ -282,6 +287,7 @@ private:
 
     // Échelle de sortie (1.0 ST, 0.5 STE) — propriété machine, voir setOutputScale().
     float  outScale_ = 1.0f;
+    bool   hpfBypass_ = false;   // STE : HPF déplacé sur le mix (non sérialisé, config machine)
 
     // --- Modèle « push » horodaté (Phase C) ---------------------------------
     // Ombre des registres vue par la SYNTHÈSE (avancée par le rejeu des événements),
