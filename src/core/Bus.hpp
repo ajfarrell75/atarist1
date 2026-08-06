@@ -142,7 +142,12 @@ public:
         if (addr + 1 < mmuFastLimit() && !(bootOverlay && addr < 8))
             return uint16_t((ram[addr] << 8) | ram[addr + 1]);
         const uint32_t off = addr - romBase;             // cf. read8 : non signé
-        if (off + 1 < rom.size()) return uint16_t((rom[off] << 8) | rom[off + 1]);
+        // ⚠ `off + 1` seul déborderait à 0 quand off == 0xFFFFFFFF (addr == romBase-1,
+        // p.ex. $DFFFFF sous un TOS 256 Ko) → `0 < rom.size()` vrai → rom[0xFFFFFFFF]
+        // (lecture hôte hors bornes). Le premier test `off < rom.size()` coupe ce cas
+        // AVANT l'addition ; le second gère le mot à cheval sur la fin de ROM.
+        if (off < rom.size() && off + 1 < rom.size())
+            return uint16_t((rom[off] << 8) | rom[off + 1]);
         return read16Slow(addr);
     }
     uint32_t read32(uint32_t addr);
@@ -398,6 +403,14 @@ private:
     mutable uint32_t    mmuFastLimit_ = 0;
     mutable uint8_t     mmuCacheConf_ = 0xFF;               // 0xFF = jamais bâti
     mutable std::size_t mmuCacheRam_  = static_cast<std::size_t>(-1);
+    // rebuildMmuCache dépend AUSSI de `machine` (règle banque 1 : ST/Mega ST lisent
+    // les bits 0-1 de $FF8001, STE/Mega STE calquent la banque 1 sur la banque 0,
+    // cf. Bus.cpp:245). `machine` doit donc faire partie de la clé de revalidation,
+    // sinon une bascule ST↔STE à chaud (Machine::reconfigure, Machine.hpp:136) qui
+    // ne change ni conf ni taille RAM laisserait le cache rance. (Aucune config
+    // atteignable ne produit d'octet faux aujourd'hui — les limites ST/STE coïncident
+    // sur les tailles standard — mais on ne laisse pas le piège armé.)
+    mutable MachineType mmuCacheMachine_ = MachineType::Ste;
     void rebuildMmuCache(uint8_t conf) const;
 
     // Config mémoire effective. Sans Glue branchée (tests unitaires du Bus seul),
@@ -407,7 +420,8 @@ private:
     }
     uint32_t mmuFastLimit() const {
         const uint8_t conf = mmuConfNow();
-        if (conf != mmuCacheConf_ || ram.size() != mmuCacheRam_) rebuildMmuCache(conf);
+        if (conf != mmuCacheConf_ || ram.size() != mmuCacheRam_ || machine != mmuCacheMachine_)
+            rebuildMmuCache(conf);
         return mmuFastLimit_;
     }
 
