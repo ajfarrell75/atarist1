@@ -362,8 +362,11 @@ static bool encodeMsa(const std::vector<uint8_t>& image, int spt, int sides,
     if (trackBytes == 0 || image.empty()) return false;
     const std::size_t tracks = image.size() / (trackBytes * static_cast<std::size_t>(sides));
     // L'image doit être un nombre ENTIER de pistes : sinon la dernière serait tronquée
-    // et le fichier réécrit ne se relirait pas.
-    if (tracks == 0 || tracks > 86 ||
+    // et le fichier réécrit ne se relirait pas. La borne est SYMÉTRIQUE de decodeMsa
+    // (piste de fin ≤ 86, index 0-based → jusqu'à 87 pistes) : la mettre à 86 rejetait
+    // une .msa de 87 pistes que decodeMsa monte pourtant inscriptible → toute
+    // sauvegarde y était acceptée en RAM puis JAMAIS persistée (perdue au remontage).
+    if (tracks == 0 || tracks > 87 ||
         tracks * trackBytes * static_cast<std::size_t>(sides) != image.size()) return false;
 
     out.clear();
@@ -446,6 +449,9 @@ bool Fdc::msaSelfTest() {
         { 18, 2, 80 },    // HD 1,44 Mo
         { 36, 2, 80 },    // ED
         { 9, 2, 1 },      // cas limite : une seule piste
+        { 9, 2, 87 },     // cas limite HAUT : 87 pistes = max que decodeMsa accepte
+                          // (piste de fin 86, 0-based) — encodeMsa doit le persister
+                          // aussi (régression « 87 pistes montées mais non sauvables »).
     };
     for (const auto& g : geos)
         for (const auto& m : motifs) {
@@ -1274,9 +1280,21 @@ void Fdc::writeBack(FloppyDisk& dk, uint64_t off, uint64_t len) {
     // pas en cours de session.
     const uint64_t fileOff = off + (dk.imgFormat == FloppyDisk::FMT_DIM ? 32u : 0u);
     std::fstream f(dk.path, std::ios::binary | std::ios::in | std::ios::out);
-    if (!f) return;                  // image en lecture seule / FS virtuel non inscriptible
+    if (!f) {                        // image en lecture seule / FS virtuel non inscriptible
+        std::fprintf(stderr, "[FDC] %s : ouverture en écriture impossible — "
+                             "secteur NON persisté\n", dk.path.c_str());
+        return;
+    }
     f.seekp(static_cast<std::streamoff>(fileOff));
     f.write(reinterpret_cast<const char*>(dk.image.data() + off), static_cast<std::streamsize>(len));
+    // Écriture in situ (pas d'atomicité possible sans réécrire tout le fichier) : on
+    // ne peut plus annuler un secteur déchiré, mais on PRÉVIENT au lieu d'échouer en
+    // silence — un disque plein laissait sinon une sauvegarde à moitié écrite sans
+    // aucun signe (le .msa, lui, est atomique tmp+rename ci-dessus).
+    if (!f.good())
+        std::fprintf(stderr, "[FDC] %s : écriture secteur incomplète à l'offset %llu "
+                             "(disque plein ?) — image possiblement corrompue\n",
+                     dk.path.c_str(), static_cast<unsigned long long>(fileOff));
 }
 
 // =============================================================================
