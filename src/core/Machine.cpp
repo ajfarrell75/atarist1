@@ -647,6 +647,12 @@ void Machine::serializeState(StateArchive& ar) {
              && frameEnd_ - frameStart_ <= 8 * int64_t(lpf_) * int64_t(cpl_));
     ar.check(lineCarry_ >= -int64_t(lpf_) * int64_t(cpl_)
              && lineCarry_ <=  int64_t(lpf_) * int64_t(cpl_));
+    // curLineLen_ = longueur réelle en CYCLES de la ligne HBL courante (224..512 ;
+    // peut dépasser cpl_ en overscan → lineCarry_ négatif). Consommé une fois par
+    // advanceLine (lineCarry_ += cpl_ - curLineLen_, Machine.cpp:422) : forgé absurde
+    // (~±2³¹), il désancre lineCarry_ APRÈS le check ci-dessus → planification HBL
+    // aberrante. Borné comme cpl_/lpf_ (jamais atteint par une valeur réelle).
+    ar.check(curLineLen_ > 0 && curLineLen_ <= 4096, "Machine::curLineLen_ hors ]0,4096]");
     // Composants. Ordre quelconque mais IDENTIQUE save/load (même méthode). Le SCC
     // (Mega STE) et l'état de commande ACSI (dans `fdc`) sont sérialisés ; seul le
     // CONTENU des images disque/disque dur reste hors-snapshot (il vit dans les

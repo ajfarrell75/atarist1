@@ -258,6 +258,11 @@ void makeAbsoluteName(std::string& fileName) {
 }
 } // namespace
 
+// Canonicalisation PHYSIQUE (realpath, liens résolus) — définie plus bas (scope global
+// static, hors namespace anonyme) ; déclarée ici pour que initDrives puisse rendre
+// hdEmuDir canonique dès le montage (cf. son usage).
+static std::string physicalCanon(const std::string& path);
+
 // -----------------------------------------------------------------------------
 //  Construction / cycle de vie
 // -----------------------------------------------------------------------------
@@ -459,6 +464,19 @@ void GemdosHd::initDrives(const std::string& hostDir) {
         if (multi) { d.hdEmuDir.push_back(PATHSEP); d.hdEmuDir.push_back((char)('C' + i)); }
         int driveNumber = 2 + i;
         if (hostDriveFolderExists(d.hdEmuDir, driveNumber)) {
+            // SÉCURITÉ/correction — canonicaliser PHYSIQUEMENT la racine du lecteur au
+            // montage (le dossier vient d'être confirmé existant). Sans ça, hdEmuDir
+            // restait LEXICAL (makeAbsoluteName seul) alors que tout `host` produit par
+            // clampToSandbox est physicalCanon() (liens résolus) : sur un montage dont
+            // le chemin traverse un lien symbolique (macOS /tmp→/private/tmp, ~ ou /var
+            // symlinkés sous Linux), les deux vivaient dans des espaces de noms distincts.
+            // Conséquences RÉELLES : gemChDir comparait host canonique vs hdEmuDir brut
+            // → Dsetpath échouait toujours en EPTHNF (« Impossible de définir le dossier »),
+            // et gemSFirst("C:\\") calculait rootLen sur la longueur brute → scan du dossier
+            // PARENT du bac à sable. Canonicaliser ici met TOUTES les comparaisons
+            // host↔hdEmuDir (gemChDir, gemSFirst, gemDgetpath, createHostFileName) dans le
+            // même espace de noms. Idempotent (physicalCanon(canon) == canon).
+            d.hdEmuDir = physicalCanon(d.hdEmuDir);
             d.driveNumber = driveNumber;
             d.used = true;
             connectedDriveMask_ |= (1u << driveNumber);

@@ -580,6 +580,14 @@ public:
         ar(glueHblPos_);
         ar(glueCyclesLine_);
         ar.podVec(glueLineStart_);  // std::vector<int64_t>
+        // Invariant : glueLineStart_ est TOUJOURS assigné à glueLines_.size()
+        // (beginFrame Shifter.cpp:427, même source g.linesPerFrame+2 que replayGlue).
+        // advanceGlueLive indexe glueLineStart_[wl]/[liveGlueLine_] (Shifter.cpp:454,
+        // 461,493) où wl ≤ liveGlueLine_ < glueLines_.size() — SANS garde de lecture
+        // (seule l'écriture ligne 496 en a une). Un .state forgé posant un glueLineStart_
+        // plus court → lecture hors-tas d'un int64_t. On revalide l'invariant au load.
+        ar.check(glueLineStart_.size() == glueLines_.size(),
+                 "Shifter::glueLineStart_ désynchronisé de glueLines_");
         ar(liveGlueLen_);
         ar(nScreenRefreshRate_);
         ar(liveGlueLine_);
