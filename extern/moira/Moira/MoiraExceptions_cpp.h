@@ -552,9 +552,9 @@ Moira::execInterrupt(u8 level)
             write<C, AddrSpace::DATA, Word>(reg.sp + 2, reg.pc >> 16);
             if (excDiag) {
                 i64 t3 = getClock();
-                fprintf(stderr, "[EXC] lvl=%d t0=%lld idle+PClo=%lld iack=%lld SR/PChi=%lld\n",
+                fprintf(stderr, "[EXC] lvl=%d t0=%lld idle+PClo=%lld iack=%lld SR/PChi=%lld pc=%x\n",
                         level, (long long)t0, (long long)(t1-t0), (long long)(t2-t1),
-                        (long long)(t3-t2));
+                        (long long)(t3-t2), (unsigned)reg.pc0);
             }
             break;
         }

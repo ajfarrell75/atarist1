@@ -3,6 +3,31 @@
 (c) 2026 VERHILLE Arnaud. Ce qui est **implémenté et validé**. Pas encore de versions
 taguées (0.1.x). Le restant est dans [`TODO.md`](TODO.md).
 
+## IACK MFP +4 cyc (raster Super Hang-On verrouillé à l'oracle) + chaîne son STE fidèle (2026-08-06/07)
+
+**IACK MFP vectorisé : 12 → 16 cycles** (`Cpu68k.cpp`, `g_iackMfp`). Mesuré à l'oracle
+Hatari **instrumenté** sur Super Hang-On EN JEU (banc souris déterministe + `--trace
+video_color` + diag `[HEXC]` étendu à la position vidéo) : la chaîne fixe « exception
+Timer B → handler → `stop #$2100` → HBL pendante prise au stop » fait 144 cycles chez
+Hatari, 140 chez NeoST — le `CPU_IACK_CYCLES_MFP_CE=12` d'Hatari (« not measured ») ne
+compte pas le cycle bus d'IACK lui-même. Après correction, l'histogramme des écritures
+palette du raster in-game est **verrouillé à ±1 point** sur ~2 500 trames (1re écriture
+de paire {104..128}, réveil STOP 40/40/20 inchangé et déjà exact). C'était la cause des
+« lignes transitoires » de SHO — aucun des candidats de la 5ᵉ passe. Nouveaux outils :
+`NEOST_PAL_TRACE_ALL` (trace palette cumulative par trame), `NEOST_RAISE_DIAG`/
+`NEOST_RAISE_WINDOW` (fenêtre de différé ipl_fetch, opt-in — mesuré : les frontières de
+prise d'IRQ d'Hatari CE correspondent au commit SANS différé), événements fifo
+`leftdown`/`leftup` ajoutés à l'oracle. Étalon `nocooper` recalé d'une trame (méthode de
+sa note, 0 px bit-identique). Détail complet → `docs/HATARI_DIVERGENCES.md` § 10ᵉ passe.
+
+**Son STE — chaîne de sortie alignée sur Hatari** : signe DMA **×−1** (le LMC1992 inverse
+le canal DMA — phase relative YM↔DMA) ; **HPF sous-sonique déplacé sur le MIX YM+DMA** en
+STE (le YM entre brut dans le mix, comme sound.c/dmaSnd.c — DC du DMA filtré), GUI +
+`--sound-dump` + WASM ; correcteur LMC1992 en **plateaux 1er ordre Savinkoff**
+(118.2763/8438.756 Hz, port exact — remplace le RBJ 2e ordre 200/8000) ; horloge YM
+**250 663 Hz** réels (MCLK/128 — l'ancien 250 000 jouait ~4,6 cents bas). Validation :
+selftests + tier full verts, étalon `make_dmasnd_test` (fetch au faisceau) inchangé.
+
 ## Performance du cœur : ~2,4× sur la même machine, à sortie octet-identique (2026-08-02)
 
 Campagne menée **au callgrind**, sur un profil de boot TOS et un profil en jeu (les deux

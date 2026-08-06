@@ -205,8 +205,9 @@ cold/warm reset : **conformes** (l'ancien doc `SOUND_HATARI_DIFF.md`, périmé, 
 - **[S2 — moyenne] ✅ corrigé (2026-07-07 soir)** — FIFO 8 octets + capture au faisceau portées
   (cf. tableau des priorités et 5ᵉ passe). *Avant :* lecture RAM directe à la cadence DMA en fin
   de trame, pas de réalignement mono→stéréo. *Impact : Mental Hangover, Power Up Plus.*
-- **[basse]** Fréquences de coupure du correcteur LMC1992 : RBJ 2e ordre 200/8000 Hz
-  (`DmaSound.cpp:218`) vs Savinkoff 1er ordre 118.28/8438.76 Hz (`dmaSnd.c:1418`). Gains ±dB corrects.
+- ~~**[basse]** Fréquences de coupure du correcteur LMC1992 : RBJ 2e ordre 200/8000 Hz
+  vs Savinkoff 1er ordre 118.28/8438.76 Hz (`dmaSnd.c:1418`)~~ **✅ corrigé (10ᵉ passe,
+  2026-08-06)** : port exact des plateaux 1er ordre, coupures 118.2763/8438.756 Hz.
 - **[basse]** Chemin DMA mono `mix()` : YM nu dès PLAY=0, pas de drainage de queue FIFO
   (`DmaSound.cpp:435` vs `dmaSnd.c:548`) — WASM/mono uniquement.
 - **[basse, méthodo]** Son absent en headless → pas d'oracle audio. *Reco : option `--sound-trace`
@@ -741,12 +742,13 @@ read-latch/PWM/LPF C10/HPF/resampler 16.16 : tous vérifiés 1:1 contre sound.c/
   Hatari (bâti DANS ce conteneur, SDL2 2.30 présent — AVI + trace `--trace dmasound`) 33,2 % ;
   `NEOST_DMASND_TRACE=1` émet le refill au format Hatari pour diff direct. Étalons 19/0 + 8 OK,
   WAV cloche GEM / Rick Dangerous II bit-identiques (YM intact).
-- **[basses]** Horloge YM figée 250 000 Hz vs `YM_Freq/8` réel (250 664 ST / 250 332 STE →
-  −4,6/−2,3 cents, écart ST↔STE non modélisé) ; écritures YM rejouées au grain ~48 kHz vs
-  frontière 250 kHz (`Sound_Update` avant `Sound_WriteReg`, psg.c:346) — jitter ≤ 21 µs
-  (sync-buzzer) ; HPF appliqué au YM seul vs au MIX YM+DMA en STE (dmaSnd.c:699,706) → DC du DMA
-  non filtré ; `mixing≠1`+DMA arrêté ne mute pas le YM (volontaire, `DmaSound.hpp:53-54`) ;
-  `kDmaGain=0.7` vs 0.75 ; signe DMA non inversé (Hatari ×−1, dmaSnd.c:532) ; garde
+- **[basses]** ~~Horloge YM figée 250 000 Hz~~ **✅ 10ᵉ passe : 250 663 Hz** (= MCLK/2/2/4/8,
+  MÊME MCLK ST et STE chez Hatari — le « 250 332 STE » de cette liste était erroné) ;
+  écritures YM rejouées au grain ~48 kHz vs frontière 250 kHz (`Sound_Update` avant
+  `Sound_WriteReg`, psg.c:346) — jitter ≤ 21 µs (sync-buzzer) ; ~~HPF appliqué au YM seul vs
+  au MIX YM+DMA en STE~~ **✅ 10ᵉ passe : HPF déplacé sur le mix** (`applyHpfStereo/Mono`) ;
+  `mixing≠1`+DMA arrêté ne mute pas le YM (volontaire, `DmaSound.hpp:53-54`) ;
+  ~~signe DMA non inversé~~ **✅ 10ᵉ passe : `kDmaGain=−0.375`** ; garde
   `nAudioFrequency≥40000` du LPF STF non portée (sans effet à 48 kHz).
 
 **FDC/DMA** — [moyennes] D3 flush FIFO sans stall 32 cyc (`Fdc.cpp:714-749` vs fdc.c:1340,1396) ;
@@ -775,6 +777,10 @@ un poll du SR MIDI voit un émetteur infiniment rapide).
 **SCC** — inchangé depuis 2026-06-15 (SC1/SC1b tranchés).
 
 ### Chantier « lignes transitoires Super Hang-On » — candidats classés (agent vidéo + MFP)
+
+> **✅ RÉSOLU (10ᵉ passe, 2026-08-06)** : aucun des candidats ci-dessous — la cause était
+> l'**IACK MFP vectorisé 4 cyc trop court** (12 → 16, mesuré à l'oracle instrumenté).
+> Cf. § 10ᵉ passe. La section est conservée pour l'historique de la méthode.
 
 Contexte : per-HBL, handler « Timer B → table → `stop #$2100` → HBL écrit couleurs 2+3 » ;
 bande d'horizon fixe déjà corrigée (STOP niveau-sensible). Les lignes brèves à position
@@ -953,3 +959,67 @@ audio lock-free/WASM (ring, points d'entrée JS), config/E-S fichier (parsing .c
 total). Aucune valeur émulée ne change sur les chemins normaux ; selftests + boots pixel-identiques
 à chaque étape. Le terrain save-state a été balayé exhaustivement ; les faux positifs en hausse
 (4/6 à la 9ᵉ passe) signalent un rendement décroissant — la fidélité est très élevée.
+
+## 10ᵉ passe — cycle-exact ciblée à l'oracle instrumenté : raster SHO + son STE (2026-08-06/07)
+
+### Chantier « lignes transitoires Super Hang-On » — ✅ CAUSE TROUVÉE ET CORRIGÉE
+
+**Cause racine : l'IACK MFP vectorisé était 4 cycles trop court** (`g_iackMfp` 12 → **16**,
+`Cpu68k.cpp`). Aucun des candidats classés de la 5ᵉ passe (seuil spec512, attribution ligne
+376+carry, HBL coalescé, troncature MFP) n'était la cause.
+
+**Banc forgé (réutilisable)** : repro in-game SHO headless — script souris daté (`--mouse-at
+1300`, clics titre, tenue accélérateur 700 trames/pas de classe, nitro = token `3` = 2 boutons,
+SPACE ×4 pour « no music », accélérateur tenu en course) → course AFRICA déterministe,
+~2 500 trames tracées `NEOST_PAL_TRACE_ALL=1` (nouveau : mode cumulatif « frame N » de
+NEOST_PAL_TRACE, `Shifter.cpp`). Oracle : `--cmd-fifo` temps réel + événements **`leftdown`/
+`leftup` AJOUTÉS à `control.c`** + `--trace video_color` en course + **[HEXC] étendu**
+(position vidéo `hbl=`/`lc=` + `pc=`, vecteurs MFP inclus — `newcpu.c`, gate
+`NEOST_HAT_IPLDIAG`). Diff : `compare.py` (scratchpad) — activations (paires idx 2+3, pc 1b30)
+par ordinal.
+
+**Mécanique élucidée (jeu, per-HBL)** : Timer B (fin de DE, ligne n−1) interrompt la boucle
+principale à lc 404-416 → handler `$1ad6` : push ×3, `clr.b $fffffa1b`, lit `$FF8244.l`
+(pc 1ae2), **`stop #$2100`** ($1ae8) → l'HBL de la ligne n, PENDANTE depuis lc 0 (masquée
+IPL 6 pendant le handler), est prise À LA FRONTIÈRE DU STOP (cas niveau-sensible, pc0=$1aec)
+→ handler HBL `$1b30` écrit couleurs 2+3 (1re écriture de paire, lc ~104-124) ; le stop
+suivant ($1b10) est réveillé par l'HBL de la ligne n+1 à lc 0 (2e écriture, lc 68-76).
+
+**Mesures (oracle instrumenté, 2 runs in-game ~20 000 exceptions)** :
+- réveil STOP : **EXACT avant comme après** — écritures {68 : 40 %, 72 : 40 %, 76 : 20 %}
+  identiques au point près des deux côtés ; exceptions à lc 0 pile.
+- frontières d'entrée Timer B : identiques (lc {404, 408, 412, 416} aux mêmes poids) → le
+  modèle « raise+commit à la frontière, sans différé ipl_fetch » est CONFIRMÉ fidèle
+  (`NEOST_RAISE_WINDOW`, nouveau mécanisme opt-in de différé, mesuré : K>0 SUR-diffère —
+  défaut 0).
+- chaîne FIXE « exception TB → handler → stop → prise HBL » : **Hatari 144 cyc, NeoST 140**
+  → +4 sur l'IACK (le `CPU_IACK_CYCLES_MFP_CE=12` d'Hatari — « not measured » — ne couvre
+  pas le cycle bus d'IACK lui-même).
+- après correction : histogramme 1re écriture {104 : 16,7/16,0 ; 108 : 24,5/25,9 ;
+  112 : 23,9/23,8 ; 116 : 18,8/17,7 ; 120 : 10,4/10,8 ; 124 : 2,4/1,8} (NeoST/Hatari) —
+  **verrouillé à ±1 pt partout** sur du code in-game vivant.
+
+Effet de bord assumé : le boot glisse d'une trame (Timer C ×milliers d'IACK) → étalon
+`nocooper` RECALÉ 6801→6802 par la méthode documentée dans sa note (0 px bit-identique à
+l'oracle à la trame voisine, rendu intact). Étalons full tier verts.
+
+### Son STE — restes [basses] portés (chaîne de sortie, ✅)
+
+1. **Signe DMA ×−1** (`kDmaGain = −0.375`) : le LMC1992 inverse le canal DMA
+   (dmaSnd.c:520-535) — phase relative YM↔DMA désormais fidèle.
+2. **HPF sous-sonique déplacé sur le MIX en STE** : ST = HPF dans la chaîne YM
+   (sound.c:1744) ; STE = YM **brut** dans le mix (`YM2149::setHpfBypass`), HPF appliqué au
+   mélange YM+DMA (DC du DMA compris) dans `DmaSound::applyHpfStereo/Mono`
+   (≙ dmaSnd.c:699,706), branché GUI + `--sound-dump` + WASM. États non sérialisés
+   (format save-state inchangé).
+3. **Correcteur LMC1992 en plateaux 1er ordre Savinkoff** : port exact de
+   `DmaSnd_Bass_Shelf`/`DmaSnd_Treble_Shelf` (dmaSnd.c:1366-1404), coupures mesurées
+   **118.2763 / 8438.756 Hz** — remplace le modèle RBJ 2e ordre 200/8000 Hz (audible dès que
+   basses/aigus ≠ 0 dB). À 0 dB : identité exacte (bypass conservé).
+4. **Horloge YM réelle 250 663 Hz** (`YM_250_HZ`) = MCLK 32084988 ÷2÷2÷4÷8 — Hatari utilise
+   le MÊME MCLK sur ST et STE (clocks_timings.c ; l'ancien « 250 332 STE » de la 5ᵉ passe
+   était erroné). L'ancien 250 000 rond jouait ~4,6 cents trop bas partout.
+
+Validation : selftests 39/15/12/16/51, tier full vert, étalon `make_dmasnd_test` : fenêtre B
+mid-trame toujours capturée (l'écrêtage sur ce signal synthétique extrême est FIDÈLE — Hatari
+écrête pareil après son HPF de mix, dmaSnd.c:700-711). B10 ($FF8922) reste consignée ouverte.

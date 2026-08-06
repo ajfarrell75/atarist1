@@ -227,7 +227,7 @@
     900,
     " "
    ],
-   "frames": 6801,
+   "frames": 6802,
    "frame": 6790,
    "crop": "buffer_noled",
    "max_diff_px": 0,
@@ -237,7 +237,7 @@
     "save_as": "disks/etalons/nocooper.msa"
    },
    "optional": true,
-   "note": "Étalon V2 (Video_WriteToGlueRes) : l'écran principal ouvre les bordures G/D en MED-RES (la nappe traverse bord à bord chez Hatari). RÉSOLU 2026-07-12 (bug hunt) : la capture par-ligne au faisceau étendue aux trames « palette seule » (spec512Active_, endVideoLine) a fermé le résidu V2 assumé de 891 px — 0 px vs oracle. Référence = tests/reference/nocooper.png (copie de nocooper_oracle.png, oracle Hatari WS3, touche espace tenue vbl ~900, frame 6788 ↔ NeoST --frames 6800, Δ=-11) RECALÉ 2026-08-01 : --frames 6800 → 6801. Deux correctifs de FIDÉLITÉ du boot (instruction RESET câblée, puis reset Glue posé en direct comme IoMem_WriteByte au lieu de passer par le bus) ont décalé la démo d'une trame. Vérifié que ce n'est PAS une régression de rendu : balayage 6798→6802, l'image est 0 px vs oracle à 6801 (bit-identique), et les trames voisines reproduisent les écarts observés. Méthode à réutiliser avant tout re-calage.",
+   "note": "Étalon V2 (Video_WriteToGlueRes) : l'écran principal ouvre les bordures G/D en MED-RES (la nappe traverse bord à bord chez Hatari). RÉSOLU 2026-07-12 (bug hunt) : la capture par-ligne au faisceau étendue aux trames « palette seule » (spec512Active_, endVideoLine) a fermé le résidu V2 assumé de 891 px — 0 px vs oracle. Référence = tests/reference/nocooper.png (copie de nocooper_oracle.png, oracle Hatari WS3, touche espace tenue vbl ~900, frame 6788 ↔ NeoST --frames 6800, Δ=-11) RECALÉ 2026-08-01 : --frames 6800 → 6801. Deux correctifs de FIDÉLITÉ du boot (instruction RESET câblée, puis reset Glue posé en direct comme IoMem_WriteByte au lieu de passer par le bus) ont décalé la démo d'une trame. Vérifié que ce n'est PAS une régression de rendu : balayage 6798→6802, l'image est 0 px vs oracle à 6801 (bit-identique), et les trames voisines reproduisent les écarts observés. Méthode à réutiliser avant tout re-calage. RECALÉ 2026-08-06 : 6801 → 6802 (IACK MFP vectorisé 12→16 cyc, mesuré à l'oracle sur Super Hang-On — le boot glisse d'une trame). Méthode de la note appliquée : balayage 6794→6808, 0 px (bit-identique oracle) à 6801 en numérotation --shot-every, voisines conformes (6800 : 12,88 %, 6802 : 15,06 %).",
    "ref_kind": "oracle"
   },
   {

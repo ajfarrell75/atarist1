@@ -81,7 +81,13 @@ namespace {
     // du faisceau +78/ligne = Hatari, cf. [[ramslot-iack-enable-overscan]]). NEOST_IACK=0 désactive.
     bool    g_iackOn      = []{ const char* s = std::getenv("NEOST_IACK"); return s ? std::atoi(s) != 0 : true; }();
     int     g_iackVideo   = []{ const char* s = std::getenv("NEOST_IACK_VIDEO"); return s ? std::atoi(s) : 14; }();
-    int     g_iackMfp     = []{ const char* s = std::getenv("NEOST_IACK_MFP");   return s ? std::atoi(s) : 12; }();
+    // 16 et non 12 : CPU_IACK_CYCLES_MFP_CE (12, « not measured » chez Hatari) ne
+    // couvre pas le cycle bus d'IACK lui-même. MESURÉ à l'oracle instrumenté
+    // (2026-08-06, Super Hang-On in-game, [HEXC] hbl/lc) : chaîne FIXE « exception
+    // Timer B → handler → stop → HBL pendante » = 144 cyc chez Hatari, 140 chez NeoST
+    // avec 12 → +4 sur l'IACK verrouille les histogrammes d'écritures palette
+    // (1re écriture de paire {104..128} à ±1 pt partout, réveil STOP 40/40/20 intact).
+    int     g_iackMfp     = []{ const char* s = std::getenv("NEOST_IACK_MFP");   return s ? std::atoi(s) : 16; }();
     // Lead-in willInterrupt → IACK réel : SYNC(6)+write PClo(4)+SYNC(4)=14 cyc (MoiraExceptions
     // _cpp.h:533-537). On l'ajoute à la phase E-clock pour la calculer comme au cycle d'IACK,
     // bien que le setClock soit fait depuis willInterrupt (seul point fiable hors mid-accès).
@@ -405,6 +411,10 @@ public:
     // événement (le vrai 68000, niveau-sensible, sert l'IRQ immédiatement ; cas
     // mesuré : « stop #$2100 » avec HBL pendante — raster Super Hang-On).
     bool irqDeliverable() const { return reg.ipl > reg.sr.ipl || reg.ipl == 7; }
+
+    // CPU en attente STOP ? (fenêtre de commit HBL/VBL : le réveil STOP est
+    // niveau-sensible et immédiat — la fenêtre d'échantillonnage ne s'y applique pas).
+    bool stoppedState() const { return (flags & moira::State::STOPPED) != 0; }
 
     // Synchro E-clock à l'ENTRÉE d'exception (port de Hatari M68000_WaitEClock,
     // m68000.c:810 + iack_cycle newcpu.c:2971-2990) : les IRQ AUTO-VECTORISÉES HBL
@@ -893,8 +903,16 @@ void Cpu68k::updateIpl() {
     neostUpdateIpl();
 }
 
+namespace { bool raiseWindowDefers(); }   // définie plus bas (fenêtre d'échantillonnage IPL)
+
 void Cpu68k::updateIplNow() {
-    neostUpdateIpl(/*commit=*/true);
+    // Même fenêtre d'échantillonnage que raiseHbl/raiseVbl : un événement MFP dû
+    // MOINS de K cycles avant la frontière n'a pas été vu par l'instruction en cours
+    // (WinUAE ipl_fetch) → broche pollée, exception après l'instruction SUIVANTE.
+    // Mesuré sur Super Hang-On in-game : l'exception Timer B (code varié interrompu)
+    // partait ~4 cyc trop tôt en moyenne, décalant toute la chaîne « handler → stop →
+    // HBL pendante » du raster (écritures palette à cyc 100 vs plancher oracle 104).
+    neostUpdateIpl(/*commit=*/!raiseWindowDefers());
 }
 
 // NEOST_RAISE_COMMIT : bit0 = HBL, bit1 = VBL — commit IMMÉDIAT de l'IPL au
@@ -907,7 +925,32 @@ void Cpu68k::updateIplNow() {
 // (loader OK, lock moteur 100 %, étalons TOUS OK). Sans commit (bit à 0) :
 // broche pollée → reconnaissance UNE instruction plus tard (l'ancien modèle).
 namespace { int g_raiseCommit = []{ const char* s = std::getenv("NEOST_RAISE_COMMIT");
-                                    return s ? std::atoi(s) : 3; }(); }
+                                    return s ? std::atoi(s) : 3; }();
+// NEOST_RAISE_WINDOW (opt-in expérimental, défaut 0 = commit inconditionnel) :
+// fenêtre d'échantillonnage IPL à la frontière (cyc bus). Modèle « WinUAE ipl_fetch » :
+// un événement dû MOINS de K cycles avant la frontière serait différé d'une instruction.
+// MESURÉ (2026-08-06, banc SHO in-game + oracle instrumenté) : les frontières de prise
+// d'IRQ de Hatari CE correspondent au commit SANS différé (positions d'exception Timer B
+// 404/408/412/416 quasi identiques des deux côtés) — l'écart résiduel était l'IACK MFP
+// (cf. g_iackMfp = 16), PAS un différé. K>0 SUR-diffère (queue tardive excédentaire).
+// Gardé en A/B pour de futures divergences de frontière.
+int g_raiseWindow = []{ const char* s = std::getenv("NEOST_RAISE_WINDOW");
+                        return s ? std::atoi(s) : 0; }();
+// La fenêtre s'applique-t-elle à ce dispatch ? (hors STOP : réveil niveau-sensible
+// immédiat, validé exact à l'oracle — cf. stoppedState).
+bool raiseWindowDefers() {
+    if (!g_sched || !g_moira) return false;
+    const int64_t due  = g_sched->firingDue();
+    const bool stopped = g_moira->stoppedState();
+    const bool defer   = !stopped && g_raiseWindow > 0 && due >= 0
+                      && g_sched->now() - due < g_raiseWindow;
+    // DIAG (NEOST_RAISE_DIAG=1) : marge frontière−échéance, état STOP et décision.
+    static const bool diag = std::getenv("NEOST_RAISE_DIAG") != nullptr;
+    if (diag) std::fprintf(stderr, "[RWD] due=%lld now=%lld stop=%d defer=%d\n",
+                           (long long)due, (long long)(g_sched->now()),
+                           stopped ? 1 : 0, defer ? 1 : 0);
+    return defer;
+} }
 void Cpu68k::raiseVbl() {
     g_vblPending = true;
     // COMMIT IMMÉDIAT (2026-07-02, mesuré à l'oracle instrumenté [HPIN]/[HEXC] :
@@ -917,12 +960,13 @@ void Cpu68k::raiseVbl() {
     // 12709/12711 échantillons du banc poll-entry). L'ancien chemin broche-POLLée
     // (neostUpdateIpl sans commit) faisait reconnaître UNE instruction plus tard.
     // Le callback d'événement EST une frontière d'instruction (modèle bloc) → commit sûr.
-    neostUpdateIpl(/*commit=*/(g_raiseCommit & 2) != 0);
+    neostUpdateIpl(/*commit=*/(g_raiseCommit & 2) != 0 && !raiseWindowDefers());
 }
 
 void Cpu68k::raiseHbl() {
     g_hblPending = true;
-    neostUpdateIpl(/*commit=*/(g_raiseCommit & 1) != 0);   // même modèle que raiseVbl
+    // même modèle que raiseVbl + fenêtre d'échantillonnage (cf. g_raiseWindow)
+    neostUpdateIpl(/*commit=*/(g_raiseCommit & 1) != 0 && !raiseWindowDefers());
 }
 
 // Pré-armement des broches IRQ vidéo — cf. .hpp. Appelées par Machine au moment
