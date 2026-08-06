@@ -92,6 +92,8 @@ public:
     // Correcteur de tonalité du LMC1992 (basses/aigus, ±12 dB) appliqué au mix
     // complet via deux filtres en plateau (shelving). Bypass total au défaut
     // (0/0 dB) → aucun coût ni risque tant que la tonalité n'est pas programmée.
+    void    applyHpfStereo(float* st, uint32_t frames);   // HPF sous-sonique du MIX (STE)
+    void    applyHpfMono(float* out, uint32_t frames);    // idem, chemin mono WASM
     void    applyTone(float* out, uint32_t frames, uint32_t sampleRate);
     // Idem en stéréo entrelacé (état de filtre L/R indépendant).
     void    applyToneStereo(float* st, uint32_t frames, uint32_t sampleRate);
@@ -282,4 +284,6 @@ private:
     double   tx1_ = 0, tx2_ = 0, ty1_ = 0, ty2_ = 0;   // plateau aigus  (G / mono)
     double   bx1R_ = 0, bx2R_ = 0, by1R_ = 0, by2R_ = 0;   // plateau basses (D)
     double   tx1R_ = 0, tx2R_ = 0, ty1R_ = 0, ty2R_ = 0;   // plateau aigus  (D)
+    // HPF sous-sonique du MIX STE (cf. applyHpfStereo) — NON sérialisé (transitoire).
+    double   hpfX1L_ = 0, hpfY0L_ = 0, hpfX1R_ = 0, hpfY0R_ = 0;
 };

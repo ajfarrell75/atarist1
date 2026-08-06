@@ -469,6 +469,7 @@ int main(int argc, char** argv) {
         machine.psg.synthesizeFrame(ym, uint32_t(n), kDumpRate, fc);
         if (machineHasDmaSound(machine.bus.machine)) {
             machine.dmasnd.mixStereo(st, ym, uint32_t(n), kDumpRate, fc);
+            machine.dmasnd.applyHpfStereo(st, uint32_t(n));   // HPF du mix (≙ chaîne GUI)
             const float gL = machine.dmasnd.gainLeft(), gR = machine.dmasnd.gainRight();
             if (gL != 1.0f || gR != 1.0f)
                 for (int i = 0; i < n; ++i) { st[2 * i] *= gL; st[2 * i + 1] *= gR; }

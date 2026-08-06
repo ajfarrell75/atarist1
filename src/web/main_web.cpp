@@ -360,8 +360,10 @@ EMSCRIPTEN_KEEPALIVE void neost_set_joy_deadzone(float dz) {
 EMSCRIPTEN_KEEPALIVE void neost_audio_render(float* buf, int frames, int rate) {
     if (!g_machine || !buf || frames <= 0) return;
     const uint32_t n = static_cast<uint32_t>(frames), r = static_cast<uint32_t>(rate);
-    g_machine->psg.synthesize(buf, n, r);          // YM2149 (écrase)
+    g_machine->psg.synthesize(buf, n, r);          // YM2149 (écrase ; BRUT sur STE)
     g_machine->dmasnd.mix(buf, n, r);              // + son DMA STE (additionné)
+    if (machineHasDmaSound(g_machine->bus.machine))
+        g_machine->dmasnd.applyHpfMono(buf, n);    // HPF sous-sonique du MIX (STE)
     const float g = g_machine->dmasnd.masterGain();   // volume maître LMC1992
     if (g != 1.0f) for (uint32_t i = 0; i < n; ++i) buf[i] *= g;
     g_machine->dmasnd.applyTone(buf, n, r);           // basses/aigus LMC1992

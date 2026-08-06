@@ -21,7 +21,11 @@ static const double kRate[4] = { 6258.0, 12517.0, 25033.0, 50066.0 };
 // l'échelle DEMI du YM STE (outScale_ 0.5, marge anti-saturation) parce que les
 // gains LMC sont DOUBLÉS en compensation (cf. gainLeft/gainRight). Soit
 // 3/4 × 1/2 = 0.375 : à 0 dB le mix sort YM = 1.0 et DMA = 0.75, comme Hatari.
-static constexpr float kDmaGain = 0.375f;
+// NÉGATIF : le LMC1992 INVERSE le signal DMA (le YM ressort en +1 : −1 ampli-op ×
+// −1 LMC). Port du « Multiply DMA sound by -1 » d'Hatari (dmaSnd.c:520-535, formule
+// −((256×¾)/4)/4). Audible uniquement en mélange YM+DMA (phase relative des deux
+// sources) — module 0.375 inchangé (¾ du YM × ½ table STE).
+static constexpr float kDmaGain = -0.375f;
 
 // Horloge CPU (Hz) pour dater la consommation DAC en cycles (cf. Mfp / Scheduler).
 static constexpr int64_t CPU_HZ = 8021248;
@@ -285,32 +289,25 @@ void DmaSound::onMicrowireShift() {
     }
 }
 
-// Coefficients d'un filtre en plateau (shelving) d'après le « Audio EQ Cookbook »
-// de R. Bridson-Robert (pente S=1), normalisés par a0. lowShelf=true → basses.
-static void shelfCoeffs(bool lowShelf, double dB, double f0, double fs,
-                        double& b0, double& b1, double& b2, double& a1, double& a2) {
-    const double A  = std::pow(10.0, dB / 40.0);
-    const double w0 = 2.0 * M_PI * f0 / fs;
-    const double cw = std::cos(w0), sw = std::sin(w0);
-    const double alpha = sw / 2.0 * std::sqrt(2.0);          // S=1
-    const double tsa   = 2.0 * std::sqrt(A) * alpha;
-    double B0, B1, B2, A0, A1, A2;
+// Plateaux (shelving) 1er ORDRE du correcteur LMC1992 — port EXACT de Hatari
+// DmaSnd_Bass_Shelf / DmaSnd_Treble_Shelf (dmaSnd.c:1366-1404, méthode Savinkoff),
+// coupures MESURÉES 118.2763 Hz (basses) / 8438.756 Hz (aigus). L'ancien modèle
+// (RBJ 2e ordre 200/8000 Hz) donnait une réponse différente dès que basses/aigus
+// quittaient 0 dB. À 0 dB (g = 1) : b0 = 1, b1 = a1 → transfert identité, d'où le
+// bypass exact des appelants quand les deux codes valent 6.
+static void shelf1(bool lowShelf, double dB, double f0, double fs,
+                   double& b0, double& b1, double& a1) {
+    const double g = std::pow(10.0, dB / 20.0);
+    const double t = std::tan(M_PI * f0 / fs);
     if (lowShelf) {
-        B0 =    A * ((A + 1) - (A - 1) * cw + tsa);
-        B1 =  2 * A * ((A - 1) - (A + 1) * cw);
-        B2 =    A * ((A + 1) - (A - 1) * cw - tsa);
-        A0 =        (A + 1) + (A - 1) * cw + tsa;
-        A1 =   -2 * ((A - 1) + (A + 1) * cw);
-        A2 =        (A + 1) + (A - 1) * cw - tsa;
-    } else {                                                 // plateau aigus
-        B0 =    A * ((A + 1) + (A - 1) * cw + tsa);
-        B1 = -2 * A * ((A - 1) + (A + 1) * cw);
-        B2 =    A * ((A + 1) + (A - 1) * cw - tsa);
-        A0 =        (A + 1) - (A - 1) * cw + tsa;
-        A1 =    2 * ((A - 1) - (A + 1) * cw);
-        A2 =        (A + 1) - (A - 1) * cw - tsa;
+        a1 = (g < 1.0) ? (t - g) / (t + g) : (t - 1.0) / (t + 1.0);
+        b0 = (1.0 + a1) * (g - 1.0) / 2.0 + 1.0;
+        b1 = (1.0 + a1) * (g - 1.0) / 2.0 + a1;
+    } else {
+        a1 = (g < 1.0) ? (g * t - 1.0) / (g * t + 1.0) : (t - 1.0) / (t + 1.0);
+        b0 = 1.0 + (1.0 - a1) * (g - 1.0) / 2.0;
+        b1 = a1 + (a1 - 1.0) * (g - 1.0) / 2.0;
     }
-    b0 = B0 / A0; b1 = B1 / A0; b2 = B2 / A0; a1 = A1 / A0; a2 = A2 / A0;
 }
 
 void DmaSound::applyTone(float* out, uint32_t frames, uint32_t sampleRate) {
@@ -322,16 +319,16 @@ void DmaSound::applyTone(float* out, uint32_t frames, uint32_t sampleRate) {
     const int trebCode = mwTreble_ < 12 ? mwTreble_ : 12;
     const double bassDb = (bassCode - 6) * 2.0;
     const double trebDb = (trebCode - 6) * 2.0;
-    double bb0, bb1, bb2, ba1, ba2, tb0, tb1, tb2, ta1, ta2;
-    shelfCoeffs(true,  bassDb, 200.0,  sampleRate, bb0, bb1, bb2, ba1, ba2);   // basses ~200 Hz
-    shelfCoeffs(false, trebDb, 8000.0, sampleRate, tb0, tb1, tb2, ta1, ta2);   // aigus  ~8 kHz
+    double bb0, bb1, ba1, tb0, tb1, ta1;
+    shelf1(true,  bassDb, 118.2763,  sampleRate, bb0, bb1, ba1);   // basses (Savinkoff)
+    shelf1(false, trebDb, 8438.756, sampleRate, tb0, tb1, ta1);    // aigus
 
     for (uint32_t i = 0; i < frames; ++i) {
         const double x = out[i];
-        const double yb = bb0 * x + bb1 * bx1_ + bb2 * bx2_ - ba1 * by1_ - ba2 * by2_;
-        bx2_ = bx1_; bx1_ = x;  by2_ = by1_; by1_ = yb;
-        const double yt = tb0 * yb + tb1 * tx1_ + tb2 * tx2_ - ta1 * ty1_ - ta2 * ty2_;
-        tx2_ = tx1_; tx1_ = yb; ty2_ = ty1_; ty1_ = yt;
+        const double yb = bb0 * x + bb1 * bx1_ - ba1 * by1_;
+        bx1_ = x;  by1_ = yb;
+        const double yt = tb0 * yb + tb1 * tx1_ - ta1 * ty1_;
+        tx1_ = yb; ty1_ = yt;
         out[i] = static_cast<float>(yt);
     }
 }
@@ -345,25 +342,52 @@ void DmaSound::applyToneStereo(float* st, uint32_t frames, uint32_t sampleRate) 
     const int trebCode = mwTreble_ < 12 ? mwTreble_ : 12;
     const double bassDb = (bassCode - 6) * 2.0;
     const double trebDb = (trebCode - 6) * 2.0;
-    double bb0, bb1, bb2, ba1, ba2, tb0, tb1, tb2, ta1, ta2;
-    shelfCoeffs(true,  bassDb, 200.0,  sampleRate, bb0, bb1, bb2, ba1, ba2);
-    shelfCoeffs(false, trebDb, 8000.0, sampleRate, tb0, tb1, tb2, ta1, ta2);
+    double bb0, bb1, ba1, tb0, tb1, ta1;
+    shelf1(true,  bassDb, 118.2763,  sampleRate, bb0, bb1, ba1);
+    shelf1(false, trebDb, 8438.756, sampleRate, tb0, tb1, ta1);
 
     for (uint32_t i = 0; i < frames; ++i) {
         // Canal gauche (état sans suffixe).
         const double xl = st[2 * i];
-        const double ybl = bb0 * xl + bb1 * bx1_ + bb2 * bx2_ - ba1 * by1_ - ba2 * by2_;
-        bx2_ = bx1_; bx1_ = xl;  by2_ = by1_; by1_ = ybl;
-        const double ytl = tb0 * ybl + tb1 * tx1_ + tb2 * tx2_ - ta1 * ty1_ - ta2 * ty2_;
-        tx2_ = tx1_; tx1_ = ybl; ty2_ = ty1_; ty1_ = ytl;
+        const double ybl = bb0 * xl + bb1 * bx1_ - ba1 * by1_;
+        bx1_ = xl;  by1_ = ybl;
+        const double ytl = tb0 * ybl + tb1 * tx1_ - ta1 * ty1_;
+        tx1_ = ybl; ty1_ = ytl;
         st[2 * i] = static_cast<float>(ytl);
         // Canal droit (état *R_).
         const double xr = st[2 * i + 1];
-        const double ybr = bb0 * xr + bb1 * bx1R_ + bb2 * bx2R_ - ba1 * by1R_ - ba2 * by2R_;
-        bx2R_ = bx1R_; bx1R_ = xr;  by2R_ = by1R_; by1R_ = ybr;
-        const double ytr = tb0 * ybr + tb1 * tx1R_ + tb2 * tx2R_ - ta1 * ty1R_ - ta2 * ty2R_;
-        tx2R_ = tx1R_; tx1R_ = ybr; ty2R_ = ty1R_; ty1R_ = ytr;
+        const double ybr = bb0 * xr + bb1 * bx1R_ - ba1 * by1R_;
+        bx1R_ = xr;  by1R_ = ybr;
+        const double ytr = tb0 * ybr + tb1 * tx1R_ - ta1 * ty1R_;
+        tx1R_ = ybr; ty1R_ = ytr;
         st[2 * i + 1] = static_cast<float>(ytr);
+    }
+}
+
+// HPF sous-sonique appliqué au MIX YM+DMA (STE) — port de Subsonic_IIR_HPF_Left/Right
+// (sound.c:382-399, pôle 1 − 64/32768) tel qu'appelé par DmaSnd_Apply_LMC AVANT
+// gains + tonalité (dmaSnd.c:699,706). Sur ST le HPF reste DANS la chaîne YM
+// (sound.c:1744) ; sur STE le YM entre BRUT dans le mix (YM2149::setHpfBypass) et
+// c'est le MÉLANGE — composante continue du DMA comprise — qui est filtré ici.
+// États NON sérialisés : transitoire de rendu (<0,1 s), format save-state inchangé.
+void DmaSound::applyHpfStereo(float* st, uint32_t frames) {
+    constexpr double pole = 1.0 - 64.0 / 32768.0;
+    for (uint32_t i = 0; i < frames; ++i) {
+        const double xl = st[2 * i], xr = st[2 * i + 1];
+        const double yl = xl - hpfX1L_ + pole * hpfY0L_;
+        hpfX1L_ = xl; hpfY0L_ = yl; st[2 * i]     = static_cast<float>(yl);
+        const double yr = xr - hpfX1R_ + pole * hpfY0R_;
+        hpfX1R_ = xr; hpfY0R_ = yr; st[2 * i + 1] = static_cast<float>(yr);
+    }
+}
+
+// Variante MONO (chemin WASM legacy) : même pôle, état gauche seul.
+void DmaSound::applyHpfMono(float* out, uint32_t frames) {
+    constexpr double pole = 1.0 - 64.0 / 32768.0;
+    for (uint32_t i = 0; i < frames; ++i) {
+        const double x = out[i];
+        const double y = x - hpfX1L_ + pole * hpfY0L_;
+        hpfX1L_ = x; hpfY0L_ = y; out[i] = static_cast<float>(y);
     }
 }
 

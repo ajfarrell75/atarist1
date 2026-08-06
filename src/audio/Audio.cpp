@@ -111,6 +111,7 @@ void Audio::produceFrame(int64_t frameCycles) {
     const bool dmaOn = dma_ && (!dmaGate_ || dmaGate_());
     if (dmaOn) {
         dma_->mixStereo(st, ym, uint32_t(n), rate_, frameCycles);   // (2) DMA STE horodaté → stéréo L/R
+        dma_->applyHpfStereo(st, uint32_t(n));             // (2b) HPF sous-sonique du MIX (≙ dmaSnd.c:699,706)
         const float gL = dma_->gainLeft(), gR = dma_->gainRight();   // (3) volume maître × G/D (panoramique)
         if (gL != 1.0f || gR != 1.0f)
             for (int i = 0; i < n; ++i) { st[2 * i] *= gL; st[2 * i + 1] *= gR; }
