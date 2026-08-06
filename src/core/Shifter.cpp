@@ -890,13 +890,19 @@ void Shifter::finishFrame() {
     // (raster bars, splits Timer B/HBL). Le fichier est réécrit à chaque trame →
     // il contient la DERNIÈRE trame rendue. Format aligné sur NEOST_SPEC512_TRACE.
     static const char* palTrace = std::getenv("NEOST_PAL_TRACE");
-    if (palTrace && !colorWrites_.empty()) {
+    // NEOST_PAL_TRACE_ALL=1 : mode CUMULATIF (append + en-tête « frame N ») pour
+    // diff multi-trames contre l'oracle Hatari (--trace video_color, continu).
+    static const bool palTraceAll = std::getenv("NEOST_PAL_TRACE_ALL") != nullptr;
+    static long palTraceFrame = -1;
+    ++palTraceFrame;
+    if (palTrace && (palTraceAll || !colorWrites_.empty())) {
         auto ws = colorWrites_;                    // copie : ne pas perturber spec512
         std::stable_sort(ws.begin(), ws.end(),
                          [](const ColorWrite& a, const ColorWrite& b) {
                              return a.frameCycle < b.frameCycle;
                          });
-        if (FILE* tf = std::fopen(palTrace, "w")) {
+        if (FILE* tf = std::fopen(palTrace, palTraceAll ? "a" : "w")) {
+            if (palTraceAll) std::fprintf(tf, "frame %ld\n", palTraceFrame);
             const Geometry gg = geometry();
             for (const auto& w : ws)
                 std::fprintf(tf, "line %d cyc=%d idx=%d col=%03x pc=%06x\n",
