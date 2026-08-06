@@ -521,6 +521,13 @@ public:
         ar(sync);
         // Registres STE ($FF8264/65, $FF820F)
         ar(hwScrollCount);
+        // Le scroll fin STE est un compteur 4 bits : le chemin MMIO le masque
+        // toujours `& 0x0F` ($FF8264/65, Shifter.cpp). Il sert d'OFFSET de lecture
+        // `idx[c + hwScrollCount]` dans renderLine (tampon de pile de 660 o) : un
+        // .state forgé (CRC valide, cf. campagne de durcissement) posant
+        // hwScrollCount=255 provoquerait une lecture hors pile de ~234 o (fuite
+        // d'info / crash). On revalide donc l'invariant matériel au chargement.
+        ar.check(hwScrollCount < 16);
         ar(hwScrollPrefetch);
         ar(lineWidth);
         ar(hwScrollReg8264_);
@@ -530,6 +537,10 @@ public:
         ar(vcLineBase_);
         ar(vcLineY_);
         ar(newHwScrollCount_);
+        // Écriture STE différée du même compteur 4 bits : sentinelle -1 (« aucune »)
+        // sinon 0..15. Appliqué à hwScrollCount en fin de ligne (Shifter.cpp) → même
+        // vecteur de lecture hors-tampon que ci-dessus ; on borne pareil.
+        ar.check(newHwScrollCount_ >= -1 && newHwScrollCount_ < 16);
         ar(newHwScrollPrefetch_);
         ar(newLineWidth_);
         ar(vcDelayedOffset_);

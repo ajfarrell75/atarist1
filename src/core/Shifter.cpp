@@ -2423,9 +2423,18 @@ uint32_t Shifter::videoCounter() const {
                 // décale toutes les suivantes (accumulation inter-lignes, port de
                 // Video_CalculateAddress qui parcourt ShifterLines[]).
                 const_cast<Shifter*>(this)->liveGlueCatchUp(line);
+                // `extra` (prefetch scroll + line-offset STE) ne s'applique qu'aux
+                // lignes RÉELLEMENT affichées, exactement comme le chemin de commit
+                // endVideoLine (`if (bpl > 0)`, Shifter.cpp:785 ≙ video.c:4213). Une
+                // ligne NO_DE (glueLineBytes == 0 : trick freq, fenêtre verticale
+                // raccourcie) ne fait avancer NI line-offset NI prefetch — l'ajouter
+                // ici faisait diverger l'extrapolation du commit, et le compteur
+                // reculait entre deux lectures $FF8205/07/09 encadrant un HBL.
                 const int extra = static_cast<int>(lineWidth) * 2 + scrollCounterAdvance();
-                for (int y = vcLineY_; y < laEff; ++y)
-                    addr += static_cast<uint32_t>(glueLineBytes(dispStart + y) + extra);
+                for (int y = vcLineY_; y < laEff; ++y) {
+                    const int lb = glueLineBytes(dispStart + y);
+                    addr += static_cast<uint32_t>(lb + (lb > 0 ? extra : 0));
+                }
             } else {
                 addr += static_cast<uint32_t>(laEff - vcLineY_) * static_cast<uint32_t>(stride);
             }
