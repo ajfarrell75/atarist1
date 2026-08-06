@@ -901,3 +901,28 @@ STOP/liveNow + double-faute de bus (f755c76/6d45a5f), chemins DMA FDC/ACSI, pars
 « latent » fermé, cf. ligne ~180), Ikbd (table commandes + souris + handlers 6301 = port 1:1),
 YM2149 (générateurs + table DAC mesurée), et les chemins rapides read8/write8/busFaultN du commit
 perf (whitelist bus-error préservée, `write8` rapide ≡ lent sur le préfixe identité).
+
+## 8ᵉ passe — workflow (6 chasseurs + vérif adversariale, 2026-08-06)
+
+Orchestration multi-agents : 6 agents chasseurs (GEMDOS/sécurité, Bus/MMIO, Blitter, FPU, série
+ACIA/SCC, CPU/save-state) → dédup → **réfutation adversariale** de chaque finding par un second
+agent. 7 findings uniques, 5 CONFIRMÉS (2 faux positifs écartés : Bus/MMIO et un doublon).
+**Corrigés** (mêmes validations que la 7ᵉ passe + montage GEMDOS symlinké/direct) :
+
+- **[MOYENNE] GEMDOS montage symlinké** — `hdEmuDir` restait LEXICAL (`makeAbsoluteName`) alors
+  que tout `host` produit par `clampToSandbox` est `physicalCanon()` (realpath, liens résolus).
+  Sur un montage traversant un lien symbolique (macOS `/tmp→/private/tmp`, `~`/`​/var` sous Linux)
+  les deux espaces de noms divergeaient : `gemChDir` (`:861`) rejetait TOUT `Dsetpath` en EPTHNF ;
+  `gemSFirst("C:\")` (`:1221`) calculait `rootLen` sur la longueur brute → scan du dossier PARENT
+  du bac à sable. Fix racine : `physicalCanon(hdEmuDir)` une fois au montage (`initDrives`, dossier
+  confirmé existant) → toutes les comparaisons `host↔hdEmuDir` partagent l'espace canonique.
+  Idempotent ; montage normal inchangé.
+- **[BASSE, save-state — trous résiduels de durcissement] `Shifter::glueLineStart_`** : restauré
+  sans check de taille, indexé sans garde de lecture dans `advanceGlueLive` (`Shifter.cpp:454/461/
+  493`) → lecture hors-tas d'un `int64_t` (invariant `== glueLines_.size()` ajouté).
+  **`Machine::curLineLen_`** : consommé par `advanceLine` (`lineCarry_ += cpl_ - curLineLen_`) →
+  forgé, désancre `lineCarry_` après son propre check (borné `]0,4096]`). **`Cpu68k::g_cpuMul`** :
+  multiplie l'horloge Moira (`addBusWaitCycles`) → forgé énorme = bond d'horloge (validé ∈ {1,2}).
+
+**Vérifiés FIDÈLES (adversarial)** : Bus/MMIO whitelist bus-error, Blitter (données + arbitration),
+FPU (NaN/exceptions/décodage), ACIA/SCC série.
