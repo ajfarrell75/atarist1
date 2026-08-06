@@ -926,3 +926,30 @@ agent. 7 findings uniques, 5 CONFIRMÉS (2 faux positifs écartés : Bus/MMIO et
 
 **Vérifiés FIDÈLES (adversarial)** : Bus/MMIO whitelist bus-error, Blitter (données + arbitration),
 FPU (NaN/exceptions/décodage), ACIA/SCC série.
+
+## 9ᵉ passe — workflow zones peu couvertes (2026-08-06)
+
+6 chasseurs sur les zones les moins auditées (balayage save-state exhaustif, Shifter tricks/
+spec512, STX en angle image malformée, IKBD 6301, audio/WASM lock-free, config/E-S fichier) +
+réfutation adversariale. 6 findings uniques, **2 CONFIRMÉS** (tous deux save-state), 4 faux
+positifs écartés. **Corrigés** :
+
+- **[BASSE] Enums IKBD `joyMode_`/`customRead_`/`customWrite_`** : sérialisés par `ar()` brut →
+  un `.state` forgé les matérialise hors domaine → UB (comparaisons/switch de dispatch, UBSan
+  enum). Même classe que `mouseMode_` déjà durci. `customWrite_` avait un `ar.check` mais qui
+  lisait l'enum déjà hors-domaine. Fix : transit par `std::underlying_type_t` + validation avant
+  cast (Ikbd.hpp). Format de save-state inchangé.
+- **[BASSE] `Bus::cart` save-state** : `ar.vec(cart)` sans le plafond 128 Ko de `loadCart`.
+  `read8Slow` décode la cartouche avant le MMIO (`Bus.cpp:369→373`) → un cart forgé > 128 Ko
+  masque les registres `$FF8xxx`. Garde `ar.check(cart.size() <= CART_END-CART_BASE)` ajoutée.
+
+**Vérifiés FIDÈLES (adversarial, 4 faux positifs)** : Shifter tricks/spec512 (rendu multi-rés,
+palette roulante), parseur STX (chemins malformés — OOB « simple tronqué » toujours fermé),
+audio lock-free/WASM (ring, points d'entrée JS), config/E-S fichier (parsing .cfg/ROM/disque).
+
+**Bilan des 3 passes de la session (7ᵉ-9ᵉ)** : 17 correctifs — 3 moyens à impact réel (OOB hôte
+`read16`, OOB pile save-state Shifter, franchissement/blocage GEMDOS symlink), 1 perte de données
+(`.msa` 87 pistes), le reste en fidélité et durcissement save-state (9 champs/enums bornés au
+total). Aucune valeur émulée ne change sur les chemins normaux ; selftests + boots pixel-identiques
+à chaque étape. Le terrain save-state a été balayé exhaustivement ; les faux positifs en hausse
+(4/6 à la 9ᵉ passe) signalent un rendement décroissant — la fidélité est très élevée.
