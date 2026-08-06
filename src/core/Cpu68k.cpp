@@ -841,6 +841,12 @@ bool Cpu68k::watchpointByIndex(int nr, uint32_t& outAddr) const {
 void Cpu68k::serialize(StateArchive& ar) {
     g_moira->serializeState(ar);
     ar(g_cpuMul);
+    // g_cpuMul ∈ {1 (8 MHz), 2 (16 MHz Mega STE)} : sélecteur de conversion horloge
+    // bus↔CPU (busOfClock/cpuClockForBus) ET multiplicateur des wait-states
+    // (addBusWaitCycles : n * g_cpuMul, Cpu68k.cpp:736). Forgé énorme → débordement /
+    // bond d'horloge Moira. On rejette toute autre valeur (rejoue le backup), comme
+    // cpl_/lpf_/now_.
+    ar.check(g_cpuMul == 1 || g_cpuMul == 2, "Cpu68k::g_cpuMul hors {1,2}");
     // g_cpuBias accompagne g_cpuMul : rebasé à CHAQUE bascule 8/16 MHz et non nul
     // même après retour à 8 MHz — sans lui, busOfClock() rendrait des valeurs d'un
     // autre domaine que sched.now_ après load (fenêtres blitter, dispatch faux).

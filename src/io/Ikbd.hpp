@@ -191,7 +191,15 @@ public:
         ar(clockMicro_);
 
         // --- Mode joystick ---
-        ar(joyMode_);
+        // Enum transité par le type sous-jacent (cf. mouseMode_ ci-dessus) : un .state
+        // forgé posant joyMode_ hors {JOY_OFF..JOY_MONITOR} matérialiserait une valeur
+        // hors domaine, ensuite lue par onVbl (comparaisons Ikbd.cpp) = UB (UBSan enum).
+        std::underlying_type_t<JoystickMode> jm =
+            static_cast<std::underlying_type_t<JoystickMode>>(joyMode_);
+        ar(jm);
+        const bool jmOk = (jm >= JOY_OFF && jm <= JOY_MONITOR);
+        ar.check(jmOk, "Ikbd::joyMode_ hors domaine");
+        if (ar.loading() && jmOk) joyMode_ = static_cast<JoystickMode>(jm);
         ar(prevJoy0_);
         ar(prevJoy1_);
         ar(vblCount_);
@@ -207,8 +215,23 @@ public:
         ar(pauseOutput_);
 
         // --- État code 6301 custom ($20/$22) ---
-        ar(customWrite_);
-        ar(customRead_);
+        // Deux enums transités par le type sous-jacent (cf. mouseMode_) : sans ça, un
+        // .state forgé les matérialise hors domaine (customWrite_ lu par les switch de
+        // dispatch 6301, customRead_ par la lecture event-driven) = UB. L'ancien
+        // ar.check(customWrite_...) plus bas LISAIT déjà l'enum hors-domaine avant de
+        // rejeter — la validation doit porter sur l'entier sous-jacent, AVANT le cast.
+        std::underlying_type_t<CustomW> cw =
+            static_cast<std::underlying_type_t<CustomW>>(customWrite_);
+        ar(cw);
+        const bool cwOk = (cw >= CW_NONE && cw <= CW_AS);
+        ar.check(cwOk, "Ikbd::customWrite_ hors domaine");
+        if (ar.loading() && cwOk) customWrite_ = static_cast<CustomW>(cw);
+        std::underlying_type_t<CustomR> cr =
+            static_cast<std::underlying_type_t<CustomR>>(customRead_);
+        ar(cr);
+        const bool crOk = (cr >= CR_NONE && cr <= CR_AS_MONO);
+        ar.check(crOk, "Ikbd::customRead_ hors domaine");
+        if (ar.loading() && crOk) customRead_ = static_cast<CustomR>(cr);
         ar(exeMode_);
         ar(memLoadLeft_);
         ar(memLoadTotal_);
@@ -230,7 +253,8 @@ public:
         ar.check(chaosIndex_ >= 0 && chaosIndex_ < 8);
         ar.check(chaosIgnore_ >= 0 && chaosIgnore_ <= 8);
         ar.check(chaosCount_ >= 0);
-        ar.check(customWrite_ >= CW_NONE && customWrite_ <= CW_AS);
+        // (customWrite_ est désormais validé plus haut, sur l'entier sous-jacent AVANT
+        // le cast dans l'enum — l'ancien ar.check ici lisait l'enum déjà hors-domaine.)
         ar(asMagic_);
         ar(asReadCount_);
     }

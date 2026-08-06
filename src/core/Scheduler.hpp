@@ -113,13 +113,22 @@ public:
         // kInactive et aucun balayage n'a lieu. L'exactitude est ce qui permet à
         // nextDue() de répondre en O(1) : c'est lui que Machine::runFrame appelle pour
         // borner chaque bloc CPU, et il pesait à lui seul ~5 % des instructions.
-        if (nextDue_ == kInactive || atCycle < nextDue_)      nextDue_ = atCycle;
+        //
+        // ⚠ « Planifier à l'inactif » (atCycle == kInactive) équivaut à un cancel :
+        // sans ce cas particulier, `atCycle < nextDue_` serait VRAI (-1 < tout) et
+        // poserait nextDue_ = kInactive alors que d'autres sources restent armées —
+        // cache faussé, assert de nextDue() en debug, dispatch gelé en mode sync.
+        // Aucun appelant actuel ne le fait, mais on ne laisse pas l'invariant fragile.
+        if (atCycle == kInactive) {
+            if (old != kInactive && old == nextDue_) nextDue_ = scanNextDue();
+        }
+        else if (nextDue_ == kInactive || atCycle < nextDue_) nextDue_ = atCycle;
         else if (old != kInactive && old == nextDue_)          nextDue_ = scanNextDue();
         // Si on est en plein bloc CPU (runTarget_ armé) et que cet événement tombe
         // AVANT la cible du bloc, on préempte : le CPU rend la main à la prochaine
         // frontière d'instruction et la boucle d'horloge ré-évaluera nextDue().
         // (Dormant dans le modèle piloté par sync() : beginRun n'est plus appelé.)
-        if (runTarget_ != kInactive && atCycle < runTarget_ && endSlice_) {
+        if (atCycle != kInactive && runTarget_ != kInactive && atCycle < runTarget_ && endSlice_) {
             runTarget_ = atCycle;   // nouvelle cible effective (évite des coupes redondantes)
             ++preemptions;
             endSlice_();
@@ -253,6 +262,12 @@ public:
             armed_ = 0;
             for (int s = 0; s < SRC_COUNT; ++s)
                 if (due_[s] != kInactive) armed_ |= 1u << s;
+            // nextDue_ est lui aussi PUREMENT DÉRIVÉ de due_ : on le recalcule au lieu
+            // de faire confiance à la valeur sérialisée. Le nouveau code (cache tenu
+            // EXACT, cf. schedule) l'exige — un état sauvé par un build plus ancien, ou
+            // forgé, pouvait porter un nextDue_ minorant/faux qui faisait avorter
+            // nextDue() en debug et retardait/gelait le dispatch en release.
+            nextDue_ = scanNextDue();
         }
         // ⚠ L'horloge du scheduler pilote des boucles de rattrapage (syncTo, et côté FDC
         // le rattrapage d'impulsion index) : forgée absurde, elle les rend non bornées —

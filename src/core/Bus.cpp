@@ -43,6 +43,14 @@ Bus::Bus(std::size_t ramBytes) {
 void Bus::serialize(StateArchive& ar) {
     ar.vec(ram);
     ar.vec(cart);   // cf. en-tête : porte le vecteur GEMDOS sauvegardé, pas qu'une image
+    // La cartouche est décodée par read8Slow AVANT le MMIO, pour tout
+    // addr < CART_BASE + cart.size() (Bus.cpp:369 → 373). loadCart plafonne l'image à
+    // la fenêtre matérielle 128 Ko ($FA0000-$FC0000) mais ar.vec ne borne que par les
+    // octets restants du buffer : un .state forgé (CRC recalculé) portant un cart plus
+    // grand masquerait les registres $FF8xxx avec des octets de cartouche. On réapplique
+    // le même plafond ici — l'échec rejoue le backup (Machine::loadState).
+    ar.check(cart.size() <= (stmap::CART_END - stmap::CART_BASE),
+             "Bus::cart.size() dépasse la fenêtre cartouche 128 Ko");
 
     // Profil machine + config ROM/TOS chargée.
     ar(machine);
@@ -279,8 +287,9 @@ int64_t Bus::mmuTranslate(uint32_t addr) const {
 //  banque 0, voire à zéro. Aucun comportement n'est perdu, seul le raccourci l'est.
 // -----------------------------------------------------------------------------
 void Bus::rebuildMmuCache(uint8_t conf) const {
-    mmuCacheConf_ = conf;
-    mmuCacheRam_  = ram.size();
+    mmuCacheConf_    = conf;
+    mmuCacheRam_     = ram.size();
+    mmuCacheMachine_ = machine;         // cf. clé de revalidation (Bus.hpp)
     mmuFastLimit_ = 0;
 
     const uint32_t mmuB0 = mmuConfSize(static_cast<uint8_t>((conf >> 2) & 3));

@@ -57,8 +57,12 @@ void DmaSound::setXsint(bool level) {
 // (début == fin, repeat ON → trame 2^24 octets, cf. fifoRefill).
 void DmaSound::startNewFrame() {
     curAddr_ = startAddr_;
-    phase_   = 0.0;
-    haveCur_ = false;                                  // 1er octet (re)tiré et filtré au prochain mix
+    // ⚠ NE PAS remettre phase_/haveCur_ ici : DmaSnd_StartNewFrame (dmaSnd.c:456-479)
+    // ne touche PAS l'état de rééchantillonnage (DmaInitSample/frameCounter_float),
+    // remis au SEUL front PLAY 0→1 (DmaSnd_SoundControl_WriteWord, dmaSnd.c:806-812).
+    // startNewFrame tourne AUSSI à chaque relatch repeat (fifoRefill) : y forcer
+    // haveCur_=false consommait un octet du flux mono hors comptabilité de phase et
+    // effaçait le reste fractionnaire → click/dérive d'un octet par boucle de sample.
     if (endAddr_ == startAddr_ && !(ctrl_ & 0x02)) {   // trame vide, pas de repeat → arrêt sec
         playing_ = false;
         ctrl_   &= ~0x01;
@@ -428,7 +432,13 @@ void DmaSound::syncAudioFromCpu() {
 // matériel montre où le DMA LIT, en avance de la FIFO — ≤ 8 octets — sur le
 // DAC). À l'ARRÊT, le vrai HW renvoie l'adresse de DÉBUT (dmaSnd.c:756-759).
 uint32_t DmaSound::liveCounter() {
-    if (playing_ && sched_) { updateDac(); fifoRefill(); }
+    // Port EXACT de DmaSnd_GetFrameCount (dmaSnd.c:748-761) : il appelle SEULEMENT
+    // Sound_Update (≙ updateDac), PAS de refill FIFO. Le refill ne se fait qu'au HBL
+    // (onHbl) ou à la volée quand la FIFO se vide (fifoPull). Un `fifoRefill()` ajouté
+    // ici re-topait curAddr_ à CHAQUE lecture du compteur → un poll serré de
+    // $FF8909-0D à l'intérieur d'une ligne voyait l'adresse de fetch avancer en
+    // continu (+2, +2…) au lieu de sauter par paquets au HBL comme sur le vrai STE.
+    if (playing_ && sched_) updateDac();
     if (!playing_) return startAddr_;                  // à l'arrêt : adresse de DÉBUT
     return curAddr_;
 }
@@ -470,6 +480,8 @@ void DmaSound::write8(uint32_t addr, uint8_t v) {
             if ((ctrl_ & 0x01) && !wasPlaying) {       // 0→1 : (re)démarre la trame
                 dacLast_ = sched_ ? sched_->liveNow() : 0;
                 dacRem_  = 0;                          // ≙ frameCounter_float = 0 au start
+                phase_   = 0.0;                        // ≙ DmaInitSample : état de rééchantillonnage
+                haveCur_ = false;                      // mono remis au SEUL front PLAY 0→1 (pas au relatch)
                 startNewFrame();                       // latch + XSINT haut (gère start==end)
                 if (playing_) recordEvent(0);          // PLAY daté (≙ DmaInitSample — pas au relatch repeat)
             } else if (!(ctrl_ & 0x01) && wasPlaying) { // bit play à 0 : arrêt

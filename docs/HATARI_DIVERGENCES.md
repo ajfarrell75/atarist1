@@ -177,8 +177,12 @@ byte-compatible : **conformes** (vérifiés ligne à ligne).
   vs `fdc.c:5042`).
 - **[basse]** Densité **HD/ED** STX : NeoST recadre `BitPosition` sur la densité (`Fdc.cpp:862-897`)
   → **plus cohérent que Hatari** (qui a une incohérence HD/ED) ; **identique en DD**.
-- **[basse]** Bornes parseur STX (`StxImage.cpp:90-200`) : rejette une image tronquée que Hatari
-  monterait ; **OOB latent** sur chemin « simple » tronqué (`Fdc.cpp:907`) — à corriger.
+- **[basse] ✅ vérifié SANS OOB (7ᵉ passe, 2026-08-06)** — Bornes parseur STX (`StxImage.cpp:90-200`) :
+  rejette une image tronquée que Hatari monterait ; l'**OOB « latent »** annoncé sur le chemin
+  « simple » tronqué est FERMÉ. Une piste simple tronquée pose `sectorsCount=0`/`sectors` vide
+  (`inBuf` échoue avant `buildSectorsSimple`) ; les 4 consommateurs bornent sur
+  `sectorsCountView()` (RNF après 5 tours). Compléments : clamp `TrackImageSize` (commit `7fe14bb`)
+  + borne save-state `stxNextSector_` 0..255. Aucune image forgée ne provoque de lecture hors bornes.
 - **[basse]** `pData==NULL` sans RNF → secteur lu 512×`0x00` + statut OK (image de bord, `StxImage.cpp:161`).
 - **[basse] ✅ vérifié SANS bug (2026-07-09)** — INTRQ : **pas de double déclenchement**. Le
   `raise(SRC_FDC)` doublé a été retiré à la refonte M1 (`bc15a67`) ; entrée périmée (les anciennes
@@ -859,3 +863,93 @@ MidiAcia, Fpu, Shifter) contre `extern/hatari/src`. **Corrigés dans la foulée*
 
 Divergences **assumées** confirmées cette passe : symlinks suivis dans un montage GEMDOS
 (même modèle de confiance que Hatari) ; VME/FPU MegaSTE « not found » correct.
+
+## 7ᵉ passe — bug hunt post-perf (2026-08-06, 4 agents parallèles)
+
+Chasse déclenchée après le commit de performance `65b1bb9` (chemins chauds inlinés + caches
+MMU/Scheduler) et le port `MSA_WriteDisk` (`0d404cc`). Quatre agents : commit perf
+(Bus/Scheduler/Shifter), FDC/STX/MSA, CPU/MFP/reset/save-state, Ikbd/DmaSound/YM/Shifter-rendu.
+**Corrigés dans la foulée** (tous validés : selftests glue 36 / spec512 15 / bus 12 / mfp 16 /
+msa 51, boots ST/STE/MegaSTE pixel-identiques, save-state déterministe) :
+
+- **[MOYENNE] `Bus::read16` chemin rapide ROM — OOB hôte** : `off + 1 < rom.size()` débordait
+  à `addr == romBase-1` (`off = 0xFFFFFFFF` → `off+1 = 0`, `0 < rom.size()` vrai → `rom[0xFFFFFFFF]`,
+  lecture hôte ~4 Go hors tampon). Atteignable par un programme invité : `GemdosHd::trap` lit
+  `read16` à une adresse prise dans la USP. Garde `off < rom.size()` ajoutée avant l'addition.
+- **[MOYENNE] `Shifter` save-state — OOB pile scroll STE** : `hwScrollCount`/`newHwScrollCount_`
+  restaurés sans borne (les 2 seuls champs oubliés par la campagne de durcissement). Compteur
+  4 bits servant d'offset `idx[c + scroll]` dans `renderLine` (tampon 660 o) → un `.state` forgé
+  (CRC valide) à `hwScrollCount=255` lit ~234 o hors pile. Gardes `ar.check` ajoutées.
+- **[MOYENNE-BASSE] `Fdc::encodeMsa` — `.msa` 87 pistes non persistée** : borne `tracks > 86`
+  asymétrique de `decodeMsa` (piste de fin ≤ 86, 0-based → 87 pistes). Une `.msa` de 87 pistes se
+  montait inscriptible mais aucune sauvegarde n'était persistée (perdue au remontage). Borne
+  rendue symétrique (`> 87`) + cas 87 pistes ajouté au `msa-selftest`.
+- **[BASSE] `DmaSound::liveCounter`** : `fifoRefill()` de trop (≙ `DmaSnd_GetFrameCount` n'appelle
+  que `Sound_Update`) → poll serré du compteur $FF8909 voyait le fetch avancer en continu au lieu
+  de sauts HBL. **[BASSE] `DmaSound::startNewFrame`** : `phase_`/`haveCur_` remis à chaque relatch
+  repeat au lieu du seul front PLAY 0→1 (≙ `DmaInitSample`) → click/dérive mono. **[BASSE]
+  `Shifter::videoCounter`** : extrapolation créditant `line-offset+prefetch` aux lignes NO_DE,
+  incohérente avec le commit `endVideoLine` (`bpl>0`) → compteur reculant entre 2 lectures $8205.
+- **[BASSE] Écritures secteur `.st`/`.dim`** : `fstream::write` jamais vérifié (disque plein →
+  secteur déchiré silencieux). Avertissement ajouté (le `.msa` est déjà atomique).
+- **[BASSE, latents durcis] `Bus` cache MMU** : `machine` ajouté à la clé de revalidation (le
+  décodage banque 1 en dépend). **`Scheduler`** : `schedule(kInactive)` traité comme cancel (ne
+  corrompt plus `nextDue_`) ; `nextDue_` recalculé au chargement de save-state (comme `armed_`).
+
+**Vérifiés FIDÈLES sans régression** : `MFP_Reset_All` (d410048), instruction RESET (7af3a7f),
+STOP/liveNow + double-faute de bus (f755c76/6d45a5f), chemins DMA FDC/ACSI, parseur STX (OOB
+« latent » fermé, cf. ligne ~180), Ikbd (table commandes + souris + handlers 6301 = port 1:1),
+YM2149 (générateurs + table DAC mesurée), et les chemins rapides read8/write8/busFaultN du commit
+perf (whitelist bus-error préservée, `write8` rapide ≡ lent sur le préfixe identité).
+
+## 8ᵉ passe — workflow (6 chasseurs + vérif adversariale, 2026-08-06)
+
+Orchestration multi-agents : 6 agents chasseurs (GEMDOS/sécurité, Bus/MMIO, Blitter, FPU, série
+ACIA/SCC, CPU/save-state) → dédup → **réfutation adversariale** de chaque finding par un second
+agent. 7 findings uniques, 5 CONFIRMÉS (2 faux positifs écartés : Bus/MMIO et un doublon).
+**Corrigés** (mêmes validations que la 7ᵉ passe + montage GEMDOS symlinké/direct) :
+
+- **[MOYENNE] GEMDOS montage symlinké** — `hdEmuDir` restait LEXICAL (`makeAbsoluteName`) alors
+  que tout `host` produit par `clampToSandbox` est `physicalCanon()` (realpath, liens résolus).
+  Sur un montage traversant un lien symbolique (macOS `/tmp→/private/tmp`, `~`/`​/var` sous Linux)
+  les deux espaces de noms divergeaient : `gemChDir` (`:861`) rejetait TOUT `Dsetpath` en EPTHNF ;
+  `gemSFirst("C:\")` (`:1221`) calculait `rootLen` sur la longueur brute → scan du dossier PARENT
+  du bac à sable. Fix racine : `physicalCanon(hdEmuDir)` une fois au montage (`initDrives`, dossier
+  confirmé existant) → toutes les comparaisons `host↔hdEmuDir` partagent l'espace canonique.
+  Idempotent ; montage normal inchangé.
+- **[BASSE, save-state — trous résiduels de durcissement] `Shifter::glueLineStart_`** : restauré
+  sans check de taille, indexé sans garde de lecture dans `advanceGlueLive` (`Shifter.cpp:454/461/
+  493`) → lecture hors-tas d'un `int64_t` (invariant `== glueLines_.size()` ajouté).
+  **`Machine::curLineLen_`** : consommé par `advanceLine` (`lineCarry_ += cpl_ - curLineLen_`) →
+  forgé, désancre `lineCarry_` après son propre check (borné `]0,4096]`). **`Cpu68k::g_cpuMul`** :
+  multiplie l'horloge Moira (`addBusWaitCycles`) → forgé énorme = bond d'horloge (validé ∈ {1,2}).
+
+**Vérifiés FIDÈLES (adversarial)** : Bus/MMIO whitelist bus-error, Blitter (données + arbitration),
+FPU (NaN/exceptions/décodage), ACIA/SCC série.
+
+## 9ᵉ passe — workflow zones peu couvertes (2026-08-06)
+
+6 chasseurs sur les zones les moins auditées (balayage save-state exhaustif, Shifter tricks/
+spec512, STX en angle image malformée, IKBD 6301, audio/WASM lock-free, config/E-S fichier) +
+réfutation adversariale. 6 findings uniques, **2 CONFIRMÉS** (tous deux save-state), 4 faux
+positifs écartés. **Corrigés** :
+
+- **[BASSE] Enums IKBD `joyMode_`/`customRead_`/`customWrite_`** : sérialisés par `ar()` brut →
+  un `.state` forgé les matérialise hors domaine → UB (comparaisons/switch de dispatch, UBSan
+  enum). Même classe que `mouseMode_` déjà durci. `customWrite_` avait un `ar.check` mais qui
+  lisait l'enum déjà hors-domaine. Fix : transit par `std::underlying_type_t` + validation avant
+  cast (Ikbd.hpp). Format de save-state inchangé.
+- **[BASSE] `Bus::cart` save-state** : `ar.vec(cart)` sans le plafond 128 Ko de `loadCart`.
+  `read8Slow` décode la cartouche avant le MMIO (`Bus.cpp:369→373`) → un cart forgé > 128 Ko
+  masque les registres `$FF8xxx`. Garde `ar.check(cart.size() <= CART_END-CART_BASE)` ajoutée.
+
+**Vérifiés FIDÈLES (adversarial, 4 faux positifs)** : Shifter tricks/spec512 (rendu multi-rés,
+palette roulante), parseur STX (chemins malformés — OOB « simple tronqué » toujours fermé),
+audio lock-free/WASM (ring, points d'entrée JS), config/E-S fichier (parsing .cfg/ROM/disque).
+
+**Bilan des 3 passes de la session (7ᵉ-9ᵉ)** : 17 correctifs — 3 moyens à impact réel (OOB hôte
+`read16`, OOB pile save-state Shifter, franchissement/blocage GEMDOS symlink), 1 perte de données
+(`.msa` 87 pistes), le reste en fidélité et durcissement save-state (9 champs/enums bornés au
+total). Aucune valeur émulée ne change sur les chemins normaux ; selftests + boots pixel-identiques
+à chaque étape. Le terrain save-state a été balayé exhaustivement ; les faux positifs en hausse
+(4/6 à la 9ᵉ passe) signalent un rendement décroissant — la fidélité est très élevée.
