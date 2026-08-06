@@ -279,8 +279,9 @@ int64_t Bus::mmuTranslate(uint32_t addr) const {
 //  banque 0, voire à zéro. Aucun comportement n'est perdu, seul le raccourci l'est.
 // -----------------------------------------------------------------------------
 void Bus::rebuildMmuCache(uint8_t conf) const {
-    mmuCacheConf_ = conf;
-    mmuCacheRam_  = ram.size();
+    mmuCacheConf_    = conf;
+    mmuCacheRam_     = ram.size();
+    mmuCacheMachine_ = machine;         // cf. clé de revalidation (Bus.hpp)
     mmuFastLimit_ = 0;
 
     const uint32_t mmuB0 = mmuConfSize(static_cast<uint8_t>((conf >> 2) & 3));
