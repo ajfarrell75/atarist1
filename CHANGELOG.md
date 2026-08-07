@@ -28,6 +28,17 @@ STE (le YM entre brut dans le mix, comme sound.c/dmaSnd.c — DC du DMA filtré)
 **250 663 Hz** réels (MCLK/128 — l'ancien 250 000 jouait ~4,6 cents bas). Validation :
 selftests + tier full verts, étalon `make_dmasnd_test` (fetch au faisceau) inchangé.
 
+**Bug hunt (workflow 6 chasseurs + vérification adversariale) — 12 correctifs**, dont :
+niveau DMA STE **−6 dB** (le ÷4 d'Hatari pré-compense AUSSI le ×2 des gains LMC —
+`kDmaGain` −0.1875) ; `reconfigure` à chaud qui perdait le placement du HPF (STE↔ST) ;
+chaîne LMC non gatée et `adjustMachineForTos` absent côté **WASM** (YM +6 dB sur ST,
+TOS incompatible = écran figé) ; **scroll fin STE par ligne** dans le re-rendu fenêtré
+(`renderGlueFrame` appliquait la valeur de fin de trame à tout l'écran → save-state
+**v9**, capture `lineScrollSnap_`) ; bit `LOOPING` forgeable dans un save-state
+(pointeur-membre nul en Release) ; $FFFA31-3F void (0xFF, sans wait-state) au lieu de
+RAM cachée ; $FF8900/8920 fidèles ; `--load-state` qui écrasait `--joy` ; défauts de
+config annoncés. Détail → `docs/HATARI_DIVERGENCES.md` § 10ᵉ passe (bug hunt).
+
 ## Performance du cœur : ~2,4× sur la même machine, à sortie octet-identique (2026-08-02)
 
 Campagne menée **au callgrind**, sur un profil de boot TOS et un profil en jeu (les deux

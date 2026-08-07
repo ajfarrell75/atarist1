@@ -146,6 +146,10 @@ public:
         bus.stePads.setMegaSte(machine == MachineType::MegaSte);
         psg.setOutputScale(machineIsSte(machine) ? 0.5f : 1.0f);   // ½ ampli YM sur STE (cf. ctor)
         psg.setStfLowPass(!machineIsSte(machine));                 // LPF_STF sur ST/Mega ST, PWM sur STE
+        // HPF sous-sonique : suit la machine comme au ctor — oublié, une bascule
+        // STE→ST à chaud laissait le YM SANS recentrage DC (hpfBypass_ resté vrai),
+        // et ST→STE filtrait le YM DEUX fois (chaîne YM + HPF du mix).
+        psg.setHpfBypass(machineIsSte(machine));
         // Reconfigure = boot à FROID (la RAM est effacée) : le LMC1992/Microwire repart
         // aux défauts — le reset() chaud que l'appelant enchaîne les PRÉSERVE, et sans
         // ça l'état microwire d'une session STE (mixing/tonalité) colorait la suivante.

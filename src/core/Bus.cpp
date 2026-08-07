@@ -780,6 +780,10 @@ uint8_t Bus::mmioRead8(uint32_t addr) {
     if (addr >= 0xFF8A00 && addr <= 0xFF8A3F && blitter && machineHasBlitter(machine))
         return blitter->read8(addr);      // blitter ($FF8A00) — Mega ST/STE/Mega STE
     if (addr >= stmap::MFP_BASE && addr < stmap::MFP_BASE + 0x40 && mfp) {
+        // $FFFA31-$FFFA3F (impairs) : VOID chez Hatari (ioMemTabST.c:143-150,
+        // IoMem_VoidRead) — lecture 0xFF, AUCUN wait-state (pas de handler). Le
+        // dernier registre câblé est l'UDR USART à $FFFA2F.
+        if ((addr & 0x3F) >= 0x31) return 0xFF;
         // Wait state MFP (4 cyc) facturé UNE fois par accès : seul l'octet IMPAIR
         // porte un registre câblé (Hatari : M68000_WaitState(4) dans le handler du
         // registre ; l'octet pair d'un accès mot n'ajoute rien).
@@ -889,6 +893,9 @@ void Bus::mmioWrite8(uint32_t addr, uint8_t v) {
         return;
     }
     if (addr >= stmap::MFP_BASE && addr < stmap::MFP_BASE + 0x40 && mfp) {
+        // $FFFA31-$FFFA3F : void — écriture ABSORBÉE sans wait-state (cf. mmioRead8) ;
+        // l'ancien chemin en faisait 8 octets de RAM relisible cachés dans le MFP.
+        if ((addr & 0x3F) >= 0x31) return;
         // Wait state MFP facturé UNE fois par accès : octet impair seulement (cf. mmioRead8).
         if (cpu && (addr & 1)) cpu->addMfpWaitCycles();
         mfp->write8(addr, v);

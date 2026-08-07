@@ -347,6 +347,12 @@ public:
         ar(clock); ar(reg); ar(queue); ar(ipl); ar(iplPrev);
         ar(iplChangeClock); ar(iplChangeClockPrev); ar(iplDelay4); ar(iplDelay2);
         ar(fcl); ar(readBuffer); ar(flags);
+        // LOOPING (mode loop 68010) n'est JAMAIS posé sur un 68000 : forgé dans un
+        // .state (CRC recalculé), il fait prendre à execute() la branche
+        // `(this->*loop[queue.ird])` dont l'assert de garde saute en Release —
+        // pointeur-membre NUL pour la quasi-totalité des opcodes → SIGSEGV.
+        // Même classe de durcissement que g_cpuMul / enums IKBD (passes 8-9).
+        ar.check(!(flags & moira::State::LOOPING), "Moira::flags LOOPING forgé (68000)");
     }
 
     // Lecture du vecteur de reset (SSP/PC) via l'overlay ROM : jamais de bus error.

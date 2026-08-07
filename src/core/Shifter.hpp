@@ -293,6 +293,7 @@ private:
     static constexpr int kLineSnapBytes = 256;   // ≥ 230 (LEFT+RIGHT_OFF) + marge décodage
     std::vector<uint8_t>  lineSnap_;             // [scanline * kLineSnapBytes]
     std::vector<uint16_t> lineSnapLen_;          // octets valides par scanline
+    std::vector<uint8_t>  lineScrollSnap_;       // scroll fin STE ($FF8265) par scanline committée
     // Octets lus par le shifter sur une scanline (160 nominal, modulé par les
     // drapeaux de bordure glue — port BORDERBYTES_*). Hors line-offset/scroll STE.
     int  glueLineBytes(int scanline) const;
@@ -550,10 +551,14 @@ public:
         // --- Captures par-ligne (échantillon faisceau) ---
         ar.vec(lineSnap_);          // std::vector<uint8_t>
         ar.podVec(lineSnapLen_);    // std::vector<uint16_t>
-        // Invariant : les deux tableaux sont indexés ENSEMBLE (lineSnap_ par
-        // tranches de kLineSnapBytes, borné par lineSnapLen_.size()) — un fichier
-        // forgé désynchronisé ferait écrire endLine() hors du tas.
+        ar.vec(lineScrollSnap_);    // scroll fin STE par ligne (v9)
+        // Invariant : les tableaux sont indexés ENSEMBLE (lineSnap_ par tranches
+        // de kLineSnapBytes, borné par lineSnapLen_.size()) — un fichier forgé
+        // désynchronisé ferait écrire endLine() hors du tas ; lineScrollSnap_ est
+        // lu par renderGlueFrame sous la même borne, et un scroll est 4 bits.
         ar.check(lineSnap_.size() == lineSnapLen_.size() * kLineSnapBytes);
+        ar.check(lineScrollSnap_.size() == lineSnapLen_.size());
+        for (uint8_t s : lineScrollSnap_) ar.check(s <= 15);
 
         // --- Filtre Glue « même valeur ignorée » (persistant inter-trames) ---
         ar(lastGlueFreq_);

@@ -313,6 +313,12 @@ EMSCRIPTEN_KEEPALIVE void neost_reset() {
 // changement de cartouche : permet de tester EmuTOS US/FR et TOS 1.02 à distance.
 EMSCRIPTEN_KEEPALIVE void neost_load_tos(const char* path) {
     if (!g_machine || !path) return;
+    // Garde machine/TOS comme le GUI et le headless (adjustMachineForTos) : un
+    // TOS ≤ 1.04 chargé sur STE/Mega STE (menu ROM du shell) haltait le CPU —
+    // écran figé sans message. On bascule le profil comme les autres frontends.
+    const MachineType adj = Machine::adjustMachineForTos(g_machine->bus.machine, path);
+    if (adj != g_machine->bus.machine)
+        g_machine->reconfigure(g_machine->bus.ram.size(), CpuCore::Moira, adj);
     g_machine->loadTos(path);
     g_machine->reset();
 }
@@ -362,11 +368,16 @@ EMSCRIPTEN_KEEPALIVE void neost_audio_render(float* buf, int frames, int rate) {
     const uint32_t n = static_cast<uint32_t>(frames), r = static_cast<uint32_t>(rate);
     g_machine->psg.synthesize(buf, n, r);          // YM2149 (écrase ; BRUT sur STE)
     g_machine->dmasnd.mix(buf, n, r);              // + son DMA STE (additionné)
-    if (machineHasDmaSound(g_machine->bus.machine))
+    // Chaîne LMC1992 gatée par la machine, comme le GUI (Audio.cpp setDmaGate) et
+    // le headless : sur ST/Mega ST il n'y a PAS de LMC — le gain ×2 (kLmcMakeup,
+    // compensation du ½-YM STE) doublait un YM déjà à pleine échelle (écrêtage,
+    // +6 dB vs natif), et l'état microwire d'une session STE colorait le ST.
+    if (machineHasDmaSound(g_machine->bus.machine)) {
         g_machine->dmasnd.applyHpfMono(buf, n);    // HPF sous-sonique du MIX (STE)
-    const float g = g_machine->dmasnd.masterGain();   // volume maître LMC1992
-    if (g != 1.0f) for (uint32_t i = 0; i < n; ++i) buf[i] *= g;
-    g_machine->dmasnd.applyTone(buf, n, r);           // basses/aigus LMC1992
+        const float g = g_machine->dmasnd.masterGain();   // volume maître LMC1992
+        if (g != 1.0f) for (uint32_t i = 0; i < n; ++i) buf[i] *= g;
+        g_machine->dmasnd.applyTone(buf, n, r);           // basses/aigus LMC1992
+    }
 }
 
 } // extern "C"
@@ -419,10 +430,13 @@ int main(int argc, char** argv) {
     if (!g_window) { std::fprintf(stderr, "[web] création fenêtre échouée\n"); glfwTerminate(); return 1; }
     glfwMakeContextCurrent(g_window);
 
-    static Machine machine(ramBytes, cpuCore, machType); // RAM+cœur+machine (statique)
+    // Garde machine/TOS au boot, comme le headless (main_headless.cpp) : un
+    // ?machine=ste|megaste avec un vieux TOS en argv figeait le CPU sans message.
+    const MachineType machTypeAdj = Machine::adjustMachineForTos(machType, romPath);
+    static Machine machine(ramBytes, cpuCore, machTypeAdj); // RAM+cœur+machine (statique)
     g_machine = &machine;
     std::fprintf(stderr, "[web] cœur CPU : %s | machine : %s | RAM : %s\n",
-                 Cpu68k::coreName(machine.cpu.core()), machineName(machType), ramLabel(ramBytes));
+                 Cpu68k::coreName(machine.cpu.core()), machineName(machTypeAdj), ramLabel(ramBytes));
     if (!machine.loadTos(romPath)) {
         std::fprintf(stderr, "[web] TOS introuvable (%s) — repli EmuTOS 192 Ko.\n", romPath.c_str());
         if (romPath != "/roms/etos192us.img" && !machine.loadTos("/roms/etos192us.img"))
