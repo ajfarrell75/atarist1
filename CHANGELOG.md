@@ -3,6 +3,35 @@
 (c) 2026 VERHILLE Arnaud. Ce qui est **implémenté et validé**. Pas encore de versions
 taguées (0.1.x). Le restant est dans [`TODO.md`](TODO.md).
 
+## Effets CRT : version GLSL choisie à l'exécution (débloque le Raspberry Pi) (2026-08-07)
+
+Sur la borne Pi, activer les effets CRT échouait avec « **shader indisponible : GLSL 1.50
+is not supported. Supported versions are: 1.10, 1.20, 1.30, 1.40, 1.00 ES, 3.00 ES** » : le
+préambule `#version 150` était **codé en dur** dans `OpenGLShader.cpp` alors que le V3D des
+Raspberry Pi (Mesa) plafonne à **GLSL 1.40**. Le corps des shaders CRT, lui, n'utilise que
+des constructions **GLSL 1.30** (`in`/`out`, `texture()`, `fwidth()`) — il n'y avait rien à
+réécrire, seulement à cesser d'exiger 1.50.
+
+Le dialecte est maintenant déduit de `GL_SHADING_LANGUAGE_VERSION` puis essayé **en cascade
+150 → 140 → 130** (`#version 300 es` si le contexte est GLES natif — Pi en KMS/Wayland,
+Emscripten). La cascade est un filet et pas une coquetterie : un pilote peut annoncer une
+version et la refuser dans *ce* contexte, seule la compilation réelle tranche. Les échecs
+des tentatives intermédiaires sont silencieux et `errorOut` est vidé en cas de succès —
+sinon le panneau afficherait « shader indisponible » alors que la pile est prête.
+
+Diagnostic : une ligne au démarrage dit ce qui a été retenu **et** ce que le pilote annonce
+— `[CRT] GLSL 140 (pilote : 1.40)`.
+
+Validé bout en bout sous Mesa llvmpipe avec la version forcée (`MESA_GL_VERSION_OVERRIDE` /
+`MESA_GLSL_VERSION_OVERRIDE` — ⚠ le pilote propriétaire NVIDIA les ignore, il faut
+`LIBGL_ALWAYS_SOFTWARE=1 __GLX_VENDOR_LIBRARY_NAME=mesa`) : pilote 4.60 → 150, **1.40 → 140
+(cas Pi)**, 1.30 → 130, chaque fois « pile d'effets CRT prête » et, capture de fenêtre à
+l'appui en 1.30, l'image bien rendue à travers la pile. ⚠ **Pas encore rejoué sur le Pi
+lui-même** ; la ligne `[CRT] GLSL …` le confirmera. Une pile limitée à GLSL 1.20/ES 1.00
+échouerait encore (il faudrait repasser en `attribute`/`varying`/`texture2D`/
+`gl_FragColor`) — ce n'est pas le cas du Pi 4. Le reste de la pile (FBO `GL_RGBA8`, VAO)
+passe sans retouche sur V3D.
+
 ## IACK MFP +4 cyc (raster Super Hang-On verrouillé à l'oracle) + chaîne son STE fidèle (2026-08-06/07)
 
 **IACK MFP vectorisé : 12 → 16 cycles** (`Cpu68k.cpp`, `g_iackMfp`). Mesuré à l'oracle
