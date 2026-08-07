@@ -822,8 +822,11 @@ diff des (ligne, cyc) des écritures couleurs 2/3 sur ~200 trames.
 ### État des mécanismes CPU « gated » (Cpu68k.cpp, référence rapide)
 
 ON par défaut : `NEOST_LINELEN` (par-ligne, 2026-07-08), `NEOST_IACK` + `NEOST_IACK_AT` (E-clock + bloc au point d'IACK réel ≙
-iack_cycle), `NEOST_RAM_SLOT` (créneau bus RAM 4 cyc ≙ wait_cpu_cycle_*), `NEOST_RAISE_COMMIT=3`
-(commit IPL au dispatch HBL+VBL), dispatch BLOC. OFF par défaut : `NEOST_ECLOCK_ON` (legacy),
+iack_cycle), **`NEOST_IACK_SYNC`** (dispatch des événements échus AU point d'IACK ≙ CycInt_Process,
+2026-08-07 — rebase de quantum inclus), `NEOST_IACK_MFP=16` (bloc IACK MFP mesuré à l'oracle),
+`NEOST_RAM_SLOT` (créneau bus RAM 4 cyc ≙ wait_cpu_cycle_*), `NEOST_RAISE_COMMIT=3`
+(commit IPL au dispatch HBL+VBL), dispatch BLOC. OFF par défaut : `NEOST_RAISE_WINDOW`
+(différé ipl_fetch à la frontière — mesuré : Hatari CE committe sans différé), `NEOST_ECLOCK_ON` (legacy),
 `NEOST_IPLDELAY` (crude), `NEOST_IPLFETCH` (fidèle ipl_fetch_next dans Moira — candidat de
 refonte non validé in-game), `NEOST_PIN_ARM` (réfuté), `NEOST_VC_WAIT` (redondant avec
 RAM_SLOT), `NEOST_LINELEN=0` (désactive le canal par-ligne, **ON par défaut** depuis 2026-07-08),
@@ -1061,13 +1064,22 @@ mid-trame toujours capturée (l'écrêtage sur ce signal synthétique extrême e
 - **[BASSE] `parseMachine`/`parseRamBytes` : valeur inconnue → défaut ANNONCÉ** sur stderr
   (« mega-ste » silencieusement remplacé par STE faisait diffier contre le mauvais profil).
 
-**Consignée OUVERTE (pas de correctif)** : [basse] à l'IACK MFP, les événements échus dans la
-fenêtre « frontière d'instruction → IACK » (~10-26 cyc) ne sont pas dispatchés avant
-l'élection du vecteur (`Mfp::iack` n'élit que parmi les IPR déjà posés), là où Hatari appelle
-`CycInt_Process()` + `MFP_UpdateIRQ_All` AVANT `MFP_ProcessIACK` (newcpu.c:2938-2946) — un
-timer expirant dans cette fenêtre peut être servi un cran plus tard (nuance à la note
-« l'IRQ elle-même n'est PAS affectée » de la 5ᵉ passe, qui reste vraie pour la PRISE de
-l'IRQ mais pas pour l'élection du vecteur à l'IACK). Rarissime (~26/40106 par IRQ Timer C).
+- **[BASSE→MOYENNE] ✅ Dispatch des événements échus AU point d'IACK** (`NEOST_IACK_SYNC`,
+  défaut ON) — port du « `CycInt_Process()` + `MFP_UpdateIRQ_All` juste avant la séquence
+  d'IACK » d'Hatari (newcpu.c:2938-2946 branche MFP, :2998-3003 branche vidéo). En mode bloc,
+  les SYNC de l'entrée d'exception ne dispatchaient rien : un timer dont l'échéance tombait
+  dans la fenêtre « frontière d'instruction → IACK » (~10-26 cyc) n'avait pas posé son bit IPR
+  quand `Mfp::iack` élisait le vecteur. **Mesuré : un événement est réellement échu à 5,7-7 %
+  des IACK** (banc SHO in-game, `NEOST_IACK_DISP=1`) — deux ordres de grandeur au-dessus de
+  l'estimation « ~26/40106 » du rapport de chasse, qui ne considérait que le Timer C.
+  ⚠ **PIÈGE (régression attrapée par le banc)** : le `syncTo` doit être précédé du **rebase du
+  quantum** (`Cpu68k::rebaseQuantumAndSync`), exactement comme le saut d'attente STOP — sinon
+  le temps couru depuis le début du quantum est facturé une DEUXIÈME fois par le
+  `runTo(now + ran)` de `Machine`, et tout le raster glisse de ~16 cycles (mesuré : écritures
+  palette {104..128} → {120..156}, réveil STOP {68,72,76} → {80..96}). C'est le troisième
+  incident de cette classe : **tout dispatch déclenché depuis un hook Moira doit rebaser**.
+  Validation : banc SHO inchangé (±0,1 pt vs oracle, réveil STOP 40/40/20), A/B `NEOST_IACK_SYNC`
+  = comportement bien modifié (un handler démarre une ligne plus tôt), tier full vert.
 
 **Vérifiés/écartés** : rien d'autre — 0 réfutation sur 13 uniques, taux inhabituel signalant
 des chasseurs bien ciblés (code frais de la session) plus que des vérificateurs laxistes :

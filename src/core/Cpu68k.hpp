@@ -115,6 +115,9 @@ public:
     // lecture MMIO en plein milieu (p.ex. le RTC) verrait donc un cycle périmé. Ce
     // delta permet de reconstituer le cycle ABSOLU exact = sched.now() + ce delta.
     int64_t cyclesRunInQuantum() const;
+    // Rebase du quantum + dispatch des événements échus, au point d'IACK réel
+    // (≙ CycInt_Process d'Hatari avant l'élection du vecteur). Cf. .cpp.
+    void rebaseQuantumAndSync();
 
     // Cycles BUS écoulés depuis le DÉBUT de l'instruction COURANTE, à l'instant exact
     // de l'appel (en plein accès mémoire en PRECISE_TIMING). = busClockNow() -

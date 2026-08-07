@@ -28,6 +28,14 @@ STE (le YM entre brut dans le mix, comme sound.c/dmaSnd.c — DC du DMA filtré)
 **250 663 Hz** réels (MCLK/128 — l'ancien 250 000 jouait ~4,6 cents bas). Validation :
 selftests + tier full verts, étalon `make_dmasnd_test` (fetch au faisceau) inchangé.
 
+**Événements échus dispatchés au point d'IACK** (`NEOST_IACK_SYNC`, défaut ON) — port du
+`CycInt_Process()` que Hatari appelle juste avant la séquence d'IACK (newcpu.c:2938-2946) :
+un timer expirant dans la fenêtre « frontière d'instruction → IACK » n'avait pas posé son
+bit IPR quand le vecteur MFP était élu. Mesuré : un événement est échu à **5,7-7 % des
+IACK**. Le dispatch **rebase le quantum** au préalable (`Cpu68k::rebaseQuantumAndSync`),
+comme le saut STOP : sans ce rebase le temps est compté deux fois et tout le raster glisse
+de ~16 cycles — régression attrapée par le banc SHO avant commit.
+
 **Bug hunt (workflow 6 chasseurs + vérification adversariale) — 12 correctifs**, dont :
 niveau DMA STE **−6 dB** (le ÷4 d'Hatari pré-compense AUSSI le ×2 des gains LMC —
 `kDmaGain` −0.1875) ; `reconfigure` à chaud qui perdait le placement du HPF (STE↔ST) ;
