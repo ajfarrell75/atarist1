@@ -13,10 +13,13 @@
 namespace neost {
 
 // Compile + linke un programme (vertex, fragment) unique. Renvoie l'objet
-// programme GL en cas de succès, 0 en cas d'échec. La ligne #version GLSL
-// choisie ("#version 150" desktop, "#version 300 es" Emscripten) est
-// préfixée automatiquement — ne passer que le corps de chaque shader. Les
-// erreurs de compilation/link sont écrites dans `errorOut`.
+// programme GL en cas de succès, 0 en cas d'échec. La ligne #version GLSL est
+// préfixée automatiquement — ne passer que le corps de chaque shader, écrit en
+// GLSL 1.30 (`in`/`out`, `texture()`). Le dialecte est choisi à l'exécution
+// d'après GL_SHADING_LANGUAGE_VERSION puis essayé en cascade 150 → 140 → 130
+// (« 300 es » sur contexte GLES/Emscripten) : les pilotes qui plafonnent à 1.40,
+// comme le V3D des Raspberry Pi, sont ainsi servis. Les erreurs de
+// compilation/link sont écrites dans `errorOut` (vidé en cas de succès).
 unsigned int compileShaderProgram(const char* vertexBody,
                                   const char* fragmentBody,
                                   std::string* errorOut = nullptr);

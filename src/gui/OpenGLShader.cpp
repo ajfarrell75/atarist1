@@ -17,6 +17,7 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <vector>
 
 #if defined(__EMSCRIPTEN__)
 #  include <GLES3/gl3.h>
@@ -102,11 +103,61 @@ bool shaderRunningOnGLES()
 static bool loadEntryPoints() { return true; }
 #endif
 
+namespace {
+
+// Un préambule GLSL candidat : ligne #version + lignes de precision.
+struct GlslDialect {
+    const char* version;
+    const char* precision;
+};
+
+// Dialectes à essayer, le plus riche d'abord. Le corps des shaders NeoST
+// n'utilise que des constructions GLSL 1.30 (`in`/`out`, `texture()`,
+// `fwidth()`) : 130 et 140 conviennent donc aussi bien que 150. Certaines
+// piles n'exposent PAS 1.50 — c'est le cas du V3D des Raspberry Pi sous Mesa,
+// qui plafonne à 1.40 (« GLSL 1.50 is not supported. Supported versions are:
+// 1.10, 1.20, 1.30, 1.40, 1.00 ES, 3.00 ES ») — d'où le repli en cascade
+// plutôt qu'une version codée en dur.
+std::vector<GlslDialect> glslDialects()
+{
+    const char* kEsPrecision = "precision highp float;\nprecision highp int;\n";
+
+#if defined(__EMSCRIPTEN__)
+    return { { "#version 300 es\n", kEsPrecision } };
+#else
+    const char* sl = reinterpret_cast<const char*>(
+        glGetString(GL_SHADING_LANGUAGE_VERSION));
+
+    // Contexte GLES natif (Pi en mode KMS/GLES, Wayland…) : « OpenGL ES GLSL ES 3.20 ».
+    if (sl && std::strstr(sl, "ES ") != nullptr)
+        return { { "#version 300 es\n", kEsPrecision } };
+
+    // Desktop : « 1.40 » ou « 4.60 NVIDIA ». Sans chaîne exploitable, on tente
+    // toute la cascade (le pire cas coûte 2 compilations ratées, au démarrage).
+    int major = 0, minor = 0;
+    if (sl) std::sscanf(sl, "%d.%d", &major, &minor);
+    if (minor < 10) minor *= 10;           // « 4.6 » ≡ « 4.60 »
+    const int ver = major * 100 + minor;   // 1.40 → 140
+
+    std::vector<GlslDialect> out;
+    if (ver == 0 || ver >= 150) out.push_back({ "#version 150\n", "\n" });
+    if (ver == 0 || ver >= 140) out.push_back({ "#version 140\n", "\n" });
+    if (ver == 0 || ver >= 130) out.push_back({ "#version 130\n", "\n" });
+    if (out.empty()) out.push_back({ "#version 130\n", "\n" });  // dernier recours
+    return out;
+#endif
+}
+
+} // namespace
+
+// `quiet` : n'écrit rien sur stderr — utilisé pour les tentatives de repli,
+// dont l'échec est normal et ne doit pas alarmer l'utilisateur.
 static unsigned int compileOne(unsigned int kind,
                                const char* versionLine,
                                const char* precisionLine,
                                const char* body,
-                               std::string* errorOut)
+                               std::string* errorOut,
+                               bool quiet)
 {
     unsigned int sh = glCreateShader(kind);
     if (!sh) {
@@ -125,7 +176,7 @@ static unsigned int compileOne(unsigned int kind,
         std::string msg = "shader compile failed: ";
         msg.append(log, len);
         if (errorOut) *errorOut = msg;
-        std::fprintf(stderr, "[CRT] %s\n", msg.c_str());
+        if (!quiet) std::fprintf(stderr, "[CRT] %s\n", msg.c_str());
         glDeleteShader(sh);
         return 0;
     }
@@ -145,20 +196,45 @@ unsigned int compileShaderProgram(const char* vertexBody,
     }
 #endif
 
-#if defined(__EMSCRIPTEN__)
-    const char* versionLine   = "#version 300 es\n";
-    const char* precisionLine = "precision highp float;\nprecision highp int;\n";
-#else
-    const char* versionLine   = "#version 150\n";
-    const char* precisionLine = "\n";
-#endif
-
-    unsigned int vs = compileOne(GL_VERTEX_SHADER,
-                                 versionLine, precisionLine, vertexBody, errorOut);
-    if (!vs) return 0;
-    unsigned int fs = compileOne(GL_FRAGMENT_SHADER,
-                                 versionLine, precisionLine, fragmentBody, errorOut);
-    if (!fs) { glDeleteShader(vs); return 0; }
+    // Essaie chaque dialecte jusqu'à ce que les DEUX shaders compilent. Un
+    // pilote peut annoncer une version et la refuser dans ce contexte : seule
+    // la compilation réelle tranche.
+    const std::vector<GlslDialect> dialects = glslDialects();
+    const char* versionLine   = nullptr;
+    const char* precisionLine = nullptr;
+    unsigned int vs = 0, fs = 0;
+    for (std::size_t i = 0; i < dialects.size(); ++i) {
+        const bool last = (i + 1 == dialects.size());
+        vs = compileOne(GL_VERTEX_SHADER, dialects[i].version,
+                        dialects[i].precision, vertexBody, errorOut, !last);
+        if (vs) {
+            fs = compileOne(GL_FRAGMENT_SHADER, dialects[i].version,
+                            dialects[i].precision, fragmentBody, errorOut, !last);
+            if (fs) {
+                versionLine   = dialects[i].version;
+                precisionLine = dialects[i].precision;
+                break;
+            }
+            glDeleteShader(vs);
+            vs = 0;
+        }
+    }
+    if (!versionLine) return 0;   // errorOut porte l'échec du dernier essai
+    (void)precisionLine;
+    // Un dialecte a fini par passer : effacer l'erreur des tentatives ratées,
+    // sinon l'UI afficherait « shader indisponible » alors que tout va bien.
+    if (errorOut) errorOut->clear();
+    // Trace systématique : sur une machine où les effets CRT posent problème
+    // (pilote inconnu, borne Raspberry Pi…), c'est la ligne qui dit quel
+    // dialecte a réellement été accepté et ce que le pilote annonçait.
+    {
+        const char* sl =
+            reinterpret_cast<const char*>(glGetString(GL_SHADING_LANGUAGE_VERSION));
+        std::string chosen(versionLine + std::strlen("#version "));
+        while (!chosen.empty() && chosen.back() == '\n') chosen.pop_back();
+        std::fprintf(stderr, "[CRT] GLSL %s (pilote : %s)\n",
+                     chosen.c_str(), sl ? sl : "?");
+    }
 
     unsigned int prog = glCreateProgram();
     if (!prog) {
