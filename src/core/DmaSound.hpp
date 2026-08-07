@@ -196,6 +196,7 @@ private:
     // Registres. Adresses sur 24 bits (octets haut/moyen/bas, paires forcées).
     uint8_t  ctrl_ = 0;              // $FF8901 : bit0 = play, bit1 = repeat (loop)
     uint8_t  mode_ = 0;              // $FF8921 : bits0-1 fréquence, bit7 = mono
+    uint8_t  pad20_ = 0;             // $FF8920 : octet scratch non intercepté (Hatari) — NON sérialisé
     uint32_t startAddr_ = 0;         // $FF8903/05/07
     uint32_t endAddr_   = 0;         // $FF890F/11/13
     uint32_t curAddr_   = 0;         // adresse de FETCH du DMA (avance par MOTS, cf. fifoRefill)

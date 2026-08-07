@@ -23,9 +23,13 @@ static const double kRate[4] = { 6258.0, 12517.0, 25033.0, 50066.0 };
 // 3/4 × 1/2 = 0.375 : à 0 dB le mix sort YM = 1.0 et DMA = 0.75, comme Hatari.
 // NÉGATIF : le LMC1992 INVERSE le signal DMA (le YM ressort en +1 : −1 ampli-op ×
 // −1 LMC). Port du « Multiply DMA sound by -1 » d'Hatari (dmaSnd.c:520-535, formule
-// −((256×¾)/4)/4). Audible uniquement en mélange YM+DMA (phase relative des deux
-// sources) — module 0.375 inchangé (¾ du YM × ½ table STE).
-static constexpr float kDmaGain = -0.375f;
+// −((256×¾)/4)/4). Module 0.1875 = ¾ × ¼ : le ÷4 d'Hatari couvre À LA FOIS la table
+// YM demi-amplitude STE (≙ outScale_ 0.5) ET la pré-compensation du ×2 kLmcMakeup
+// des gains — gains appliqués ensuite au MIX ENTIER, DMA compris (dmaSnd.c:699/706).
+// L'ancien −0.375 (= ¾ × ½) ne retranchait que la demi-table : le ×2 des gains
+// s'appliquait une DEUXIÈME fois au canal DMA → +6 dB vs Hatari (à 0 dB LMC,
+// s=127 : Hatari 0.372 fs, NeoST sortait 0.744 fs — bug hunt 10ᵉ passe).
+static constexpr float kDmaGain = -0.1875f;
 
 // Horloge CPU (Hz) pour dater la consommation DAC en cycles (cf. Mfp / Scheduler).
 static constexpr int64_t CPU_HZ = 8021248;
@@ -469,7 +473,15 @@ uint32_t DmaSound::liveCounter() {
 
 uint8_t DmaSound::read8(uint32_t addr) {
     switch (addr & 0xFF) {
+        // $FF8900 : registre MOT chez Hatari (ioMemTabSTE.c:142) — la lecture pose
+        // nDmaSoundControl en 16 bits, l'octet PAIR relit donc 0x00 (pas 0xFF) :
+        // « move.w $FF8900,d0 » doit rendre $000x, pas $FF0x.
+        case 0x00: return 0x00;
         case 0x01: return ctrl_;
+        // $FF8920 : octet lu/écrit SANS interception chez Hatari (ioMemTabSTE.c:162)
+        // — il conserve la valeur écrite (0 au boot). NON sérialisé (octet scratch
+        // sans effet d'émulation : un load repart à 0, valeur de boot fidèle).
+        case 0x20: return pad20_;
         case 0x03: return uint8_t(startAddr_ >> 16);
         case 0x05: return uint8_t(startAddr_ >> 8);
         case 0x07: return uint8_t(startAddr_);
@@ -522,6 +534,8 @@ void DmaSound::write8(uint32_t addr, uint8_t v) {
         case 0x0F: endAddr_   = (endAddr_   & 0x00FFFF) | (uint32_t(v) << 16); break;
         case 0x11: endAddr_   = (endAddr_   & 0xFF00FF) | (uint32_t(v) << 8);  break;
         case 0x13: endAddr_   = (endAddr_   & 0xFFFF00) | (uint32_t(v) & 0xFE); break;
+        // $FF8920 : octet scratch relisible (cf. read8 — Hatari ne l'intercepte pas).
+        case 0x20: pad20_ = v; break;
         // Mode : seuls les bits existant sur un vrai STE sont câblés — masque 0x8F
         // (bit7 mono + bits0-1 fréquence), la relecture montre la valeur masquée
         // (Hatari DmaSnd_SoundModeCtrl_WriteByte, dmaSnd.c:1013-1027). La

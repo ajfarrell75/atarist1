@@ -553,6 +553,16 @@ int main(int argc, char** argv) {
             outFail = true;
         } else {
             std::fprintf(stderr, "[headless] état restauré depuis %s\n", loadStatePath.c_str());
+            // --joy est posé AVANT ce point (après reset) mais l'état restauré
+            // rétablit hostJoy_/stePads sauvegardés (généralement neutres) : sans
+            // cette repose, « --load-state titre.state --joy 0x80 » n'appuyait
+            // jamais le feu, silencieusement.
+            if (haveJoy) {
+                machine.ikbd.setJoystick(joy0Hold, joy1Hold);
+                machine.bus.stePads.setJoystick(joy0Hold, joy1Hold);
+                std::fprintf(stderr, "[headless] joystick re-posé après restauration : port1=$%02X port0=$%02X\n",
+                             joy1Hold, joy0Hold);
+            }
         }
     }
     for (int frame = 0; frame < frames; ++frame) {

@@ -413,6 +413,7 @@ void Shifter::beginFrame() {
         // tampon d'octets n'a pas besoin d'être effacé (len fait foi).
         lineSnapLen_.assign(glueLines_.size(), 0);
         lineSnap_.resize(glueLines_.size() * static_cast<std::size_t>(kLineSnapBytes));
+        lineScrollSnap_.assign(glueLines_.size(), 0);   // scroll fin STE par ligne (cf. renderGlueFrame)
         glueStartHBL_   = g.dispStartLine;
         glueEndHBL_     = g.dispStartLine + g.displayLines;
         glueVOverscan_  = 0;
@@ -773,6 +774,10 @@ void Shifter::endVideoLine() {
         for (int i = 0; i < n; ++i)
             snap[i] = bus_.read8((vcLineBase_ + static_cast<uint32_t>(i)) & 0xFFFFFFu);
         lineSnapLen_[sl] = static_cast<uint16_t>(n);
+        // Scroll fin de CETTE ligne (capturé AVANT le latch différé newHwScrollCount_
+        // quelques lignes plus bas) — consommé par renderGlueFrame (idx[s + scroll]).
+        if (sl < static_cast<int>(lineScrollSnap_.size()))
+            lineScrollSnap_[sl] = hwScrollCount;
     }
     vcLineBase_ += static_cast<uint32_t>(bpl);
     // Prefetch et line-offset STE ne s'appliquent QUE sur une ligne réellement
@@ -901,7 +906,12 @@ void Shifter::finishFrame() {
                          [](const ColorWrite& a, const ColorWrite& b) {
                              return a.frameCycle < b.frameCycle;
                          });
-        if (FILE* tf = std::fopen(palTrace, palTraceAll ? "a" : "w")) {
+        // 1re ouverture du run en "w" : TRONQUE un fichier survivant d'un run
+        // précédent (sinon les en-têtes « frame 0.. » de plusieurs sessions se
+        // concaténaient et le diff multi-trames se synchronisait sur le run périmé).
+        static bool palTraceFresh = true;
+        if (FILE* tf = std::fopen(palTrace, (palTraceAll && !palTraceFresh) ? "a" : "w")) {
+            palTraceFresh = false;
             if (palTraceAll) std::fprintf(tf, "frame %ld\n", palTraceFrame);
             const Geometry gg = geometry();
             for (const auto& w : ws)
@@ -1862,10 +1872,20 @@ void Shifter::renderGlueFrame() {
         if (nPix > 1024) nPix = 1024;                      // garde idx : cf. dimensionnement ci-dessus
         if (rtr && displayed && (renderAll || sl < baseStart + 12))
             std::fprintf(stderr, "  sl%d ds=%d de=%d bm=%03x nPix=%d addr=%06x\n", sl, ds, de, bm, nPix, addr & 0xFFFFFF);
+        // Scroll fin STE PAR LIGNE : la valeur capturée au commit de CETTE scanline
+        // (lineScrollSnap_, même datation que lineSnap_) — un split qui change
+        // $FF8264/65 à mi-trame était re-rendu tout entier avec le scroll de FIN
+        // de trame dès qu'une écriture palette déclenchait renderGlueFrame
+        // (spec512Active_, seuil 1). Repli : valeur de fin de trame (lignes non
+        // committées — même approximation que la relecture RAM ci-dessous).
+        const bool snapHere = sl >= 0 && sl < static_cast<int>(lineSnapLen_.size())
+                              && lineSnapLen_[sl] > 0;
+        const int  lineScroll = (snapHere && sl < static_cast<int>(lineScrollSnap_.size()))
+                              ? lineScrollSnap_[sl] : scroll;
         // decodeWindowIndices décode des GROUPES de 16 px (+1 groupe si scroll avec
         // prefetch, ou offset 16 sans prefetch) : la plage valide de idx est
         // [0, nDec) — marge pour le DisplayPixelShift et le scroll.
-        const int  nDec = lineHasDE ? ((nPix + 15) / 16) * 16 + (scroll ? 16 : 0) : 0;
+        const int  nDec = lineHasDE ? ((nPix + 15) / 16) * 16 + (lineScroll ? 16 : 0) : 0;
         // Décalage SOURCE de la ligne med overscan, en OCTETS sur la base de
         // décodage : Hatari VideoOffset = −champ MED_OFFSET (0 No Cooper, −2 PYM)
         // là où le chemin LOW validé (LEFT_OFF) vaut −2 → différentiel
@@ -1891,8 +1911,7 @@ void Shifter::renderGlueFrame() {
         // relecture RAM en fin de trame (lignes non committées : bordure haute
         // ouverte, bas de trame au-delà des lignes actives).
         if (nPix > 0 && !lineBlank) {
-            const bool haveSnap = sl >= 0 && sl < static_cast<int>(lineSnapLen_.size())
-                                  && lineSnapLen_[sl] > 0;
+            const bool haveSnap = snapHere;
             if (haveSnap)
                 decodeWindowIndicesFromBytes(lineSnap_.data() + static_cast<std::size_t>(sl) * kLineSnapBytes
                                                  + medSrcBytes,
@@ -1927,7 +1946,7 @@ void Shifter::renderGlueFrame() {
                 // hi (−4) ne s'applique pas au chemin med (Hatari rend ces
                 // lignes via VideoOffset seul, video.c:3932).
                 int s = lineMed ? ((cyc - ds) * 2 + medSrcPx)
-                                : ((cyc - ds) * ppc + (x % ppc) - shift + scroll);
+                                : ((cyc - ds) * ppc + (x % ppc) - shift + lineScroll);
                 if (s < 0) s = 0; else if (s >= nDec) s = nDec - 1;
                 if (lineMed) {
                     const int s2 = (s + 1 < nDec) ? s + 1 : s;

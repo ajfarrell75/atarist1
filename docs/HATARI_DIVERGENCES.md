@@ -1023,3 +1023,53 @@ l'oracle à la trame voisine, rendu intact). Étalons full tier verts.
 Validation : selftests 39/15/12/16/51, tier full vert, étalon `make_dmasnd_test` : fenêtre B
 mid-trame toujours capturée (l'écrêtage sur ce signal synthétique extrême est FIDÈLE — Hatari
 écrête pareil après son HPF de mix, dmaSnd.c:700-711). B10 ($FF8922) reste consignée ouverte.
+
+### Bug hunt de la 10ᵉ passe (workflow 6 chasseurs + vérif adversariale, 2026-08-07)
+
+16 trouvailles brutes (3 doublons inter-chasseurs), **12 corrigées le jour même** :
+
+- **[MOYENNE] `kDmaGain` −0.375 → −0.1875** : le ÷4 d'Hatari (dmaSnd.c:520-535) couvre la
+  demi-table STE **ET** la pré-compensation du ×2 `kLmcMakeup` — appliqué ensuite au mix
+  ENTIER, DMA compris. L'ancien module ne retranchait que la demi-table : **canal DMA +6 dB
+  vs Hatari** (0.744 fs au lieu de 0.372 à 0 dB LMC), écrêtage accru sur mix riche. La
+  « validation S3 ratio DMA 0.75 » de la 5ᵉ passe mesurait NeoST contre sa propre lecture
+  (erronée) du commentaire « 3/4 level », pas contre un WAV oracle.
+- **[MOYENNE] `Machine::reconfigure` ne reposait pas `setHpfBypass`** : bascule STE→ST à
+  chaud = YM sans recentrage DC (offset permanent, clics) ; ST→STE = YM filtré deux fois.
+- **[MOYENNE] WASM : chaîne LMC non gatée par la machine** (le fix natif « gate LMC/ST »
+  n'avait pas été porté au web) : sur `?machine=st`, gain ×2 sur un YM déjà pleine échelle
+  → +6 dB + écrêtage. Gate `machineHasDmaSound` posé (HPF + gains + tonalité).
+- **[MOYENNE] WASM : `adjustMachineForTos` absent** (boot ET menu ROM du shell) : un TOS
+  ≤ 1.04 sur STE/MegaSTE haltait le CPU, écran figé sans message. Garde posée aux deux
+  endroits (reconfigure du profil comme GUI/headless).
+- **[MOYENNE] save-state : bit `LOOPING` de Moira forgeable** → `(this->*loop[ird])` sur
+  pointeur-membre NUL en Release (l'assert saute). `ar.check` ajouté (jamais posé sur 68000).
+- **[MOYENNE] `renderGlueFrame` appliquait le scroll fin STE de FIN de trame à toutes les
+  lignes** (échantillonné une fois) : un split $FF8264/65 mi-trame + une seule écriture
+  palette (seuil spec512 = 1) re-rendait la moitié haute avec le mauvais décalage. Corrigé
+  par capture PAR LIGNE (`lineScrollSnap_`, même datation que `lineSnap_`) → **save-state v9**.
+- **[BASSE] $FFFA31-$FFFA3F (impairs)** : void chez Hatari (ioMemTabST.c:143-150) — NeoST
+  en faisait 8 octets de RAM relisible AVEC wait-state 4 cyc. Lecture 0xFF, écriture
+  absorbée, sans wait (le dernier registre câblé est l'UDR $FFFA2F).
+- **[BASSE] $FF8900 octet pair lit 0x00** (registre MOT, ioMemTabSTE.c:142) et **$FF8920 =
+  octet scratch relisible** (non intercepté chez Hatari) — l'ancien 0xFF figé faisait
+  échouer un `move.w $FF8900,d0` de diagnostic.
+- **[BASSE] `NEOST_PAL_TRACE(_ALL)` : 1re ouverture du run en "w"** — un fichier survivant
+  concaténait les sessions (« frame 0.. » dupliqués, diff désynchronisé).
+- **[BASSE] headless : `--load-state` écrasait `--joy`** (hostJoy_/stePads restaurés) —
+  le joystick est re-posé après restauration, avec log.
+- **[BASSE] `parseMachine`/`parseRamBytes` : valeur inconnue → défaut ANNONCÉ** sur stderr
+  (« mega-ste » silencieusement remplacé par STE faisait diffier contre le mauvais profil).
+
+**Consignée OUVERTE (pas de correctif)** : [basse] à l'IACK MFP, les événements échus dans la
+fenêtre « frontière d'instruction → IACK » (~10-26 cyc) ne sont pas dispatchés avant
+l'élection du vecteur (`Mfp::iack` n'élit que parmi les IPR déjà posés), là où Hatari appelle
+`CycInt_Process()` + `MFP_UpdateIRQ_All` AVANT `MFP_ProcessIACK` (newcpu.c:2938-2946) — un
+timer expirant dans cette fenêtre peut être servi un cran plus tard (nuance à la note
+« l'IRQ elle-même n'est PAS affectée » de la 5ᵉ passe, qui reste vraie pour la PRISE de
+l'IRQ mais pas pour l'élection du vecteur à l'IACK). Rarissime (~26/40106 par IRQ Timer C).
+
+**Vérifiés/écartés** : rien d'autre — 0 réfutation sur 13 uniques, taux inhabituel signalant
+des chasseurs bien ciblés (code frais de la session) plus que des vérificateurs laxistes :
+chaque correctif ci-dessus a été RE-vérifié à la main contre les sources Hatari avant d'être
+appliqué.
