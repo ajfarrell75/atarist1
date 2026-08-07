@@ -25,6 +25,7 @@
 namespace {
     Bus*    g_bus = nullptr;        // bus actif vu par les callbacks CPU
     Scheduler* g_sched = nullptr;   // ordonnanceur piloté par sync() (cf. NeostMoira::sync)
+    Cpu68k* g_cpuSelf = nullptr;    // instance courante (rebase de quantum depuis les hooks Moira)
     bool    g_vblPending = false;   // VBL (niveau 4) en attente d'acquittement
     bool    g_hblPending = false;   // HBL (niveau 2) en attente d'acquittement
     Tracer* g_tracer = nullptr;     // traceur optionnel (nullptr = aucun surcoût)
@@ -88,6 +89,12 @@ namespace {
     // avec 12 → +4 sur l'IACK verrouille les histogrammes d'écritures palette
     // (1re écriture de paire {104..128} à ±1 pt partout, réveil STOP 40/40/20 intact).
     int     g_iackMfp     = []{ const char* s = std::getenv("NEOST_IACK_MFP");   return s ? std::atoi(s) : 16; }();
+    // NEOST_IACK_SYNC (défaut ON) : dispatch des événements échus AU point d'IACK,
+    // port du « CycInt_Process() + MFP_UpdateIRQ_All juste avant la séquence d'IACK »
+    // d'Hatari (newcpu.c:2938-2946 MFP, :2998-3003 vidéo). Mesuré : un événement est
+    // réellement échu à 5,7-7 % des IACK (banc SHO in-game). =0 restaure l'ancien
+    // modèle (élection du vecteur sur les seuls IPR posés à la frontière).
+    bool    g_iackSync    = []{ const char* s = std::getenv("NEOST_IACK_SYNC"); return s ? std::atoi(s) != 0 : true; }();
     // Lead-in willInterrupt → IACK réel : SYNC(6)+write PClo(4)+SYNC(4)=14 cyc (MoiraExceptions
     // _cpp.h:533-537). On l'ajoute à la phase E-clock pour la calculer comme au cycle d'IACK,
     // bien que le setClock soit fait depuis willInterrupt (seul point fiable hors mid-accès).
@@ -492,6 +499,24 @@ public:
     }
 
     moira::u16 readIrqUserVector(moira::u8 level) const override {
+        // Port de « CycInt_Process() + MFP_UpdateIRQ_All au point d'IACK » d'Hatari
+        // (newcpu.c:2938-2946 branche MFP, :2998-3003 branche vidéo — dans les DEUX
+        // cas juste avant l'élection/l'acquittement). En mode bloc, les SYNC de
+        // l'entrée d'exception ne dispatchent rien : un timer MFP dont l'échéance
+        // tombe dans la fenêtre « frontière d'instruction → IACK » (~10-26 cyc)
+        // n'avait pas posé son bit IPR quand Mfp::iack élisait le vecteur (l'élection
+        // ne regarde que les IPR posés) → servi un cran trop tard. On dispatche les
+        // événements échus AU cycle d'IACK réel. Sans danger pendant l'exception :
+        // reg.sr.ipl est déjà monté au niveau servi (execInterrupt), un commit d'IPL
+        // par un callback ne déclenche aucune prise parasite ; et le prochain
+        // événement HBL/VBL est à une ligne entière (jamais dans la fenêtre).
+        // ⚠ REBASE DU QUANTUM AVANT le dispatch, comme le saut STOP (cf. Cpu68k::run) :
+        // sans lui, syncTo avance sched.now() jusqu'ici alors que `ran` (mesuré depuis
+        // quantumStartBus_) sera ENCORE facturé par le runTo(now+ran) de Machine → le
+        // temps écoulé compté DEUX FOIS, et les callbacks lisent liveNow() gonflé.
+        // Mesuré sur le banc SHO : sans rebase, tout le raster glisse de ~16 cycles
+        // (écritures palette {104..128} → {120..156}, réveil STOP {68,72,76} → {80..96}).
+        if (g_iackSync && g_sched && !g_inReset && g_cpuSelf) g_cpuSelf->rebaseQuantumAndSync();
         if (level == 6 && g_bus->mfp) {                 // MFP : vecteur fourni par le 68901
             const int v = g_bus->mfp->iack();
             if (g_tracer) g_tracer->onInterrupt(level, v);
@@ -589,7 +614,36 @@ const char* Cpu68k::coreName(CpuCore) {
 
 Cpu68k::Cpu68k(Bus& bus, CpuCore core) : core_(core) {
     g_bus = &bus;
+    g_cpuSelf = this;      // cf. rebaseQuantumAndSync (hook d'IACK)
     initCore();
+}
+
+// Transfère à l'ordonnanceur le temps couru depuis le début du quantum, PUIS
+// dispatche les événements échus — appelé au point d'IACK réel (≙ le
+// « CycInt_Process() juste avant la séquence d'IACK » de Hatari, newcpu.c:2938).
+// Le rebase est indispensable et doit précéder le dispatch : sans lui, `ran` (le
+// retour de run(), mesuré depuis quantumStartBus_) serait facturé une SECONDE fois
+// par le runTo(now+ran) de Machine, et les callbacks liraient un liveNow() gonflé.
+// Même raisonnement — et même ordre — que le saut d'attente STOP de run().
+void Cpu68k::rebaseQuantumAndSync() {
+    if (!g_sched || !g_moira) return;
+    const int64_t busNow = busOfClock(static_cast<int64_t>(g_moira->getClock()));
+    quantumStartBus_   = busNow;
+    quantumStartClock_ = static_cast<int64_t>(g_moira->getClock());
+    // DIAG (NEOST_IACK_DISP=1) : compte les IACK où un événement était RÉELLEMENT
+    // échu dans la fenêtre frontière→IACK (le cas que ce dispatch corrige) —
+    // sert à prouver que le chemin n'est pas mort et à mesurer sa fréquence.
+    static const bool diag = std::getenv("NEOST_IACK_DISP") != nullptr;
+    if (diag) {
+        static long total = 0, hits = 0;
+        const int64_t nd = g_sched->peekNextDue();
+        ++total;
+        if (nd >= 0 && nd <= busNow) ++hits;
+        if (total % 100000 == 0)
+            std::fprintf(stderr, "[IACKDISP] %ld/%ld IACK avec événement échu (%.3f %%)\n",
+                         hits, total, 100.0 * double(hits) / double(total));
+    }
+    g_sched->syncTo(busNow);
 }
 
 // (Ré)initialise le cœur Moira. Appelé par le constructeur ET par setCore()
