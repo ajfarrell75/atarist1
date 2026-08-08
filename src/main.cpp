@@ -688,9 +688,14 @@ static bool applyCrtPreset(const std::string& name, neost::CrtParams& p, bool& o
 //    (latch) pour ne pas basculer sur un retrait d'une seule trame.
 // Les latches sont des statiques de fonction : un seul jeu pour toute l'application,
 // donc un aller-retour bureau ⇄ kiosk ne réinitialise pas l'hystérésis en cours.
-static void stContentRegion(Machine& machine, int& cTop, int& cH) {
+// cW = largeur (en px du buffer) qui doit RESTER visible : la zone active seule en
+// régime normal (les bordures latérales sont du décor, rognables), le buffer entier
+// dès qu'une bordure est ouverte (l'image déborde alors DANS les bordures). Le
+// cadrage du bureau s'en sert comme plancher : il n'ampute jamais l'image elle-même.
+static void stContentRegion(Machine& machine, int& cTop, int& cH, int& cW) {
     static int overscanLatch     = 0;   // bordure ouverte (haut ou bas)
     static int fullOverscanLatch = 0;   // bordure BASSE retirée (démos full-overscan)
+    cW = std::max(1, machine.shifter.activeWidth());   // défaut : la zone active
     // snapBordersOpen/snapLiveTop/snapLiveHeight : snapshot capturé à finishFrame(),
     // stable au rendu (les champs live glueStartHBL_/glueEndHBL_ sont remis à zéro
     // par beginFrame_() du cycle suivant AVANT que le rendu GL ne s'exécute).
@@ -710,6 +715,9 @@ static void stContentRegion(Machine& machine, int& cTop, int& cH) {
     else if (fullOverscanLatch > 0)
         --fullOverscanLatch;
 
+    // Bordure ouverte : l'image occupe aussi les bordures latérales → tout le buffer
+    // devient du contenu, y compris en largeur.
+    cW = std::max(1, machine.shifter.width());
     if (fullOverscanLatch > 0) {
         // Bordure BASSE retirée (démos full-overscan : Cuddly, LX…) : buffer entier.
         cTop = 0;
@@ -1973,7 +1981,7 @@ static void renderDockSpace(bool visible) {
 // non en viewport GL — les bordures inutilisées sortent du cadre au lieu d'ajouter
 // des bandes noires. Zoom auto OFF → cTop=0, cH=hauteur du buffer (cadre entier).
 void drawStScreen(const GlScreen& s, bool captured, bool& reqCapture, float topOffset,
-                  int cTop, int cH) {
+                  int cTop, int cH, int cW) {
     // ANCRÉE : c'est le nœud qui donne position ET taille. On ne pose donc ni pos, ni
     // taille, ni contrainte de ratio (elles se battraient avec le nœud — la fenêtre
     // « pomperait » à chaque trame). L'image, elle, garde son ratio en letterbox.
@@ -2030,6 +2038,14 @@ void drawStScreen(const GlScreen& s, bool captured, bool& reqCapture, float topO
     //    est ROGNÉE aux UV au lieu d'ajouter des bandes. Si le cadre entier tient en
     //    largeur à cette échelle, on retombe sur un pillarbox latéral — exactement les
     //    deux cas de drawStKiosk, transposés du viewport GL aux UV.
+    //    PLANCHER DE LARGEUR (bureau uniquement) : la hauteur seule pilotant le zoom,
+    //    un panneau plus étroit que haut (docking : l'écran ST partage la fenêtre avec
+    //    la Configuration) rognait jusque DANS l'image — bureau GEM amputé de ses menus
+    //    « Bureau »/« Options », jeu coupé aux deux bords. L'échelle est donc bornée
+    //    pour que `cW` (zone active, ou buffer entier si une bordure est ouverte) tienne
+    //    toujours en largeur : on préfère une bande haut/bas à une image amputée. Le
+    //    kiosk garde la règle pure — son écran est plus large que haut, le cas ne s'y
+    //    présente pas.
     //  · Zoom auto OFF : ancien comportement, cadre entier en letterbox, jamais rogné.
     // Dans les deux cas le ratio pixel ST est respecté : l'image ne se déforme jamais.
     const ImVec2 avail = ImGui::GetContentRegionAvail();
@@ -2037,8 +2053,13 @@ void drawStScreen(const GlScreen& s, bool captured, bool& reqCapture, float topO
     float dw, dh;
     float u0 = 0.f, u1 = 1.f;
     if (g_autoZoom) {
-        dh = availH;
-        const float scale = dh / (visH * sy);              // px écran par px ST (vertical)
+        // Bornage défensif : cW vient du Glue LIVE comme cTop/cH (une trame de
+        // transition peut le donner hors du buffer courant).
+        const float keepW = (float)std::max(1, std::min(cW, s.w));
+        float scale = availH / (visH * sy);                // px écran par px ST (vertical)
+        const float maxScale = availW / (keepW * sx);      // au-delà, on rognerait l'image
+        if (scale > maxScale) scale = maxScale;
+        dh = visH * sy * scale;                            // ≤ availH (bandes si borné)
         const float fullW = s.w * sx * scale;              // cadre ENTIER à cette échelle
         if (fullW > availW) {                              // déborde → on rogne les côtés
             const float visW = availW / (sx * scale);      // largeur ST réellement montrée
@@ -3417,9 +3438,9 @@ int main(int argc, char** argv) {
         // statiques de fonction, et les sauter les GÈLERAIT à leur dernière valeur —
         // à la réactivation, un latch resté armé sur une démo overscan afficherait le
         // buffer entier pendant ~30 trames avant de retomber d'un coup.
-        int cTop, cH; stContentRegion(machine, cTop, cH);
-        int kTop = 0, kH = machine.shifter.height();
-        if (g_autoZoom) { kTop = cTop; kH = cH; }
+        int cTop, cH, cW; stContentRegion(machine, cTop, cH, cW);
+        int kTop = 0, kH = machine.shifter.height(), kW = machine.shifter.width();
+        if (g_autoZoom) { kTop = cTop; kH = cH; kW = cW; }
 
         bool reqReset = false, reqHardReset = false, reqRebuild = false, reqCapture = false;
         int  reqMonitor = -1;
@@ -3644,7 +3665,7 @@ int main(int argc, char** argv) {
         renderDockSpace(g_dockOn);
 
         // --- Fenêtre écran (base) + fenêtres masquables ----------------------
-        drawStScreen(screen, g_mouseCaptured, reqCapture, menuH + toolH, kTop, kH);
+        drawStScreen(screen, g_mouseCaptured, reqCapture, menuH + toolH, kTop, kH, kW);
         if (g_showCfg) {
             // La fenêtre ne monte/démonte/redémarre rien : elle remplit `cfgUi`, qu'on
             // déverse dans les requêtes de la boucle juste après. Les chemins de disque
