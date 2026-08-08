@@ -125,6 +125,10 @@ public:
     // Machine itère sur activeHeight() ; renderLine(y) place la ligne active y à
     // l'offset bordure-haut dans le buffer (cf. activeY_).
     int activeHeight() const { return curAH_; }
+    // Largeur de l'écran ACTIF (sans les bordures) : 320 (low) / 640 (med/mono).
+    // Public au même titre qu'activeHeight() : le cadrage du frontend s'en sert pour
+    // garantir que le zoom ne rogne JAMAIS dans l'image (cf. main.cpp stContentRegion).
+    int activeWidth() const { return curW_ - (bordered() ? (kBorderLeftPx + kBorderRightPx) : 0); }
     // Offset de l'écran actif dans le buffer (bordures overscan tout autour).
     int activeLeft() const { return activeX_; }
     int activeTop()  const { return activeY_; }
@@ -491,8 +495,6 @@ private:
     static constexpr int kBorderBotLines = 47;    // MAX_OVERSCAN_BOTTOM
     static constexpr bool kBordersEnabled = true;
     bool bordered() const { return frameMode_ == Mode::Low && kBordersEnabled; }
-    // Largeur de l'écran ACTIF (sans les bordures) : 320 (low) / 640 (med/mono).
-    int activeWidth() const { return curW_ - (bordered() ? (kBorderLeftPx + kBorderRightPx) : 0); }
 
     Bus&          bus_;
     int           curW_ = 0, curH_ = 0;     // dimensions du buffer (overscan inclus)
