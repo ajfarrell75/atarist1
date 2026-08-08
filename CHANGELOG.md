@@ -3,6 +3,69 @@
 (c) 2026 VERHILLE Arnaud. Ce qui est **implémenté et validé**. Pas encore de versions
 taguées (0.1.x). Le restant est dans [`TODO.md`](TODO.md).
 
+## Interface : une fenêtre « Configuration » unique + barre d'état (2026-08-07)
+
+Réorganisation de la GUI. Le diagnostic tenait en trois points : **trois idiomes pour la
+même action** (une cartouche se montait par le menu *et* par une fenêtre, un disque dur en
+tapant un chemin *ou* par une fenêtre, une disquette par une fenêtre seulement), un menu
+`Machine` **fourre-tout** (actions + configuration matérielle + réglage d'émulation +
+Quitter), et surtout **aucun affichage de l'état courant** — or les deux « bugs » signalés
+ce jour-là (démo déchirée, jeu qui plante) étaient des faits de configuration invisibles :
+ROM `us` en 60 Hz NTSC, et 512 Ko là où le crack veut 1 Mo.
+
+**Fenêtre `Configuration`** (⚙ dans la barre d'outils, `Machine → Configuration…`),
+ancrable et non modale : colonne de navigation à gauche (Machine · Mémoire · ROM/TOS ·
+Disquettes · Disques durs · Cartouche · Écran · Son · Entrées · Émulation · Borne), page à
+droite, rangée de profils en haut (520 ST / 1040 STE / Mega STE). Elle **absorbe** six
+sous-menus et les **trois fenêtres-bibliothèques** (Disk/Cart/Hard Disks, supprimées) : il
+n'y a désormais qu'**une** façon de monter un support. Elle ne fait rien elle-même — tout
+sort en requêtes consommées en fin de trame, la discipline des anciennes bibliothèques.
+La page ROM affiche **50 Hz PAL / 60 Hz NTSC** (en orange) à côté de chaque image, d'après
+le suffixe pays.
+
+**« Appliquer et redémarrer »** : modèle, RAM, FPU et ROM ne relancent plus la machine à
+chaque clic. Ils sont mis **en attente**, le pied de page les compte (« 3 réglages
+matériels en attente ») et un seul bouton reconstruit une fois — avec le rattrapage TOS
+≥ 2.06 du Mega STE (`pickTosForMachine`) au passage. Les **montages** restent immédiats :
+monter est une action, pas un réglage.
+
+**Barre d'état permanente** : `Mega STE | 4 Mo | tos206fr | 50 Hz PAL | A: … | B: … |
+C: gemdos/ | 50,1 fps`. Chaque segment est cliquable et ouvre SA page. C'est le remède
+direct aux faux rapports de bug ci-dessus.
+
+**Lecteur B en GUI.** Le cœur le gérait depuis toujours (`Fdc::loadImage(path,1)`,
+`--diskb` du headless) ; seule l'interface l'ignorait — alors que Lethal Xcess ne DÉMARRE
+qu'avec son disque 2 monté. Chaque ligne de la ludothèque a maintenant deux boutons
+`[A] [B]` ; mémorisé (`diskb=`).
+
+**Glisser-déposer** sur la fenêtre : un DOSSIER se monte en C: (GEMDOS), une image
+`.st/.msa/.dim/.stx` va dans le lecteur A, une image de disque dur en ACSI, un TOS devient
+la ROM. `.img` étant ambigu (roms/, carts/ et hd/ en sont tous pleins), l'arbitrage se fait
+sur la **taille et l'en-tête** (BRA.S `$602E` + ≤ 512 Ko = TOS ; ≤ 128 Ko = cartouche ;
+au-delà = disque dur), pas sur l'extension. Ignoré en borne (config figée).
+
+**Barre de menus ramenée à quatre entrées** — Machine (actions + états + borne + Quitter),
+Affichage (moniteur, zoom, CRT, ancrage), Fenêtres (**inspection seulement** : hex, CPU,
+joystick, débogueur), Aide (**liste des raccourcis**, jusqu'ici nulle part). La barre
+d'outils ne porte plus que des verbes (⚙ ⟳ ⏻ ◐ + volume) : ses bascules de fenêtres
+faisaient doublon avec le menu.
+
+**Dossier `hd/`** (+ `hd/README.md`, contenu gitignoré) : un **dossier** dedans = un lecteur
+GEMDOS, un **fichier** image = un disque ACSI. Le scan des images n'est pas récursif, sinon
+les `.img` rangés dans un lecteur GEMDOS seraient proposés comme disques durs.
+
+Migration : `neost.cfg` gagne `diskb=`, `showCfg=`, `uiVersion=` (les `showDisk=/showCart=/
+showHd=` d'avant sont ignorés) ; `uiVersion` resème **une fois** la disposition ancrée,
+sans quoi un `imgui.ini` existant garderait des nœuds pour des fenêtres disparues et
+laisserait la fenêtre Configuration flotter au-dessus de l'écran ST.
+
+Validé en GUI (captures à l'appui) : montage GEMDOS → barre d'état `C: gemdos/` ; profil
+Mega STE → « 3 réglages en attente » → Appliquer → `[Bus] TOS chargé : tos206fr` et barre
+d'état `Mega STE | 4 Mo | tos206fr` ; lecteur B → `B: diskA.st` ; page ROM avec ses badges
+50/60 Hz ; **mode borne intact** (`--kiosk` : plein écran, aucun chrome). ⚠ Non faits, et
+c'est ce que la colonne de gauche est faite pour accueillir : pause/avance rapide,
+capture d'écran, protection en écriture, imprimante/RS-232, plein écran hors borne.
+
 ## Effets CRT : version GLSL choisie à l'exécution (débloque le Raspberry Pi) (2026-08-07)
 
 Sur la borne Pi, activer les effets CRT échouait avec « **shader indisponible : GLSL 1.50
