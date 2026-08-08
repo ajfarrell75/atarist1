@@ -66,7 +66,6 @@ Autres points de conformité relevés à la même passe (non bloquants mais à t
   `Dockerfile.bionic` les épingle par SHA256.
 - `.dmg` macOS ni signé ni notarisé : Gatekeeper affichera « NeoST est endommagé » sans
   que rien ne l'explique à l'utilisateur (documenter `xattr -dr com.apple.quarantine`).
-- `build-ref/` (26 fichiers générés) est suivi alors que `.gitignore` contient `build-*/`.
 - Le GUI n'a pas de `--help` et avale en silence toute option inconnue commençant par `-`.
 
 ---
