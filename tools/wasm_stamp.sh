@@ -13,6 +13,20 @@
 #  même que le poste de dev — la garde échouerait en permanence, pour rien.
 #  On compare donc ce qui, lui, est déterministe : le contenu des sources.
 #
+#  « Déterministe » impose trois précautions, apprises d'une CI rouge alors que
+#  RIEN n'avait bougé — l'empreinte écrite sur le poste macOS ne retombait pas
+#  sur celle recalculée par le runner Linux :
+#    · la liste des fichiers vient de `git ls-files`, PAS de `find` : git ne
+#      voit que le SUIVI (un brouillon oublié dans src/ ne décale plus rien) et
+#      trie par octets, indépendamment de la locale — `sort` en en_US.UTF-8
+#      (macOS) et en C (CI) ne classent PAS pareil dès qu'un « / » ou un « _ »
+#      départage deux chemins ;
+#    · l'empreinte de chaque fichier est recomposée ICI (« hash<espace>chemin »)
+#      au lieu de recopier la sortie de l'outil : sha256sum, shasum et openssl
+#      la formatent chacun à leur façon ;
+#    · l'outil de hachage est choisi parmi les trois, macOS n'ayant pas
+#      sha256sum sans coreutils.
+#
 #  Usage :
 #      tools/wasm_stamp.sh            # imprime l'empreinte
 #      tools/wasm_stamp.sh --write    # l'écrit dans wasm/SOURCE_STAMP
@@ -25,14 +39,38 @@ cd "$(dirname "$0")/.."
 
 STAMP_FILE="wasm/SOURCE_STAMP"
 
+# Outil de hachage, choisi une fois pour toutes.
+if command -v sha256sum >/dev/null 2>&1; then
+    SHA_CMD=(sha256sum)
+elif command -v shasum >/dev/null 2>&1; then
+    SHA_CMD=(shasum -a 256)
+elif command -v openssl >/dev/null 2>&1; then
+    SHA_CMD=(openssl dgst -sha256 -r)
+else
+    echo "ERREUR : aucun outil sha256 disponible (sha256sum, shasum, openssl)." >&2
+    exit 1
+fi
+
+# sha256 de l'entrée standard, en hexadécimal nu. Les trois outils impriment
+# « empreinte <séparateur> nom » : on ne garde que le premier champ.
+sha256_stdin() {
+    "${SHA_CMD[@]}" | cut -d' ' -f1
+}
+
 # Tout ce qui entre dans le bundle : le cœur, le frontend web, la coque HTML et
 # les options de build. PAS les ROM/disquettes embarquées (elles changent
 # rarement et alourdiraient inutilement le calcul).
 compute() {
-    {
-        find src -type f \( -name '*.cpp' -o -name '*.hpp' -o -name '*.h' \) -print0 | sort -z | xargs -0 sha256sum
-        sha256sum web/shell.html CMakeLists.txt
-    } | sha256sum | cut -d' ' -f1
+    if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        echo "ERREUR : hors d'un dépôt git — la liste des sources vient de git ls-files." >&2
+        exit 1
+    fi
+    while IFS= read -r -d '' f; do
+        case "$f" in
+            src/*.cpp|src/*.hpp|src/*.h|web/shell.html|CMakeLists.txt)
+                printf '%s %s\n' "$(sha256_stdin < "$f")" "$f" ;;
+        esac
+    done < <(git ls-files -z -- src web/shell.html CMakeLists.txt) | sha256_stdin
 }
 
 CUR="$(compute)"
@@ -64,6 +102,10 @@ tant que ce dossier n'est pas reconstruit, la démo en ligne reste l'ancienne.
   cmake --build build-web -j --target neost-web
   tools/wasm_stamp.sh --write
   git add wasm/ && git commit
+
+Sans emsdk : le job « wasm » de la CI téléverse le bundle qu'il vient de construire
+(artefact NeoST-web-wasm) MÊME quand ce contrôle échoue — dézipper les quatre
+fichiers index.* dans wasm/, puis --write.
 EOF
             exit 1
         fi
