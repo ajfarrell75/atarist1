@@ -53,10 +53,19 @@ montage de disquettes, bascule couleur/mono, et **upload** de votre propre `.st`
 
 ### Télécharger un binaire
 
-Chaque release publie **5 paquets** (avec leurs sommes SHA-256) : AppImage Linux x86_64
-(compatible glibc ≥ 2.27, donc des distributions anciennes aux plus récentes), AppImage
-Linux aarch64, AppImage Raspberry Pi, `.dmg` macOS **Universal 2** (Apple Silicon + Intel)
-et le bundle WebAssembly. Compiler depuis les sources reste possible — voir ci-dessous.
+Chaque release publie **6 paquets** avec leurs sommes SHA-256 :
+
+| Paquet | Pour qui |
+|--------|----------|
+| `NeoST-<ver>-x86_64.AppImage` | Linux Intel/AMD — glibc ≥ 2.27, des distributions anciennes aux plus récentes |
+| `NeoST-<ver>-aarch64.AppImage` | Linux ARM64 générique |
+| `NeoST-<ver>-raspberry-aarch64.AppImage` | **Raspberry Pi 3 → Pi 5** — aarch64 générique, PGO + LTO. En cas de doute, c'est celui-ci. |
+| `NeoST-<ver>-pi400-aarch64.AppImage` | **Pi 4 / Pi 400 uniquement** — compilé `-mcpu=cortex-a72`, ~10-20 % plus rapide sur Moira, mais **ne démarre pas** sur un cœur plus ancien |
+| `NeoST-<ver>-macOS-universal2.dmg` | macOS **Universal 2** (Apple Silicon + Intel) |
+| `NeoST-<ver>-web-wasm.zip` | WebAssembly, à servir depuis un serveur web |
+
+Pas de paquet Windows : NeoST cible macOS Silicon et Linux (cf. [`CLAUDE.md`](CLAUDE.md)).
+Compiler depuis les sources reste possible — voir ci-dessous.
 
 ### Dépendances
 
