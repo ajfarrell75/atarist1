@@ -680,11 +680,13 @@ jobs:
           update: false
           install: >-
             zip
+            unzip
           pacboy: >-
             toolchain:p
             cmake:p
             ninja:p
             glfw:p
+            python:p
 
       - name: Build + zip (MinGW64, tout statique)
         env:
