@@ -61,9 +61,14 @@
       display: flex; align-items: center; justify-content: center;
     }
     #bezel.dragover { outline: 3px dashed var(--accent); outline-offset: -6px; }
+    /* La taille INTRINSÈQUE du canvas est posée par le C++ à chaque changement de
+       résolution ST (cf. uploadFrame → displaySize) : width:100% + height:auto
+       laisse donc le navigateur conserver exactement le bon ratio, overscan
+       compris. max-height borne le cas mono 640×400 sur les écrans courts. */
     #canvas {
       display: block; background: #000; image-rendering: pixelated;
-      width: 100%; height: auto; outline: none;
+      width: 100%; height: auto; max-height: 78vh; object-fit: contain;
+      outline: none;
     }
     #bezel:fullscreen { border-radius: 0; }
     #bezel:fullscreen #canvas { width: 100%; height: 100%; object-fit: contain; }

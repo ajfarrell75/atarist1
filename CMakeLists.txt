@@ -244,7 +244,28 @@ add_executable(neost
 # ${CMAKE_DL_LIBS} : miniaudio charge sa backend par dlopen ; avant la glibc
 # 2.34 (bionic — l'image release Linux), libdl est séparée et doit être liée
 # explicitement. Vide sur les systèmes où dlopen vit dans libc → sans effet.
-target_link_libraries(neost PRIVATE neost_core glfw OpenGL::GL Threads::Threads ${CMAKE_DL_LIBS})
+# GLFW : la cible importée `glfw` de glfw3Config passe le chemin ABSOLU de la
+# bibliothèque installée. Sous MinGW c'est l'import-lib de glfw3.dll, et un
+# chemin explicite ne se laisse pas rattraper par -static — le paquet Windows
+# ressortait donc avec une dépendance à glfw3.dll (attrapée par le garde de
+# packaging/windows/build_mingw.sh). On passe alors par -lglfw3, que -static
+# résout vers libglfw3.a, plus les bibliothèques système que GLFW statique et
+# miniaudio réclament ; la liste exacte vient de pkg-config (NEOST_WIN_GLFW_LIBS,
+# posé par le script de packaging) plutôt que d'une devinette de notre part.
+if(WIN32 AND NEOST_WIN_GLFW_LIBS)
+    separate_arguments(_neost_win_glfw NATIVE_COMMAND "${NEOST_WIN_GLFW_LIBS}")
+    set(NEOST_GLFW_LINK ${_neost_win_glfw})
+    message(STATUS "GLFW (Windows, statique) : ${NEOST_WIN_GLFW_LIBS}")
+else()
+    set(NEOST_GLFW_LINK glfw)
+endif()
+target_link_libraries(neost PRIVATE neost_core ${NEOST_GLFW_LINK} OpenGL::GL Threads::Threads ${CMAKE_DL_LIBS})
+if(WIN32)
+    # miniaudio (WASAPI) n'auto-lie ses dépendances COM que sous MSVC (#pragma
+    # comment), jamais sous MinGW : sans elles, l'édition de liens échoue sur
+    # CoInitializeEx / les IID. Inoffensif si déjà tirées par pkg-config.
+    target_link_libraries(neost PRIVATE ole32 oleaut32 uuid winmm)
+endif()
 target_compile_definitions(neost PRIVATE NEOST_VERSION="${NEOST_VERSION_STR}")
 set_source_files_properties(src/main.cpp src/audio/DriveSound.cpp
     PROPERTIES COMPILE_OPTIONS "${NEOST_STRICT_OPTS}")
