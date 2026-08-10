@@ -93,6 +93,34 @@ par `packaging/stage_free_data.sh` (EmuTOS, `tos102uk`/`tos162uk` des profils 52
 autre ROM. ⚠ `tos102uk`/`tos162uk` sont des **ROM Atari sous copyright** : leur
 redistribution est un choix assumé du projet, pas une donnée libre.
 
+## CI verte : bundle web reconstruit, et une empreinte qui ne dépend plus de la machine (2026-08-10)
+
+Le job `wasm` de `release.yml` bloquait la 0.5.1 : sa garde de fraîcheur refusait le
+dossier `wasm/` commité, et le job `publish` (qui attend les 7 paquets) restait donc
+`skipped` — **aucune Release n'était attachée au tag**.
+
+**La garde avait raison.** Le commit « démo par défaut en ST 1 Mo / EmuTOS » avait changé
+`src/web/main_web.cpp` sans reconstruire le bundle : `wasm/index.wasm` contenait encore
+l'ancien défaut Mega STE + TOS Atari. Le bundle est reconstruit
+(`-DNEOST_WEB_FREE_ONLY=ON`, 9,0 Mo au total) et vérifié dans un Chromium headless — la
+démo boote bien sur `Atari ST · 1 MB` / `etos192us.img`, disquette A montée, sans erreur
+de page.
+
+**Mais l'empreinte, elle, avait tort aussi.** Elle ne retombait sur la même valeur qu'à
+machine identique, ce qui aurait fait rougir la CI *sans* qu'aucune source bouge :
+`find | sort` classe selon la **locale** (le poste macOS en `en_US.UTF-8`, le runner en
+`C`, et un `/` ou un `_` suffit à départager deux chemins dans l'ordre inverse), `find`
+compte les fichiers **non suivis** traînant dans `src/`, et `sha256sum` n'existe pas sur
+un macOS sans coreutils. `tools/wasm_stamp.sh` liste désormais par `git ls-files` (tri
+par octets, fichiers suivis seulement), recompose lui-même chaque ligne
+« empreinte + chemin » et accepte `sha256sum`, `shasum` ou `openssl` — vérifié
+identique entre les trois.
+
+**Et l'artefact part avant la garde** (`if: always()`) : quand elle se déclenche, le zip
+que le job vient de construire EST le bundle à recommiter, donc on le récupère depuis la
+CI sans installer emsdk. Marche à suivre dans `DEV.md` § *Builds spécialisés*, qui
+pointait encore le `deploy-web.yml` supprimé.
+
 ## Interface : une fenêtre « Configuration » unique + barre d'état (2026-08-07)
 
 Réorganisation de la GUI. Le diagnostic tenait en trois points : **trois idiomes pour la
