@@ -35,9 +35,18 @@ mkdir -p dist
 # -- Compilation -------------------------------------------------------------
 # -static : voir l'en-tête. GLFW_USE_STATIC : la config CMake de mingw-w64-glfw
 # expose la cible `glfw` en statique quand on ne demande pas la DLL.
+# La cible CMake importée `glfw` pointe l'import-lib de glfw3.dll par chemin
+# ABSOLU, que -static ne peut pas contourner. On demande donc à pkg-config la
+# ligne de lien STATIQUE exacte (libglfw3.a + ses dépendances système) : c'est le
+# paquet lui-même qui la déclare, pas nous.
+GLFW_STATIC_LIBS="$(pkg-config --static --libs glfw3)"
+test -n "$GLFW_STATIC_LIBS" || { echo "ERREUR : pkg-config ne connaît pas glfw3" >&2; exit 1; }
+echo "GLFW statique : $GLFW_STATIC_LIBS"
+
 cmake -B "$BUILD_DIR" -G Ninja \
       -DCMAKE_BUILD_TYPE=Release \
       -DNEOST_VERSION_STR="$VERSION" \
+      -DNEOST_WIN_GLFW_LIBS="$GLFW_STATIC_LIBS" \
       -DCMAKE_EXE_LINKER_FLAGS="-static -static-libgcc -static-libstdc++"
 cmake --build "$BUILD_DIR" -j"$(nproc)"
 

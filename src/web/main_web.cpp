@@ -144,10 +144,32 @@ void initGl() {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 }
 
+// Taille d'AFFICHAGE d'un buffer ST, aspect pixel compris — même règle que le
+// frontend bureau (cf. drawStScreen/drawStKiosk dans main.cpp) : les pixels de
+// basse résolution sont deux fois plus larges ET deux fois plus hauts que ceux
+// de la mono, si bien que 320×200, 640×200 et 640×400 couvrent la MÊME surface
+// à l'écran. On classe donc par dimension : ≤ 480 px de large = classe basse
+// rés (×2), ≤ 300 lignes = classe 200 lignes (×2).
+void displaySize(int w, int h, int& dw, int& dh) {
+    dw = w * ((w <= 480) ? 2 : 1);
+    dh = h * ((h <= 300) ? 2 : 1);
+}
+
 void uploadFrame(const uint32_t* px, int w, int h) {
     glBindTexture(GL_TEXTURE_2D, g_tex);
     if (w != g_texW || h != g_texH) {     // la résolution ST a changé → réalloue
         g_texW = w; g_texH = h;
+        // …et le CANVAS suit. Sans ça il restait figé au 640×400 de la création
+        // et l'image ST y était ÉTIRÉE : une trame overscan 416×276 (dont
+        // l'affichage correct fait 832×552, ratio 1.507) était déformée de 6 %
+        // pour entrer dans un cadre 1.6. La page met `width:100%; height:auto`,
+        // donc c'est la taille INTRINSÈQUE du canvas qui fixe le ratio : la
+        // poser juste ici suffit à ce que la fenêtre corresponde toujours à la
+        // résolution courante, bordures comprises.
+        int dw = 0, dh = 0;
+        displaySize(w, h, dw, dh);
+        glfwSetWindowSize(g_window, dw, dh);   // port GLFW Emscripten → taille du canvas
+        std::fprintf(stderr, "[web] resolution %dx%d → canvas %dx%d\n", w, h, dw, dh);
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0,
                      GL_RGBA, GL_UNSIGNED_BYTE, px);
     } else {
@@ -291,7 +313,37 @@ void mainLoop() {
     }
 
     g_machine->cpu.updateIpl();
-    g_machine->runFrame();
+
+    // CADENCE : sur le TEMPS ÉMULÉ, pas sur requestAnimationFrame.
+    //
+    // La boucle exécutait UNE trame par tick rAF, c'est-à-dire à la fréquence de
+    // rafraîchissement de l'ÉCRAN. Sur un moniteur 60 Hz, une machine PAL (50 Hz)
+    // tournait donc à 120 % : musique et bruitages trop rapides, et pire encore
+    // sur un écran 120/144 Hz. Le son sortait « bizarre » sans que rien ne soit
+    // faux dans la synthèse — c'est l'horloge de la machine qui était fausse.
+    //
+    // Même modèle que le frontend natif : `g_emuNextMs` est l'échéance réelle de
+    // la PROCHAINE trame émulée, et chaque trame la repousse de SA durée (la
+    // géométrie vidéo décide : 50, 60 ou 71 Hz). Un tour rAF exécute donc 0, 1 ou
+    // 2 trames selon ce que le temps réel réclame. Plafond à 4 pour ne pas
+    // spiraler après un onglet mis en arrière-plan (rAF y est suspendu).
+    static constexpr double kCpuHz = 8021248.0;      // horloge CPU/bus
+    static double g_emuNextMs = 0.0;
+    const double nowMs = emscripten_get_now();
+    if (g_emuNextMs == 0.0) g_emuNextMs = nowMs;     // 1re trame : on part d'ici
+
+    int ran = 0;
+    while (nowMs >= g_emuNextMs && ran < 4) {
+        g_machine->runFrame();
+        g_emuNextMs += double(g_machine->frameCycles()) * 1000.0 / kCpuHz;
+        ++ran;
+    }
+    if (ran == 4 && nowMs > g_emuNextMs) g_emuNextMs = nowMs;   // longue pause : resync
+
+    // Aucune trame due (écran plus rapide que la machine) : rien de neuf à
+    // montrer, on garde l'image précédente plutôt que de re-téléverser la même.
+    if (ran == 0) return;
+
     uploadFrame(g_machine->shifter.pixels(),
                 g_machine->shifter.width(), g_machine->shifter.height());
     drawScreen();
@@ -426,6 +478,9 @@ int main(int argc, char** argv) {
     // L'écran ST le plus grand est 640×400 (mono) ; le canvas est dimensionné par
     // la page. Pas de hint de profil : le port GLFW d'Emscripten crée un contexte
     // WebGL (GLES2) compatible avec nos shaders.
+    // 640×400 n'est qu'une amorce : uploadFrame() redimensionne le canvas à la
+    // taille d'affichage réelle dès la première trame, puis à chaque changement
+    // de résolution.
     g_window = glfwCreateWindow(640, 400, "NeoST — Atari ST (WASM)", nullptr, nullptr);
     if (!g_window) { std::fprintf(stderr, "[web] window creation failed\n"); glfwTerminate(); return 1; }
     glfwMakeContextCurrent(g_window);
