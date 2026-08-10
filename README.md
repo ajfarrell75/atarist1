@@ -6,7 +6,7 @@ Most emulators are black boxes: they run the games and hide the machine. NeoST i
 opposite. Every chip — the Shifter, the YM2149, the MFP 68901, the WD1772 floppy
 controller, the MMU/GLUE, the blitter — is modelled separately and wired onto a `Bus`
 that **is** the memory map, exactly the way the real silicon sits on the real board. You
-watch RAM, the 68000 registers and the chip state live https://habib256.github.io/neost/wasm/while your game runs.
+watch RAM, the 68000 registers and the chip state live while your game runs.
 
 ![NeoST running a Spectrum 512 picture, with the configuration panel and live 68000 registers](docs/img/neost-gui.png)
 
