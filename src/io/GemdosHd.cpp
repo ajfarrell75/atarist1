@@ -67,6 +67,11 @@
 // MinGW : mkdir() ne prend PAS de mode (Windows n'a pas de bits POSIX), et les
 // constantes de access() s'appellent autrement. On ramène les deux à la forme
 // POSIX pour que le corps du fichier reste écrit une seule fois.
+// ⚠ ORDRE : les en-têtes DOIVENT venir avant le #define — <direct.h> déclare
+// lui-même `int mkdir(const char*)`, et la macro le réécrirait en plein milieu
+// de sa propre déclaration (« macro 'mkdir' requires 2 arguments »).
+#include <direct.h>            // _mkdir, _rmdir, _getcwd, et son mkdir() 1 argument
+#include <io.h>                // _access
 #define mkdir(p, m) _mkdir(p)
 #ifndef F_OK
 #define F_OK 0
@@ -77,8 +82,6 @@
 #ifndef R_OK
 #define R_OK 4
 #endif
-#include <direct.h>            // _mkdir, _rmdir, _getcwd
-#include <io.h>                // _access
 #endif
 
 // -----------------------------------------------------------------------------
