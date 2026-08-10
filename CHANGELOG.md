@@ -36,9 +36,14 @@ qui sert d'outil de diagnostic et de banc de non-régression.
 (glue 36, spec512 15, bus 12, MFP 16, MSA 51 — 0 échec), verdicts série de la cartouche
 de diagnostic, cycle-bench, provenance des références, et les étalons pixel comparés à
 **0 pixel d'écart** (dont `nocooper` / `nocooper_greetings` en overscan med-res et les
-diaporamas Spectrum 512, référencés sur l'**oracle Hatari**). Réserves assumées :
-l'étalon `cuddly_demos` reste **DÉSACTIVÉ** (référence à recalibrer, cf. plus bas) et
-`union_demo` est ignoré faute de disque optionnel.
+diaporamas Spectrum 512, référencés sur l'**oracle Hatari**).
+
+Deux étalons ne gardent rien, ce qui ne dit RIEN du logiciel qu'ils visent :
+`union_demo` est ignoré faute de disque optionnel, et `cuddly_demos` est désactivé faute
+de **référence** — il n'y a aucune image dans `tests/reference/` pour la trame 3400
+(animation centrale), donc rien à comparer. **The Cuddly Demos tourne bien** en
+512 Ko ST + TOS 1.02 UK (`--machine st --mem 512k roms/tos102uk.img`) : écran-titre
+complet et conforme. C'est l'outillage de non-régression qui manque, pas l'émulation.
 
 **Paquets.** Cinq artefacts par release, avec leurs sommes SHA-256 : AppImage Linux
 x86_64 (plancher glibc 2.27), AppImage Linux aarch64, AppImage Raspberry Pi (glibc 2.36),
