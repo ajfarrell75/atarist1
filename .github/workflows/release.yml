@@ -649,6 +649,16 @@ jobs:
           mkdir -p dist
           (cd wasm && zip -9 "../dist/NeoST-$NEOST_VERSION-web-wasm.zip" index.html index.js index.wasm index.data)
 
+      # Téléversé AVANT la garde ci-dessous, donc téléversé MÊME quand elle
+      # échoue : quand elle se déclenche, le zip qu'on vient de produire EST le
+      # bundle à recommiter. On peut donc le récupérer ici et le déposer dans
+      # wasm/ sans installer emsdk sur le poste de dev.
+      - uses: actions/upload-artifact@v5
+        with:
+          name: NeoST-web-wasm
+          path: dist/*.zip
+          if-no-files-found: error
+
       # GARDE DE FRAÎCHEUR — depuis que Pages est repassé en « deploy from a
       # branch » (build_type=legacy, main/(root)), la démo en ligne EST le
       # dossier wasm/ COMMITÉ : ce job le reconstruit pour le paquet, mais ce
@@ -659,12 +669,6 @@ jobs:
       # d'une version d'emsdk à l'autre, un diff octet échouerait pour rien.
       - name: wasm/ commité à jour ?
         run: tools/wasm_stamp.sh --check
-
-      - uses: actions/upload-artifact@v5
-        with:
-          name: NeoST-web-wasm
-          path: dist/*.zip
-          if-no-files-found: error
 
   # ------------------------------------------------------ Windows x86_64 -----
   # MSYS2/MINGW64 et non MSVC : le code est écrit pour GCC/Clang (options -W…,
