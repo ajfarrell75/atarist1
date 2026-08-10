@@ -649,6 +649,17 @@ jobs:
           mkdir -p dist
           (cd wasm && zip -9 "../dist/NeoST-$NEOST_VERSION-web-wasm.zip" index.html index.js index.wasm index.data)
 
+      # GARDE DE FRAÎCHEUR — depuis que Pages est repassé en « deploy from a
+      # branch » (build_type=legacy, main/(root)), la démo en ligne EST le
+      # dossier wasm/ COMMITÉ : ce job le reconstruit pour le paquet, mais ce
+      # n'est plus lui qui déploie. Un oubli de reconstruction mettrait donc en
+      # ligne une démo périmée, en silence — c'est ce qui avait laissé
+      # wasm/index.html sur une coque française pendant des semaines.
+      # On compare les SOURCES et non le bundle : emcc n'est pas reproductible
+      # d'une version d'emsdk à l'autre, un diff octet échouerait pour rien.
+      - name: wasm/ commité à jour ?
+        run: tools/wasm_stamp.sh --check
+
       - uses: actions/upload-artifact@v5
         with:
           name: NeoST-web-wasm

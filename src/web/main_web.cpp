@@ -447,10 +447,13 @@ int main(int argc, char** argv) {
     }, cpuBuf);
     const CpuCore cpuCore = Cpu68k::parseCore(cpuBuf);
 
-    // Profil machine choisi par ?machine=st|megast|ste|megaste (défaut Mega STE).
-    char machBuf[16] = "megaste";
+    // Profil machine choisi par ?machine=st|megast|ste|megaste (défaut ST).
+    // ST et non Mega STE : c'est la machine de référence des jeux et démos de
+    // l'époque, et celle qu'attend un visiteur qui découvre la démo sans lire
+    // la doc. Le Mega STE reste à un paramètre d'URL.
+    char machBuf[16] = "st";
     EM_ASM({
-        var m = new URLSearchParams(location.search).get('machine') || 'megaste';
+        var m = new URLSearchParams(location.search).get('machine') || 'st';
         stringToUTF8(m, $0, 16);
     }, machBuf);
     const MachineType machType = parseMachine(machBuf);
@@ -463,15 +466,17 @@ int main(int argc, char** argv) {
     }, memBuf);
     const std::size_t ramBytes = parseRamBytes(memBuf);
 
-    // ROM par défaut adaptée à la machine : TOS 1.02 UK (profil 520 ST) pour
-    // ST/Mega ST, TOS 1.62 UK (profil 1040 STE) pour STE, EmuTOS 256 Ko pour
-    // Mega STE. Repli EmuTOS si la ROM cible n'est pas embarquée.
+    // ROM par défaut adaptée à la machine. Sur ST/Mega ST : **EmuTOS 192 Ko**
+    // (libre) plutôt qu'un TOS Atari — la démo publique démarre ainsi sur du
+    // 100 % libre, et EmuTOS 192 Ko est justement le build « Atari ST » (pas
+    // d'autodétection du matériel additionnel). STE → TOS 1.62 UK, Mega STE →
+    // EmuTOS 256 Ko (le seul EmuTOS qui programme le SCU).
     const bool wantsSte     = (machType == MachineType::Ste);
     const bool wantsMegaSte = (machType == MachineType::MegaSte);
     const std::string romPath = (argc > 1) ? argv[1]
         : (wantsSte     ? "/roms/tos162uk.img"
          : wantsMegaSte ? "/roms/etos256us.img"
-                        : "/roms/tos102uk.img");
+                        : "/roms/etos192us.img");
 
     if (!glfwInit()) { std::fprintf(stderr, "[web] glfwInit failed\n"); return 1; }
 
