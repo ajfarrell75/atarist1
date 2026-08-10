@@ -18,7 +18,7 @@ the Hatari reference.*
 
 ## Try it right now — nothing to install
 
-### 👉 **[habib256.github.io/neost](https://habib256.github.io/neost/)**
+### 👉 **[habib256.github.io/neost](https://habib256.github.io/neost/wasm/)**
 
 The same emulation core, compiled to WebAssembly. Pick a ROM, mount a floppy, flip
 between colour and mono, or **drag your own `.st` onto the screen**. No download, no
