@@ -289,13 +289,19 @@ Le déploiement GitHub Pages est automatisé par `.github/workflows/deploy-web.y
 
 ## État
 
-EmuTOS (FR/US) et TOS 1.02 bootent (green desktop, disquette, souris, son). Les trois
-cartouches de diagnostic atteignent leur menu et passent leurs tests internes.
-**Arkanoid** se lance et affiche son écran-titre. Les images **Spectrum 512**
-(palette intra-ligne, jusqu'à 512 couleurs) sont rendues **100 % pixel-identiques à
-l'oracle Hatari**, sans flicker. Le grand chantier en cours est la **précision cycle**
-(bordures, timing fin des jeux/démos) — voir [`TODO.md`](TODO.md) et
-[`docs/CYCLE_ACCURACY.md`](docs/CYCLE_ACCURACY.md).
+Version **0.5 « Newborn »** — première release taguée (cf. [`CHANGELOG.md`](CHANGELOG.md)).
+
+EmuTOS (FR/US), TOS 1.02/1.62/2.06 bootent (green desktop, disquette, souris, son) et les
+trois cartouches de diagnostic passent leurs tests internes. Des jeux et démos
+**limites** tournent : Enchanted Land, Super Hang-On, Lethal Xcess, The Cuddly Demos,
+No Cooper. Les images **Spectrum 512** (palette intra-ligne, jusqu'à 512 couleurs) et
+l'**overscan med-res** de No Cooper sont rendus **pixel-identiques à l'oracle Hatari**
+(0 px d'écart, suite `tools/run_all.py --tier full`).
+
+Le grand chantier reste la **précision cycle** (bordures et timing fin des jeux/démos) —
+voir [`TODO.md`](TODO.md) et [`docs/CYCLE_ACCURACY.md`](docs/CYCLE_ACCURACY.md). L'interface
+et les messages de journal sont en **anglais** ; le code (commentaires) et la documentation
+sont en français.
 
 ## Licence
 
