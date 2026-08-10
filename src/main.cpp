@@ -34,9 +34,10 @@
 #include <cmath>
 #include <map>
 #include <vector>
-#include <sys/stat.h>
 #if defined(__APPLE__)
 #include <mach-o/dyld.h>       // _NSGetExecutablePath (résolution du chemin exécutable)
+#elif defined(_WIN32)
+#include <windows.h>           // GetModuleFileNameW (résolution du chemin exécutable)
 #endif
 
 #include "core/Machine.hpp"
@@ -48,7 +49,12 @@ namespace fs = std::filesystem;
 
 // Résout un chemin de données indépendamment du répertoire courant : tel quel,
 // puis relatif au répertoire de l'exécutable (utile quand on lance depuis build/).
-static bool fileExists(const std::string& p) { struct stat s; return ::stat(p.c_str(), &s) == 0; }
+// std::filesystem et non stat() : <sys/stat.h> n'existe pas partout, et la
+// surcharge à error_code ne LANCE jamais (un chemin illisible = « absent »).
+static bool fileExists(const std::string& p) {
+    std::error_code ec;
+    return std::filesystem::exists(p, ec) && !ec;
+}
 static std::string resolveData(const std::string& given, const std::string& exeDir) {
     const std::string cands[] = { given, exeDir + "/" + given, exeDir + "/../" + given, "../" + given };
     for (const auto& c : cands) if (fileExists(c)) return c;
@@ -2725,6 +2731,26 @@ int main(int argc, char** argv) {
         if (_NSGetExecutablePath(buf, &sz) == 0) {
             const auto self = std::filesystem::canonical(buf, ec);
             if (!ec && self.has_parent_path()) return self.parent_path().string();
+        }
+#elif defined(_WIN32)
+        // GetModuleFileNameW et non argv[0] : lancé depuis le menu Démarrer ou par
+        // association de fichier, argv[0] peut être nu, et le cwd est alors celui de
+        // l'explorateur — roms/ et neost.cfg seraient cherchés n'importe où.
+        // La version W (et non A) : un chemin contenant des accents — « C:\\Users\\Frédéric »
+        // — ressort en mojibake avec la version ANSI et aucun fichier n'est trouvé.
+        {
+            std::wstring buf(MAX_PATH, L'\0');
+            for (;;) {
+                const DWORD n = GetModuleFileNameW(nullptr, buf.data(), (DWORD)buf.size());
+                if (n == 0) break;                       // échec : on tombera sur argv[0]
+                if (n < buf.size()) { buf.resize(n); break; }
+                if (buf.size() >= 32768) break;          // borne NT : on abandonne
+                buf.resize(buf.size() * 2);              // tronqué : on réessaie plus grand
+            }
+            if (!buf.empty()) {
+                const auto self = std::filesystem::path(buf).lexically_normal();
+                if (self.has_parent_path()) return self.parent_path().string();
+            }
         }
 #endif
         const std::string a0 = argv[0] ? argv[0] : "";

@@ -1,7 +1,41 @@
 # Changelog — NeoST
 
 (c) 2026 VERHILLE Arnaud. Ce qui est **implémenté et validé**. Version courante :
-**0.5 « Newborn »**. Le restant est dans [`TODO.md`](TODO.md).
+**0.5.1**. Le restant est dans [`TODO.md`](TODO.md).
+
+## 0.5.1 — Windows, et le vrai paquet Pi 400 (2026-08-10)
+
+Deux paquets s'ajoutent aux cinq de la 0.5 ; le cœur d'émulation est inchangé.
+
+**Windows x64.** `NeoST-<ver>-windows-x86_64.zip` : on déballe, on lance `neost.exe`,
+il n'y a rien à installer. Bâti en **MinGW-w64** (MSYS2/MINGW64) et non MSVC — le code
+est écrit pour GCC/Clang et Moira exige C++20, donc la chaîne se réutilise telle quelle
+au lieu de porter les options et les dépendances vers vcpkg. **Tout est lié en
+statique** (libgcc, libstdc++, winpthread, GLFW) : `packaging/windows/build_mingw.sh`
+inspecte les imports du binaire et REFUSE le paquet s'il dépend d'une DLL non système,
+parce qu'une DLL manquante est invisible en CI (MSYS2 les a dans son `PATH`) et fatale
+chez l'utilisateur. Le paquet n'est **pas signé** : SmartScreen prévient au premier
+lancement. Le job CI tourne sur `windows-latest` et **exécute réellement** le binaire
+produit (`--version`, boot EmuTOS 500 trames, capture non uniforme).
+
+Portage nécessaire, quatre points — aucun changement de comportement sur POSIX :
+`main.cpp` résout le dossier de l'exécutable par `GetModuleFileNameW` (la variante W :
+un chemin accentué ressort en mojibake avec la version ANSI, et plus rien n'est trouvé) ;
+`Acsi.cpp` et `Fdc.cpp` abandonnent `<sys/stat.h>` pour `std::filesystem` (la
+write-protection reste la permission d'écriture du propriétaire, ce que Windows dérive
+de son attribut « lecture seule » — même sémantique qu'Hatari) ; `GemdosHd.cpp` remplace
+`realpath()` par `std::filesystem::canonical` et `statvfs()` par `GetDiskFreeSpaceExW`.
+⚠ La canonicalisation Windows renormalise les séparateurs en `/` : tout le fichier
+compare avec `PATHSEP`, et un retour en `\` aurait fait échouer le test de préfixe du
+bac à sable GEMDOS — donc rabattu chaque accès sur la racine, en silence.
+
+**Paquet Pi 4 / Pi 400.** `NeoST-<ver>-pi400-aarch64.AppImage`, compilé
+`-mcpu=cortex-a72` (~10-20 % sur Moira). Il existait déjà, mais seulement dans
+`pi-borne.yml`, un workflow manuel dont les artefacts n'étaient attachés à aucune
+Release. `raspberry-aarch64` reste ce qu'il a toujours été et ce qu'il doit être :
+aarch64 **générique**, du Pi 3 au Pi 5. En cas de doute, c'est le générique.
+
+La release passe donc de 5 à **7 paquets** ; le job `publish` compte 7 et échoue sinon.
 
 ## 0.5 « Newborn » — première release taguée (2026-08-10)
 
@@ -45,7 +79,7 @@ de **référence** — il n'y a aucune image dans `tests/reference/` pour la tra
 512 Ko ST + TOS 1.02 UK (`--machine st --mem 512k roms/tos102uk.img`) : écran-titre
 complet et conforme. C'est l'outillage de non-régression qui manque, pas l'émulation.
 
-**Paquets.** Six artefacts par release, avec leurs sommes SHA-256 : AppImage Linux
+**Paquets.** Cinq artefacts à la 0.5 (sept depuis la 0.5.1), avec leurs sommes SHA-256 : AppImage Linux
 x86_64 (plancher glibc 2.27), AppImage Linux aarch64, **deux** paquets Raspberry —
 `raspberry-aarch64` GÉNÉRIQUE (Pi 3 → Pi 5, aucun `-mcpu`, PGO+LTO) et `pi400-aarch64`
 taillé pour le Cortex-A72 du Pi 4/400 (~10-20 % sur Moira, mais il ne démarre pas sur un

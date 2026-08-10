@@ -23,7 +23,7 @@
 #include <fstream>
 #include <functional>
 
-#include <sys/stat.h>
+#include <filesystem>
 
 // --- Bits DMA control ($FF8606), cf. EmuTOS bios/dma.h -----------------------
 enum : uint16_t {
@@ -704,8 +704,13 @@ bool Fdc::loadImage(const std::string& path, int drive) {
     // alors que la même disquette en .st fonctionnait.
     // `!dk.raw` subsiste pour le seul cas où l'on ne SAIT PAS ré-encoder : STX, ou
     // en-tête .msa/.dim reconnu mais indécodable. Y écrire détruirait le fichier.
-    struct stat st;
-    const bool writable = (::stat(path.c_str(), &st) == 0) && (st.st_mode & S_IWUSR);
+    // Permission d'écriture du PROPRIÉTAIRE, via std::filesystem : <sys/stat.h>
+    // manque hors POSIX, et sous Windows l'implémentation reflète l'attribut
+    // « lecture seule » dans owner_write — même sémantique qu'Hatari.
+    std::error_code stec;
+    const std::filesystem::perms pm = std::filesystem::status(path, stec).permissions();
+    const bool writable = !stec &&
+        (pm & std::filesystem::perms::owner_write) != std::filesystem::perms::none;
     dk.writeProtect = !dk.raw || !writable;
 
     // Densité déduite de la géométrie (18 spt → HD 1,44 Mo, 36 spt → ED) — sur
