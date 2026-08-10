@@ -16,6 +16,12 @@
 #include <OpenGL/gl.h>
 #else
 #include <GL/gl.h>
+// glext.h est REQUIS hors macOS : le <GL/gl.h> livré par Windows est figé en
+// OpenGL 1.1 et ignore GL_BGRA / GL_UNSIGNED_INT_8_8_8_8_REV (GL 1.2), dont le
+// téléversement du framebuffer ARGB du Shifter a besoin. Seul l'EN-TÊTE est
+// ancien : tout pilote réel expose ces formats depuis vingt ans. Même schéma
+// que gui/CrtEffectStack.cpp et gui/OpenGLShader.cpp.
+#include <GL/glext.h>
 #endif
 #include "gui/CrtEffectStack.h"   // passe d'effets CRT (opt-in, façade moniteur)
 #include "core/Symbols.hpp"       // table de symboles du débogueur (noms ↔ adresses)
@@ -1582,7 +1588,11 @@ static void kioskComputeShortcuts() {
         g_browseShortcutLabels.push_back(label);
     };
     add("/", std::string(ICON_FA_SERVER) + " / (filesystem root)");
-    if (const char* home = std::getenv("HOME"))
+    // USERPROFILE en repli : Windows ne définit pas HOME, et sans lui le
+    // raccourci « Home » du navigateur borne disparaissait purement et simplement.
+    const char* home = std::getenv("HOME");
+    if (!home || !*home) home = std::getenv("USERPROFILE");
+    if (home && *home)
         add(home, std::string(ICON_FA_FOLDER_OPEN) + " Home  (" + home + ")");
     // Emplacements de montage (portable : le garde is_directory ci-dessous fait que
     // chaque OS n'expose que ceux qui existent, pas besoin de #ifdef) :
@@ -3995,6 +4005,7 @@ int main(int argc, char** argv) {
                             fs::path bp = fs::weakly_canonical(fs::path(g_browseDir), cec);
                             if (cec) bp = fs::path(g_browseDir).lexically_normal();
                             const char* home = std::getenv("HOME");
+                            if (!home || !*home) home = std::getenv("USERPROFILE");
                             bool tooBroad = (bp == bp.root_path());
                             if (!tooBroad && home && *home) {
                                 std::error_code hec;
