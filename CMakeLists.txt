@@ -160,6 +160,18 @@ target_include_directories(neost-stx-test PRIVATE "${CMAKE_SOURCE_DIR}/src")
 #  puis servir le dossier en HTTP (les .wasm/.data ne se chargent pas en file://).
 # =============================================================================
 if(EMSCRIPTEN)
+    # EXCEPTIONS : Moira SIGNALE les bus/address errors du 68000 en LANÇANT
+    # (`throw moira::BusError` dans Cpu68k::raiseBusError, `DoubleFault`, et le
+    # `catch` de Moira::processException). Emscripten neutralise les `catch` par
+    # défaut : le premier `throw` appelait donc `__cxa_throw` → `abort()`, soit
+    # « Aborted(undefined) » dans la console dès qu'un TOS sonde le matériel —
+    # or sonder en provoquant des bus errors est EXACTEMENT la façon dont EmuTOS
+    # détecte la machine. Le port web se coupait donc au boot, alors que le même
+    # cœur tourne partout ailleurs. -fexceptions doit s'appliquer AUSSI à
+    # neost_core (Moira y est compilé), et à la compilation comme au lien.
+    target_compile_options(neost_core PUBLIC -fwasm-exceptions)
+    target_link_options(neost_core PUBLIC -fwasm-exceptions)
+
     add_executable(neost-web src/web/main_web.cpp)
     target_link_libraries(neost-web PRIVATE neost_core)
     set_source_files_properties(src/web/main_web.cpp
