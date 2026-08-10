@@ -1,7 +1,52 @@
 # Changelog — NeoST
 
-(c) 2026 VERHILLE Arnaud. Ce qui est **implémenté et validé**. Pas encore de versions
-taguées (0.1.x). Le restant est dans [`TODO.md`](TODO.md).
+(c) 2026 VERHILLE Arnaud. Ce qui est **implémenté et validé**. Version courante :
+**0.5 « Newborn »**. Le restant est dans [`TODO.md`](TODO.md).
+
+## 0.5 « Newborn » — première release taguée (2026-08-10)
+
+Premier tag du projet. « Newborn » parce que c'est la première fois que NeoST sort du
+dépôt sous forme de paquets : la machine est complète et se tient debout toute seule,
+mais elle vient de naître. Ce qui suit récapitule l'état livré ; le détail par
+sous-système est dans les sections datées ci-dessous.
+
+**Interface et journaux en anglais.** Toute l'UI (barre de menus, fenêtre
+`Configuration` et ses onze pages, débogueur, joystick, effets CRT, mode borne, barre
+d'état, infobulles, messages transitoires) et **tous les messages de journal** —
+`neost-headless --help` inclus — sont désormais en anglais. Les commentaires du code et
+la documentation restent en français. Les étiquettes de journal (`[FDC]`, `[headless]`,
+`[Bus]`…), les noms d'options et les champs de trace sont inchangés : rien de ce qui
+analyse cette sortie ne bouge. Unités normalisées `Ko/Mo` → `KB/MB`.
+
+**Le matériel émulé.** Quatre profils — ST, Mega ST, STE, Mega STE — de 256 Ko à 4 Mo de
+ST-RAM, avec le matériel optionnel présent ou absent selon le modèle (68000 8/16 MHz +
+cache et socket **FPU MC68881** sur Mega STE). Cœur 68000 **Moira** cycle-exact.
+Shifter + Glue (bordures, overscan, tricks de résolution, **Spectrum 512**, scroll fin
+STE), MFP 68901, ACIA 6850 + IKBD, FDC WD1772 (`.st`/`.msa`/`.dim` inscriptibles, `.stx`
+Pasti), DMA/ACSI, blitter, YM2149 + son DMA STE + Microwire/LMC1992, RTC.
+
+**Ce qu'on peut en faire.** Disque dur **GEMDOS** (dossier hôte monté en C:) et image
+**ACSI**, **save-states** complets (v9, empreinte de config vérifiée), **débogueur**
+(breakpoints, watchpoints, symboles, pas-à-pas instruction, désassemblage, hexa,
+registres), **mode borne** plein écran pilotable à la manette, **effets CRT** opt-in, et
+un `neost-headless` déterministe (traces façon MAME, captures PPM, dumps RAM/audio/série)
+qui sert d'outil de diagnostic et de banc de non-régression.
+
+**Validation.** `tools/run_all.py --tier full` passe intégralement : auto-tests logique
+(glue 36, spec512 15, bus 12, MFP 16, MSA 51 — 0 échec), verdicts série de la cartouche
+de diagnostic, cycle-bench, provenance des références, et les étalons pixel comparés à
+**0 pixel d'écart** (dont `nocooper` / `nocooper_greetings` en overscan med-res et les
+diaporamas Spectrum 512, référencés sur l'**oracle Hatari**). Réserves assumées :
+l'étalon `cuddly_demos` reste **DÉSACTIVÉ** (référence à recalibrer, cf. plus bas) et
+`union_demo` est ignoré faute de disque optionnel.
+
+**Paquets.** Cinq artefacts par release, avec leurs sommes SHA-256 : AppImage Linux
+x86_64 (plancher glibc 2.27), AppImage Linux aarch64, AppImage Raspberry Pi (glibc 2.36),
+`.dmg` macOS Universal 2, bundle WebAssembly. Contenu embarqué : liste explicite tenue
+par `packaging/stage_free_data.sh` (EmuTOS, `tos102uk`/`tos162uk` des profils 520 ST /
+1040 STE, `diskA.st`, polices, échantillons de lecteur) — un garde-fou refuse toute
+autre ROM. ⚠ `tos102uk`/`tos162uk` sont des **ROM Atari sous copyright** : leur
+redistribution est un choix assumé du projet, pas une donnée libre.
 
 ## Interface : une fenêtre « Configuration » unique + barre d'état (2026-08-07)
 
