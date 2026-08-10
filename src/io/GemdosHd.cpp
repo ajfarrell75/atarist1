@@ -64,6 +64,21 @@
 #ifndef S_IRWXU
 #define S_IRWXU (S_IRUSR | S_IWUSR | S_IXUSR)
 #endif
+// MinGW : mkdir() ne prend PAS de mode (Windows n'a pas de bits POSIX), et les
+// constantes de access() s'appellent autrement. On ramène les deux à la forme
+// POSIX pour que le corps du fichier reste écrit une seule fois.
+#define mkdir(p, m) _mkdir(p)
+#ifndef F_OK
+#define F_OK 0
+#endif
+#ifndef W_OK
+#define W_OK 2
+#endif
+#ifndef R_OK
+#define R_OK 4
+#endif
+#include <direct.h>            // _mkdir, _rmdir, _getcwd
+#include <io.h>                // _access
 #endif
 
 // -----------------------------------------------------------------------------
