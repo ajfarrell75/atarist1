@@ -1,10 +1,21 @@
 # Changelog — NeoST
 
 (c) 2026 VERHILLE Arnaud. **La chronologie** : releases, puis les chantiers datés dans
-l'ordre inverse. Version courante : **0.5.1**.
+l'ordre inverse. Version courante : **0.5.2**.
 
 - « NeoST gère-t-il X ? » → [`docs/IMPLEMENTED.md`](docs/IMPLEMENTED.md) (inventaire par puce)
 - « Que reste-t-il ? » → [`TODO.md`](TODO.md)
+
+## 0.5.2 — la 0.5.1, mais réellement livrée (2026-08-10)
+
+**Aucun changement fonctionnel par rapport à la 0.5.1** : mêmes 7 paquets, même cœur
+d'émulation. La 0.5.1 n'a jamais reçu ses binaires — son job `wasm` échouait, donc
+`publish` (qui attend les 7 paquets) restait `skipped` et le tag pointait sur une
+Release vide. Cette version reprend le même contenu sur une CI verte.
+
+Ce qui a été corrigé pour y arriver est décrit au chantier du 2026-08-10 ci-dessous :
+bundle WebAssembly reconstruit (il servait encore l'ancien défaut Mega STE + TOS Atari)
+et empreinte de fraîcheur rendue reproductible d'une machine à l'autre.
 
 ## 0.5.1 — Windows, et le vrai paquet Pi 400 (2026-08-10)
 

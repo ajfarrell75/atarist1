@@ -12,7 +12,7 @@
 cmake_minimum_required(VERSION 3.20)
 
 project(NeoST
-    VERSION 0.5.1
+    VERSION 0.5.2
     DESCRIPTION "Emulateur Atari ST orienté transparence matérielle"
     LANGUAGES C CXX)
 
