@@ -31,6 +31,12 @@
 #include <unistd.h>
 #include <utime.h>
 #if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX               // sinon windows.h définit min()/max() en MACROS et
+#endif                         // casse les std::min / std::max du fichier
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
 #include <windows.h>           // GetDiskFreeSpaceExW (Dfree), faute de statvfs
 #include <filesystem>          // canonical() : il n'y a pas de realpath()
 // MinGW n'a pas les bits de permission « groupe » et « autres » : sous Windows il
