@@ -30,6 +30,56 @@
 #endif
 #include <unistd.h>
 #include <utime.h>
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX               // sinon windows.h définit min()/max() en MACROS et
+#endif                         // casse les std::min / std::max du fichier
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>           // GetDiskFreeSpaceExW (Dfree), faute de statvfs
+#include <filesystem>          // canonical() : il n'y a pas de realpath()
+// MinGW n'a pas les bits de permission « groupe » et « autres » : sous Windows il
+// n'existe qu'un attribut « lecture seule », que le CRT dérive du bit propriétaire.
+// On les définit à 0 pour que les masques ci-dessous restent lisibles tels quels
+// (mode & 0 = 0 : neutre, ce qui est exactement la sémantique de l'hôte).
+#ifndef S_IRGRP
+#define S_IRGRP 0
+#endif
+#ifndef S_IROTH
+#define S_IROTH 0
+#endif
+#ifndef S_IWGRP
+#define S_IWGRP 0
+#endif
+#ifndef S_IWOTH
+#define S_IWOTH 0
+#endif
+#ifndef S_IRWXG
+#define S_IRWXG 0
+#endif
+#ifndef S_IRWXO
+#define S_IRWXO 0
+#endif
+#ifndef S_IRWXU
+#define S_IRWXU (S_IRUSR | S_IWUSR | S_IXUSR)
+#endif
+// MinGW : mkdir() ne prend PAS de mode (Windows n'a pas de bits POSIX), et les
+// constantes de access() s'appellent autrement. On ramène les deux à la forme
+// POSIX pour que le corps du fichier reste écrit une seule fois.
+#define mkdir(p, m) _mkdir(p)
+#ifndef F_OK
+#define F_OK 0
+#endif
+#ifndef W_OK
+#define W_OK 2
+#endif
+#ifndef R_OK
+#define R_OK 4
+#endif
+#include <direct.h>            // _mkdir, _rmdir, _getcwd
+#include <io.h>                // _access
+#endif
 
 // -----------------------------------------------------------------------------
 //  Octets assemblés de la cartouche système (cart_asm.s → cartData.c d'Hatari).
@@ -674,8 +724,21 @@ bool GemdosHd::addPathComponent(std::string& path, const std::string& origname, 
 static std::string physicalCanon(const std::string& path) {
     std::string head = path, tail;
     for (;;) {
+#if defined(_WIN32)
+        // Pas de realpath() : std::filesystem::canonical résout de la même façon les
+        // liens (jonctions/liens NTFS) et les « . / .. ». On NORMALISE les séparateurs
+        // en '/' derrière, car tout le reste du fichier compare avec PATHSEP — un
+        // retour en '\\' ferait échouer le test de préfixe du bac à sable, donc
+        // rabattrait chaque accès sur la racine. generic_string() fait exactement ça.
+        std::error_code cec;
+        const std::filesystem::path cp = std::filesystem::canonical(head, cec);
+        const bool ok = !cec;
+        std::string res = ok ? cp.generic_string() : std::string();
+        if (ok) {
+#else
         char* rp = ::realpath(head.c_str(), nullptr);
         if (rp) { std::string res(rp); std::free(rp);
+#endif
                   if (!tail.empty()) { if (res.empty() || res.back() != PATHSEP) res.push_back(PATHSEP);
                                        res += tail; }
                   return res; }
@@ -803,6 +866,20 @@ bool GemdosHd::gemDFree(uint32_t p) {
             const uint64_t frsize = sv.f_frsize ? sv.f_frsize : sv.f_bsize;
             total = sv.f_blocks * frsize / 1024;
             freeC = sv.f_bavail * frsize / 1024;
+        }
+    }
+#elif defined(_WIN32)
+    // Même intention que statvfs ci-dessus : sans espace RÉEL, « Informations disque »
+    // et les installeurs qui vérifient Dfree avant d'extraire se font tromper par les
+    // valeurs factices. GetDiskFreeSpaceExW rend des OCTETS (pas des blocs) et le
+    // premier paramètre accepte un dossier quelconque du volume.
+    {
+        ULARGE_INTEGER avail{}, tot{}, dummy{};
+        const std::wstring dir =
+            std::filesystem::path(emudrives_[drive - 2].hdEmuDir).wstring();
+        if (GetDiskFreeSpaceExW(dir.c_str(), &avail, &tot, &dummy)) {
+            total = uint64_t(tot.QuadPart) / 1024;
+            freeC = uint64_t(avail.QuadPart) / 1024;
         }
     }
 #endif
