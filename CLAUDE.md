@@ -3,8 +3,10 @@
 Hub d'orientation pour Claude Code (claude.ai/code). **Ces instructions priment.**
 
 NeoST — émulateur Atari ST « boîte à hack » pédagogique. C++17, GLFW3 + OpenGL (immediate
-mode) + Dear ImGui (GUI), miniaudio (son), Moira (68000 cycle-exact) en sous-modules. Cibles :
-macOS Silicon / CachyOS Linux. **Commentaires en français.**
+mode) + Dear ImGui (GUI), miniaudio (son), Moira (68000 cycle-exact) en sous-modules. Cibles de
+DÉVELOPPEMENT : macOS Silicon / CachyOS Linux ; **Windows x64 est livré** depuis la 0.5.1
+(MinGW-w64, `packaging/windows/`) mais n'est vérifié qu'en CI — personne n'y développe.
+**Commentaires en français, interface et journaux en anglais.**
 
 ## Où trouver quoi
 
