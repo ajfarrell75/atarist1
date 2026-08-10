@@ -1,5 +1,5 @@
 # =============================================================================
-#  Artefacts NeoST — 6 paquets, calqués sur la release POM1 (jobs natifs,
+#  Artefacts NeoST — 7 paquets, calqués sur la release POM1 (jobs natifs,
 #  vérifications structurelles, smoke-launch headless, publication sur tag) :
 #
 #    1. NeoST-<ver>-x86_64.AppImage             (Linux Intel/AMD, image bionic
@@ -13,9 +13,11 @@
 #    5. NeoST-<ver>-pi400-aarch64.AppImage      (Pi 4 / Pi 400 : -mcpu=cortex-a72,
 #                                                NE démarre pas sur un cœur plus
 #                                                ancien — c'est le prix du gain)
-#    6. NeoST-<ver>-web-wasm.zip                (WebAssembly, contenu libre)
+#    6. NeoST-<ver>-windows-x86_64.zip          (Windows 10/11 x64, MinGW-w64,
+#                                                tout statique — aucune DLL à
+#                                                installer, non signé)
+#    7. NeoST-<ver>-web-wasm.zip                (WebAssembly, contenu libre)
 #
-#  Pas de job Windows : NeoST cible macOS Silicon / Linux (cf. CLAUDE.md).
 #
 #  Chaque job SMOKE-LANCE le paquet via neost-headless (déterministe, sans
 #  affichage) : --version puis boot EmuTOS 500 trames (le bureau apparaît vers
@@ -24,7 +26,7 @@
 #  EmuTOS GPL + tos102uk/tos162uk des profils 520 ST / 1040 STE + diskA.st) —
 #  jamais les autres TOS ni les jeux du dépôt.
 #
-#  Déclencheurs : chaque push/PR vérifie que la génération des 6 artefacts
+#  Déclencheurs : chaque push/PR vérifie que la génération des 7 artefacts
 #  passe ; un tag de version (v1.0.0 ou 1.0.0) les attache en plus à la Release.
 #
 #  Planchers glibc : x86_64 = 2.27 (image bionic gelée neost-bionic-builder,
@@ -653,9 +655,97 @@ jobs:
           path: dist/*.zip
           if-no-files-found: error
 
+  # ------------------------------------------------------ Windows x86_64 -----
+  # MSYS2/MINGW64 et non MSVC : le code est écrit pour GCC/Clang (options -W…,
+  # C++20 pour Moira) et se compile ainsi tel quel, sans porter la chaîne de
+  # dépendances vers vcpkg. Le runner windows-latest EXÉCUTE le binaire produit :
+  # le smoke-launch ci-dessous est donc un vrai lancement Windows, pas un
+  # contrôle symbolique. Tout est lié en STATIQUE — cf. packaging/windows/
+  # build_mingw.sh, qui refuse le paquet s'il importe une DLL non système.
+  windows:
+    needs: version
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: false
+          install: >-
+            zip
+          pacboy: >-
+            toolchain:p
+            cmake:p
+            ninja:p
+            glfw:p
+
+      - name: Build + zip (MinGW64, tout statique)
+        env:
+          NEOST_VERSION: ${{ needs.version.outputs.neost_version }}
+        run: packaging/windows/build_mingw.sh
+
+      - name: Vérifier le zip (contenu libre, pas de DLL parasite)
+        run: |
+          set -euo pipefail
+          ZIP=$(ls dist/*-windows-x86_64.zip)
+          echo "Paquet : $ZIP"
+          unzip -q "$ZIP" -d _check
+          ROOT=$(ls -d _check/*/)
+          test -s "${ROOT}neost.exe"          || { echo "ERREUR : neost.exe absent"; exit 1; }
+          test -s "${ROOT}neost-headless.exe" || { echo "ERREUR : neost-headless.exe absent"; exit 1; }
+          # Aucune DLL ne doit être livrée : le build est statique. Une DLL ici
+          # signifierait que le -static a silencieusement lâché.
+          if find "$ROOT" -name '*.dll' | grep -q .; then
+            echo "ERREUR : DLL présente dans le zip — le lien statique a lâché"
+            find "$ROOT" -name '*.dll'; exit 1
+          fi
+          # Mêmes gardes de contenu que les AppImage : liste autorisée seulement.
+          for rom in tos102uk.img tos162uk.img; do
+            test -s "${ROOT}roms/$rom" || { echo "ERREUR : $rom absent du paquet"; exit 1; }
+          done
+          STRAY=$(find "${ROOT}roms" -maxdepth 1 -name '*.img' \
+                  ! -name 'etos*' ! -name 'tos102uk.img' ! -name 'tos162uk.img')
+          test -z "$STRAY" || { echo "ERREUR : ROM non autorisée embarquée : $STRAY"; exit 1; }
+          STRAYD=$(find "${ROOT}disks" -type f ! -name 'diskA.st')
+          test -z "$STRAYD" || { echo "ERREUR : disquette non libre embarquée : $STRAYD"; exit 1; }
+          for f in DejaVuSans.ttf fa-solid-900.ttf; do
+            test -s "${ROOT}fonts/$f" || { echo "ERREUR : police absente du paquet : $f"; exit 1; }
+          done
+          echo "OK : zip Windows valide (statique, contenu libre)"
+
+      - name: Smoke-launch (boot EmuTOS headless 500 trames + capture)
+        env:
+          NEOST_VERSION: ${{ needs.version.outputs.neost_version }}
+        run: |
+          set -euo pipefail
+          cd "$(ls -d _check/*/)"
+          ./neost-headless.exe --version
+          ./neost-headless.exe --version | grep -qF "$NEOST_VERSION" \
+            || { echo "ERREUR : version binaire ≠ $NEOST_VERSION"; exit 1; }
+          ./neost-headless.exe roms/etos192us.img --frames 500 --screenshot boot.ppm
+          python3 - <<'EOF'
+          data = open('boot.ppm', 'rb').read()
+          body = data.split(b'\n', 3)[3]
+          assert len(set(body)) > 1, "capture uniforme — le boot EmuTOS a échoué"
+          print(f"OK : capture {len(body)} octets, {len(set(body))} valeurs distinctes")
+          EOF
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: NeoST-windows-x86_64
+          path: dist/*-windows-x86_64.zip
+          if-no-files-found: error
+
   # ----------------------------------------------- attacher à la Release ----
   publish:
-    needs: [linux-bionic, linux-arm64, raspberry, pi400, macos, wasm]
+    needs: [linux-bionic, linux-arm64, raspberry, pi400, macos, wasm, windows]
     runs-on: ubuntu-latest
     if: github.ref_type == 'tag'
     steps:
@@ -677,7 +767,7 @@ jobs:
                -exec cp -v {} staging/ \;
           cd staging
           COUNT=$(ls | wc -l)
-          test "$COUNT" -eq 6 || { echo "ERREUR : $COUNT paquet(s) au lieu de 6"; exit 1; }
+          test "$COUNT" -eq 7 || { echo "ERREUR : $COUNT paquet(s) au lieu de 7"; exit 1; }
           sha256sum -- * > SHA256SUMS.txt
           cat SHA256SUMS.txt
           if gh release view "$TAG" >/dev/null 2>&1; then
