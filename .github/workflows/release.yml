@@ -1,5 +1,5 @@
 # =============================================================================
-#  Artefacts NeoST — 5 paquets, calqués sur la release POM1 (jobs natifs,
+#  Artefacts NeoST — 6 paquets, calqués sur la release POM1 (jobs natifs,
 #  vérifications structurelles, smoke-launch headless, publication sur tag) :
 #
 #    1. NeoST-<ver>-x86_64.AppImage             (Linux Intel/AMD, image bionic
@@ -7,9 +7,13 @@
 #    2. NeoST-<ver>-aarch64.AppImage            (Linux ARM64 générique)
 #    3. NeoST-<ver>-macOS-universal2.dmg        (Universal 2 arm64+x86_64,
 #                                                GLFW statique)
-#    4. NeoST-<ver>-raspberry-aarch64.AppImage  (Raspberry Pi, plancher glibc
+#    4. NeoST-<ver>-raspberry-aarch64.AppImage  (Raspberry Pi GÉNÉRIQUE Pi 3→Pi 5,
+#                                                aucun -mcpu ; plancher glibc
 #                                                bookworm 2.36 = Pi OS)
-#    5. NeoST-<ver>-web-wasm.zip                (WebAssembly, contenu libre)
+#    5. NeoST-<ver>-pi400-aarch64.AppImage      (Pi 4 / Pi 400 : -mcpu=cortex-a72,
+#                                                NE démarre pas sur un cœur plus
+#                                                ancien — c'est le prix du gain)
+#    6. NeoST-<ver>-web-wasm.zip                (WebAssembly, contenu libre)
 #
 #  Pas de job Windows : NeoST cible macOS Silicon / Linux (cf. CLAUDE.md).
 #
@@ -20,13 +24,13 @@
 #  EmuTOS GPL + tos102uk/tos162uk des profils 520 ST / 1040 STE + diskA.st) —
 #  jamais les autres TOS ni les jeux du dépôt.
 #
-#  Déclencheurs : chaque push/PR vérifie que la génération des 5 artefacts
+#  Déclencheurs : chaque push/PR vérifie que la génération des 6 artefacts
 #  passe ; un tag de version (v1.0.0 ou 1.0.0) les attache en plus à la Release.
 #
 #  Planchers glibc : x86_64 = 2.27 (image bionic gelée neost-bionic-builder,
 #  dérivée du pom1-bionic-builder — gcc-11 car Moira exige C++20) ;
-#  Raspberry = 2.36 (conteneur debian:bookworm = Pi OS) ; arm64 générique =
-#  l'image du runner (2.39), suffisant pour les distros ARM récentes.
+#  Raspberry et pi400 = 2.36 (conteneur debian:bookworm = Pi OS) ; arm64
+#  générique = l'image du runner (2.39), suffisant pour les distros ARM récentes.
 # =============================================================================
 name: Artefacts (release)
 
@@ -203,7 +207,8 @@ jobs:
   # --------------------------------------------- Linux ARM64 générique ------
   # Bâti directement sur le runner ARM64 natif (gratuit en dépôt public) :
   # plancher glibc = image du runner (2.39) — pour les distros ARM récentes.
-  # Le paquet Raspberry (job `raspberry`) couvre Pi OS avec son plancher 2.36.
+  # Les paquets Raspberry (jobs `raspberry` générique et `pi400` -mcpu) couvrent
+  # Pi OS avec leur plancher 2.36.
   linux-arm64:
     needs: version
     runs-on: ubuntu-24.04-arm
@@ -422,6 +427,103 @@ jobs:
           path: dist/*.AppImage
           if-no-files-found: error
 
+  # ------------------------------------------- Raspberry Pi 4 / Pi 400 -------
+  # Jumeau TAILLÉ POUR UN CŒUR du job `raspberry` ci-dessus, et c'est toute la
+  # différence : `raspberry` est aarch64 GÉNÉRIQUE (aucun -mcpu) parce qu'il doit
+  # tourner du Pi 3 au Pi 5 ; celui-ci compile en -mcpu=cortex-a72 (Pi 4 / Pi 400)
+  # et ne démarrera PAS sur un cœur plus ancien. Les deux sont publiés : le nom
+  # dit lequel on prend. Même script que la borne (packaging/raspberry/), déjà
+  # éprouvé par pi-borne.yml — d'où le PGO + LTO et les 90 minutes (deux
+  # compilations complètes + le parcours d'entraînement). Cf. docs/PERFORMANCE.md § 5.
+  pi400:
+    needs: version
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - name: Build -mcpu=cortex-a72 dans un conteneur bookworm arm64
+        env:
+          NEOST_VERSION: ${{ needs.version.outputs.neost_version }}
+          NEOST_MCPU: cortex-a72
+        run: |
+          docker run --rm -v "$PWD":/work -w /work \
+            -e NEOST_VERSION -e NEOST_MCPU \
+            debian:bookworm bash /work/packaging/raspberry/build_in_bookworm_pi.sh
+
+      - name: Vérifier l'AppImage (nom, arch, plancher glibc <= 2.36, contenu libre)
+        run: |
+          set -euo pipefail
+          APP=$(ls dist/*.AppImage)
+          echo "Paquet : $APP"
+          # Le nom doit porter « pi400 » : le job publish aplatit tous les artefacts
+          # dans un même dossier, et une collision écraserait EN SILENCE l'AppImage
+          # raspberry générique — c'est-à-dire remplacerait le paquet Pi 3→Pi 5 par
+          # un binaire qui ne démarre que sur Cortex-A72.
+          case "$APP" in
+            *-pi400-aarch64.AppImage) ;;
+            *) echo "ERREUR : $APP n'est pas nommé -pi400-aarch64.AppImage"; exit 1 ;;
+          esac
+          TYPE=$(readelf -h "$APP" | awk -F'[ :]+' '/^ *Type/ {print $3; exit}')
+          echo "Type ELF du runtime : $TYPE"
+          test "$TYPE" = "EXEC" || { echo "ERREUR : runtime $TYPE ≠ EXEC"; exit 1; }
+          MAGIC=$(xxd -s 8 -l 3 -p "$APP")
+          test "$MAGIC" = "414902" || { echo "ERREUR : magic AppImage $MAGIC ≠ 414902"; exit 1; }
+          "$APP" --appimage-extract >/dev/null
+          BIN=squashfs-root/usr/bin/neost
+          readelf -h "$BIN" | grep -q AArch64 \
+            || { echo "ERREUR : pas un binaire AArch64"; exit 1; }
+          MAX=$(objdump -T "$BIN" 2>/dev/null | grep -oE 'GLIBC_[0-9]+\.[0-9]+' | sort -V | tail -1)
+          echo "Symbole glibc le plus haut : ${MAX:-aucun}"
+          test "$(printf '%s\nGLIBC_2.36\n' "$MAX" | sort -V | tail -1)" = "GLIBC_2.36" \
+            || { echo "ERREUR : le paquet exige ${MAX} > GLIBC_2.36 — Pi OS ne le lancera pas"; exit 1; }
+          find squashfs-root -name 'libglfw*' | grep -q . \
+            || { echo "ERREUR : libglfw absente du paquet"; exit 1; }
+          if find squashfs-root -name 'libGL.so*' -o -name 'libOpenGL.so*' | grep -q .; then
+            echo "ERREUR : libGL embarquée dans l'AppImage"; exit 1
+          fi
+          for rom in tos102uk.img tos162uk.img; do
+            test -s "squashfs-root/usr/roms/$rom" \
+              || { echo "ERREUR : $rom absent du paquet"; exit 1; }
+          done
+          STRAY=$(find squashfs-root/usr/roms -maxdepth 1 -name '*.img' \
+                  ! -name 'etos*' ! -name 'tos102uk.img' ! -name 'tos162uk.img')
+          test -z "$STRAY" || { echo "ERREUR : ROM non autorisée embarquée : $STRAY"; exit 1; }
+          STRAYD=$(find squashfs-root/usr/disks -type f ! -name 'diskA.st')
+          test -z "$STRAYD" || { echo "ERREUR : disquette non libre embarquée : $STRAYD"; exit 1; }
+          for f in DejaVuSans.ttf fa-solid-900.ttf; do
+            test -s "squashfs-root/usr/fonts/$f" || { echo "ERREUR : police absente du paquet : $f"; exit 1; }
+          done
+          echo "OK : AppImage Pi 4 / Pi 400 valide (-mcpu=cortex-a72, glibc <= 2.36)"
+
+      - name: Smoke-launch (boot EmuTOS headless 500 trames + capture)
+        env:
+          NEOST_VERSION: ${{ needs.version.outputs.neost_version }}
+        run: |
+          set -euo pipefail
+          # Le runner ubuntu-24.04-arm est un Neoverse : il EXÉCUTE du cortex-a72
+          # (même ISA ARMv8-A, -mcpu ne fait qu'ordonnancer et choisir des
+          # extensions déjà présentes). Le smoke est donc réel, pas symbolique.
+          cd squashfs-root/usr
+          bin/neost-headless --version
+          bin/neost-headless --version | grep -qF "$NEOST_VERSION" \
+            || { echo "ERREUR : version binaire ≠ $NEOST_VERSION"; exit 1; }
+          bin/neost-headless roms/etos192us.img --frames 500 --screenshot boot.ppm
+          python3 - <<'EOF'
+          data = open('boot.ppm', 'rb').read()
+          body = data.split(b'\n', 3)[3]
+          assert len(set(body)) > 1, "capture uniforme — le boot EmuTOS a échoué"
+          print(f"OK : capture {len(body)} octets, {len(set(body))} valeurs distinctes")
+          EOF
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: NeoST-pi400-arm64-AppImage
+          path: dist/*-pi400-aarch64.AppImage
+          if-no-files-found: error
+
   # ----------------------------------------------------------------- macOS --
   # UN .dmg Universal 2 (arm64 + x86_64) — natif sur Apple Silicon ET Intel,
   # aucun Rosetta. Le runner arm64 cross-compile la tranche x86_64 nativement.
@@ -553,7 +655,7 @@ jobs:
 
   # ----------------------------------------------- attacher à la Release ----
   publish:
-    needs: [linux-bionic, linux-arm64, raspberry, macos, wasm]
+    needs: [linux-bionic, linux-arm64, raspberry, pi400, macos, wasm]
     runs-on: ubuntu-latest
     if: github.ref_type == 'tag'
     steps:
@@ -575,7 +677,7 @@ jobs:
                -exec cp -v {} staging/ \;
           cd staging
           COUNT=$(ls | wc -l)
-          test "$COUNT" -eq 5 || { echo "ERREUR : $COUNT paquet(s) au lieu de 5"; exit 1; }
+          test "$COUNT" -eq 6 || { echo "ERREUR : $COUNT paquet(s) au lieu de 6"; exit 1; }
           sha256sum -- * > SHA256SUMS.txt
           cat SHA256SUMS.txt
           if gh release view "$TAG" >/dev/null 2>&1; then

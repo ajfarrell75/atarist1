@@ -45,9 +45,12 @@ de **référence** — il n'y a aucune image dans `tests/reference/` pour la tra
 512 Ko ST + TOS 1.02 UK (`--machine st --mem 512k roms/tos102uk.img`) : écran-titre
 complet et conforme. C'est l'outillage de non-régression qui manque, pas l'émulation.
 
-**Paquets.** Cinq artefacts par release, avec leurs sommes SHA-256 : AppImage Linux
-x86_64 (plancher glibc 2.27), AppImage Linux aarch64, AppImage Raspberry Pi (glibc 2.36),
-`.dmg` macOS Universal 2, bundle WebAssembly. Contenu embarqué : liste explicite tenue
+**Paquets.** Six artefacts par release, avec leurs sommes SHA-256 : AppImage Linux
+x86_64 (plancher glibc 2.27), AppImage Linux aarch64, **deux** paquets Raspberry —
+`raspberry-aarch64` GÉNÉRIQUE (Pi 3 → Pi 5, aucun `-mcpu`, PGO+LTO) et `pi400-aarch64`
+taillé pour le Cortex-A72 du Pi 4/400 (~10-20 % sur Moira, mais il ne démarre pas sur un
+cœur plus ancien) —, `.dmg` macOS Universal 2, bundle WebAssembly. Pas de paquet Windows :
+les cibles sont macOS Silicon et Linux. Contenu embarqué : liste explicite tenue
 par `packaging/stage_free_data.sh` (EmuTOS, `tos102uk`/`tos162uk` des profils 520 ST /
 1040 STE, `diskA.st`, polices, échantillons de lecteur) — un garde-fou refuse toute
 autre ROM. ⚠ `tos102uk`/`tos162uk` sont des **ROM Atari sous copyright** : leur
