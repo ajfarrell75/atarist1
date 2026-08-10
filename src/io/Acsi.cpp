@@ -13,7 +13,8 @@
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
-#include <sys/stat.h>
+#include <filesystem>
+#include <cstdint>
 
 namespace {
 // Opcodes (hdc.h)
@@ -55,8 +56,11 @@ bool Acsi::mount(int target, const std::string& path) {
     if (d.fp) { fclose(d.fp); d.fp = nullptr; }
     d.enabled = false;
 
-    struct stat st;
-    if (stat(path.c_str(), &st) != 0 || st.st_size == 0 || (st.st_size & 511)) {
+    // std::filesystem et non stat() : <sys/stat.h> manque hors POSIX, et la
+    // surcharge à error_code ne LANCE pas sur un chemin illisible.
+    std::error_code ec;
+    const std::uintmax_t sz = std::filesystem::file_size(path, ec);
+    if (ec || sz == 0 || (sz & 511)) {
         std::fprintf(stderr, "[acsi] invalid image (zero size or not a multiple of 512): %s\n",
                      path.c_str());
         return false;
@@ -71,7 +75,7 @@ bool Acsi::mount(int target, const std::string& path) {
     d.fp = fp;
     d.readOnly = ro;
     d.blockSize = 512;
-    d.hdSize = uint32_t(st.st_size / 512);
+    d.hdSize = uint32_t(sz / 512);
     d.scsiVersion = 1;
     d.lastError = HD_REQSENS_OK;
     d.enabled = true;

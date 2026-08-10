@@ -9,7 +9,7 @@ modélisé séparément et **branché sur un `Bus` qui *est* le plan mémoire**,
 comme les puces sont câblées sur la vraie carte. On voit la RAM, les registres 68000
 et l'état des puces vivre en direct.
 
-> (c) 2026 VERHILLE Arnaud — C++17 · macOS Silicon / Linux · **et dans le navigateur**.
+> (c) 2026 VERHILLE Arnaud — C++17 · macOS Silicon / Linux / Windows · **et dans le navigateur**.
 
 ## ▶ Essayer tout de suite (sans rien installer)
 
@@ -47,13 +47,13 @@ montage de disquettes, bascule couleur/mono, et **upload** de votre propre `.st`
   l'état reprennent byte-identiques).
 - 🔊 **Son complet** — YM2149 (3 voies + bruit + enveloppe), son DMA STE, filtres
   Microwire/LMC1992, et même les **bruits mécaniques du lecteur** de disquette.
-- 🌐 **Multi-plateforme** — macOS Silicon, Linux, et WebAssembly. Une seule base de code.
+- 🌐 **Multi-plateforme** — macOS Silicon, Linux, Windows et WebAssembly. Une seule base de code.
 
 ## Démarrage rapide
 
 ### Télécharger un binaire
 
-Chaque release publie **6 paquets** avec leurs sommes SHA-256 :
+Chaque release publie **7 paquets** avec leurs sommes SHA-256 :
 
 | Paquet | Pour qui |
 |--------|----------|
@@ -62,9 +62,11 @@ Chaque release publie **6 paquets** avec leurs sommes SHA-256 :
 | `NeoST-<ver>-raspberry-aarch64.AppImage` | **Raspberry Pi 3 → Pi 5** — aarch64 générique, PGO + LTO. En cas de doute, c'est celui-ci. |
 | `NeoST-<ver>-pi400-aarch64.AppImage` | **Pi 4 / Pi 400 uniquement** — compilé `-mcpu=cortex-a72`, ~10-20 % plus rapide sur Moira, mais **ne démarre pas** sur un cœur plus ancien |
 | `NeoST-<ver>-macOS-universal2.dmg` | macOS **Universal 2** (Apple Silicon + Intel) |
+| `NeoST-<ver>-windows-x86_64.zip` | **Windows 10/11 x64** — à déballer et lancer, tout est lié en statique (aucune DLL à installer) |
 | `NeoST-<ver>-web-wasm.zip` | WebAssembly, à servir depuis un serveur web |
 
-Pas de paquet Windows : NeoST cible macOS Silicon et Linux (cf. [`CLAUDE.md`](CLAUDE.md)).
+Le paquet Windows n'est **pas signé** : SmartScreen affichera « Windows a protégé votre
+ordinateur » au premier lancement (*Informations complémentaires* → *Exécuter quand même*).
 Compiler depuis les sources reste possible — voir ci-dessous.
 
 ### Dépendances
