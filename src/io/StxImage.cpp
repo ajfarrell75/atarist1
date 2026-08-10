@@ -413,7 +413,7 @@ bool StxImage::loadWd1772(const std::string& path) {
 
     if (std::memcmp(in.data(), "WD1772", 6) != 0) return false;
     if (in[6] != 1 || in[7] != 0) {                       // version/révision inconnues
-        std::fprintf(stderr, "[STX] %s : version .wd1772 %d.%d non gérée\n",
+        std::fprintf(stderr, "[STX] %s: unsupported .wd1772 version %d.%d\n",
                      path.c_str(), in[6], in[7]);
         return false;
     }
@@ -455,15 +455,15 @@ bool StxImage::loadWd1772(const std::string& path) {
             if (sec && ss.data.size() != sec->sectorSize) {
                 // Overlay d'une autre taille que le secteur : les lecteurs bouclent
                 // sur sec.sectorSize → un bloc plus court ferait lire hors du vector.
-                std::fprintf(stderr, "[STX] %s : bloc SECT de %zu o pour un secteur de "
-                             "%u o (piste %d face %d) — ignoré\n", path.c_str(),
+                std::fprintf(stderr, "[STX] %s: SECT block of %zu B for a %u B sector "
+                             "(track %d side %d) — ignored\n", path.c_str(),
                              ss.data.size(), sec->sectorSize, ss.track, ss.side);
             } else if (sec) {                             // associe l'overlay à son secteur
                 saveSectors.push_back(std::move(ss));
                 sec->saveIndex = int(saveSectors.size()) - 1;
             } else {
-                std::fprintf(stderr, "[STX] %s : bloc SECT sans secteur (piste %d face %d "
-                             "bitpos %d) — ignoré\n", path.c_str(), ss.track, ss.side, ss.bitPos);
+                std::fprintf(stderr, "[STX] %s: SECT block with no sector (track %d side %d "
+                             "bitpos %d) — ignored\n", path.c_str(), ss.track, ss.side, ss.bitPos);
             }
         } else if (std::memcmp(&in[p], "TRCK", 4) == 0 && blockLen >= 8 && wantTrack) {
             SaveTrack st;
@@ -479,12 +479,12 @@ bool StxImage::loadWd1772(const std::string& path) {
                 t->saveTrackIndex = int(saveTracks.size()) - 1;
                 reinterpretSaveTrack(*t);          // flux rechargé → secteurs lisibles
             } else {
-                std::fprintf(stderr, "[STX] %s : bloc TRCK sans piste (piste %d face %d) "
-                             "— ignoré\n", path.c_str(), st.track, st.side);
+                std::fprintf(stderr, "[STX] %s: TRCK block with no track (track %d side %d) "
+                             "— ignored\n", path.c_str(), st.track, st.side);
             }
         } else if (wantTrack && std::memcmp(&in[p], "SECT", 4) != 0
                               && std::memcmp(&in[p], "TRCK", 4) != 0) {
-            std::fprintf(stderr, "[STX] %s : bloc inconnu « %.4s » — ignoré\n",
+            std::fprintf(stderr, "[STX] %s: unknown block \"%.4s\" — ignored\n",
                          path.c_str(), reinterpret_cast<const char*>(&in[p]));
         }
         p = next;

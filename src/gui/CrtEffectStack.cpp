@@ -342,7 +342,7 @@ bool CrtEffectStack::initialize()
     glBindBuffer(GL_ARRAY_BUFFER, 0);   // ne pas laisser le VBO lié (cf. process())
 
     ready = true;
-    std::fprintf(stderr, "[CRT] pile d'effets CRT prête\n");
+    std::fprintf(stderr, "[CRT] CRT effect stack ready\n");
     return true;
 }
 

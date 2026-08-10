@@ -112,7 +112,7 @@ void Bus::peripheralReset() {
 bool Bus::loadTos(const std::string& path) {
     std::ifstream f(path, std::ios::binary | std::ios::ate);
     if (!f) {
-        std::fprintf(stderr, "[Bus] TOS introuvable : %s\n", path.c_str());
+        std::fprintf(stderr, "[Bus] TOS not found: %s\n", path.c_str());
         return false;
     }
     const std::streamsize n = f.tellg();
@@ -120,7 +120,7 @@ bool Bus::loadTos(const std::string& path) {
     // Linux) → resize géant. Borne haute : la fenêtre ROM à $E00000 fait 1 Mo.
     constexpr std::streamsize kMaxTos = 1024 * 1024;
     if (n <= 0 || n > kMaxTos) {
-        std::fprintf(stderr, "[Bus] TOS invalide (%lld o, max %lld o) : %s\n",
+        std::fprintf(stderr, "[Bus] invalid TOS (%lld B, max %lld B): %s\n",
                      static_cast<long long>(n), static_cast<long long>(kMaxTos), path.c_str());
         return false;
     }
@@ -136,7 +136,7 @@ bool Bus::loadTos(const std::string& path) {
     // Vecteurs reset $0-$7 : le GLUE les mappe sur la ROM en permanence — on les
     // recopie en RAM dès le chargement (et à chaque reset, cf. seedResetVectors).
     seedResetVectors();
-    std::fprintf(stderr, "[Bus] TOS chargé : %s (%zu Ko @ $%06X, version $%04X)\n",
+    std::fprintf(stderr, "[Bus] TOS loaded: %s (%zu KB @ $%06X, version $%04X)\n",
                  path.c_str(), rom.size() / 1024, romBase, tosVersion);
     return true;
 }
@@ -144,13 +144,13 @@ bool Bus::loadTos(const std::string& path) {
 bool Bus::loadCart(const std::string& path) {
     std::ifstream f(path, std::ios::binary | std::ios::ate);
     if (!f) {
-        std::fprintf(stderr, "[Bus] cartouche introuvable : %s\n", path.c_str());
+        std::fprintf(stderr, "[Bus] cartridge not found: %s\n", path.c_str());
         return false;
     }
     const std::streamsize n = f.tellg();
     const std::size_t maxSize = stmap::CART_END - stmap::CART_BASE;   // 128 Ko
     if (n <= 0 || static_cast<std::size_t>(n) > maxSize) {
-        std::fprintf(stderr, "[Bus] cartouche invalide (%lld o, max %zu o) : %s\n",
+        std::fprintf(stderr, "[Bus] invalid cartridge (%lld B, max %zu B): %s\n",
                      static_cast<long long>(n), maxSize, path.c_str());
         return false;
     }
@@ -163,18 +163,18 @@ bool Bus::loadCart(const std::string& path) {
         ? (uint32_t(cart[0]) << 24) | (uint32_t(cart[1]) << 16) |
           (uint32_t(cart[2]) << 8)  |  uint32_t(cart[3])
         : 0;
-    const char* kind = magic == 0xFA52235F ? "diagnostic (saut $FA0004 au reset)"
-                     : magic == 0xABCDEF42 ? "applicative (lancée par le TOS)"
-                     : "inconnue (magic absent)";
+    const char* kind = magic == 0xFA52235F ? "diagnostic (jump to $FA0004 at reset)"
+                     : magic == 0xABCDEF42 ? "application (launched by TOS)"
+                     : "unknown (no magic)";
     cartPath_ = path;
-    std::fprintf(stderr, "[Bus] cartouche chargée : %s (%zu Ko @ $FA0000, magic $%08X, %s)\n",
+    std::fprintf(stderr, "[Bus] cartridge loaded: %s (%zu KB @ $FA0000, magic $%08X, %s)\n",
                  path.c_str(), cart.size() / 1024, magic, kind);
     return true;
 }
 
 void Bus::ejectCart() {
     if (!cart.empty())
-        std::fprintf(stderr, "[Bus] cartouche éjectée : %s\n", cartPath_.c_str());
+        std::fprintf(stderr, "[Bus] cartridge ejected: %s\n", cartPath_.c_str());
     cart.clear();
     cartPath_.clear();
 }

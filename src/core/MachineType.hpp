@@ -35,7 +35,7 @@ inline MachineType parseMachine(const std::string& s) {
     // Valeur inconnue → défaut STE, mais EN LE DISANT : « mega-ste » ou « ST » (casse)
     // silencieusement remplacés faisaient diffier l'utilisateur contre le mauvais profil.
     if (s != "ste" && !s.empty())
-        std::fprintf(stderr, "[config] machine « %s » inconnue → ste (valides : st, megast, ste, megaste)\n", s.c_str());
+        std::fprintf(stderr, "[config] unknown machine \"%s\" → ste (valid: st, megast, ste, megaste)\n", s.c_str());
     return MachineType::Ste;                 // défaut : 1040 STE (son DMA, pas de blitter)
 }
 
@@ -49,7 +49,7 @@ inline std::size_t parseRamBytes(const std::string& s) {
     if (s == "2m")   return 2048u * 1024;
     if (s == "4m")   return 4096u * 1024;
     if (!s.empty())                              // même politique que parseMachine : défaut ANNONCÉ
-        std::fprintf(stderr, "[config] mem « %s » inconnue → 512k (valides : 256k, 512k, 1m, 2m, 4m)\n", s.c_str());
+        std::fprintf(stderr, "[config] unknown mem \"%s\" → 512k (valid: 256k, 512k, 1m, 2m, 4m)\n", s.c_str());
     return 512u * 1024;                          // défaut : 512 Ko
 }
 inline const char* ramLabel(std::size_t bytes) {

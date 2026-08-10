@@ -36,8 +36,8 @@ public:
     // d'un fichier réellement corrompu).
     void check(bool cond, const char* what = nullptr) {
         if (!loading_ || cond) return;
-        if (ok_) std::fprintf(stderr, "[save-state] invariant refusé : %s\n",
-                              what ? what : "(non étiqueté)");
+        if (ok_) std::fprintf(stderr, "[save-state] invariant rejected: %s\n",
+                              what ? what : "(unlabelled)");
         ok_ = false;
     }
 

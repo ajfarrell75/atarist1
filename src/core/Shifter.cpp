@@ -1615,7 +1615,7 @@ void Shifter::replayGlue() {
     // Stat Glue (gated NEOST_GLUE_STAT) : liste les écritures freq/res datées de la
     // trame (ligne, cycle, registre, valeur) — diagnostic « pourquoi pas de trick ».
     if (!syncWrites_.empty() && std::getenv("NEOST_GLUE_STAT")) {
-        std::fprintf(stderr, "[gluestat] %zu écritures :", syncWrites_.size());
+        std::fprintf(stderr, "[gluestat] %zu writes:", syncWrites_.size());
         for (std::size_t i = 0; i < syncWrites_.size() && i < 24; ++i) {
             const SyncWrite& w = syncWrites_[i];
             std::fprintf(stderr, " %s=%02X@%lld+%d", w.isRes ? "res" : "frq", w.val,
@@ -1667,7 +1667,7 @@ void Shifter::replayGlue() {
                 if (fixedLine != vline) {
                     ++ndiff;
                     if (++nshown <= 24)
-                        std::fprintf(stderr, "[varline] %s=%02x fc=%d : fixe=L%d/c%d  var=L%d/c%d\n",
+                        std::fprintf(stderr, "[varline] %s=%02x fc=%d : fixed=L%d/c%d  var=L%d/c%d\n",
                             w.isRes ? "res" : "frq", w.val, w.frameCycle, fixedLine,
                             static_cast<int>(w.frameCycle % cpl), vline,
                             static_cast<int>(w.frameCycle - cyc));
@@ -1677,7 +1677,7 @@ void Shifter::replayGlue() {
             }
             cyc += len; ++vline;
         }
-        std::fprintf(stderr, "[varline] %d/%zu writes mésattribués (fixe≠variable) | dérive finale=%lld cyc\n",
+        std::fprintf(stderr, "[varline] %d/%zu writes misattributed (fixed!=variable) | final drift=%lld cyc\n",
                      ndiff, nw, static_cast<long long>(cyc - static_cast<int64_t>(vline) * cpl));
     }
 }
@@ -1798,7 +1798,7 @@ void Shifter::renderGlueFrame() {
                              static_cast<int>(w.frameCycle % gg.cyclesPerLine),
                              w.index, w.colour & 0xFFF, w.pc);
             std::fclose(tf);
-            std::fprintf(stderr, "[spec512] %zu écritures palette → %s\n",
+            std::fprintf(stderr, "[spec512] %zu palette writes → %s\n",
                          colorWrites_.size(), spcTrace);
         }
     }

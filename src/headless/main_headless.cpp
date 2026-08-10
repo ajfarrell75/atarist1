@@ -29,54 +29,54 @@ namespace {
 void usage() {
     std::printf(
         "Usage: neost-headless [options] [rom]\n"
-        "  --frames N        nombre de trames à exécuter (défaut 200, ~4 s ST)\n"
-        "  --sound-dump F    dump audio WAV (48 kHz stéréo s16) : YM2149 + DMA STE + LMC,\n"
-        "                    même chaîne que la GUI (boucle --frames uniquement)\n"
-        "  --trace FILE      écrit la trace d'instructions ('-' = stdout)\n"
-        "  --trace-from N    n'active la trace qu'à partir de la trame N\n"
-        "  --regs            ajoute l'état des registres à chaque instruction\n"
-        "  --irq             trace aussi les interruptions prises\n"
-        "  --until-pc HEX    arrête dès que PC atteint cette adresse (hex)\n"
-        "  --break HEX       breakpoint PC (instruction-exact, répétable) : stoppe AVANT\n"
-        "                    d'exécuter l'instruction, dump les registres, sort\n"
-        "  --symbols FILE    table de symboles (.sym nm-style OU exécutable TOS $601A)\n"
-        "  --symbols-base HEX  base de relocation ajoutée aux symboles d'un exécutable TOS\n"
-        "  --break-sym NAME  breakpoint sur un symbole (nécessite --symbols ; répétable)\n"
-        "  --watch HEX       watchpoint mémoire (accès lecture/écriture ; break-after ; répétable)\n"
-        "  --save-state FILE écrit l'état complet (save-state) à la fin des --frames\n"
-        "  --load-state FILE restaure un état AVANT de tourner (même config machine requise)\n"
-        "  --save-state-test auto-test de DÉTERMINISME : run --frames → save → load → re-run,\n"
-        "                    l'état re-sérialisé ET l'écran doivent être identiques, puis quitte\n"
-        "  --cpu CORE        cœur 68000 : moira (seul disponible, cycle-exact)\n"
-        "  --machine TYPE    profil : st, megast, ste (défaut), megaste\n"
-        "  --fpu             peuple le socket MC68881 du Mega STE ($FFFA40, émulation\n"
-        "                    fonctionnelle — défaut absent : « not found » fidèle Hatari)\n"
-        "  --mem SIZE        ST-RAM : 256k, 512k (défaut), 1m, 2m, 4m\n"
-        "  --walk-mouse      après le boot, injecte un mouvement souris + clic (diag)\n"
-        "  --keys STR        après le boot, tape STR au clavier (ex. menus de diag)\n"
-        "  --key-down N C    make SEUL du caractère C à la trame N (touche TENUE)\n"
-        "  --key-up N C      break SEUL du caractère C à la trame N\n"
-        "  --joy P1[,P0]     maintient un état joystick (bits haut$01 bas$02 g$04 d$08 feu$80)\n"
-        "  --disk FILE       monte une image dans le lecteur A (défaut disks/diskA.st)\n"
-        "  --diskb FILE      monte une image dans le lecteur B (2e lecteur)\n"
-        "  --fastfdc         FDC rapide (délais ÷10) — accélère les accès disque\n"
-        "  --loopback        « branche » le connecteur de bouclage RS232 (test S série)\n"
-        "  --cart FILE       monte une cartouche ($FA0000) : Test Kit diagnostic, etc.\n"
-        "  --gemdos DIR      disque dur GEMDOS : mappe DIR sur C: (redirection des appels\n"
-        "                    GEMDOS vers l'hôte, façon Hatari ; exclusif avec --cart)\n"
-        "  --printer FILE    imprimante Centronics : capture les octets imprimés dans FILE\n"
-        "  --acsi IMG        image disque dur ACSI (cible 0) : le TOS lit la table de\n"
-        "                    partitions et monte C:/D:… (alias --hd ; port de hdc.c)\n"
-        "  --glue-selftest   auto-test de la machine Glue (bordures) puis quitte\n"
-        "  --spec512-selftest auto-test du re-rendu Spectrum 512 (palette/pixel) puis quitte\n"
-        "  --bus-selftest    auto-test du modèle de bus error (whitelist) puis quitte\n"
-        "  --mfp-selftest    auto-test du MFP (GPIP/fronts/Timer B) puis quitte\n"
-        "  --msa-selftest    auto-test du ré-encodage .msa (aller-retour) puis quitte\n"
-        "  --serial-dump F   écrit les octets série RS-232 bruts dans F (verdicts NEOST-TEST)\n"
-        "  --from-cfg F      rejoue la config GUI (neost.cfg) ; les options suivantes surchargent\n"
-        "  --dump-at N A L F dump brut de L octets de RAM dès $A (hex) après la trame N → F\n"
-        "  --screenshot PPM  dump du framebuffer final au format PPM\n"
-        "  rom               image TOS (défaut roms/etos192fr.img)\n");
+        "  --frames N        number of frames to run (default 200, ~4 s of ST time)\n"
+        "  --sound-dump F    WAV audio dump (48 kHz stereo s16): YM2149 + STE DMA + LMC,\n"
+        "                    same chain as the GUI (--frames loop only)\n"
+        "  --trace FILE      write the instruction trace ('-' = stdout)\n"
+        "  --trace-from N    only enable the trace from frame N onwards\n"
+        "  --regs            append the register state to every instruction\n"
+        "  --irq             also trace the interrupts taken\n"
+        "  --until-pc HEX    stop as soon as PC reaches this address (hex)\n"
+        "  --break HEX       PC breakpoint (instruction-exact, repeatable): stops BEFORE\n"
+        "                    executing the instruction, dumps the registers, exits\n"
+        "  --symbols FILE    symbol table (nm-style .sym OR a TOS $601A executable)\n"
+        "  --symbols-base HEX  relocation base added to the symbols of a TOS executable\n"
+        "  --break-sym NAME  breakpoint on a symbol (requires --symbols; repeatable)\n"
+        "  --watch HEX       memory watchpoint (read/write access; break-after; repeatable)\n"
+        "  --save-state FILE write the full state (save-state) at the end of --frames\n"
+        "  --load-state FILE restore a state BEFORE running (same machine config required)\n"
+        "  --save-state-test DETERMINISM self-test: run --frames → save → load → re-run,\n"
+        "                    the re-serialized state AND the screen must match, then exits\n"
+        "  --cpu CORE        68000 core: moira (the only one, cycle-exact)\n"
+        "  --machine TYPE    profile: st, megast, ste (default), megaste\n"
+        "  --fpu             populate the Mega STE MC68881 socket ($FFFA40, functional\n"
+        "                    emulation — absent by default: Hatari-faithful \"not found\")\n"
+        "  --mem SIZE        ST-RAM: 256k, 512k (default), 1m, 2m, 4m\n"
+        "  --walk-mouse      after boot, inject a mouse move + click (diagnostic)\n"
+        "  --keys STR        after boot, type STR on the keyboard (e.g. diag menus)\n"
+        "  --key-down N C    make ONLY of character C at frame N (key HELD)\n"
+        "  --key-up N C      break ONLY of character C at frame N\n"
+        "  --joy P1[,P0]     hold a joystick state (bits up$01 down$02 l$04 r$08 fire$80)\n"
+        "  --disk FILE       mount an image in drive A (default disks/diskA.st)\n"
+        "  --diskb FILE      mount an image in drive B (second drive)\n"
+        "  --fastfdc         fast FDC (delays /10) — speeds up disk access\n"
+        "  --loopback        \"plug in\" the RS232 loopback connector (serial S test)\n"
+        "  --cart FILE       mount a cartridge ($FA0000): diagnostic Test Kit, etc.\n"
+        "  --gemdos DIR      GEMDOS hard disk: map DIR onto C: (GEMDOS calls redirected\n"
+        "                    to the host, Hatari-style; exclusive with --cart)\n"
+        "  --printer FILE    Centronics printer: capture the printed bytes into FILE\n"
+        "  --acsi IMG        ACSI hard disk image (target 0): TOS reads the partition\n"
+        "                    table and mounts C:/D:… (alias --hd; port of hdc.c)\n"
+        "  --glue-selftest   self-test of the Glue machine (borders) then exit\n"
+        "  --spec512-selftest self-test of the Spectrum 512 re-render (palette/pixel) then exit\n"
+        "  --bus-selftest    self-test of the bus error model (whitelist) then exit\n"
+        "  --mfp-selftest    self-test of the MFP (GPIP/edges/Timer B) then exit\n"
+        "  --msa-selftest    self-test of the .msa re-encoding (round-trip) then exit\n"
+        "  --serial-dump F   write the raw RS-232 serial bytes into F (NEOST-TEST verdicts)\n"
+        "  --from-cfg F      replay the GUI config (neost.cfg); later options override it\n"
+        "  --dump-at N A L F raw dump of L bytes of RAM from $A (hex) after frame N → F\n"
+        "  --screenshot PPM  dump the final framebuffer in PPM format\n"
+        "  rom               TOS image (default roms/etos192fr.img)\n");
 }
 
 // Dump du framebuffer décodé en PPM binaire (P6) — comparable visuellement.
@@ -235,14 +235,14 @@ int main(int argc, char** argv) {
     for (int i = 1; i < argc; ++i) {
         const char* a = argv[i];
         auto next = [&](const char* opt) -> const char* {
-            if (i + 1 >= argc) { std::fprintf(stderr, "%s attend un argument\n", opt); std::exit(2); }
+            if (i + 1 >= argc) { std::fprintf(stderr, "%s expects an argument\n", opt); std::exit(2); }
             return argv[++i];
         };
         if (!std::strcmp(a, "--version")) {       // identité de build
 #ifdef NEOST_VERSION
             std::printf("neost-headless %s\n", NEOST_VERSION);
 #else
-            std::printf("neost-headless (version inconnue)\n");
+            std::printf("neost-headless (unknown version)\n");
 #endif
             return 0;
         }
@@ -301,7 +301,7 @@ int main(int argc, char** argv) {
             // et la boucle de lecture qui suit tournait alors à vide — NeoST annonçait
             // « config reprise de … » puis démarrait sur ses valeurs par défaut.
             if (!cf || cf.peek() == std::ifstream::traits_type::eof()) {
-                std::fprintf(stderr, "[headless] --from-cfg : %s introuvable ou illisible\n", p);
+                std::fprintf(stderr, "[headless] --from-cfg: %s not found or unreadable\n", p);
                 return 2;
             }
             // Les chemins de neost.cfg sont relatifs à exeDir (= <racine>/build) : le GUI
@@ -332,7 +332,7 @@ int main(int argc, char** argv) {
                 else if (ln.rfind("fastfdc=", 0) == 0) fastFdc    = (v(ln, 8) == "1");
                 else if (ln.rfind("fpu=", 0) == 0)     fpuPresent = (v(ln, 4) == "1");
             }
-            std::fprintf(stderr, "[headless] config reprise de %s\n", p);
+            std::fprintf(stderr, "[headless] config taken from %s\n", p);
         }
         else if (!std::strcmp(a, "--cpu"))        cpuCore   = Cpu68k::parseCore(next(a));
         else if (!std::strcmp(a, "--machine"))    machType  = parseMachine(next(a));
@@ -348,7 +348,7 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(a, "--symbols"))    symbolsPath = next(a);
         else if (!std::strcmp(a, "--symbols-base")) symBase = (uint32_t)std::strtoul(next(a), nullptr, 16);
         else if (!std::strcmp(a, "-h") || !std::strcmp(a, "--help")) { usage(); return 0; }
-        else if (a[0] == '-')                     { std::fprintf(stderr, "option inconnue: %s\n", a); usage(); return 2; }
+        else if (a[0] == '-')                     { std::fprintf(stderr, "unknown option: %s\n", a); usage(); return 2; }
         else                                      romPath   = a;
     }
 
@@ -357,8 +357,8 @@ int main(int argc, char** argv) {
     Machine machine(ramBytes, cpuCore, machType);
     if (fpuPresent) {
         if (machType == MachineType::MegaSte) machine.bus.setFpuPresent(true);
-        else std::fprintf(stderr, "[headless] --fpu ignoré : socket 68881 présent "
-                                  "uniquement sur Mega STE (--machine megaste)\n");
+        else std::fprintf(stderr, "[headless] --fpu ignored: the 68881 socket only exists "
+                                  "on the Mega STE (--machine megaste)\n");
     }
     // Auto-test de la machine Glue (bordures) : pas besoin de ROM/boot, on teste
     // directement la logique du Shifter contre les valeurs documentées d'Hatari.
@@ -367,10 +367,10 @@ int main(int argc, char** argv) {
     if (busSelfTest) return machine.bus.busSelfTest() ? 0 : 1;
     if (mfpSelfTest) return machine.mfp.mfpSelfTest() ? 0 : 1;
     if (msaSelfTest) return machine.fdc.msaSelfTest() ? 0 : 1;
-    std::fprintf(stderr, "[headless] cœur CPU : %s | machine : %s | RAM : %s\n",
+    std::fprintf(stderr, "[headless] CPU core: %s | machine: %s | RAM: %s\n",
                  Cpu68k::coreName(machine.cpu.core()), machineName(machType), ramLabel(ramBytes));
     if (!machine.loadTos(romPath)) {
-        std::fprintf(stderr, "[headless] impossible de charger %s\n", romPath.c_str());
+        std::fprintf(stderr, "[headless] cannot load %s\n", romPath.c_str());
         return 1;
     }
     machine.loadDisk(diskPath);   // lecteur A (optionnel)
@@ -380,7 +380,7 @@ int main(int argc, char** argv) {
     // exclusif avec une cartouche externe (--cart), comme Hatari.
     if (!gemdosDir.empty()) {
         if (!cartPath.empty())
-            std::fprintf(stderr, "[headless] --cart ignoré : incompatible avec --gemdos\n");
+            std::fprintf(stderr, "[headless] --cart ignored: incompatible with --gemdos\n");
         machine.gemdos.setDirectory(gemdosDir);
     } else if (!cartPath.empty()) {
         machine.loadCart(cartPath);   // cartouche $FA0000 (optionnelle)
@@ -388,14 +388,14 @@ int main(int argc, char** argv) {
     // Imprimante Centronics (--printer FILE) : capture les octets imprimés dans FILE.
     if (!printerPath.empty()) {
         if (machine.setPrinterFile(printerPath))
-            std::printf("[headless] imprimante Centronics → %s\n", printerPath.c_str());
+            std::printf("[headless] Centronics printer → %s\n", printerPath.c_str());
         else
-            std::fprintf(stderr, "[headless] impossible d'ouvrir %s pour l'imprimante\n", printerPath.c_str());
+            std::fprintf(stderr, "[headless] cannot open %s for the printer\n", printerPath.c_str());
     }
     // Disque dur ACSI (--acsi/--hd) : le TOS détecte le périphérique, lit la table de
     // partitions et monte les partitions FAT (C:, D:…). Indépendant du GEMDOS HD.
     if (!acsiImg.empty() && machine.fdc.mountAcsi(acsiImg))
-        std::fprintf(stderr, "[headless] ACSI : %d partition(s) détectée(s)\n",
+        std::fprintf(stderr, "[headless] ACSI: %d partition(s) detected\n",
                      machine.fdc.acsiPartitionCount());
     machine.mfp.setColorMonitor(!machineMono);   // --mono → moniteur mono (haute rés)
 
@@ -407,7 +407,7 @@ int main(int argc, char** argv) {
     Tracer tracer;
     if (!tracePath.empty()) {
         if (!tracer.open(tracePath)) {
-            std::fprintf(stderr, "[headless] impossible d'ouvrir la trace %s\n", tracePath.c_str());
+            std::fprintf(stderr, "[headless] cannot open the trace %s\n", tracePath.c_str());
             return 1;
         }
         tracer.setLogRegs(regs);
@@ -433,7 +433,7 @@ int main(int argc, char** argv) {
     if (haveJoy) {
         machine.ikbd.setJoystick(joy0Hold, joy1Hold);
         machine.bus.stePads.setJoystick(joy0Hold, joy1Hold);   // joypads STE ($FF9200/02)
-        std::fprintf(stderr, "[headless] joystick maintenu : port1=$%02X port0=$%02X\n",
+        std::fprintf(stderr, "[headless] joystick held: port1=$%02X port0=$%02X\n",
                      joy1Hold, joy0Hold);
     }
 
@@ -491,10 +491,10 @@ int main(int argc, char** argv) {
     // Symboles (débogueur) : charge la table puis résout les breakpoints par nom.
     if (!symbolsPath.empty()) {
         if (symbols.load(symbolsPath, symBase))
-            std::fprintf(stderr, "[headless] symboles : %zu chargés depuis %s\n",
+            std::fprintf(stderr, "[headless] symbols: %zu loaded from %s\n",
                          symbols.count(), symbolsPath.c_str());
         else
-            std::fprintf(stderr, "[headless] symboles : échec de chargement de %s\n", symbolsPath.c_str());
+            std::fprintf(stderr, "[headless] symbols: failed to load %s\n", symbolsPath.c_str());
     }
     // Save-state — test de DÉTERMINISME (le vrai) : run N trames → save A → passe DIRECTE
     // (200 trames, capture état+écran) → load(A) → RE-JOUE 200 trames → capture état+écran.
@@ -516,7 +516,7 @@ int main(int argc, char** argv) {
         std::vector<uint8_t> stD; machine.saveState(stD);
         const uint64_t hD = screenHash();
         if (!machine.loadState(A.data(), A.size())) {
-            std::fprintf(stderr, "[save-state-det] FAIL : loadState a échoué\n");
+            std::fprintf(stderr, "[save-state-det] FAIL: loadState failed\n");
             return 1;
         }
         for (int i = 0; i < runLen; ++i) machine.runFrame();       // RE-JOUE depuis A
@@ -528,12 +528,12 @@ int main(int argc, char** argv) {
             // dès que le payload diverge et masquerait l'offset du champ fautif.
             size_t off = 17; const size_t m = std::min(stD.size(), stR.size());
             while (off < m && stD[off] == stR[off]) ++off;
-            std::fprintf(stderr, "[save-state-det] DIVERGENCE état @ offset %zu / %zu "
+            std::fprintf(stderr, "[save-state-det] STATE DIVERGENCE @ offset %zu / %zu "
                          "(dir[%zu]=%02X res=%02X)\n", off, stD.size(), off,
                          off < m ? stD[off] : 0, off < m ? stR[off] : 0);
         }
-        std::fprintf(stderr, "[save-state-det] écran %s | état re-sérialisé %s\n",
-                     screenEq ? "OK (identique)" : "DIFF", stateEq ? "OK (identique)" : "DIFF");
+        std::fprintf(stderr, "[save-state-det] screen %s | re-serialized state %s\n",
+                     screenEq ? "OK (identical)" : "DIFF", stateEq ? "OK (identical)" : "DIFF");
         return (stateEq && screenEq) ? 0 : 1;
     }
     for (uint32_t a : breakAddrs) machine.cpu.setBreakpoint(a);   // débogueur : breakpoints PC
@@ -541,18 +541,18 @@ int main(int argc, char** argv) {
     for (const std::string& s : breakSyms) {
         uint32_t a = 0;
         if (symbols.lookup(s, a)) { machine.cpu.setBreakpoint(a);
-            std::fprintf(stderr, "[headless] breakpoint symbole '%s' → $%06X\n", s.c_str(), a); }
-        else std::fprintf(stderr, "[headless] symbole inconnu : '%s'\n", s.c_str());
+            std::fprintf(stderr, "[headless] symbol breakpoint '%s' → $%06X\n", s.c_str(), a); }
+        else std::fprintf(stderr, "[headless] unknown symbol: '%s'\n", s.c_str());
     }
     if (!loadStatePath.empty()) {   // restaure un état AVANT de tourner (config machine identique requise)
         // Un échec DOIT teinter le code de sortie, comme toutes les autres E/S fichier :
         // sinon un runner d'oracle « restaurer l'état → tourner N trames → diffier »
         // repart d'un boot à froid et rend un vert silencieux sur la mauvaise scène.
         if (!machine.loadStateFile(loadStatePath)) {
-            std::fprintf(stderr, "[headless] ÉCHEC restauration état %s\n", loadStatePath.c_str());
+            std::fprintf(stderr, "[headless] FAILED to restore state %s\n", loadStatePath.c_str());
             outFail = true;
         } else {
-            std::fprintf(stderr, "[headless] état restauré depuis %s\n", loadStatePath.c_str());
+            std::fprintf(stderr, "[headless] state restored from %s\n", loadStatePath.c_str());
             // --joy est posé AVANT ce point (après reset) mais l'état restauré
             // rétablit hostJoy_/stePads sauvegardés (généralement neutres) : sans
             // cette repose, « --load-state titre.state --joy 0x80 » n'appuyait
@@ -560,7 +560,7 @@ int main(int argc, char** argv) {
             if (haveJoy) {
                 machine.ikbd.setJoystick(joy0Hold, joy1Hold);
                 machine.bus.stePads.setJoystick(joy0Hold, joy1Hold);
-                std::fprintf(stderr, "[headless] joystick re-posé après restauration : port1=$%02X port0=$%02X\n",
+                std::fprintf(stderr, "[headless] joystick re-applied after restore: port1=$%02X port0=$%02X\n",
                              joy1Hold, joy0Hold);
             }
         }
@@ -600,17 +600,17 @@ int main(int argc, char** argv) {
                     std::fwrite(&b, 1, 1, df);
                 }
                 std::fclose(df);
-                std::fprintf(stderr, "[headless] dump RAM trame %d : $%06X+%u → %s\n",
+                std::fprintf(stderr, "[headless] RAM dump frame %d: $%06X+%u → %s\n",
                              frame, dumpAddr, dumpLen, dumpPath.c_str());
             } else {
-                std::fprintf(stderr, "[headless] ÉCHEC ouverture dump RAM %s\n", dumpPath.c_str());
+                std::fprintf(stderr, "[headless] FAILED to open RAM dump %s\n", dumpPath.c_str());
                 outFail = true;
             }
         }
         if (joyAtFrame >= 0 && frame == joyAtFrame) {
             machine.ikbd.setJoystick(0, joyAt1);
             machine.bus.stePads.setJoystick(0, joyAt1);   // joypads STE ($FF9200/02)
-            std::fprintf(stderr, "[headless] joystick posé à la trame %d : port1=$%02X\n", frame, joyAt1);
+            std::fprintf(stderr, "[headless] joystick applied at frame %d: port1=$%02X\n", frame, joyAt1);
         }
         // Script souris daté (--mouse-at) : 1 token = 1 trame. Pilote un menu souris.
         if (mouseAtFrame >= 0 && frame >= mouseAtFrame) {
@@ -667,10 +667,10 @@ int main(int argc, char** argv) {
             char label[128] = "";
             if (!sym.empty()) std::snprintf(label, sizeof label, " <%s+%u>", sym.c_str(), off);
             if (isW)   // break-after : bpa = adresse DONNÉE accédée, PC = instruction suivante
-                std::fprintf(stderr, "[headless] WATCH accès $%06X%s (trame %d) \xe2\x80\x94 PC=$%06X : %s\n",
+                std::fprintf(stderr, "[headless] WATCH access $%06X%s (frame %d) \xe2\x80\x94 PC=$%06X: %s\n",
                              bpa, label, frame, pc, dis);
             else
-                std::fprintf(stderr, "[headless] BREAK $%06X%s (trame %d) : %s\n", bpa, label, frame, dis);
+                std::fprintf(stderr, "[headless] BREAK $%06X%s (frame %d): %s\n", bpa, label, frame, dis);
             std::fprintf(stderr, "  PC=%06X SR=%04X\n", pc, machine.cpu.sr());
             for (int r = 0; r < 8; ++r) std::fprintf(stderr, "  D%d=%08X A%d=%08X\n",
                                                      r, machine.cpu.reg(r), r, machine.cpu.reg(8 + r));
@@ -682,20 +682,20 @@ int main(int argc, char** argv) {
             std::snprintf(path, sizeof(path), "%s%05d.ppm", shotPrefix.c_str(), frame);
             if (!writePpm(path, machine.shifter.pixels(),
                           machine.shifter.width(), machine.shifter.height())) {
-                std::fprintf(stderr, "[headless] ÉCHEC capture périodique %s\n", path);
+                std::fprintf(stderr, "[headless] FAILED periodic screenshot %s\n", path);
                 outFail = true;
             }
         }
         if (haveUntil && machine.cpu.pc() == untilPc) {
-            std::fprintf(stderr, "[headless] PC=$%06X atteint à la trame %d\n", untilPc, frame);
+            std::fprintf(stderr, "[headless] PC=$%06X reached at frame %d\n", untilPc, frame);
             break;
         }
     }
 
     if (!saveStatePath.empty()) {   // sauvegarde l'état à la fin de la boucle
         const bool ok = machine.saveStateFile(saveStatePath);
-        std::fprintf(stderr, ok ? "[headless] état sauvegardé \xe2\x86\x92 %s\n"
-                                : "[headless] ÉCHEC sauvegarde état %s\n", saveStatePath.c_str());
+        std::fprintf(stderr, ok ? "[headless] state saved \xe2\x86\x92 %s\n"
+                                : "[headless] FAILED to save state %s\n", saveStatePath.c_str());
         if (!ok) outFail = true;
     }
 
@@ -712,10 +712,10 @@ int main(int argc, char** argv) {
             std::fwrite("data", 4, 1, wf); w32(dataLen);
             std::fwrite(dumpPcm.data(), 2, dumpPcm.size(), wf);
             std::fclose(wf);
-            std::fprintf(stderr, "[headless] dump audio → %s (%.1f s à %u Hz)\n",
+            std::fprintf(stderr, "[headless] audio dump → %s (%.1f s at %u Hz)\n",
                          soundDumpPath.c_str(), double(dumpPcm.size() / 2) / kDumpRate, kDumpRate);
         } else {
-            std::fprintf(stderr, "[headless] ÉCHEC ouverture dump audio %s\n", soundDumpPath.c_str());
+            std::fprintf(stderr, "[headless] FAILED to open audio dump %s\n", soundDumpPath.c_str());
             outFail = true;
         }
     }
@@ -738,7 +738,7 @@ int main(int argc, char** argv) {
         idle(3);
         packet(0, 0, false);                                 // 4) relâcher
         idle(40);
-        std::fprintf(stderr, "[headless] séquence : clic-glissé de Disque A vers le centre\n");
+        std::fprintf(stderr, "[headless] sequence: click-drag from Disk A to the centre\n");
     }
 
     // Injection de touches (pilotage des menus de diagnostic). Table de scancodes
@@ -758,25 +758,25 @@ int main(int argc, char** argv) {
         // clavier échouerait. Le technicien le branche juste avant de lancer le test S.
         if (loopback) machine.mfp.setLoopback(true);
         idle(frames);   // laisse les tests déclenchés s'exécuter
-        std::fprintf(stderr, "[headless] touches injectées : \"%s\"\n", keys.c_str());
+        std::fprintf(stderr, "[headless] keys injected: \"%s\"\n", keys.c_str());
     }
 
-    std::fprintf(stderr, "[headless] %llu instructions tracées\n",
+    std::fprintf(stderr, "[headless] %llu instructions traced\n",
                  (unsigned long long)tracer.instructionCount());
     // Métrique précision cycle : pire retard d'IRQ timer MFP + préemptions du
     // timeslice CPU (cf. Scheduler). Retard faible = quantum « sous la ligne ».
-    std::fprintf(stderr, "[headless] timer IRQ retard max = %lld cyc | préemptions = %ld\n",
+    std::fprintf(stderr, "[headless] timer IRQ max lateness = %lld cyc | preemptions = %ld\n",
                  (long long)machine.sched.timerMaxLate, machine.sched.preemptions);
-    std::fprintf(stderr, "[headless] vidéo : %dx%d @ %d Hz\n",
+    std::fprintf(stderr, "[headless] video: %dx%d @ %d Hz\n",
                  machine.shifter.width(), machine.shifter.height(), machine.shifter.refreshHz());
 
     if (!shotPath.empty()) {
         if (writePpm(shotPath.c_str(), machine.shifter.pixels(),
                      machine.shifter.width(), machine.shifter.height()))
-            std::fprintf(stderr, "[headless] capture écran → %s (%dx%d)\n",
+            std::fprintf(stderr, "[headless] screenshot → %s (%dx%d)\n",
                          shotPath.c_str(), machine.shifter.width(), machine.shifter.height());
         else {
-            std::fprintf(stderr, "[headless] ÉCHEC capture écran %s\n", shotPath.c_str());
+            std::fprintf(stderr, "[headless] FAILED screenshot %s\n", shotPath.c_str());
             outFail = true;
         }
     }
@@ -795,7 +795,7 @@ int main(int argc, char** argv) {
     }
 
     if (!serialOut.empty())
-        std::fprintf(stderr, "[headless] port série RS-232 (%zu octets) :\n%s\n",
+        std::fprintf(stderr, "[headless] RS-232 serial port (%zu bytes):\n%s\n",
                      serialOut.size(), serialOut.c_str());
     // --serial-dump FILE : écrit les octets série bruts dans FILE (capture propre pour
     // les runners de verdict, ex. tools/run_selftests.py qui y cherche NEOST-TEST: … PASS).
@@ -804,7 +804,7 @@ int main(int argc, char** argv) {
             std::fwrite(serialOut.data(), 1, serialOut.size(), sf);
             std::fclose(sf);
         } else {
-            std::fprintf(stderr, "[headless] impossible d'écrire le dump série %s\n",
+            std::fprintf(stderr, "[headless] cannot write the serial dump %s\n",
                          serialDumpPath.c_str());
             outFail = true;
         }
@@ -814,8 +814,8 @@ int main(int argc, char** argv) {
     // sur --break/--until-pc, ou LEN=0) : sans ce contrôle, aucun fichier n'était écrit,
     // rien n'était dit, et le runner diffiait un dump PÉRIMÉ en croyant l'avoir refait.
     if (dumpAtFrame >= 0 && !dumpDone) {
-        std::fprintf(stderr, "[headless] --dump-at trame %d jamais atteinte (LEN=%u) — "
-                     "aucun dump écrit\n", dumpAtFrame, dumpLen);
+        std::fprintf(stderr, "[headless] --dump-at frame %d never reached (LEN=%u) — "
+                     "no dump written\n", dumpAtFrame, dumpLen);
         outFail = true;
     }
 

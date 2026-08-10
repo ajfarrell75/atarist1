@@ -191,7 +191,7 @@ unsigned int compileShaderProgram(const char* vertexBody,
     if (!loadEntryPoints()) {
         if (errorOut) *errorOut = "GL 3.x entry points unavailable";
         std::fprintf(stderr, "[CRT] GL 3.x entry points unavailable — "
-                             "effets CRT désactivés\n");
+                             "CRT effects disabled\n");
         return 0;
     }
 #endif
@@ -232,7 +232,7 @@ unsigned int compileShaderProgram(const char* vertexBody,
             reinterpret_cast<const char*>(glGetString(GL_SHADING_LANGUAGE_VERSION));
         std::string chosen(versionLine + std::strlen("#version "));
         while (!chosen.empty() && chosen.back() == '\n') chosen.pop_back();
-        std::fprintf(stderr, "[CRT] GLSL %s (pilote : %s)\n",
+        std::fprintf(stderr, "[CRT] GLSL %s (driver: %s)\n",
                      chosen.c_str(), sl ? sl : "?");
     }
 

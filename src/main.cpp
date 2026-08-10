@@ -354,14 +354,14 @@ static void saveConfig(const std::string& exeDir, Config& c, Machine* machine = 
              << "\nrtc=" << w.rtc << "\nrtc_saved=" << w.rtcSaved << "\n";
     // Dossiers ROM additionnels (0..N) : une ligne kiosk_romdir= par dossier.
     if (f) for (const auto& d : w.romDirs) f << "kiosk_romdir=" << d << "\n";
-    if (!f) { std::fprintf(stderr, "[cfg] écriture impossible (%s) — configuration NON enregistrée\n",
+    if (!f) { std::fprintf(stderr, "[cfg] cannot write (%s) — configuration NOT saved\n",
                            tmpPath.c_str());
               f.close(); std::error_code rmec; fs::remove(tmpPath, rmec); return; }
     f.flush();
     const bool ok = f.good();
     f.close();
     if (!ok) {   // le flush a échoué : on garde l'ANCIEN fichier intact
-        std::fprintf(stderr, "[cfg] écriture incomplète (%s) — ancienne configuration conservée\n",
+        std::fprintf(stderr, "[cfg] incomplete write (%s) — previous configuration kept\n",
                      tmpPath.c_str());
         std::error_code rmec; fs::remove(tmpPath, rmec);
         return;
@@ -372,7 +372,7 @@ static void saveConfig(const std::string& exeDir, Config& c, Machine* machine = 
     std::error_code mvec;
     fs::rename(tmpPath, dest, mvec);
     if (mvec) {
-        std::fprintf(stderr, "[cfg] remplacement impossible (%s → %s) : %s\n",
+        std::fprintf(stderr, "[cfg] cannot replace (%s → %s): %s\n",
                      tmpPath.c_str(), dest.c_str(), mvec.message().c_str());
         std::error_code rmec; fs::remove(tmpPath, rmec);
     }
@@ -579,7 +579,7 @@ bool  g_joyCfgDirty = false;           // un réglage joystick a changé → res
 char g_gdBuf[512] = {0}, g_hdBuf[512] = {0};
 
 void onGlfwError(int code, const char* desc) {
-    std::fprintf(stderr, "GLFW erreur %d : %s\n", code, desc);
+    std::fprintf(stderr, "GLFW error %d: %s\n", code, desc);
 }
 
 // Callback bouton souris : ÉVÉNEMENTIEL (capte chaque transition, même un
@@ -589,7 +589,7 @@ void onMouseButton(GLFWwindow* w, int /*button*/, int /*action*/, int /*mods*/) 
     if (!g_ikbd || !g_mouseCaptured) return;
     const bool l = glfwGetMouseButton(w, GLFW_MOUSE_BUTTON_LEFT)  == GLFW_PRESS;
     const bool r = glfwGetMouseButton(w, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
-    if (g_dbgMouse) std::fprintf(stderr, "[souris] bouton  L=%d R=%d\n", l, r);
+    if (g_dbgMouse) std::fprintf(stderr, "[mouse] button  L=%d R=%d\n", l, r);
     g_ikbd->mouseEvent(0, 0, l, r);
 }
 
@@ -986,9 +986,9 @@ void updateKbdCountry(const std::vector<uint8_t>& rom) {
     if (rom.size() < 0x1E) { g_kbdCountry = -1; return; }
     g_kbdCountry = ((rom[0x1C] << 8) | rom[0x1D]) >> 1;
     static const char* names[] = {"US", "DE", "FR", "UK"};
-    std::fprintf(stderr, "[kbd] disposition TOS : %s (mapping symbolique)\n",
+    std::fprintf(stderr, "[kbd] TOS layout: %s (symbolic mapping)\n",
                  g_kbdCountry >= 0 && g_kbdCountry <= 3 ? names[g_kbdCountry]
-                 : g_kbdCountry == 127 ? "multilangue (défaut)" : "autre (défaut)");
+                 : g_kbdCountry == 127 ? "multilingual (default)" : "other (default)");
 }
 
 // Callback clavier GLFW → IKBD. La touche Suppr (DEL) est réservée à l'hôte (elle
@@ -1050,8 +1050,8 @@ void onKey(GLFWwindow*, int key, int scancode, int action, int /*mods*/) {
 #if defined(NEOST_WITH_IMGUI)
 void drawHexViewer(Bus& bus) {
     static int base = 0;
-    ImGui::Begin("Mémoire (hex)");
-    ImGui::InputInt("Adresse base", &base, 16, 256,
+    ImGui::Begin("Memory (hex)");
+    ImGui::InputInt("Base address", &base, 16, 256,
                     ImGuiInputTextFlags_CharsHexadecimal | ImGuiInputTextFlags_EnterReturnsTrue);
     // Le champ ne doit pas confisquer durablement le clavier du ST : dès qu'il
     // perd l'édition (Entrée/Échap/clic ailleurs), on relâche le focus fenêtre
@@ -1079,7 +1079,7 @@ void drawHexViewer(Bus& bus) {
 // reqReset passe à true si le bouton RESET est cliqué.
 void drawCpuState(Cpu68k& cpu, bool& reqReset) {
     ImGui::Begin("CPU 68000");
-    if (IconButton(ICON_FA_POWER_OFF, "Reset (RESET physique)")) reqReset = true;
+    if (IconButton(ICON_FA_POWER_OFF, "Reset (hardware RESET)")) reqReset = true;
     ImGui::Separator();
     ImGui::Text("PC = %08X    SR = %04X", cpu.pc(), cpu.sr());
     ImGui::Separator();
@@ -1115,14 +1115,14 @@ void drawJoystickWindow(GLFWwindow* win, uint8_t lastJoy0, uint8_t lastJoy1) {
     ImGui::Begin("Joystick", &g_showJoy);
 
     // --- Réglages (modifient les globals ; resauve via g_joyCfgDirty) -----------
-    if (ImGui::Checkbox("Émulation clavier (flèches + Ctrl droit)", &g_kbdJoy)) g_joyCfgDirty = true;
+    if (ImGui::Checkbox("Keyboard emulation (arrows + right Ctrl)", &g_kbdJoy)) g_joyCfgDirty = true;
     ImGui::SameLine(); ImGui::TextDisabled("(F11)");
-    ImGui::Text("Port émulé :"); ImGui::SameLine();
-    if (ImGui::RadioButton("1 (jeux)", g_kbdJoyPort == 1)) { g_kbdJoyPort = 1; g_joyCfgDirty = true; }
+    ImGui::Text("Emulated port:"); ImGui::SameLine();
+    if (ImGui::RadioButton("1 (games)", g_kbdJoyPort == 1)) { g_kbdJoyPort = 1; g_joyCfgDirty = true; }
     ImGui::SameLine();
-    if (ImGui::RadioButton("0 (souris)", g_kbdJoyPort == 0)) { g_kbdJoyPort = 0; g_joyCfgDirty = true; }
+    if (ImGui::RadioButton("0 (mouse)", g_kbdJoyPort == 0)) { g_kbdJoyPort = 0; g_joyCfgDirty = true; }
     ImGui::SetNextItemWidth(160.0f);
-    if (ImGui::SliderFloat("Zone morte", &g_joyDeadzone, 0.0f, 0.95f, "%.2f")) {
+    if (ImGui::SliderFloat("Dead zone", &g_joyDeadzone, 0.0f, 0.95f, "%.2f")) {
         if (g_joyDeadzone < 0.0f) g_joyDeadzone = 0.0f;
         if (g_joyDeadzone > 0.95f) g_joyDeadzone = 0.95f;
     }
@@ -1133,14 +1133,14 @@ void drawJoystickWindow(GLFWwindow* win, uint8_t lastJoy0, uint8_t lastJoy1) {
     // --- Sortie réellement envoyée au ST (le plus important) --------------------
     auto decodeRow = [](const char* who, uint8_t v) {
         ImGui::Text("%s  $%02X :", who, v); ImGui::SameLine();
-        drawJoyDirLed("HAUT",   v & stjoy::UP);
-        drawJoyDirLed("BAS",    v & stjoy::DOWN);
-        drawJoyDirLed("GAUCHE", v & stjoy::LEFT);
-        drawJoyDirLed("DROITE", v & stjoy::RIGHT);
-        drawJoyDirLed("FEU",    v & stjoy::FIRE);
+        drawJoyDirLed("UP",    v & stjoy::UP);
+        drawJoyDirLed("DOWN",  v & stjoy::DOWN);
+        drawJoyDirLed("LEFT",  v & stjoy::LEFT);
+        drawJoyDirLed("RIGHT", v & stjoy::RIGHT);
+        drawJoyDirLed("FIRE",  v & stjoy::FIRE);
         ImGui::NewLine();
     };
-    ImGui::TextDisabled("→ Envoyé à l'IKBD (ST) :");
+    ImGui::TextDisabled("→ Sent to the IKBD (ST):");
     decodeRow("Port 0", lastJoy0);
     decodeRow("Port 1", lastJoy1);
 
@@ -1153,12 +1153,12 @@ void drawJoystickWindow(GLFWwindow* win, uint8_t lastJoy0, uint8_t lastJoy1) {
         ++nPresent;
         const char* nm = glfwGetJoystickName(jid);
         const int stPort = (nPresent == 1) ? 1 : (nPresent == 2 ? 0 : -1);
-        ImGui::Text("Manette %d : %s", jid, nm ? nm : "?");
-        if (stPort >= 0) { ImGui::SameLine(); ImGui::TextDisabled("→ port ST %d", stPort); }
+        ImGui::Text("Pad %d: %s", jid, nm ? nm : "?");
+        if (stPort >= 0) { ImGui::SameLine(); ImGui::TextDisabled("→ ST port %d", stPort); }
 
         GLFWgamepadstate gs;
         if (glfwGetGamepadState(jid, &gs)) {
-            ImGui::TextColored(ImVec4(0.4f,0.8f,1.0f,1.0f), "  reconnue gamepad (mapping SDL)");
+            ImGui::TextColored(ImVec4(0.4f,0.8f,1.0f,1.0f), "  recognized as a gamepad (SDL mapping)");
             ImGui::Indent(8.0f);
             drawJoystickAxisBar("LX", gs.axes[GLFW_GAMEPAD_AXIS_LEFT_X],  g_joyDeadzone);
             drawJoystickAxisBar("LY", gs.axes[GLFW_GAMEPAD_AXIS_LEFT_Y],  g_joyDeadzone);
@@ -1166,7 +1166,7 @@ void drawJoystickWindow(GLFWwindow* win, uint8_t lastJoy0, uint8_t lastJoy1) {
             drawJoystickAxisBar("RY", gs.axes[GLFW_GAMEPAD_AXIS_RIGHT_Y], g_joyDeadzone);
             ImGui::Unindent(8.0f);
         } else {
-            ImGui::TextColored(ImVec4(1.0f,0.7f,0.3f,1.0f), "  NON reconnue gamepad → lecture brute");
+            ImGui::TextColored(ImVec4(1.0f,0.7f,0.3f,1.0f), "  NOT recognized as a gamepad → raw read");
         }
 
         // Axes bruts (toujours affichés : révèlent un axe non centré au repos).
@@ -1174,31 +1174,31 @@ void drawJoystickWindow(GLFWwindow* win, uint8_t lastJoy0, uint8_t lastJoy1) {
         const float*         ax  = glfwGetJoystickAxes(jid, &axN);
         const unsigned char* bt  = glfwGetJoystickButtons(jid, &btN);
         const unsigned char* hat = glfwGetJoystickHats(jid, &hatN);
-        ImGui::Text("  Axes bruts (%d) :", axN);
+        ImGui::Text("  Raw axes (%d):", axN);
         for (int i = 0; i < axN && ax; ++i) {
             char lbl[24]; std::snprintf(lbl, sizeof lbl, "a%d%s", i,
                                         (i == 0 ? " (X?)" : i == 1 ? " (Y?)" : ""));
             ImGui::Indent(8.0f); drawJoystickAxisBar(lbl, ax[i], g_joyDeadzone); ImGui::Unindent(8.0f);
         }
-        ImGui::Text("  Boutons (%d) :", btN); ImGui::SameLine();
+        ImGui::Text("  Buttons (%d):", btN); ImGui::SameLine();
         for (int i = 0; i < btN && bt; ++i)
             if (bt[i]) { ImGui::SameLine(); ImGui::Text("%d", i); }
         if (hat && hatN >= 1)
-            ImGui::Text("  Hat0 : %s%s%s%s", (hat[0]&GLFW_HAT_UP)?"H":"", (hat[0]&GLFW_HAT_DOWN)?"B":"",
-                        (hat[0]&GLFW_HAT_LEFT)?"G":"", (hat[0]&GLFW_HAT_RIGHT)?"D":"");
+            ImGui::Text("  Hat0 : %s%s%s%s", (hat[0]&GLFW_HAT_UP)?"U":"", (hat[0]&GLFW_HAT_DOWN)?"D":"",
+                        (hat[0]&GLFW_HAT_LEFT)?"L":"", (hat[0]&GLFW_HAT_RIGHT)?"R":"");
         // Décomposition analogique / numérique + effet du filtre anti-bloqué.
         const float thr = (g_joyDeadzone < 0.0f) ? 0.0f : (g_joyDeadzone > 0.95f ? 0.95f : g_joyDeadzone);
         uint8_t an = 0, dg = 0; stjoy::readStickRaw(jid, thr, an, dg);
         const uint8_t fin = stjoy::readStick(jid, g_joyDeadzone);
-        ImGui::Text("  analogique $%02X | numérique brut $%02X", an, dg);
+        ImGui::Text("  analog $%02X | raw digital $%02X", an, dg);
         if ((dg & ~fin) & ~an)
             ImGui::TextColored(ImVec4(1.0f,0.7f,0.3f,1.0f),
-                               "  filtre anti-bloqué : bits numériques collés ignorés ($%02X)",
+                               "  stuck-input filter: jammed digital bits ignored ($%02X)",
                                uint8_t((dg & ~fin) & ~an));
-        ImGui::Text("  → octet ST envoyé : $%02X", fin);
+        ImGui::Text("  → ST byte sent: $%02X", fin);
         ImGui::Separator();
     }
-    if (nPresent == 0) ImGui::TextDisabled("Aucune manette détectée. (Clavier : active l'émulation ci-dessus.)");
+    if (nPresent == 0) ImGui::TextDisabled("No pad detected. (Keyboard: enable the emulation above.)");
     (void)win;
     ImGui::End();
 }
@@ -1211,43 +1211,43 @@ void drawJoystickWindow(GLFWwindow* win, uint8_t lastJoy0, uint8_t lastJoy1) {
 // et par la page Écran de la fenêtre Configuration (proposition B) — une seule
 // définition des réglages, deux endroits où les afficher.
 void drawCrtControls(bool& changed) {
-    if (ImGui::Checkbox("Activer les effets CRT", &g_crtOn)) {
+    if (ImGui::Checkbox("Enable CRT effects", &g_crtOn)) {
         changed = true;
         if (g_crtOn && !g_crt.available() && !g_crtInit) { g_crtInit = true; g_crt.initialize(); }
     }
     // Diagnostic : shader indisponible (ex. contexte GL 2.1 sur macOS legacy).
     if (g_crtOn && g_crtInit && !g_crt.available()) {
-        ImGui::TextColored(ImVec4(1, 0.5f, 0.3f, 1), "Shader indisponible :");
+        ImGui::TextColored(ImVec4(1, 0.5f, 0.3f, 1), "Shader unavailable:");
         ImGui::TextWrapped("%s", g_crt.lastError().c_str());
-        ImGui::TextDisabled("→ écran ST présenté brut (passthrough).");
+        ImGui::TextDisabled("→ ST screen shown raw (passthrough).");
     }
 
-    ImGui::TextDisabled("Presets :");
+    ImGui::TextDisabled("Presets:");
     ImGui::SameLine();
-    if (ImGui::SmallButton("Léger"))    { applyCrtPreset("leger",    g_crtParams, g_crtOn); changed = true; }
+    if (ImGui::SmallButton("Light"))    { applyCrtPreset("light",    g_crtParams, g_crtOn); changed = true; }
     ImGui::SameLine();
     if (ImGui::SmallButton("Arcade"))   { applyCrtPreset("arcade",   g_crtParams, g_crtOn); changed = true; }
     ImGui::SameLine();
-    if (ImGui::SmallButton("Phosphore")){ applyCrtPreset("phosphor", g_crtParams, g_crtOn); changed = true; }
+    if (ImGui::SmallButton("Phosphor")) { applyCrtPreset("phosphor", g_crtParams, g_crtOn); changed = true; }
 
     ImGui::Separator();
     ImGui::BeginDisabled(!g_crtOn);
     neost::CrtParams& p = g_crtParams;
     bool ch = false;
-    ch |= ImGui::SliderFloat("Luminosité",  &p.brightness, -0.5f, 0.5f);
-    ch |= ImGui::SliderFloat("Contraste",   &p.contrast,    0.5f, 1.5f);
+    ch |= ImGui::SliderFloat("Brightness",  &p.brightness, -0.5f, 0.5f);
+    ch |= ImGui::SliderFloat("Contrast",    &p.contrast,    0.5f, 1.5f);
     ch |= ImGui::SliderFloat("Saturation",  &p.saturation,  0.0f, 2.0f);
-    ch |= ImGui::SliderFloat("Teinte",      &p.hue,        -0.5f, 0.5f);
+    ch |= ImGui::SliderFloat("Hue",         &p.hue,        -0.5f, 0.5f);
     ImGui::Separator();
-    ch |= ImGui::SliderFloat("Netteté",     &p.sharpness,   0.0f, 1.0f);
-    ch |= ImGui::SliderFloat("Rémanence",   &p.persistence, 0.0f, 0.98f);
+    ch |= ImGui::SliderFloat("Sharpness",   &p.sharpness,   0.0f, 1.0f);
+    ch |= ImGui::SliderFloat("Persistence", &p.persistence, 0.0f, 0.98f);
     ImGui::Separator();
     ch |= ImGui::SliderFloat("Scanlines",   &p.scanlines,   0.0f, 1.0f);
-    ch |= ImGui::SliderFloat("Baril",       &p.barrel,      0.0f, 0.30f);
+    ch |= ImGui::SliderFloat("Barrel",      &p.barrel,      0.0f, 0.30f);
 
     ImGui::Separator();
     static const char* kMaskNames[] = {
-        "Off", "Triade (3 bandes)", "Grille d'ouverture (Trinitron)", "Points (triades décalées)"
+        "Off", "Triad (3 stripes)", "Aperture grille (Trinitron)", "Dots (offset triads)"
     };
     int maskIdx = static_cast<int>(p.shadowMask);
     if (ImGui::Combo("Shadow mask", &maskIdx, kMaskNames, IM_ARRAYSIZE(kMaskNames))) {
@@ -1255,11 +1255,11 @@ void drawCrtControls(bool& changed) {
         ch = true;
     }
     ImGui::BeginDisabled(p.shadowMask == neost::CrtParams::ShadowMask::Off);
-    ch |= ImGui::SliderFloat("Force du masque", &p.shadowMaskStrength, 0.0f, 1.0f);
+    ch |= ImGui::SliderFloat("Mask strength", &p.shadowMaskStrength, 0.0f, 1.0f);
     ImGui::EndDisabled();
-    ch |= ImGui::SliderFloat("Gain de luminance", &p.luminanceGain, 1.0f, 2.0f);
+    ch |= ImGui::SliderFloat("Luminance gain",    &p.luminanceGain, 1.0f, 2.0f);
     ch |= ImGui::SliderFloat("Vignette",          &p.centerLighting, 0.5f, 1.0f);
-    ch |= ImGui::SliderFloat("Gamma phosphore",   &p.phosphorGamma, 0.6f, 2.6f);
+    ch |= ImGui::SliderFloat("Phosphor gamma",    &p.phosphorGamma, 0.6f, 2.6f);
     ImGui::EndDisabled();
 
     if (ch) changed = true;
@@ -1269,7 +1269,7 @@ void drawCrtControls(bool& changed) {
 // donc à côté de l'écran ST, pas dans une page de configuration).
 void drawCrtSettings(bool& changed) {
     ImGui::SetNextWindowSize(ImVec2(360, 0), ImGuiCond_FirstUseEver);
-    ImGui::Begin("Effets CRT", &g_showCrt);
+    ImGui::Begin("CRT Effects", &g_showCrt);
     drawCrtControls(changed);
     ImGui::End();
 }
@@ -1290,52 +1290,52 @@ void drawDebugger(Machine& machine) {
         return b;
     };
     ImGui::SetNextWindowSize(ImVec2(480, 560), ImGuiCond_FirstUseEver);
-    ImGui::Begin(ICON_FA_BUG " Débogueur", &g_showDbg);
+    ImGui::Begin(ICON_FA_BUG " Debugger", &g_showDbg);
 
     // --- État + transport -----------------------------------------------------
     if (g_dbgPaused) {
         ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f),
-                           ICON_FA_PAUSE " EN PAUSE  \xe2\x80\x94  PC=$%06X%s",
+                           ICON_FA_PAUSE " PAUSED  \xe2\x80\x94  PC=$%06X%s",
                            cpu.pc(), symLabel(cpu.pc()).c_str());
         if (cpu.breakpointHit() && cpu.breakpointHitIsWatch())
-            ImGui::TextColored(ImVec4(0.55f, 0.85f, 1.0f, 1.0f), "  watchpoint : accès $%06X%s",
+            ImGui::TextColored(ImVec4(0.55f, 0.85f, 1.0f, 1.0f), "  watchpoint: access $%06X%s",
                                cpu.breakpointHitAddr(), symLabel(cpu.breakpointHitAddr()).c_str());
-        if (ImGui::Button(ICON_FA_PLAY " Continuer")) {
+        if (ImGui::Button(ICON_FA_PLAY " Continue")) {
             cpu.clearBreakpointHit();   // arme le skip-once de l'adresse courante
             g_dbgPaused = false;
         }
         ImGui::SameLine();
-        if (ImGui::Button(ICON_FA_STEP_FORWARD " Pas (1 instr)")) g_dbgStepInstr = true;
+        if (ImGui::Button(ICON_FA_STEP_FORWARD " Step (1 instr)")) g_dbgStepInstr = true;
         ImGui::SameLine();
-        if (ImGui::Button(ICON_FA_STEP_FORWARD " Pas (1 trame)")) g_dbgStepFrame = true;
+        if (ImGui::Button(ICON_FA_STEP_FORWARD " Step (1 frame)")) g_dbgStepFrame = true;
     } else {
-        ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.5f, 1.0f), ICON_FA_PLAY " En cours");
+        ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.5f, 1.0f), ICON_FA_PLAY " Running");
         if (ImGui::Button(ICON_FA_PAUSE " Pause")) g_dbgPaused = true;
     }
     ImGui::Separator();
 
     // --- Symboles : chargement (.sym nm-style ou exécutable TOS) + bp par nom --
-    ImGui::Text("Symboles (%zu)", g_symbols.count());
+    ImGui::Text("Symbols (%zu)", g_symbols.count());
     static char symPath[512] = "";
     static char symBaseBuf[16] = "";
     ImGui::SetNextItemWidth(220.0f);
-    ImGui::InputTextWithHint("##sympath", "chemin .sym ou .TOS", symPath, sizeof symPath);
+    ImGui::InputTextWithHint("##sympath", ".sym or .TOS path", symPath, sizeof symPath);
     ImGui::SameLine();
     ImGui::SetNextItemWidth(80.0f);
-    ImGui::InputTextWithHint("##symbase", "base hex", symBaseBuf, sizeof symBaseBuf,
+    ImGui::InputTextWithHint("##symbase", "hex base", symBaseBuf, sizeof symBaseBuf,
                              ImGuiInputTextFlags_CharsHexadecimal);
     ImGui::SameLine();
-    if (ImGui::Button("Charger") && symPath[0]) {
+    if (ImGui::Button("Load") && symPath[0]) {
         const uint32_t base = (uint32_t)std::strtoul(symBaseBuf, nullptr, 16);
         g_symbols.load(symPath, base);   // auto-détecte nm-style vs exécutable TOS
     }
     // Breakpoint par symbole (nom → adresse via la table).
     static char symBp[64] = "";
     ImGui::SetNextItemWidth(220.0f);
-    const bool symEnter = ImGui::InputTextWithHint("##symbp", "nom de symbole", symBp, sizeof symBp,
+    const bool symEnter = ImGui::InputTextWithHint("##symbp", "symbol name", symBp, sizeof symBp,
                                                    ImGuiInputTextFlags_EnterReturnsTrue);
     ImGui::SameLine();
-    if ((ImGui::Button("BP symbole") || symEnter) && symBp[0]) {
+    if ((ImGui::Button("Symbol BP") || symEnter) && symBp[0]) {
         uint32_t a = 0;
         if (g_symbols.lookup(symBp, a)) { cpu.setBreakpoint(a); symBp[0] = '\0'; }
     }
@@ -1349,12 +1349,12 @@ void drawDebugger(Machine& machine) {
                                           ImGuiInputTextFlags_CharsHexadecimal |
                                           ImGuiInputTextFlags_EnterReturnsTrue);
     ImGui::SameLine();
-    if ((ImGui::Button("Ajouter") || entered) && bpBuf[0]) {
+    if ((ImGui::Button("Add") || entered) && bpBuf[0]) {
         cpu.setBreakpoint((uint32_t)std::strtoul(bpBuf, nullptr, 16));
         bpBuf[0] = '\0';
     }
     ImGui::SameLine();
-    if (ImGui::Button("Tout effacer")) cpu.clearAllBreakpoints();
+    if (ImGui::Button("Clear all")) cpu.clearAllBreakpoints();
 
     if (ImGui::BeginChild("##bplist", ImVec2(0, 120), true)) {
         for (int i = 0; i < cpu.breakpointCount(); ++i) {
@@ -1379,16 +1379,16 @@ void drawDebugger(Machine& machine) {
     ImGui::Text("Watchpoints (%d)", cpu.watchpointCount());
     static char wpBuf[16] = "";
     ImGui::SetNextItemWidth(120.0f);
-    const bool wpEnter = ImGui::InputTextWithHint("##wpaddr", "adresse hex", wpBuf, sizeof wpBuf,
+    const bool wpEnter = ImGui::InputTextWithHint("##wpaddr", "hex address", wpBuf, sizeof wpBuf,
                                                   ImGuiInputTextFlags_CharsHexadecimal |
                                                   ImGuiInputTextFlags_EnterReturnsTrue);
     ImGui::SameLine();
-    if ((ImGui::Button("Ajouter##wp") || wpEnter) && wpBuf[0]) {
+    if ((ImGui::Button("Add##wp") || wpEnter) && wpBuf[0]) {
         cpu.setWatchpoint((uint32_t)std::strtoul(wpBuf, nullptr, 16));
         wpBuf[0] = '\0';
     }
     ImGui::SameLine();
-    if (ImGui::Button("Tout effacer##wp")) cpu.clearAllWatchpoints();
+    if (ImGui::Button("Clear all##wp")) cpu.clearAllWatchpoints();
     if (ImGui::BeginChild("##wplist", ImVec2(0, 80), true)) {
         for (int i = 0; i < cpu.watchpointCount(); ++i) {
             uint32_t a = 0;
@@ -1404,7 +1404,7 @@ void drawDebugger(Machine& machine) {
     ImGui::Separator();
 
     // --- Désassemblage autour du PC (clic sur une ligne = toggle breakpoint) ---
-    ImGui::TextDisabled("Désassemblage (clic = poser/retirer un breakpoint)");
+    ImGui::TextDisabled("Disassembly (click = toggle a breakpoint)");
     if (ImGui::BeginChild("##disasm", ImVec2(0, 0), true)) {
         const uint32_t pc = cpu.pc();
         uint32_t addr = pc;
@@ -1931,10 +1931,10 @@ static void applyDockLayout() {
     // onglet du bon groupe plus tard, au lieu de flotter par-dessus l'écran.
     ImGui::DockBuilderDockWindow(ICON_FA_COG " Configuration", right);
     ImGui::DockBuilderDockWindow("CPU 68000",     rlow);
-    ImGui::DockBuilderDockWindow("Mémoire (hex)", rlow);
+    ImGui::DockBuilderDockWindow("Memory (hex)", rlow);
     ImGui::DockBuilderDockWindow("Joystick",      rlow);
-    ImGui::DockBuilderDockWindow("Effets CRT",    rlow);
-    ImGui::DockBuilderDockWindow(ICON_FA_BUG " Débogueur",      bottom);
+    ImGui::DockBuilderDockWindow("CRT Effects",    rlow);
+    ImGui::DockBuilderDockWindow(ICON_FA_BUG " Debugger",      bottom);
     ImGui::DockBuilderFinish(g_dockId);
 #endif
 }
@@ -2030,8 +2030,8 @@ void drawStScreen(const GlScreen& s, bool captured, bool& reqCapture, float topO
 #ifdef IMGUI_HAS_DOCK
     s_docked = ImGui::IsWindowDocked();   // pour la trame SUIVANTE (cf. plus haut)
 #endif
-    ImGui::TextDisabled(captured ? "Souris capturée — Suppr (DEL) pour la libérer"
-                                 : "Clic dans l'écran pour capturer la souris (curseur GEM)");
+    ImGui::TextDisabled(captured ? "Mouse captured — press DEL to release it"
+                                 : "Click inside the screen to capture the mouse (GEM cursor)");
     // Cadrage de l'image dans la zone dispo. Deux régimes :
     //  · Zoom auto (défaut) — RÈGLE DU KIOSK : l'échelle est pilotée par la HAUTEUR,
     //    la région de contenu cale dessus, et la largeur en excès (bordures latérales)
@@ -2110,23 +2110,23 @@ void drawFloppyPage(const std::string& disksDir,
     auto driveRow = [](const char* letter, const std::string& mounted, bool& reqEject) {
         if (!mounted.empty()) {
             ImGui::PushID(letter);
-            if (IconButton(ICON_FA_EJECT, "Éjecter")) reqEject = true;
+            if (IconButton(ICON_FA_EJECT, "Eject")) reqEject = true;
             ImGui::PopID();
             ImGui::SameLine();
             ImGui::Text("%s: %s", letter, fs::path(mounted).filename().string().c_str());
         } else {
             ImGui::Text("%s: ", letter); ImGui::SameLine();
-            ImGui::TextDisabled("(vide)");
+            ImGui::TextDisabled("(empty)");
         }
     };
     driveRow("A", mountedA, reqEjectA);
     driveRow("B", mountedB, reqEjectB);
     ImGui::Separator();
-    ImGui::TextDisabled("Images dans %s/", disksDir.c_str());
+    ImGui::TextDisabled("Images in %s/", disksDir.c_str());
 
     std::error_code ec;
     if (!fs::is_directory(disksDir, ec)) {
-        ImGui::TextDisabled("(dossier disks/ introuvable)");
+        ImGui::TextDisabled("(disks/ folder not found)");
         return;
     }
     const fs::path base(disksDir);
@@ -2146,7 +2146,7 @@ void drawFloppyPage(const std::string& disksDir,
     static double       cacheTime = -1.0;
     const double now = ImGui::GetTime();
     bool refresh = (cacheDir != disksDir) || cacheTime < 0.0 || (now - cacheTime) > 2.0;
-    if (ImGui::SmallButton("Rafraîchir")) refresh = true;
+    if (ImGui::SmallButton("Refresh")) refresh = true;
     ImGui::SameLine();
     ImGui::TextDisabled("(%zu images)", cache.size());
     if (refresh) {
@@ -2202,14 +2202,14 @@ void drawFloppyPage(const std::string& disksDir,
 void drawCartPage(const std::string& cartsDir, const std::string& mounted,
                   std::string& reqMount, bool& reqEject) {
     if (!mounted.empty()) {
-        if (IconButton(ICON_FA_EJECT, "Éjecter")) reqEject = true;
+        if (IconButton(ICON_FA_EJECT, "Eject")) reqEject = true;
         ImGui::SameLine();
-        ImGui::Text("branchée : %s", fs::path(mounted).filename().string().c_str());
+        ImGui::Text("plugged: %s", fs::path(mounted).filename().string().c_str());
     } else {
-        ImGui::TextDisabled("(port cartouche vide)");
+        ImGui::TextDisabled("(cartridge port empty)");
     }
     ImGui::Separator();
-    ImGui::TextDisabled("Images dans %s/", cartsDir.c_str());
+    ImGui::TextDisabled("Images in %s/", cartsDir.c_str());
 
     std::error_code ec;
     if (fs::is_directory(cartsDir, ec)) {
@@ -2232,7 +2232,7 @@ void drawCartPage(const std::string& cartsDir, const std::string& mounted,
                     ImGui::PushID(name.c_str());
                     if (name == mountedName) {
                         ImGui::TextDisabled("●");          // branchée
-                    } else if (ImGui::SmallButton("Brancher")) {
+                    } else if (ImGui::SmallButton("Plug in")) {
                         reqMount = e.path().string();
                     }
                     ImGui::SameLine();
@@ -2243,11 +2243,11 @@ void drawCartPage(const std::string& cartsDir, const std::string& mounted,
             it.increment(ec);
         }
     } else {
-        ImGui::TextDisabled("(dossier carts/ introuvable)");
+        ImGui::TextDisabled("(carts/ folder not found)");
     }
     ImGui::Separator();
-    ImGui::TextDisabled("Brancher/éjecter relance la machine pour re-détecter la cartouche.");
-    ImGui::TextDisabled("Exclusif avec le lecteur GEMDOS : les deux occupent $FA0000.");
+    ImGui::TextDisabled("Plugging in / ejecting restarts the machine to re-detect the cart.");
+    ImGui::TextDisabled("Exclusive with the GEMDOS drive: both occupy $FA0000.");
 }
 
 // Page « Disques durs » : les deux chemins d'accès (HD GEMDOS = dossier hôte monté en
@@ -2320,64 +2320,64 @@ void drawHardDiskPage(const std::string& hdDir, const std::string& gemdosDefault
     };
 
     // ── GEMDOS ────────────────────────────────────────────────────────────
-    ImGui::TextDisabled(ICON_FA_FOLDER_OPEN " GEMDOS — dossier hôte monté en C:");
+    ImGui::TextDisabled(ICON_FA_FOLDER_OPEN " GEMDOS — host folder mounted as C:");
     if (gemdosActive) {
-        if (IconButton(ICON_FA_EJECT, "Éjecter le lecteur GEMDOS")) reqEjectGemdos = true;
+        if (IconButton(ICON_FA_EJECT, "Eject the GEMDOS drive")) reqEjectGemdos = true;
         ImGui::SameLine();
-        ImGui::Text("monté : %s", curGemdos.c_str());
-        ImGui::TextDisabled("(occupe le port cartouche $FA0000 — exclusif avec une cartouche)");
+        ImGui::Text("mounted: %s", curGemdos.c_str());
+        ImGui::TextDisabled("(occupies cartridge port $FA0000 — exclusive with a cartridge)");
     } else {
-        ImGui::TextDisabled("(aucun lecteur GEMDOS monté)");
+        ImGui::TextDisabled("(no GEMDOS drive mounted)");
     }
     for (const auto& c : gemCands) {
         ImGui::PushID(c.path.c_str());
         if (gemdosActive && samePath(c.path, curGemdos)) ImGui::TextDisabled("●");
-        else if (ImGui::SmallButton("Monter")) reqMountGemdos = c.path;
+        else if (ImGui::SmallButton("Mount")) reqMountGemdos = c.path;
         ImGui::SameLine();
         ImGui::TextUnformatted(c.label.c_str());
         ImGui::PopID();
     }
     ImGui::SetNextItemWidth(-70.0f);
-    ImGui::InputTextWithHint("##gdPath", "chemin d'un dossier hôte…", g_gdBuf, sizeof g_gdBuf);
+    ImGui::InputTextWithHint("##gdPath", "path to a host folder…", g_gdBuf, sizeof g_gdBuf);
     ImGui::SameLine();
-    if (ImGui::Button("Monter##gdFree") && g_gdBuf[0]) reqMountGemdos = g_gdBuf;
+    if (ImGui::Button("Mount##gdFree") && g_gdBuf[0]) reqMountGemdos = g_gdBuf;
 
     ImGui::Separator();
 
     // ── ACSI ──────────────────────────────────────────────────────────────
-    ImGui::TextDisabled(ICON_FA_HDD " ACSI — image de disque dur (cible 0)");
+    ImGui::TextDisabled(ICON_FA_HDD " ACSI — hard disk image (target 0)");
     if (acsiActive) {
-        if (IconButton(ICON_FA_EJECT, "Éjecter l'image ACSI")) reqEjectAcsi = true;
+        if (IconButton(ICON_FA_EJECT, "Eject the ACSI image")) reqEjectAcsi = true;
         ImGui::SameLine();
-        ImGui::Text("monté : %s — %d partition(s)",
+        ImGui::Text("mounted: %s — %d partition(s)",
                     fs::path(curAcsi).filename().string().c_str(), acsiParts);
     } else {
-        ImGui::TextDisabled("(aucune image ACSI montée)");
+        ImGui::TextDisabled("(no ACSI image mounted)");
     }
     for (const auto& c : acsiCands) {
         ImGui::PushID(c.path.c_str());
         if (acsiActive && samePath(c.path, curAcsi)) ImGui::TextDisabled("●");
-        else if (ImGui::SmallButton("Monter")) reqMountAcsi = c.path;
+        else if (ImGui::SmallButton("Mount")) reqMountAcsi = c.path;
         ImGui::SameLine();
         ImGui::TextUnformatted(c.label.c_str());
         ImGui::PopID();
     }
     ImGui::SetNextItemWidth(-70.0f);
-    ImGui::InputTextWithHint("##hdPath", "chemin d'une image disque dur…", g_hdBuf, sizeof g_hdBuf);
+    ImGui::InputTextWithHint("##hdPath", "path to a hard disk image…", g_hdBuf, sizeof g_hdBuf);
     ImGui::SameLine();
-    if (ImGui::Button("Monter##hdFree") && g_hdBuf[0]) reqMountAcsi = g_hdBuf;
+    if (ImGui::Button("Mount##hdFree") && g_hdBuf[0]) reqMountAcsi = g_hdBuf;
 
     if (gemCands.empty() && acsiCands.empty())
-        ImGui::TextDisabled("(rien dans %s/ — y déposer un dossier ou une image)", hdDir.c_str());
+        ImGui::TextDisabled("(nothing in %s/ — drop a folder or an image there)", hdDir.c_str());
 
     // Les deux montés : NeoST ne décale pas le lecteur GEMDOS derrière les partitions
     // ACSI (contrairement à Hatari) → les deux revendiquent C:.
     if (gemdosActive && acsiActive)
         ImGui::TextColored(ImVec4(1.f, .6f, .2f, 1.f),
-                           "GEMDOS et ACSI revendiquent C: tous les deux !");
+                           "GEMDOS and ACSI both claim C:!");
     ImGui::Separator();
-    ImGui::TextDisabled("Dossier = lecteur GEMDOS, fichier = image ACSI. Monter relance");
-    ImGui::TextDisabled("la machine (le TOS ne sonde les disques qu'au boot).");
+    ImGui::TextDisabled("Folder = GEMDOS drive, file = ACSI image. Mounting restarts");
+    ImGui::TextDisabled("the machine (TOS only probes disks at boot).");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2463,7 +2463,7 @@ void drawConfigWindow(ConfigUi& ui) {
         { "1040 STE", "ste",     "1m",   "roms/tos162uk.img" },
         { "Mega STE", "megaste", "4m",   "roms/tos206fr.img" },
     };
-    ImGui::TextDisabled("Profils :");
+    ImGui::TextDisabled("Profiles:");
     for (const auto& p : kProfils) {
         ImGui::SameLine();
         const bool cur = ui.pendMachine == p.machine && ui.pendMem == p.mem
@@ -2479,12 +2479,12 @@ void drawConfigWindow(ConfigUi& ui) {
 
     // ── Colonne de navigation + page ──────────────────────────────────────
     static const char* kPageNames[kCfgCount] = {
-        ICON_FA_MICROCHIP " Machine",  ICON_FA_MEMORY " Mémoire",
-        ICON_FA_SAVE " ROM / TOS",     ICON_FA_SAVE " Disquettes",
-        ICON_FA_HDD " Disques durs",   ICON_FA_COMPACT_DISC " Cartouche",
-        ICON_FA_DESKTOP " Écran",      ICON_FA_VOLUME_UP " Son",
-        ICON_FA_GAMEPAD " Entrées",    ICON_FA_BOLT " Émulation",
-        ICON_FA_DESKTOP " Borne (kiosk)",
+        ICON_FA_MICROCHIP " Machine",  ICON_FA_MEMORY " Memory",
+        ICON_FA_SAVE " ROM / TOS",     ICON_FA_SAVE " Floppies",
+        ICON_FA_HDD " Hard disks",     ICON_FA_COMPACT_DISC " Cartridge",
+        ICON_FA_DESKTOP " Screen",     ICON_FA_VOLUME_UP " Sound",
+        ICON_FA_GAMEPAD " Input",      ICON_FA_BOLT " Emulation",
+        ICON_FA_DESKTOP " Kiosk",
     };
     // Hauteur réservée au pied de page : le message « à jour » tient sur deux lignes
     // dans une fenêtre étroite — sans la deuxième, il déborde sous le bord.
@@ -2502,7 +2502,7 @@ void drawConfigWindow(ConfigUi& ui) {
 
     switch (g_cfgPage) {
     case kCfgMachine: {
-        ImGui::TextDisabled("Modèle de machine");
+        ImGui::TextDisabled("Machine model");
         static const char* labels[] = { "ST", "Mega ST", "STE", "Mega STE" };
         static const char* ids[]    = { "st", "megast", "ste", "megaste" };
         for (int i = 0; i < 4; ++i)
@@ -2511,31 +2511,31 @@ void drawConfigWindow(ConfigUi& ui) {
         // Le socket MC68881 n'existe QUE sur Mega STE (cf. Fpu.hpp) ; ailleurs il n'y a
         // rien à peupler et « not found » est le comportement fidèle.
         ImGui::BeginDisabled(ui.pendMachine != "megaste");
-        ImGui::Checkbox("Peupler le socket FPU MC68881", &ui.pendFpu);
+        ImGui::Checkbox("Populate the MC68881 FPU socket", &ui.pendFpu);
         ImGui::EndDisabled();
         if (ui.pendMachine != "megaste")
-            ImGui::TextDisabled("(socket FPU : Mega STE uniquement)");
+            ImGui::TextDisabled("(FPU socket: Mega STE only)");
         ImGui::Separator();
-        ImGui::TextWrapped("Un TOS ≤ 1.04 lancé sur STE/Mega STE fait basculer NeoST en "
-                           "mode ST (comme Hatari) : ces TOS ne connaissent pas le "
-                           "matériel additionnel.");
+        ImGui::TextWrapped("A TOS ≤ 1.04 booted on an STE/Mega STE switches NeoST to ST "
+                           "mode (like Hatari): those TOS versions know nothing of the "
+                           "extra hardware.");
         break;
     }
     case kCfgMem: {
         ImGui::TextDisabled("ST-RAM");
-        static const char* mlabels[] = { "256 Ko", "512 Ko", "1 Mo", "2 Mo", "4 Mo" };
+        static const char* mlabels[] = { "256 KB", "512 KB", "1 MB", "2 MB", "4 MB" };
         static const char* mids[]    = { "256k", "512k", "1m", "2m", "4m" };
         for (int i = 0; i < 5; ++i)
             if (ImGui::RadioButton(mlabels[i], ui.pendMem == mids[i])) ui.pendMem = mids[i];
         ImGui::Separator();
-        ImGui::TextWrapped("512 Ko = la machine de 1985. Beaucoup de jeux à partir de 1989 "
-                           "et la plupart des cracks/dépaqueteurs exigent 1 Mo : en 512 Ko "
-                           "ils ne préviennent pas, ils partent en vrille (écran noir figé "
-                           "après l'intro).");
+        ImGui::TextWrapped("512 KB = the 1985 machine. Many games from 1989 on, and most "
+                           "cracks/depackers, require 1 MB: with 512 KB they give no "
+                           "warning, they just go haywire (black screen frozen after "
+                           "the intro).");
         break;
     }
     case kCfgRom: {
-        ImGui::TextDisabled("Images TOS dans %s/", ui.romsDir.c_str());
+        ImGui::TextDisabled("TOS images in %s/", ui.romsDir.c_str());
         std::error_code ec;
         if (fs::is_directory(ui.romsDir, ec)) {
             const std::string curName = fs::path(ui.pendRom).filename().string();
@@ -2565,13 +2565,13 @@ void drawConfigWindow(ConfigUi& ui) {
                 else                 ImGui::TextDisabled("50 Hz PAL");
             }
         } else {
-            ImGui::TextDisabled("(dossier roms/ introuvable)");
+            ImGui::TextDisabled("(roms/ folder not found)");
         }
         ImGui::Separator();
-        ImGui::TextWrapped("La ROM fixe la fréquence de balayage : suffixe « us » = 60 Hz "
-                           "NTSC, « uk/fr/de/es » = 50 Hz PAL. Les démos européennes "
-                           "sortent DÉCHIRÉES en 60 Hz — fidèlement, c'est aussi le cas "
-                           "sur le vrai matériel.");
+        ImGui::TextWrapped("The ROM sets the scan rate: an \"us\" suffix = 60 Hz NTSC, "
+                           "\"uk/fr/de/es\" = 50 Hz PAL. European demos come out TORN "
+                           "at 60 Hz — faithfully so, that also happens on real "
+                           "hardware.");
         break;
     }
     case kCfgFloppy:
@@ -2592,54 +2592,54 @@ void drawConfigWindow(ConfigUi& ui) {
                      ui.reqMountCart, ui.reqEjectCart);
         break;
     case kCfgScreen: {
-        ImGui::TextDisabled("Moniteur Atari");
-        if (ImGui::RadioButton("Couleur (basse/moyenne rés)", ui.color))  ui.reqMonitor = 1;
-        if (ImGui::RadioButton("Mono (haute rés)",           !ui.color))  ui.reqMonitor = 0;
+        ImGui::TextDisabled("Atari monitor");
+        if (ImGui::RadioButton("Color (low/medium res)", ui.color))  ui.reqMonitor = 1;
+        if (ImGui::RadioButton("Mono (high res)",        !ui.color))  ui.reqMonitor = 0;
         ImGui::Separator();
         // Même cadrage adaptatif que la borne : l'écran cale sa zone de contenu sur la
         // hauteur disponible, les bordures inutilisées sortent du cadre, et une
         // ouverture de bordure (démo overscan) rend le cadre entier.
-        if (ImGui::Checkbox("Zoom auto (cadre adaptatif)", &g_autoZoom)) ui.cfgDirty = true;
+        if (ImGui::Checkbox("Auto zoom (adaptive framing)", &g_autoZoom)) ui.cfgDirty = true;
         ImGui::Separator();
-        ImGui::TextDisabled("Façade CRT");
+        ImGui::TextDisabled("CRT look");
         bool crtChanged = false;
         drawCrtControls(crtChanged);
         if (crtChanged) ui.cfgDirty = true;
         break;
     }
     case kCfgSound: {
-        ImGui::TextDisabled("Volume maître (sortie hôte, indépendant du LMC1992 émulé)");
+        ImGui::TextDisabled("Master volume (host output, independent of the emulated LMC1992)");
         int pct = int(ui.volume * 100.0f + 0.5f);
         ImGui::SetNextItemWidth(220.0f);
         if (ImGui::SliderInt("##vol", &pct, 0, 100, "%d %%")) ui.reqVolume = float(pct) / 100.0f;
         if (ImGui::IsItemDeactivatedAfterEdit()) ui.volumeDone = true;
         ImGui::SameLine();
-        if (ImGui::SmallButton(ui.volume <= 0.0f ? "Rétablir" : "Muet")) {
+        if (ImGui::SmallButton(ui.volume <= 0.0f ? "Unmute" : "Mute")) {
             ui.reqVolume = (ui.volume <= 0.0f) ? 1.0f : 0.0f;
             ui.volumeDone = true;
         }
         ImGui::Separator();
-        if (ImGui::Checkbox("Son du lecteur de disquettes", &ui.driveSound)) ui.cfgDirty = true;
+        if (ImGui::Checkbox("Floppy drive sound", &ui.driveSound)) ui.cfgDirty = true;
         ImGui::Separator();
-        ImGui::TextDisabled("La latence audio se règle au lancement (--audio-latency MS,");
-        ImGui::TextDisabled("mémorisée dans neost.cfg) : la changer à chaud recréerait");
-        ImGui::TextDisabled("l'anneau audio en pleine lecture.");
-        ImGui::Text("Coussin visé : %d ms", cfg.audioLatencyMs);
+        ImGui::TextDisabled("Audio latency is set at launch (--audio-latency MS, stored");
+        ImGui::TextDisabled("in neost.cfg): changing it live would rebuild the audio");
+        ImGui::TextDisabled("ring mid-playback.");
+        ImGui::Text("Target cushion: %d ms", cfg.audioLatencyMs);
         break;
     }
     case kCfgInput: {
         // Émulation au clavier : réglage de SESSION, jamais persisté (elle avale les
         // flèches, ce qui « casse » le clavier des jeux qui s'en servent).
-        ImGui::Checkbox("Émulation joystick au clavier (flèches + Ctrl droit)", &g_kbdJoy);
-        ImGui::SameLine(); ImGui::TextDisabled("(F11 — non mémorisé)");
-        ImGui::TextDisabled("Port ST émulé au clavier :");
-        if (ImGui::RadioButton("Port 1 (jeux)", g_kbdJoyPort == 1))  { g_kbdJoyPort = 1; g_joyCfgDirty = true; }
+        ImGui::Checkbox("Keyboard joystick emulation (arrows + right Ctrl)", &g_kbdJoy);
+        ImGui::SameLine(); ImGui::TextDisabled("(F11 — not remembered)");
+        ImGui::TextDisabled("ST port driven by the keyboard:");
+        if (ImGui::RadioButton("Port 1 (games)", g_kbdJoyPort == 1))  { g_kbdJoyPort = 1; g_joyCfgDirty = true; }
         ImGui::SameLine();
-        if (ImGui::RadioButton("Port 0 (souris)", g_kbdJoyPort == 0)) { g_kbdJoyPort = 0; g_joyCfgDirty = true; }
+        if (ImGui::RadioButton("Port 0 (mouse)", g_kbdJoyPort == 0)) { g_kbdJoyPort = 0; g_joyCfgDirty = true; }
         ImGui::Separator();
         // Zone morte centrale des sticks analogiques (anti-drift). Le D-pad numérique
         // n'est pas concerné. Mémorisée à la validation du slider.
-        ImGui::TextDisabled("Zone morte des sticks analogiques");
+        ImGui::TextDisabled("Analog stick dead zone");
         ImGui::SetNextItemWidth(220.0f);
         ImGui::SliderFloat("##deadzone", &g_joyDeadzone, 0.0f, 0.95f, "%.2f");
         if (ImGui::IsItemDeactivatedAfterEdit()) {
@@ -2647,40 +2647,40 @@ void drawConfigWindow(ConfigUi& ui) {
             g_joyCfgDirty = true;
         }
         ImGui::Separator();
-        ImGui::TextDisabled("Manettes USB détectées (la 1re → port 1, la 2e → port 0) :");
+        ImGui::TextDisabled("USB pads detected (1st → port 1, 2nd → port 0):");
         int nPad = 0;
         for (int jid = GLFW_JOYSTICK_1; jid <= GLFW_JOYSTICK_LAST; ++jid) {
             if (!glfwJoystickPresent(jid)) continue;
             const char* nm = glfwGetGamepadName(jid);
             if (!nm) nm = glfwGetJoystickName(jid);
-            ImGui::BulletText("Port %d : %s", (nPad == 0) ? 1 : 0, nm ? nm : "?");
+            ImGui::BulletText("Port %d: %s", (nPad == 0) ? 1 : 0, nm ? nm : "?");
             ++nPad;
         }
-        if (nPad == 0) ImGui::BulletText("(aucune)");
+        if (nPad == 0) ImGui::BulletText("(none)");
         break;
     }
     case kCfgEmul: {
-        ImGui::TextDisabled("Vitesse d'accès disquette");
+        ImGui::TextDisabled("Floppy access speed");
         bool fast = cfg.fastfdc;
-        if (ImGui::Checkbox("FDC rapide (délais ÷10)", &fast)) ui.reqFastFdc = fast ? 1 : 0;
-        ImGui::TextDisabled("Équivalent de --fastfdc : les chargements passent en accéléré.");
-        ImGui::TextDisabled("À COUPER pour comparer une trace à l'oracle Hatari : les");
-        ImGui::TextDisabled("numéros de trame ne correspondent plus entre les deux.");
+        if (ImGui::Checkbox("Fast FDC (delays ÷10)", &fast)) ui.reqFastFdc = fast ? 1 : 0;
+        ImGui::TextDisabled("Same as --fastfdc: loading runs at accelerated speed.");
+        ImGui::TextDisabled("TURN IT OFF to compare a trace with the Hatari oracle: the");
+        ImGui::TextDisabled("frame numbers no longer match between the two.");
         ImGui::Separator();
-        ImGui::TextDisabled("État de la machine (save-state)");
-        if (ImGui::Button(ICON_FA_SAVE " Sauver l'état (F5)"))   ui.reqSaveState = true;
+        ImGui::TextDisabled("Machine state (save-state)");
+        if (ImGui::Button(ICON_FA_SAVE " Save state (F5)"))   ui.reqSaveState = true;
         ImGui::SameLine();
-        if (ImGui::Button(ICON_FA_FOLDER_OPEN " Charger (F7)"))  ui.reqLoadState = true;
-        ImGui::TextDisabled("L'état embarque une empreinte de la config : un état pris");
-        ImGui::TextDisabled("sur une autre machine/ROM est refusé plutôt qu'appliqué.");
+        if (ImGui::Button(ICON_FA_FOLDER_OPEN " Load (F7)"))  ui.reqLoadState = true;
+        ImGui::TextDisabled("A state carries a fingerprint of the config: one taken on");
+        ImGui::TextDisabled("another machine/ROM is refused rather than applied.");
         break;
     }
     case kCfgKiosk: {
-        ImGui::TextWrapped("Le mode borne passe en plein écran sans chrome, fige la "
-                           "configuration (rien n'est plus écrit dans neost.cfg) et "
-                           "active l'émulation joystick au clavier. Sortie par F8.");
+        ImGui::TextWrapped("Kiosk mode goes full screen with no chrome, freezes the "
+                           "configuration (nothing more is written to neost.cfg) and "
+                           "enables keyboard joystick emulation. Leave it with F8.");
         ImGui::Separator();
-        if (ImGui::Button(ICON_FA_DESKTOP " Passer en mode borne (F8)")) ui.reqKiosk = true;
+        if (ImGui::Button(ICON_FA_DESKTOP " Switch to kiosk mode (F8)")) ui.reqKiosk = true;
         break;
     }
     default: break;
@@ -2696,14 +2696,14 @@ void drawConfigWindow(ConfigUi& ui) {
     if (pending > 0) {
         // Texte PUIS boutons sur leur propre ligne : ancrée sur le côté, la fenêtre
         // est étroite et « Appliquer et redémarrer » sortait du cadre.
-        ImGui::TextColored(ImVec4(1.f, .6f, .2f, 1.f), ICON_FA_REDO " %d réglage%s matériel%s en attente",
-                           pending, pending > 1 ? "s" : "", pending > 1 ? "s" : "");
-        if (ImGui::Button("Annuler")) ui.pendInit = false;      // resème depuis cfg
+        ImGui::TextColored(ImVec4(1.f, .6f, .2f, 1.f), ICON_FA_REDO " %d pending hardware setting%s",
+                           pending, pending > 1 ? "s" : "");
+        if (ImGui::Button("Cancel")) ui.pendInit = false;       // resème depuis cfg
         ImGui::SameLine();
-        if (ImGui::Button(ICON_FA_POWER_OFF " Appliquer et redémarrer")) ui.reqApply = true;
+        if (ImGui::Button(ICON_FA_POWER_OFF " Apply and restart")) ui.reqApply = true;
     } else {
-        ImGui::TextDisabled("Machine à jour. Modèle, RAM, FPU et ROM sont appliqués");
-        ImGui::TextDisabled("ensemble, par un seul redémarrage.");
+        ImGui::TextDisabled("Machine up to date. Model, RAM, FPU and ROM are applied");
+        ImGui::TextDisabled("together, by a single restart.");
     }
     ImGui::End();
 }
@@ -2740,7 +2740,7 @@ int main(int argc, char** argv) {
     // nœuds pour des fenêtres qui n'existent plus (Disk/Cart Library) et ne connaît
     // pas la fenêtre Configuration — qui flotterait alors au-dessus de l'écran ST.
     // On resème la disposition UNE fois, puis on note la version dans neost.cfg.
-    static constexpr int kUiVersion = 2;
+    static constexpr int kUiVersion = 3;
     const bool uiLayoutOutdated = (cfg.uiVersion < kUiVersion);
     cfg.uiVersion = kUiVersion;
     g_dockOn   = cfg.dock;     // mode ancré mémorisé (cf. renderDockSpace)
@@ -2761,7 +2761,7 @@ int main(int argc, char** argv) {
 #ifdef NEOST_VERSION
             std::printf("NeoST %s\n", NEOST_VERSION);
 #else
-            std::printf("NeoST (version inconnue)\n");
+            std::printf("NeoST (unknown version)\n");
 #endif
             return 0;
         }
@@ -2777,8 +2777,8 @@ int main(int argc, char** argv) {
         else if (a == "--crt-preset" && i + 1 < argc) {
             const std::string name = argv[++i];
             if (!applyCrtPreset(name, g_crtParams, g_crtOn))
-                std::fprintf(stderr, "[main] preset CRT inconnu : '%s' "
-                             "(off|leger|arcade|phosphor)\n", name.c_str());
+                std::fprintf(stderr, "[main] unknown CRT preset: '%s' "
+                             "(off|light|arcade|phosphor)\n", name.c_str());
         }
         else if (!a.empty() && a[0] != '-') pos.push_back(a);
     }
@@ -2857,22 +2857,22 @@ int main(int argc, char** argv) {
     const MachineType machType0 = Machine::adjustMachineForTos(parseMachine(cfg.machine), tosPath);
     Machine machine(parseRamBytes(cfg.mem), Cpu68k::parseCore(cfg.cpu),
                     machType0);                   // RAM + cœur + modèle (cfg, ajusté au TOS)
-    std::fprintf(stderr, "[main] cœur CPU : %s | machine : %s | RAM : %s\n",
+    std::fprintf(stderr, "[main] CPU core: %s | machine: %s | RAM: %s\n",
                  Cpu68k::coreName(machine.cpu.core()),
                  machineName(machType0), cfg.mem.c_str());
     if (!machine.loadTos(tosPath))
-        std::fprintf(stderr, "[main] Démarrage sans TOS (le CPU tournera à vide).\n");
+        std::fprintf(stderr, "[main] Starting without a TOS (the CPU will run on nothing).\n");
     updateKbdCountry(machine.bus.rom);    // pays du TOS → surcharges keymap (FR/DE/UK…)
     if (!machine.loadDisk(diskPath))
-        std::fprintf(stderr, "[main] Aucune disquette montée (%s).\n", diskPath.c_str());
+        std::fprintf(stderr, "[main] No floppy mounted (%s).\n", diskPath.c_str());
     // Lecteur B mémorisé (diskb=) : remonté au démarrage comme le A. Silencieux si
     // l'image a disparu — un second lecteur vide est un état parfaitement normal.
     if (!cfg.diskb.empty() && !machine.fdc.loadImage(resolveData(cfg.diskb, exeDir), 1)) {
-        std::fprintf(stderr, "[main] Lecteur B : image introuvable (%s).\n", cfg.diskb.c_str());
+        std::fprintf(stderr, "[main] Drive B: image not found (%s).\n", cfg.diskb.c_str());
         cfg.diskb.clear();
     }
     if (!cartPath.empty() && !machine.loadCart(cartPath))
-        std::fprintf(stderr, "[main] Aucune cartouche montée (%s).\n", cartPath.c_str());
+        std::fprintf(stderr, "[main] No cartridge mounted (%s).\n", cartPath.c_str());
     // Résolution de chemin façon resolveData mais tolérante aux DOSSIERS (le HD
     // GEMDOS monte un répertoire ; fs::exists accepte fichiers et dossiers).
     auto resolvePath = [&exeDir](const std::string& given) -> std::string {
@@ -2890,7 +2890,7 @@ int main(int argc, char** argv) {
     if (const char* hd = std::getenv("NEOST_ACSI_IMG"))   cfg.acsi  = hd;
     if (!cfg.gemdos.empty()) {
         if (!cartPath.empty())
-            std::fprintf(stderr, "[main] cartouche ignorée : incompatible avec GEMDOS HD\n");
+            std::fprintf(stderr, "[main] cartridge ignored: incompatible with GEMDOS HD\n");
         if (!machine.gemdos.setDirectory(resolvePath(cfg.gemdos)))
             cfg.gemdos.clear();                // dossier invalide → on ne le mémorise pas
     }
@@ -2955,7 +2955,7 @@ int main(int argc, char** argv) {
         if (!machine.loadTos(romP))
             // ROM absente/illisible (profil pointant un TOS non installé) : l'ANCIENNE
             // ROM reste chargée — on le dit au lieu de laisser croire au nouveau profil.
-            std::fprintf(stderr, "[main] ⚠ ROM introuvable : %s — l'ancienne ROM reste active\n",
+            std::fprintf(stderr, "[main] WARNING ROM not found: %s — the previous ROM stays active\n",
                          romP.c_str());
         updateKbdCountry(machine.bus.rom);   // la nouvelle ROM peut changer de pays clavier
         if (cfg.cart.empty()) machine.ejectCart();
@@ -2973,7 +2973,7 @@ int main(int argc, char** argv) {
         machine.fdc.setFastFdc(cfg.fastfdc);   // ré-applique le FDC rapide après reconfig
         machine.bus.setFpuPresent(cfg.fpu && machTypeR == MachineType::MegaSte);
         machine.reset();
-        std::fprintf(stderr, "[main] reconfig à chaud : cœur %s | machine %s | RAM %s\n",
+        std::fprintf(stderr, "[main] live reconfigure: core %s | machine %s | RAM %s\n",
                      Cpu68k::coreName(machine.cpu.core()),
                      machineName(machTypeR), cfg.mem.c_str());
     };
@@ -3038,7 +3038,7 @@ int main(int argc, char** argv) {
             io.Fonts->AddFontFromFileTTF(fontPath.c_str(), 15.0f);
         } else {
             io.Fonts->AddFontDefault();   // base toujours présente (requis avant la fusion FA)
-            std::fprintf(stderr, "[main] police %s introuvable — police ImGui par défaut.\n",
+            std::fprintf(stderr, "[main] font %s not found — falling back to the default ImGui font.\n",
                          fontPath.c_str());
         }
         // Fusionne les pictogrammes Font Awesome dans la police courante (menus/boutons).
@@ -3052,7 +3052,7 @@ int main(int argc, char** argv) {
             fcfg.GlyphOffset.y = 1.0f;        // léger recentrage vertical sur la ligne de texte
             io.Fonts->AddFontFromFileTTF(faPath.c_str(), 13.0f, &fcfg, fa_ranges);
         } else {
-            std::fprintf(stderr, "[main] police d'icônes %s introuvable — pas de pictogrammes.\n",
+            std::fprintf(stderr, "[main] icon font %s not found — no pictograms.\n",
                          faPath.c_str());
         }
     }
@@ -3063,10 +3063,10 @@ int main(int argc, char** argv) {
     ImGui_ImplOpenGL2_Init();
 #endif
 
-    std::printf("[main] Clic dans l'écran : capture souris | Suppr (DEL) : libère | "
-                "bouton Reset dans la fenêtre CPU | fermer la fenêtre : quitter\n");
-    std::printf("[main] Joystick : manette USB auto (port 1) | F11 = émulation "
-                "clavier (flèches + Ctrl droit) | menu « Joystick »\n");
+    std::printf("[main] Click inside the screen: capture mouse | DEL: release | "
+                "Reset button in the CPU window | close the window: quit\n");
+    std::printf("[main] Joystick: USB pad auto-detected (port 1) | F11 = keyboard "
+                "emulation (arrows + right Ctrl) | \"Joystick\" menu\n");
 
     // Bridage à la durée ÉMULÉE de chaque trame : indispensable pour que le temps
     // émulé colle au temps réel — sinon le compteur 200 Hz d'EmuTOS s'emballe et les
@@ -3199,17 +3199,17 @@ int main(int argc, char** argv) {
 
         // (3) Restaure l'instantané : le ST reprend EXACTEMENT où il en était.
         if (!snap.empty() && !machine.loadState(snap.data(), snap.size()))
-            std::fprintf(stderr, "[kiosk] ⚠ restauration de l'état échouée — "
-                                 "la machine continue telle quelle\n");
+            std::fprintf(stderr, "[kiosk] WARNING state restore failed — "
+                                 "the machine carries on as is\n");
         // Recale l'horloge et le delta souris : la bascule a pris du temps réel et
         // déplacé le curseur (changement de mode). Sans ça : rafale de rattrapage
         // de trames + saut de souris d'un demi-écran à la reprise.
         emuNext = clock::now();
         glfwGetCursorPos(window, &lastMx, &lastMy);
-        g_stateMsg = g_kiosk ? "\xef\x84\x88 Mode borne (F8 pour revenir)"
-                             : "\xef\x84\x88 Mode bureau (F8 pour la borne)";
+        g_stateMsg = g_kiosk ? "\xef\x84\x88 Kiosk mode (F8 to go back)"
+                             : "\xef\x84\x88 Desktop mode (F8 for the kiosk)";
         g_stateMsgFrames = 120;
-        std::fprintf(stderr, "[kiosk] bascule → %s\n", g_kiosk ? "BORNE" : "BUREAU");
+        std::fprintf(stderr, "[kiosk] switched → %s\n", g_kiosk ? "KIOSK" : "DESKTOP");
     };
 
     while (!glfwWindowShouldClose(window)) {
@@ -3240,7 +3240,7 @@ int main(int argc, char** argv) {
                                                 // fractionnaire s'accumule (drags lents)
                 const bool l = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT)  == GLFW_PRESS;
                 const bool r = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
-                if (g_dbgMouse) std::fprintf(stderr, "[souris] mvt dx=%d dy=%d L=%d R=%d\n", dx, dy, l, r);
+                if (g_dbgMouse) std::fprintf(stderr, "[mouse] move dx=%d dy=%d L=%d R=%d\n", dx, dy, l, r);
                 machine.ikbd.mouseEvent(dx * MOUSE_X_SIGN, dy * MOUSE_Y_SIGN, l, r);
             }
         }
@@ -3273,7 +3273,7 @@ int main(int argc, char** argv) {
             if (f10 && !f10Prev) {
                 g_autoZoom = !g_autoZoom;
                 cfg.autoZoom = g_autoZoom;   // sinon un retour au bureau resauverait l'ANCIENNE valeur
-                std::fprintf(stderr, "[kiosk] zoom adaptatif %s\n", g_autoZoom ? "ON" : "OFF");
+                std::fprintf(stderr, "[kiosk] adaptive zoom %s\n", g_autoZoom ? "ON" : "OFF");
             }
             f10Prev = f10;
         }
@@ -3285,7 +3285,7 @@ int main(int argc, char** argv) {
             const bool f11 = glfwGetKey(window, GLFW_KEY_F11) == GLFW_PRESS;
             if (f11 && !f11Prev) {
                 g_kbdJoy = !g_kbdJoy;   // bascule de session (jamais persistée)
-                std::fprintf(stderr, "[joystick] émulation clavier %s (port %d)\n",
+                std::fprintf(stderr, "[joystick] keyboard emulation %s (port %d)\n",
                              g_kbdJoy ? "ON" : "OFF", g_kbdJoyPort);
             }
             f11Prev = f11;
@@ -3412,15 +3412,15 @@ int main(int argc, char** argv) {
             const bool f7 = glfwGetKey(window, GLFW_KEY_F7) == GLFW_PRESS;
             if (f5 && !f5Prev) {
                 const bool ok = machine.saveStateFile(statePath);
-                g_stateMsg = ok ? "\xef\x83\x87 État sauvegardé (F5)" : "Échec sauvegarde";
+                g_stateMsg = ok ? "\xef\x83\x87 State saved (F5)" : "Save failed";
                 g_stateMsgFrames = 120;
-                std::fprintf(stderr, "[state] save %s → %s\n", ok ? "OK" : "ÉCHEC", statePath.c_str());
+                std::fprintf(stderr, "[state] save %s → %s\n", ok ? "OK" : "FAILED", statePath.c_str());
             }
             if (f7 && !f7Prev) {
                 const bool ok = machine.loadStateFile(statePath);
-                g_stateMsg = ok ? "\xef\x80\x9e État restauré (F7)" : "Aucun état / échec";
+                g_stateMsg = ok ? "\xef\x80\x9e State restored (F7)" : "No state / failed";
                 g_stateMsgFrames = 120;
-                std::fprintf(stderr, "[state] load %s ← %s\n", ok ? "OK" : "ÉCHEC", statePath.c_str());
+                std::fprintf(stderr, "[state] load %s ← %s\n", ok ? "OK" : "FAILED", statePath.c_str());
             }
             f5Prev = f5; f7Prev = f7;
         }
@@ -3473,85 +3473,85 @@ int main(int argc, char** argv) {
                 ImGui::Separator();
                 ImGui::MenuItem(ICON_FA_COG " Configuration…", nullptr, &g_showCfg);
                 ImGui::Separator();
-                if (ImGui::MenuItem(ICON_FA_SAVE " Sauver l'état", "F5")) {
+                if (ImGui::MenuItem(ICON_FA_SAVE " Save state", "F5")) {
                     const bool ok = machine.saveStateFile(exeDir + "/../neost.state");
-                    g_stateMsg = ok ? "\xef\x83\x87 État sauvegardé" : "Échec sauvegarde";
+                    g_stateMsg = ok ? "\xef\x83\x87 State saved" : "Save failed";
                     g_stateMsgFrames = 120;
                 }
-                if (ImGui::MenuItem(ICON_FA_FOLDER_OPEN " Charger l'état", "F7")) {
+                if (ImGui::MenuItem(ICON_FA_FOLDER_OPEN " Load state", "F7")) {
                     const bool ok = machine.loadStateFile(exeDir + "/../neost.state");
-                    g_stateMsg = ok ? "\xef\x80\x9e État restauré" : "Aucun état / échec";
+                    g_stateMsg = ok ? "\xef\x80\x9e State restored" : "No state / failed";
                     g_stateMsgFrames = 120;
                 }
                 ImGui::Separator();
                 // Bascule borne : plein écran sans chrome, config figée, navigation à
                 // la manette. La machine traverse la bascule par instantané → le jeu
                 // en cours continue. F8 revient au bureau.
-                if (ImGui::MenuItem(ICON_FA_DESKTOP " Mode borne (kiosk)", "F8"))
+                if (ImGui::MenuItem(ICON_FA_DESKTOP " Kiosk mode", "F8"))
                     g_kioskSwitchReq = 1;
                 ImGui::Separator();
-                if (ImGui::MenuItem(ICON_FA_SIGN_OUT_ALT " Quitter")) glfwSetWindowShouldClose(window, 1);
+                if (ImGui::MenuItem(ICON_FA_SIGN_OUT_ALT " Quit")) glfwSetWindowShouldClose(window, 1);
                 ImGui::EndMenu();
             }
             // Affichage : ce qui change la façon de REGARDER, pas la machine émulée.
-            if (ImGui::BeginMenu(ICON_FA_DESKTOP " Affichage")) {
-                if (ImGui::MenuItem(ICON_FA_PALETTE " Couleur (basse rés)", nullptr,  color)) reqMonitor = 1;
-                if (ImGui::MenuItem(ICON_FA_ADJUST " Mono (haute rés)",    nullptr, !color)) reqMonitor = 0;
+            if (ImGui::BeginMenu(ICON_FA_DESKTOP " Display")) {
+                if (ImGui::MenuItem(ICON_FA_PALETTE " Color (low res)", nullptr,  color)) reqMonitor = 1;
+                if (ImGui::MenuItem(ICON_FA_ADJUST " Mono (high res)",     nullptr, !color)) reqMonitor = 0;
                 ImGui::Separator();
                 // Même cadrage adaptatif que la borne : l'écran cale sa zone de contenu
                 // sur la hauteur disponible, les bordures inutilisées sortent du cadre,
                 // et une ouverture de bordure (démo overscan) rend le cadre entier.
                 // Décoché = cadre complet fixe. En kiosk, F10 bascule la même chose.
-                if (ImGui::MenuItem(ICON_FA_EXPAND " Zoom auto (cadre adaptatif)",
+                if (ImGui::MenuItem(ICON_FA_EXPAND " Auto zoom (adaptive framing)",
                                     nullptr, &g_autoZoom)) {
                     cfg.autoZoom = g_autoZoom; saveConfig(exeDir, cfg, &machine);
                 }
-                ImGui::MenuItem(ICON_FA_DESKTOP " Effets CRT (fenêtre)", nullptr, &g_showCrt);
+                ImGui::MenuItem(ICON_FA_DESKTOP " CRT effects (window)", nullptr, &g_showCrt);
 #ifdef IMGUI_HAS_DOCK
                 ImGui::Separator();
                 // Mode ancré : les fenêtres deviennent des onglets d'une disposition
                 // persistante (imgui.ini). Décoché → ImGui DÉTRUIT ses nœuds (elles
                 // redeviennent flottantes) ; recoché → on resème la disposition par
                 // défaut, la personnalisation précédente est perdue.
-                if (ImGui::MenuItem(ICON_FA_CLONE " Mode ancré (dock)", nullptr, &g_dockOn)) {
+                if (ImGui::MenuItem(ICON_FA_CLONE " Docked mode", nullptr, &g_dockOn)) {
                     ImGuiIO& dio = ImGui::GetIO();
                     if (g_dockOn) { dio.ConfigFlags |=  ImGuiConfigFlags_DockingEnable; g_dockReset = true; }
                     else            dio.ConfigFlags &= ~ImGuiConfigFlags_DockingEnable;
                     cfg.dock = g_dockOn; saveConfig(exeDir, cfg, &machine);
                 }
-                if (ImGui::MenuItem(ICON_FA_REDO " Disposition par défaut", nullptr, false, g_dockOn))
+                if (ImGui::MenuItem(ICON_FA_REDO " Default layout", nullptr, false, g_dockOn))
                     g_dockReset = true;
 #endif
                 ImGui::EndMenu();
             }
             // Fenêtres : rien que les outils d'INSPECTION. Les bibliothèques de supports
             // n'y sont plus — elles sont devenues des pages de la Configuration.
-            if (ImGui::BeginMenu(ICON_FA_CLONE " Fenêtres")) {
-                ImGui::MenuItem(ICON_FA_MEMORY " Mémoire (hex)", nullptr, &g_showHex);
+            if (ImGui::BeginMenu(ICON_FA_CLONE " Windows")) {
+                ImGui::MenuItem(ICON_FA_MEMORY " Memory (hex)", nullptr, &g_showHex);
                 ImGui::MenuItem(ICON_FA_MICROCHIP " CPU 68000",  nullptr, &g_showCpu);
                 ImGui::MenuItem(ICON_FA_GAMEPAD " Joystick",     nullptr, &g_showJoy);
-                ImGui::MenuItem(ICON_FA_BUG " Débogueur",        nullptr, &g_showDbg);
+                ImGui::MenuItem(ICON_FA_BUG " Debugger",        nullptr, &g_showDbg);
                 ImGui::EndMenu();
             }
-            if (ImGui::BeginMenu("Aide")) {
+            if (ImGui::BeginMenu("Help")) {
                 // Les raccourcis étaient jusqu'ici invisibles (F5/F7/F8/F11/F12 ne
                 // figuraient nulle part sauf dans le code).
-                ImGui::TextDisabled("Raccourcis clavier");
+                ImGui::TextDisabled("Keyboard shortcuts");
                 ImGui::Separator();
                 struct Key { const char* k; const char* w; };
                 static const Key keys[] = {
-                    { "F5",  "sauver l'état de la machine" },
-                    { "F7",  "recharger l'état" },
-                    { "F8",  "mode borne (aller-retour)" },
-                    { "F11", "émulation joystick au clavier" },
-                    { "F12", "capture souris (ou clic dans l'écran)" },
-                    { "Suppr", "libérer la souris capturée" },
+                    { "F5",  "save the machine state" },
+                    { "F7",  "reload the state" },
+                    { "F8",  "kiosk mode (toggle)" },
+                    { "F11", "keyboard joystick emulation" },
+                    { "F12", "mouse capture (or click inside the screen)" },
+                    { "DEL", "release the captured mouse" },
                 };
                 for (const auto& k : keys) ImGui::BulletText("%-6s %s", k.k, k.w);
                 ImGui::Separator();
-                ImGui::TextDisabled("NeoST " NEOST_VERSION " — émulateur Atari ST");
-                ImGui::TextDisabled("Glisser-déposer : dossier → C:, image → lecteur A,");
-                ImGui::TextDisabled("image disque dur → ACSI, TOS → ROM.");
+                ImGui::TextDisabled("NeoST " NEOST_VERSION " — Atari ST emulator");
+                ImGui::TextDisabled("Drag and drop: folder → C:, image → drive A,");
+                ImGui::TextDisabled("hard disk image → ACSI, TOS → ROM.");
                 ImGui::EndMenu();
             }
             ImGui::EndMainMenuBar();
@@ -3578,7 +3578,7 @@ int main(int argc, char** argv) {
         // Reset à froid : efface la ST-RAM → EmuTOS/TOS refait un boot complet.
         if (IconButton(ICON_FA_POWER_OFF, "Hard Reset")) reqHardReset = true;
         ImGui::SameLine(); ImGui::TextDisabled("|"); ImGui::SameLine();
-        if (IconButton(color ? ICON_FA_ADJUST : ICON_FA_PALETTE, color ? "Passer en Mono" : "Passer en Couleur"))
+        if (IconButton(color ? ICON_FA_ADJUST : ICON_FA_PALETTE, color ? "Switch to Mono" : "Switch to Color"))
             reqMonitor = color ? 0 : 1;
         // Volume : le seul réglage qu'on touche EN JOUANT, donc il reste ici (le
         // reste du son est dans la page Son).
@@ -3589,7 +3589,7 @@ int main(int argc, char** argv) {
             const bool   muted = vol <= 0.0f;
             const char*  vicon = muted      ? ICON_FA_VOLUME_MUTE
                                : vol < 0.5f ? ICON_FA_VOLUME_DOWN : ICON_FA_VOLUME_UP;
-            if (IconButton(vicon, muted ? "Rétablir le son" : "Muet")) {
+            if (IconButton(vicon, muted ? "Unmute" : "Mute")) {
                 if (muted) audio.setMasterVolume(volBeforeMute > 0.0f ? volBeforeMute : 1.0f);
                 else     { volBeforeMute = vol; audio.setMasterVolume(0.0f); }
                 cfg.volume = audio.masterVolume(); saveConfig(exeDir, cfg, &machine);
@@ -3625,7 +3625,7 @@ int main(int argc, char** argv) {
                 if (warn) ImGui::TextColored(ImVec4(1.f, .6f, .2f, 1.f), "%s", text.c_str());
                 else      ImGui::TextUnformatted(text.c_str());
                 if (ImGui::IsItemHovered()) {
-                    ImGui::SetTooltip("%s\n(clic : ouvrir la configuration)", tip);
+                    ImGui::SetTooltip("%s\n(click: open the configuration)", tip);
                     if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
                         g_showCfg = true; g_cfgPage = page;
                     }
@@ -3638,26 +3638,26 @@ int main(int argc, char** argv) {
             const std::string mdl = cfg.machine == "megaste" ? "Mega STE"
                                   : cfg.machine == "ste"     ? "STE"
                                   : cfg.machine == "megast"  ? "Mega ST" : "ST";
-            const std::string ram = cfg.mem == "256k" ? "256 Ko" : cfg.mem == "512k" ? "512 Ko"
-                                  : cfg.mem == "1m" ? "1 Mo" : cfg.mem == "2m" ? "2 Mo" : "4 Mo";
-            seg(mdl, kCfgMachine, "Modèle de machine émulé");
-            seg(ram, kCfgMem,     "ST-RAM installée");
-            seg(fs::path(cfg.rom).stem().string(), kCfgRom, "Image TOS en ROM");
+            const std::string ram = cfg.mem == "256k" ? "256 KB" : cfg.mem == "512k" ? "512 KB"
+                                  : cfg.mem == "1m" ? "1 MB" : cfg.mem == "2m" ? "2 MB" : "4 MB";
+            seg(mdl, kCfgMachine, "Emulated machine model");
+            seg(ram, kCfgMem,     "Installed ST-RAM");
+            seg(fs::path(cfg.rom).stem().string(), kCfgRom, "TOS image in ROM");
             // Le balayage est DÉDUIT de la ROM ; on le signale en orange en 60 Hz, la
             // configuration qui déchire les démos européennes.
             const int hz = machine.shifter.refreshHz();
             char hzbuf[32];
             std::snprintf(hzbuf, sizeof hzbuf, "%d Hz %s", hz, hz >= 55 ? "NTSC" : "PAL");
-            seg(hzbuf, kCfgRom, "Fréquence de balayage (fixée par la ROM)", hz >= 55);
-            seg("A: " + shortName(machine.fdc.mountedPath(0)), kCfgFloppy, "Lecteur de disquettes A");
-            seg("B: " + shortName(machine.fdc.mountedPath(1)), kCfgFloppy, "Lecteur de disquettes B");
+            seg(hzbuf, kCfgRom, "Scan rate (set by the ROM)", hz >= 55);
+            seg("A: " + shortName(machine.fdc.mountedPath(0)), kCfgFloppy, "Floppy drive A");
+            seg("B: " + shortName(machine.fdc.mountedPath(1)), kCfgFloppy, "Floppy drive B");
             const std::string c = machine.gemdos.active() ? shortName(cfg.gemdos) + "/"
                                 : machine.fdc.acsiActive() ? shortName(cfg.acsi)
                                 : std::string("—");
-            seg("C: " + c, kCfgHd, "Disque dur (GEMDOS ou ACSI)");
+            seg("C: " + c, kCfgHd, "Hard disk (GEMDOS or ACSI)");
             char fps[32];
             std::snprintf(fps, sizeof fps, "%.1f fps", double(ImGui::GetIO().Framerate));
-            seg(fps, kCfgEmul, "Cadence de la boucle hôte");
+            seg(fps, kCfgEmul, "Host loop frame rate");
         }
         ImGui::End();
 
@@ -3711,12 +3711,12 @@ int main(int argc, char** argv) {
             }
             if (cfgUi.reqSaveState) {
                 const bool ok = machine.saveStateFile(exeDir + "/../neost.state");
-                g_stateMsg = ok ? "\xef\x83\x87 État sauvegardé" : "Échec sauvegarde";
+                g_stateMsg = ok ? "\xef\x83\x87 State saved" : "Save failed";
                 g_stateMsgFrames = 120; cfgUi.reqSaveState = false;
             }
             if (cfgUi.reqLoadState) {
                 const bool ok = machine.loadStateFile(exeDir + "/../neost.state");
-                g_stateMsg = ok ? "\xef\x80\x9e État restauré" : "Aucun état / échec";
+                g_stateMsg = ok ? "\xef\x80\x9e State restored" : "No state / failed";
                 g_stateMsgFrames = 120; cfgUi.reqLoadState = false;
             }
             // « Appliquer et redémarrer » : les quatre réglages matériels d'un coup,
@@ -3974,7 +3974,7 @@ int main(int argc, char** argv) {
                                         || (!relToHome.empty() && relToHome.rfind("..", 0) != 0);
                             }
                             if (tooBroad) {
-                                g_stateMsg = "Dossier trop vaste (racine / maison) — refusé";
+                                g_stateMsg = "Folder too broad (root / home) — refused";
                                 g_stateMsgFrames = 180;
                             } else {
                             if (std::find(g_kioskRomDirs.begin(), g_kioskRomDirs.end(), g_browseDir)
@@ -4193,7 +4193,7 @@ int main(int argc, char** argv) {
                         reqMountAcsi = d;
                     }
                 } else {
-                    g_stateMsg = "Déposé : type inconnu (" +
+                    g_stateMsg = "Dropped: unknown type (" +
                                  fs::path(d).filename().string() + ")";
                     g_stateMsgFrames = 150;
                 }
@@ -4214,7 +4214,7 @@ int main(int argc, char** argv) {
                     cfg.disk = reqMount; saveConfig(exeDir, cfg, &machine);
                 }
             } else {
-                g_stateMsg = "Image disquette illisible"; g_stateMsgFrames = 120;
+                g_stateMsg = "Unreadable floppy image"; g_stateMsgFrames = 120;
             }
         }
         if (reqEject) {
@@ -4231,7 +4231,7 @@ int main(int argc, char** argv) {
                     cfg.diskb = reqMountB; saveConfig(exeDir, cfg, &machine);
                 }
             } else {
-                g_stateMsg = "Image disquette illisible (B)"; g_stateMsgFrames = 120;
+                g_stateMsg = "Unreadable floppy image (B)"; g_stateMsgFrames = 120;
             }
         }
         if (reqEjectB) {
@@ -4253,7 +4253,7 @@ int main(int argc, char** argv) {
                 cfg.cart = reqMountCart; saveConfig(exeDir, cfg, &machine);
                 reqHardReset = true;       // le TOS sonde le port cartouche au boot
             } else {
-                g_stateMsg = "Cartouche illisible (max 128 Ko)"; g_stateMsgFrames = 120;
+                g_stateMsg = "Unreadable cartridge (max 128 KB)"; g_stateMsgFrames = 120;
             }
         }
         if (reqEjectCart) {
@@ -4278,7 +4278,7 @@ int main(int argc, char** argv) {
                 cfg.gemdos = reqMountGemdos; saveConfig(exeDir, cfg, &machine);
                 reqHardReset = true;
             } else {
-                g_stateMsg = "Dossier GEMDOS introuvable"; g_stateMsgFrames = 120;
+                g_stateMsg = "GEMDOS folder not found"; g_stateMsgFrames = 120;
             }
         }
         if (reqEjectGemdos) {
@@ -4293,7 +4293,7 @@ int main(int argc, char** argv) {
                 cfg.acsi = reqMountAcsi; saveConfig(exeDir, cfg, &machine);
                 reqHardReset = true;
             } else {
-                g_stateMsg = "Image ACSI illisible"; g_stateMsgFrames = 120;
+                g_stateMsg = "Unreadable ACSI image"; g_stateMsgFrames = 120;
             }
         }
         if (reqEjectAcsi) {

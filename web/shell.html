@@ -7,11 +7,11 @@
   Module.ccall. Défaut : Atari Mega STE, 1 Mo, EmuTOS 256 Ko.
   (c) 2026 VERHILLE Arnaud — projet NeoST.
 -->
-<html lang="fr">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>NeoST — Atari Mega STE dans le navigateur</title>
+  <title>NeoST — Atari Mega STE in your browser</title>
   <style>
     :root {
       color-scheme: dark;
@@ -132,7 +132,7 @@
   <header>
     <div class="fuji" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></div>
     <h1>NeoST</h1>
-    <div class="sub">Atari Mega STE dans le navigateur · WebAssembly · 68000 Moira cycle-exact · EmuTOS</div>
+    <div class="sub">Atari Mega STE in your browser · WebAssembly · cycle-exact Moira 68000 · EmuTOS</div>
   </header>
 
   <div id="monitor">
@@ -140,9 +140,9 @@
       <canvas id="canvas" tabindex="0" oncontextmenu="event.preventDefault()"></canvas>
     </div>
     <div id="screenbar">
-      <span id="status">Chargement du module WebAssembly…</span>
+      <span id="status">Loading the WebAssembly module…</span>
       <span class="badge" id="machineBadge">—</span>
-      <button class="iconbtn" id="btnFullscreen" title="Plein écran (Échap pour sortir)">⛶ Plein écran</button>
+      <button class="iconbtn" id="btnFullscreen" title="Full screen (Esc to leave)">⛶ Full screen</button>
     </div>
   </div>
 
@@ -150,56 +150,56 @@
     <fieldset>
       <legend>Machine</legend>
       <div class="row">
-        <select id="machineSel" title="Modèle de machine (recharge la page)">
+        <select id="machineSel" title="Machine model (reloads the page)">
           <option value="st">Atari ST</option>
           <option value="megast">Atari Mega ST</option>
           <option value="ste">Atari STE</option>
           <option value="megaste">Atari Mega STE</option>
         </select>
-        <select id="memSel" title="Mémoire ST-RAM (recharge la page)">
-          <option value="256k">256 Ko</option>
-          <option value="512k">512 Ko</option>
-          <option value="1m">1 Mo</option>
-          <option value="2m">2 Mo</option>
-          <option value="4m">4 Mo</option>
+        <select id="memSel" title="ST-RAM size (reloads the page)">
+          <option value="256k">256 KB</option>
+          <option value="512k">512 KB</option>
+          <option value="1m">1 MB</option>
+          <option value="2m">2 MB</option>
+          <option value="4m">4 MB</option>
         </select>
-        <select id="romSel" title="ROM / TOS (change + reset)"></select>
-        <button id="btnReset" title="Reset à froid de la machine">Reset</button>
+        <select id="romSel" title="ROM / TOS (swap + reset)"></select>
+        <button id="btnReset" title="Cold reset of the machine">Reset</button>
       </div>
     </fieldset>
 
     <fieldset>
-      <legend>Disquettes</legend>
+      <legend>Floppies</legend>
       <div class="row">
-        <select id="diskSel" title="Disquette préchargée"></select>
-        <button id="btnMount" class="primary" title="Monte en A: et reboote">Monter A: + Reset</button>
-        <button id="btnMountB" title="Monter la disquette sélectionnée dans le lecteur B (sans reset)">→ B:</button>
-        <label class="file" title="Charger une image disquette depuis votre disque (ou glissez-la sur l'écran)">
-          Ouvrir un fichier…
+        <select id="diskSel" title="Bundled floppy image"></select>
+        <button id="btnMount" class="primary" title="Mount in A: and reboot">Mount A: + Reset</button>
+        <button id="btnMountB" title="Mount the selected floppy in drive B (no reset)">→ B:</button>
+        <label class="file" title="Load a floppy image from your disk (or drop it on the screen)">
+          Open a file…
           <input type="file" id="diskFile" accept=".st,.msa,.dim,.stx">
         </label>
       </div>
     </fieldset>
 
     <fieldset>
-      <legend>Affichage &amp; périphériques</legend>
+      <legend>Display &amp; peripherals</legend>
       <div class="row">
-        <button id="btnMono" class="toggle" title="Bascule moniteur couleur (basse/moyenne rés.) ↔ monochrome (haute rés.) — provoque un reset">Écran : Couleur</button>
-        <button id="btnJoy" class="toggle" title="Flèches + Ctrl droit = joystick port 1 (les manettes USB sont toujours détectées)">Joystick clavier : off</button>
-        <button id="btnSound" class="toggle on" title="Bruits mécaniques du lecteur de disquette">Son lecteur : on</button>
+        <button id="btnMono" class="toggle" title="Toggle color monitor (low/medium res) ↔ monochrome (high res) — triggers a reset">Screen: Color</button>
+        <button id="btnJoy" class="toggle" title="Arrows + right Ctrl = joystick port 1 (USB pads are always detected)">Keyboard joystick: off</button>
+        <button id="btnSound" class="toggle on" title="Mechanical floppy drive noises">Drive sound: on</button>
       </div>
     </fieldset>
   </div>
 
   <details>
-    <summary>Aide &amp; raccourcis</summary>
+    <summary>Help &amp; shortcuts</summary>
     <ul>
-      <li><b>Souris</b> : cliquez dans l'écran pour la <b>capturer</b> (curseur GEM), <kbd>Suppr</kbd> pour la libérer. <kbd>Échap</kbd> est envoyée au ST.</li>
-      <li><b>Clavier</b> : routé vers l'IKBD (disposition US). <b>Joystick clavier</b> : flèches + <kbd>Ctrl droit</kbd> = bouton feu (port 1).</li>
-      <li><b>Disquettes de jeu</b> : « Monter A: + Reset » bascule au besoin sur un <b>vrai TOS</b> (EmuTOS ne boote que les disquettes système) — TOS 2.06 sur STE/Mega STE, TOS 1.0x sur ST. Choisissez une ROM à la main pour figer ce choix.</li>
-      <li><b>Glisser-déposer</b> : lâchez une image <code>.st</code> / <code>.msa</code> / <code>.dim</code> / <code>.stx</code> directement sur l'écran pour la monter en A: et rebooter.</li>
-      <li><b>Machine &amp; RAM</b> : figées à la construction de la machine → leur changement recharge la page (paramètres d'URL <code>?machine=</code> et <code>?mem=</code>, partageables).</li>
-      <li><b>Son</b> : le navigateur exige un geste utilisateur — cliquez une fois dans l'écran pour débloquer l'audio (YM2149 + DMA STE + bruits de lecteur).</li>
+      <li><b>Mouse</b>: click inside the screen to <b>capture</b> it (GEM cursor), <kbd>Del</kbd> to release it. <kbd>Esc</kbd> is sent to the ST.</li>
+      <li><b>Keyboard</b>: routed to the IKBD (US layout). <b>Keyboard joystick</b>: arrows + <kbd>right Ctrl</kbd> = fire button (port 1).</li>
+      <li><b>Game floppies</b>: "Mount A: + Reset" switches to a <b>real TOS</b> when needed (EmuTOS only boots system floppies) — TOS 2.06 on STE/Mega STE, TOS 1.0x on ST. Pick a ROM by hand to lock that choice.</li>
+      <li><b>Drag and drop</b>: drop a <code>.st</code> / <code>.msa</code> / <code>.dim</code> / <code>.stx</code> image straight onto the screen to mount it in A: and reboot.</li>
+      <li><b>Machine &amp; RAM</b>: fixed when the machine is built → changing them reloads the page (URL parameters <code>?machine=</code> and <code>?mem=</code>, shareable).</li>
+      <li><b>Sound</b>: browsers require a user gesture — click once inside the screen to unlock audio (YM2149 + STE DMA + drive noises).</li>
     </ul>
   </details>
 
@@ -218,7 +218,7 @@
     var isSteFamily = (machineParam === 'ste' || machineParam === 'megaste');
 
     var MACHINE_LABELS = { st: 'ST', megast: 'Mega ST', ste: 'STE', megaste: 'Mega STE' };
-    var MEM_LABELS = { '256k': '256 Ko', '512k': '512 Ko', '1m': '1 Mo', '2m': '2 Mo', '4m': '4 Mo' };
+    var MEM_LABELS = { '256k': '256 KB', '512k': '512 KB', '1m': '1 MB', '2m': '2 MB', '4m': '4 MB' };
     document.getElementById('machineBadge').textContent =
       'Atari ' + (MACHINE_LABELS[machineParam] || machineParam) + ' · ' + (MEM_LABELS[memParam] || memParam);
 
@@ -242,7 +242,7 @@
         if (statusEl) { statusEl.textContent = text || ''; statusEl.className = ''; }
       }
     };
-    Module.setStatus('Chargement du module WebAssembly…');
+    Module.setStatus('Loading the WebAssembly module…');
 
     function setStatusOk(text) {
       if (statusEl) { statusEl.textContent = text; statusEl.className = 'ok'; }
@@ -252,7 +252,7 @@
     // EM_ASM appelant neostOnReady) : garantit que le runtime tourne vraiment.
     window.neostOnReady = function () {
       ready = true;
-      setStatusOk('Prêt — cliquez dans l\'écran pour jouer.');
+      setStatusOk('Ready — click inside the screen to play.');
       // Peuple les menus depuis le FS virtuel : montre exactement ce qui a été
       // embarqué (tout en local, EmuTOS+diskA pour le déploiement libre). La ROM
       // présélectionnée suit la machine : EmuTOS 256 Ko (STE/Mega STE) ou 192 Ko.
@@ -347,7 +347,7 @@
 
     document.getElementById('btnSound').addEventListener('click', function () {
       drive.enabled = !drive.enabled;
-      this.textContent = drive.enabled ? 'Son lecteur : on' : 'Son lecteur : off';
+      this.textContent = drive.enabled ? 'Drive sound: on' : 'Drive sound: off';
       this.classList.toggle('on', drive.enabled);
       if (!drive.enabled) driveMotorStop();
     });
@@ -414,7 +414,7 @@
     document.getElementById('romSel').addEventListener('change', function () {
       romUserChosen = true;
       callLoadTos(this.value);
-      setStatusOk('ROM : ' + this.value.split('/').pop());
+      setStatusOk('ROM: ' + this.value.split('/').pop());
     });
 
     // Cherche un vrai TOS adapté à la machine (pour booter les jeux) : TOS 2.06
@@ -434,20 +434,20 @@
     document.getElementById('btnMountB').addEventListener('click', function () {
       var p = document.getElementById('diskSel').value;
       callMountB(p);
-      setStatusOk('Lecteur B : ' + p.split('/').pop());
+      setStatusOk('Drive B: ' + p.split('/').pop());
     });
 
     document.getElementById('btnMono').addEventListener('click', function () {
       monoOn = !monoOn;
       callMono(monoOn ? 1 : 0);
-      this.textContent = monoOn ? 'Écran : Monochrome' : 'Écran : Couleur';
+      this.textContent = monoOn ? 'Screen: Monochrome' : 'Screen: Color';
       this.classList.toggle('on', monoOn);
     });
 
     document.getElementById('btnJoy').addEventListener('click', function () {
       joyOn = !joyOn;
       callKbdJoy(joyOn);
-      this.textContent = joyOn ? 'Joystick clavier : on' : 'Joystick clavier : off';
+      this.textContent = joyOn ? 'Keyboard joystick: on' : 'Keyboard joystick: off';
       this.classList.toggle('on', joyOn);
       document.getElementById('canvas').focus();
     });
@@ -461,10 +461,10 @@
       var note = '';
       if (!romUserChosen && /etos|emutos/i.test(rom.value)) {
         var tos = findRealTos();
-        if (tos) { rom.value = tos; callLoadTos(tos); note = ' — ROM : ' + tos.split('/').pop(); }
+        if (tos) { rom.value = tos; callLoadTos(tos); note = ' — ROM: ' + tos.split('/').pop(); }
       }
       callMount(path);
-      setStatusOk('Monté : ' + displayName + note);
+      setStatusOk('Mounted: ' + displayName + note);
     }
 
     document.getElementById('btnMount').addEventListener('click', function () {
@@ -476,7 +476,7 @@
     function mountLocalFile(file) {
       if (!file || !ready) return;
       var m = /\.(st|msa|dim|stx)$/i.exec(file.name);
-      if (!m) { Module.setStatus('Format non reconnu : ' + file.name + ' (.st/.msa/.dim/.stx)'); return; }
+      if (!m) { Module.setStatus('Unrecognized format: ' + file.name + ' (.st/.msa/.dim/.stx)'); return; }
       var reader = new FileReader();
       reader.onload = function () {
         var data = new Uint8Array(reader.result);
@@ -484,7 +484,7 @@
         // mais STX (Pasti) se repère par son en-tête + extension.
         var path = '/disks/_upload.' + m[1].toLowerCase();
         Module.FS.writeFile(path, data);
-        mountWithAutoTos(path, file.name + ' (' + data.length + ' octets)');
+        mountWithAutoTos(path, file.name + ' (' + data.length + ' bytes)');
       };
       reader.readAsArrayBuffer(file);
     }

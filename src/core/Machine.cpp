@@ -40,8 +40,8 @@ MachineType Machine::adjustMachineForTos(MachineType requested, const std::strin
     // (le Mega ST tourne nativement sous TOS 1.0x, donc PAS de bascule).
     if (tosVer <= 0x0104 && machineIsSte(requested)) {
         std::fprintf(stderr,
-            "[NeoST] TOS %X.%02X ne fonctionne qu'en mode ST (68000) — bascule %s -> ST.\n"
-            "        Pour le STE/Mega STE, utiliser EmuTOS 256 Ko (etos256*) ou TOS 1.62/2.06.\n",
+            "[NeoST] TOS %X.%02X only runs in ST mode (68000) — switching %s -> ST.\n"
+            "        For STE/Mega STE, use EmuTOS 256 KB (etos256*) or TOS 1.62/2.06.\n",
             tosVer >> 8, tosVer & 0xFF, machineName(requested));
         return MachineType::St;
     }
@@ -53,8 +53,8 @@ MachineType Machine::adjustMachineForTos(MachineType requested, const std::strin
     // aucun moyen de comprendre. Hatari bascule en STE et boote ; on fait pareil.
     if ((tosVer == 0x0106 || tosVer == 0x0162) && requested != MachineType::Ste) {
         std::fprintf(stderr,
-            "[NeoST] TOS %X.%02X est une ROM STE exclusivement — bascule %s -> STE.\n"
-            "        (sur ST, son nettoyage RAM déborde et halte le CPU : écran figé)\n",
+            "[NeoST] TOS %X.%02X is an STE-only ROM — switching %s -> STE.\n"
+            "        (on ST its RAM clear overruns and halts the CPU: frozen screen)\n",
             tosVer >> 8, tosVer & 0xFF, machineName(requested));
         return MachineType::Ste;
     }
@@ -65,8 +65,8 @@ MachineType Machine::adjustMachineForTos(MachineType requested, const std::strin
     // = écran vide, alors que STE + 1.62 fonctionne).
     if (tosVer < 0x0200 && requested == MachineType::MegaSte) {
         std::fprintf(stderr,
-            "[NeoST] TOS %X.%02X ne gère pas le Mega STE (cache/SCU/16 MHz) — bascule Mega STE -> STE.\n"
-            "        Pour un vrai Mega STE, utiliser TOS 2.06 (tos206*) ou EmuTOS 256 Ko (etos256*).\n",
+            "[NeoST] TOS %X.%02X does not support the Mega STE (cache/SCU/16 MHz) — switching Mega STE -> STE.\n"
+            "        For a real Mega STE, use TOS 2.06 (tos206*) or EmuTOS 256 KB (etos256*).\n",
             tosVer >> 8, tosVer & 0xFF);
         return MachineType::Ste;
     }
@@ -720,8 +720,8 @@ bool Machine::loadState(const uint8_t* data, std::size_t n) {
     uint16_t version; std::memcpy(&version, data + 4, 2);
     if (magic != 0x4E535453u) return false;
     if (version != 9) {
-        std::fprintf(stderr, "[state] refusé : format v%u non supporté (cette version "
-                     "de NeoST écrit du v9) — re-sauver l'état avec F5\n", version);
+        std::fprintf(stderr, "[state] rejected: unsupported format v%u (this build of "
+                     "NeoST writes v9) — re-save the state with F5\n", version);
         return false;
     }
     uint8_t  mt    = data[6];
@@ -729,8 +729,8 @@ bool Machine::loadState(const uint8_t* data, std::size_t n) {
     uint16_t tosV;  std::memcpy(&tosV, data + 11, 2);
     if (mt != static_cast<uint8_t>(machineType_) || ramSz != bus.ram.size()
         || tosV != bus.tosVersion) {
-        std::fprintf(stderr, "[state] refusé : l'état a été sauvé sur une autre config "
-                     "(machine %u/RAM %u Ko/TOS %03x vs session %u/%zu Ko/%03x)\n",
+        std::fprintf(stderr, "[state] rejected: the state was saved on a different config "
+                     "(machine %u/RAM %u KB/TOS %03x vs session %u/%zu KB/%03x)\n",
                      mt, ramSz / 1024u, tosV, unsigned(machineType_),
                      bus.ram.size() / 1024u, bus.tosVersion);
         return false;
@@ -740,19 +740,19 @@ bool Machine::loadState(const uint8_t* data, std::size_t n) {
     const uint8_t  curFlags  = uint8_t(gemdos.active() ? 1u : 0u);
     const uint32_t curCartFp = cartFingerprint(bus.cart);
     if (flags != curFlags) {
-        std::fprintf(stderr, "[state] refusé : HD GEMDOS %s à la sauvegarde et %s "
-                     "maintenant (l'état du HD n'est pas sérialisable)\n",
-                     (flags & 1) ? "actif" : "inactif", curFlags ? "actif" : "inactif");
+        std::fprintf(stderr, "[state] rejected: GEMDOS HD was %s when saved and is %s "
+                     "now (the HD state is not serializable)\n",
+                     (flags & 1) ? "active" : "inactive", curFlags ? "active" : "inactive");
         return false;
     }
     if (cartFp != curCartFp) {
-        std::fprintf(stderr, "[state] refusé : la cartouche montée n'est pas celle de "
-                     "la sauvegarde (empreinte %08x vs %08x)\n", cartFp, curCartFp);
+        std::fprintf(stderr, "[state] rejected: the mounted cartridge is not the one from "
+                     "the save (fingerprint %08x vs %08x)\n", cartFp, curCartFp);
         return false;
     }
     uint32_t crc; std::memcpy(&crc, data + kStateCrcOffset, 4);
     if (crc != stateCrc32(data + kStateHeaderSize, n - kStateHeaderSize)) {
-        std::fprintf(stderr, "[state] refusé : CRC du payload invalide (fichier corrompu)\n");
+        std::fprintf(stderr, "[state] rejected: invalid payload CRC (corrupt file)\n");
         return false;
     }
     // Filet de sécurité : un load qui échoue à MI-restauration (ok_=false — champ
@@ -770,7 +770,7 @@ bool Machine::loadState(const uint8_t* data, std::size_t n) {
     if (!ok) {
         StateArchive rb = StateArchive::loader(backup.data(), backup.size());
         serializeState(rb);
-        std::fprintf(stderr, "[state] fichier tronqué/incohérent — état de la session restauré\n");
+        std::fprintf(stderr, "[state] truncated/inconsistent file — session state restored\n");
         return false;
     }
     return true;

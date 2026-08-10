@@ -57,7 +57,7 @@ bool Acsi::mount(int target, const std::string& path) {
 
     struct stat st;
     if (stat(path.c_str(), &st) != 0 || st.st_size == 0 || (st.st_size & 511)) {
-        std::fprintf(stderr, "[acsi] image invalide (taille nulle ou non multiple de 512) : %s\n",
+        std::fprintf(stderr, "[acsi] invalid image (zero size or not a multiple of 512): %s\n",
                      path.c_str());
         return false;
     }
@@ -65,7 +65,7 @@ bool Acsi::mount(int target, const std::string& path) {
     FILE* fp = fopen(path.c_str(), "rb+");
     if (!fp) { fp = fopen(path.c_str(), "rb"); ro = true; }
     if (!fp) {
-        std::fprintf(stderr, "[acsi] ouverture impossible : %s\n", path.c_str());
+        std::fprintf(stderr, "[acsi] cannot open: %s\n", path.c_str());
         return false;
     }
     d.fp = fp;
@@ -76,8 +76,8 @@ bool Acsi::mount(int target, const std::string& path) {
     d.lastError = HD_REQSENS_OK;
     d.enabled = true;
     d.path = path;
-    std::fprintf(stderr, "[acsi] ACSI %d <-> %s (%u secteurs, %.1f Mo%s)\n",
-                 target, path.c_str(), d.hdSize, d.hdSize / 2048.0, ro ? ", lecture seule" : "");
+    std::fprintf(stderr, "[acsi] ACSI %d <-> %s (%u sectors, %.1f MB%s)\n",
+                 target, path.c_str(), d.hdSize, d.hdSize / 2048.0, ro ? ", read-only" : "");
     return true;
 }
 
