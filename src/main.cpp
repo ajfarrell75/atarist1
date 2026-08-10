@@ -37,6 +37,12 @@
 #if defined(__APPLE__)
 #include <mach-o/dyld.h>       // _NSGetExecutablePath (résolution du chemin exécutable)
 #elif defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX               // sinon windows.h définit min()/max() en MACROS et
+#endif                         // casse tous les std::min / std::max du fichier
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN    // pas de winsock/ole : rien d'utile ici, des conflits sûrs
+#endif
 #include <windows.h>           // GetModuleFileNameW (résolution du chemin exécutable)
 #endif
 
