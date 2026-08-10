@@ -1,333 +1,180 @@
 # NeoST
 
-**Un Atari ST que vous pouvez ouvrir, comprendre et bidouiller — puce par puce.**
+**An Atari ST you can open up, understand, and tinker with — chip by chip.**
 
-NeoST est un émulateur Atari ST « boîte à hack » pédagogique : au lieu d'une boîte
-noire qui « fait tourner les jeux », c'est une **carte mère transparente**. Chaque
-composant (Shifter vidéo, YM2149, MFP 68901, FDC WD1772, MMU/GLUE, blitter…) est
-modélisé séparément et **branché sur un `Bus` qui *est* le plan mémoire**, exactement
-comme les puces sont câblées sur la vraie carte. On voit la RAM, les registres 68000
-et l'état des puces vivre en direct.
+Most emulators are black boxes: they run the games and hide the machine. NeoST is the
+opposite. Every chip — the Shifter, the YM2149, the MFP 68901, the WD1772 floppy
+controller, the MMU/GLUE, the blitter — is modelled separately and wired onto a `Bus`
+that **is** the memory map, exactly the way the real silicon sits on the real board. You
+watch RAM, the 68000 registers and the chip state live while your game runs.
 
-> (c) 2026 VERHILLE Arnaud — C++17 · macOS Silicon / Linux · **et dans le navigateur**.
+> (c) 2026 VERHILLE Arnaud · C++17 · Linux / macOS Silicon / Windows · **and in your browser**
 
-## ▶ Essayer tout de suite (sans rien installer)
+![NeoST running a Spectrum 512 picture, with the configuration panel and live 68000 registers](docs/img/neost-gui.png)
 
-**Démo WebAssembly : <https://habib256.github.io/neost/>**
+*That planet is a real Atari ST screen: 512 colours out of a machine that officially does
+16, by rewriting the palette mid-scanline. NeoST renders it pixel-for-pixel identical to
+the Hatari reference.*
 
-Le même cœur d'émulation, compilé en WASM, tourne dans votre navigateur. L'interface
-permet de **tout tester sans recompiler** : choix de la ROM (EmuTOS US/FR, TOS 1.02),
-montage de disquettes, bascule couleur/mono, et **upload** de votre propre `.st`.
+## Try it right now — nothing to install
 
-![NeoST WASM — boot EmuTOS](web/neost-wasm-emutos.png)
+### 👉 **[habib256.github.io/neost](https://habib256.github.io/neost/)**
 
-## Pourquoi NeoST
+The same emulation core, compiled to WebAssembly. Pick a ROM, mount a floppy, flip
+between colour and mono, or **drag your own `.st` onto the screen**. No download, no
+account, no build.
 
-- 🔬 **Transparence matérielle totale** — le `Bus` route chaque accès vers la bonne
-  puce ; rien n'est caché. Idéal pour *apprendre* comment un ST fonctionne vraiment.
-- 🧩 **Modélisation puce par puce, fidèle Hatari** — le comportement matériel est
-  porté registre par registre depuis [Hatari](https://hatari.tuxfamily.org/) et MAME,
-  les références de l'émulation Atari. Les vraies **cartouches de diagnostic Field
-  Service** (ST / STE / MegaSTE) passent leur batterie de tests internes sans erreur.
-- 🖥️ **4 profils machine** — ST, Mega ST, STE, Mega STE, choisis avant le boot, avec
-  le matériel optionnel correctement présent/absent selon le modèle. Sur Mega STE :
-  68000 8/16 MHz + cache, et **FPU MC68881 émulé** (socket périphérique `$FFFA40`,
-  option `--fpu` / menu Modèle — chose qu'Hatari n'émule pas).
-- ⚙️ **Cœur 68000 cycle-exact** — [Moira](https://github.com/dirkwhoffmann/Moira)
-  (timing inter-instructions, IPL échantillonné au cycle, contention de bus).
-- 🐞 **Débogueur intégré** — **breakpoints** PC et **watchpoints** mémoire, **pas-à-pas
-  instruction** (au cycle, sans dérive), **symboles** (`.sym` nm-style ou DRI/GST d'un
-  exécutable TOS) avec désassemblage annoté, plus le visualiseur hexa RAM + registres
-  68000 en direct (Dear ImGui). Aussi en **headless déterministe** (`--break`, `--watch`,
-  `--symbols`/`--break-sym`) qui produit des traces façon MAME — l'arme secrète pour
-  diagnostiquer un jeu qui bloque.
-- 💾 **Save-states** — sauvegarde/restauration de l'état **complet** de la machine
-  (CPU, RAM, toutes les puces) à l'octet près : **F5** sauver / **F7** charger, ou
-  `--save-state`/`--load-state` en headless. Restauration **déterministe** (l'écran et
-  l'état reprennent byte-identiques).
-- 🔊 **Son complet** — YM2149 (3 voies + bruit + enveloppe), son DMA STE, filtres
-  Microwire/LMC1992, et même les **bruits mécaniques du lecteur** de disquette.
-- 🌐 **Multi-plateforme** — macOS Silicon, Linux, et WebAssembly. Une seule base de code.
+## Why you might like it
 
-## Démarrage rapide
+🔬 **You can see everything.** The `Bus` routes every access to the right chip and hides
+nothing. If you have ever wanted to *learn* how a 16-bit machine actually works, this is
+a machine with the lid off.
 
-### Télécharger un binaire
+⚙️ **It is honest about timing.** The 68000 core is [Moira](https://github.com/dirkwhoffmann/Moira),
+cycle-exact down to inter-instruction timing, IPL sampled per cycle and bus contention.
+Hardware behaviour is ported register by register from
+[Hatari](https://hatari.tuxfamily.org/) and MAME — and checked against Hatari as a
+running oracle, not just read.
 
-Chaque release publie **6 paquets** avec leurs sommes SHA-256 :
+🖥️ **Four real machines.** ST, Mega ST, STE, Mega STE, chosen before boot, with the
+optional hardware correctly present or absent per model. The Mega STE gets its 8/16 MHz
+68000, its cache, and an **emulated MC68881 FPU** — which even Hatari does not do.
 
-| Paquet | Pour qui |
-|--------|----------|
-| `NeoST-<ver>-x86_64.AppImage` | Linux Intel/AMD — glibc ≥ 2.27, des distributions anciennes aux plus récentes |
-| `NeoST-<ver>-aarch64.AppImage` | Linux ARM64 générique |
-| `NeoST-<ver>-raspberry-aarch64.AppImage` | **Raspberry Pi 3 → Pi 5** — aarch64 générique, PGO + LTO. En cas de doute, c'est celui-ci. |
-| `NeoST-<ver>-pi400-aarch64.AppImage` | **Pi 4 / Pi 400 uniquement** — compilé `-mcpu=cortex-a72`, ~10-20 % plus rapide sur Moira, mais **ne démarre pas** sur un cœur plus ancien |
+🐞 **A debugger that earns its keep.** Breakpoints, memory watchpoints, cycle-accurate
+single-stepping, symbols (`.sym` or straight out of a TOS executable), annotated
+disassembly, live hex and registers. All of it also available **headless and
+deterministic** — which is how you find out why that one demo hangs.
+
+💾 **Save-states that really restore.** The complete machine — CPU, RAM, every chip — to
+the byte. <kbd>F5</kbd> saves, <kbd>F7</kbd> loads, and the restored run is
+bit-for-bit identical.
+
+🔊 **Sound all the way down.** YM2149 with noise and envelopes, STE DMA sound,
+Microwire/LMC1992 filters — and the mechanical clatter of the floppy drive, because of
+course.
+
+🕹️ **Arcade cabinet mode.** Full screen, no chrome, frozen config, entirely
+gamepad-driven. Point it at a Raspberry Pi and you have a machine for the living room.
+
+## Get it
+
+Every release ships **7 packages** with SHA-256 sums:
+
+| Package | For |
+|---------|-----|
+| `NeoST-<ver>-x86_64.AppImage` | Linux Intel/AMD — glibc ≥ 2.27, so old distros too |
+| `NeoST-<ver>-aarch64.AppImage` | Linux ARM64, generic |
+| `NeoST-<ver>-raspberry-aarch64.AppImage` | **Raspberry Pi 3 → Pi 5.** When in doubt, this one |
+| `NeoST-<ver>-pi400-aarch64.AppImage` | **Pi 4 / Pi 400 only** — `-mcpu=cortex-a72`, ~10-20 % faster, won't start on older cores |
 | `NeoST-<ver>-macOS-universal2.dmg` | macOS **Universal 2** (Apple Silicon + Intel) |
-| `NeoST-<ver>-web-wasm.zip` | WebAssembly, à servir depuis un serveur web |
+| `NeoST-<ver>-windows-x86_64.zip` | **Windows 10/11 x64** — unzip and run, everything is linked statically |
+| `NeoST-<ver>-web-wasm.zip` | WebAssembly, to serve from any web server |
 
-Pas de paquet Windows : NeoST cible macOS Silicon et Linux (cf. [`CLAUDE.md`](CLAUDE.md)).
-Compiler depuis les sources reste possible — voir ci-dessous.
+The Windows package is **unsigned**: SmartScreen will warn you on first launch
+(*More info* → *Run anyway*).
 
-### Dépendances
+### Build from source
 
-- **GLFW3** — `brew install glfw` (macOS) / `pacman -S glfw` (CachyOS/Arch)
-- **OpenGL** — fourni par le système (framework Apple / Mesa)
-- Sous-modules : `extern/imgui`, `extern/miniaudio` — le cœur 68000 `extern/moira` est
-  **vendorisé** (copié dans le dépôt, cf. `extern/moira/NEOST_VENDOR.md`), rien à cloner
+You need **GLFW3** (`brew install glfw`, `pacman -S glfw`, `apt install libglfw3-dev`)
+and OpenGL from your system. The 68000 core is vendored — nothing to fetch.
 
 ```sh
 git submodule update --init --recursive
-# Aucune étape de génération : Moira se compile tel quel (C++20).
-```
-
-### Build & run
-
-```sh
 cmake -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build -j                          # cibles : neost, neost-headless, neost_core
-./build/neost                                   # auto : dernier ROM (neost.cfg) ou EmuTOS US
-./build/neost roms/etos192fr.img disks/diskA.st  # ROM + disquette explicites
+cmake --build build -j
+./build/neost                                    # picks up your last ROM, or EmuTOS
+./build/neost roms/etos192fr.img disks/diskA.st  # or be explicit
 ```
 
-> Les chemins par défaut (`roms/`, `disks/`) sont résolus depuis le répertoire courant
-> **et** depuis l'exécutable — `./neost` marche aussi bien depuis la racine que `build/`.
+`roms/` and `disks/` are resolved both from the current directory and from the
+executable, so running from the repository root or from `build/` both work.
 
-### Contrôles
+## Using it
 
-| Touche     | Action                       |
-|------------|------------------------------|
-| F12        | Reset physique virtuel       |
-| Suppr (DEL)| Libère la capture souris     |
+Click inside the ST screen to capture the mouse (you are then driving the GEM cursor);
+<kbd>Del</kbd> releases it. The keyboard goes straight to the IKBD. Everything else —
+machine model, memory, ROM, floppies, hard disks, sound, CRT look — lives in one
+**Configuration** window, and the status bar at the bottom always tells you what machine
+you are actually running.
 
-Clic dans l'écran ST = capture de la souris (curseur GEM) ; le clavier est routé vers
-l'IKBD. Le GUI ajoute un menu **Machine** (modèle, mémoire, cœur CPU) et une
-**Disk Library** (monter/éjecter à chaud).
+| Key | Action |
+|-----|--------|
+| <kbd>F5</kbd> / <kbd>F7</kbd> | Save / load state |
+| <kbd>F8</kbd> | Toggle kiosk (cabinet) mode |
+| <kbd>F11</kbd> | Keyboard joystick (arrows + right Ctrl) |
+| <kbd>F12</kbd> | Capture the mouse |
+| <kbd>Del</kbd> | Release the mouse |
 
-## Mode kiosk (borne / expo)
+**Floppies** — drop a `.st`, `.msa`, `.dim` or `.stx` (Pasti, for copy-protected games)
+onto the window, or mount it from the Configuration window. Writes are persisted back to
+the image.
 
-Pour une borne d'exposition : plein écran **sans le chrome de bureau** (ni barre de
-menu, ni fenêtres ImGui), image centrée, configuration **figée** (la borne repart
-toujours identique) — mais avec un **menu in-game** manette/clavier pour changer de
-jeu, envoyer des touches ou redémarrer, sans jamais quitter le plein écran.
+**Hard disks** — two ways. Drop a *folder* on the window and it becomes drive **C:** via
+GEMDOS redirection (Hatari's trick: no controller emulation, your real files). Or mount a
+real ACSI disk image and let TOS read its partition table.
 
-```sh
-./build/neost --kiosk roms/tos102uk.img "disks/Jeu.stx"              # plein écran EXCLUSIF
-./build/neost --kiosk --kiosk-monitor 1 roms/tos162uk.img            # sur le 2ᵉ écran
-```
+**Cabinet mode** (`--kiosk`, or <kbd>F8</kbd>) — exclusive full screen, no window
+chrome, configuration frozen so the cabinet always restarts identical, and an in-game
+menu on **START** to swap games, remap pads or send keystrokes without ever leaving full
+screen. The whole thing is drivable from a gamepad. Details, including the Raspberry Pi
+cabinet build: [`docs/KIOSK.md`](docs/KIOSK.md).
 
-- **`--kiosk`** : vrai plein écran **exclusif** — reste au-dessus de tout (panneaux/dock
-  inclus, impossible à recouvrir), garde le focus clavier.
-- **`--kiosk-monitor N`** : écran cible (0 = principal).
-- **`--audio-latency MS`** : coussin audio visé (défaut 85, borné `[20, 250]`, persisté en
-  `audio_latency_ms=`). Le monter (120-150) sur une machine juste — un underrun coûte un
-  **trou audible**, une latence un peu plus haute non. Le diagnostic est dans la sortie
-  d'erreur : `[Audio] underrun anneau … boucle émulation : XX trames/s réelles`.
+**CRT look** (`--crt`, or *Display → CRT effects*) — an opt-in shader pass that puts the
+glass of an old monitor back in front of the pixels: barrel geometry, scanlines, shadow
+mask, phosphor persistence. Presets `light`, `arcade`, `phosphor`, then tweak every
+slider live. If the shader can't compile, you simply get the raw screen.
 
-**Borne Raspberry Pi** — démarrage direct sur l'émulateur (Pi OS Lite, X nu sans
-compositeur, ALSA en direct, build natif `-mcpu`) : voir
-[`packaging/raspberry/README.md`](packaging/raspberry/README.md).
+## ROMs
 
-En kiosk : la souris est capturée et le curseur masqué ; l'**émulation joystick au
-clavier est activée** (flèches + Ctrl droit = feu) pour jouer sans manette ; le fichier
-`neost.cfg` n'est réécrit que pour les réglages que la borne doit mémoriser et qui se
-règlent depuis son menu (dossiers ROM additionnels, affectation des manettes) — jamais
-pour la ROM, la disquette ou le modèle de machine.
+NeoST boots **[EmuTOS](https://emutos.sourceforge.io/)** (GPL) out of the box, so it
+works with no proprietary ROM at all. The packages also carry **TOS 1.02 UK** and
+**TOS 1.62 UK** for the 520 ST and 1040 STE profiles.
 
-**Zoom adaptatif** (défaut, bascule **F10**) : la **zone active** (l'écran ST « de base »,
-hors bandes overscan) est calée sur la hauteur en gardant le ratio pixel — un jeu normal
-remplit l'écran autant qu'une démo, sans être rapetissé par des bordures unies qu'il
-n'exploite pas (barres noires latérales seulement). Dès qu'une démo **ouvre les bordures**
-(overscan — Enchanted Land, Lethal Xcess…), la Glue le signale et NeoST montre le **buffer
-entier** (hystérésis anti-clignotement). F10 fige au contraire le cadre complet en permanence.
-
-**Menu in-game** (**START** manette ou **F9**) : plein écran, le jeu est **mis en pause**.
-Libellés en **anglais** (borne). Deux colonnes que l'on bascule gauche/droite — la **liste des
-jeux** (triée par proximité : les phases B/C/D du jeu en cours remontent en tête, **L1/R1** =
-défilement rapide par page) et les **actions** (*Restart machine* / *Keyboard & mouse* /
-*Joysticks* / *ROM folders* / *Quit*). Le FEU (A / Entrée) valide. Insérer un jeu **échange
-la disquette à chaud, sans reboot** (comme glisser une disquette : le jeu en cours continue) ;
-seul « Restart » relance la machine.
-
-**Clavier & souris** (**SELECT** manette ou **K**, même en cours de jeu) : un bandeau en bas
-sans mettre le jeu en pause — on envoie une frappe brève (touches F1-F8, chiffres, Espace/
-Return/Escape, clics souris) au jeu qui tourne dessous.
-
-**Joysticks** (action *Joysticks*) : choisir **quelle manette hôte pilote quel port ST**.
-Une ligne par manette détectée (bouger un stick allume une pastille ● pour identifier
-laquelle est laquelle) ; le FEU fait tourner son rôle : **AUTO** (défaut historique — 1ʳᵉ
-manette → port 1 « jeux », 2ᵉ → port 0) → **PORT 1** → **PORT 0** → **OFF**. Plusieurs
-manettes sur le même port sont OR-ées (deux sticks pilotent le même joueur). Le choix est
-**persisté par GUID** dans `neost.cfg` (`joymap=`) — il survit au rebranchement et au
-reboot de la borne. Boutons en jeu : **A/B (et gâchettes) = FEU**, **X = ESPACE**,
-**Y = RETURN** — les jeux « press SPACE to start » (Enchanted Land…) se jouent donc
-entièrement à la manette.
-
-**Dossiers ROM** (action *ROM folders*) : ajouter d'autres dossiers de jeux/disques, scannés
-**en plus** de `disks/`. Un **navigateur piloté à la manette** parcourt tout le système de
-fichiers (chemin absolu → remontée jusqu'à `/`) avec des **raccourcis** vers la racine, le
-*Home* et les **volumes montés** (`/Volumes` sur macOS, `/run/media`·`/media`·`/mnt` sur
-Linux). *USE THIS FOLDER* ajoute ; chaque dossier se retire d'une **croix ×** (et est
-auto-supprimé s'il n'existe plus). La liste est **persistée** dans `neost.cfg` (`kiosk_romdir=`).
-
-| Touche / bouton          | Action                                             |
-|--------------------------|----------------------------------------------------|
-| Flèches / Ctrl droit     | Joystick émulé (direction / feu)                   |
-| **F9** / START           | Ouvre/ferme le menu in-game (jeu en pause)         |
-| **K** / SELECT           | Ouvre/ferme le bandeau Clavier & souris            |
-| **L1 / R1** (Page↑/↓)    | Défilement rapide par page dans la liste des jeux  |
-| **F5** / **F7**          | Sauver / charger l'état (save-state, slot `neost.state`) |
-| **F10**                  | (dés)active le zoom adaptatif (cadre complet fixe) |
-| **F11**                  | (dés)active l'émulation joystick clavier           |
-| A·B / Entrée·Échap       | Valider / revenir (dans le menu)                   |
-| **Alt+F4**               | **Quitter la borne** (immédiat, le classique)      |
-| **Ctrl+Shift+Q** (~0,7 s)| Quitter la borne (chord discret)                   |
-
-> Démarrage direct sur un jeu (attract) : monter un dossier GEMDOS
-> (`NEOST_GEMDOS_DIR=…`) dont le `DESKTOP.INF` (TOS 1.x) ou `NEWDESK.INF` (TOS 2.x)
-> contient une ligne d'autostart `#Z 01 C:\JEU.TOS@`.
-
-## Effets CRT (façade moniteur)
-
-Option **opt-in** : une passe shader (FBO) applique par-dessus l'écran ST la « façade
-verre » d'un vieux moniteur cathodique — géométrie de baril, scanlines, shadow mask,
-rémanence phosphore, luminosité/contraste/saturation/teinte, vignette et courbe gamma.
-Sans surprise : à échec gracieux (si le shader ne compile pas — ex. contexte GL 2.1 sur
-un vieux macOS — l'écran est présenté **brut**, passthrough).
-
-```sh
-./build/neost --crt                         # active les effets (réglages du neost.cfg)
-./build/neost --crt-preset arcade           # preset : off | leger | arcade | phosphor
-./build/neost --kiosk --crt-preset phosphor roms/tos162uk.img "disks/Jeu.stx"
-```
-
-En **fenêtré**, le menu **Affichage → Effets CRT** ouvre un panneau de réglages en direct
-(chaque curseur est persisté dans `neost.cfg`). Un preset n'est qu'un point de départ : on
-peut ensuite tout ajuster. En **kiosk**, la config est figée → les effets viennent du
-`neost.cfg` (ou de `--crt` / `--crt-preset`).
-
-## ROM : EmuTOS par défaut (+ TOS UK pour les profils 520 ST / 1040 STE)
-
-NeoST démarre par défaut sur **[EmuTOS](https://emutos.sourceforge.io/)** (GPL).
-Les paquets (AppImage / DMG / WASM) embarquent aussi **TOS 1.02 UK** et **TOS 1.62 UK**,
-choisis par les profils **520 ST** et **1040 STE** ; les autres TOS Atari du dépôt
-ne sont **pas** redistribués.
-
-```
-roms/etos192fr.img   EmuTOS 192 Ko, français  (mappé à $FC0000, par défaut) — ST / Mega ST
-roms/etos192us.img   EmuTOS 192 Ko, US        — ST / Mega ST
-roms/etos256fr.img   EmuTOS 256 Ko, français  (mappé à $E00000) — STE / Mega STE
-roms/etos256us.img   EmuTOS 256 Ko, US        — STE / Mega STE
-roms/tos102uk.img    TOS 1.02 UK (PAL 50 Hz)  — profil 520 ST (embarqué dans les dist)
-roms/tos162uk.img    TOS 1.62 UK (PAL 50 Hz)  — profil 1040 STE (embarqué dans les dist)
-```
-
-Le build 192 Ko se présente « Atari ST » (pas d'autodétection du matériel additionnel) ;
-pour un profil STE/Mega STE, utiliser un TOS STE (1.62 / 2.06) ou un EmuTOS 256 Ko
-(qui programme le SCU).
-
-## Disquettes
-
-Le lecteur A monte une image `.st` (dump de secteurs brut ; `.msa` aussi supporté).
-Une image FAT12 720 Ko de démonstration est fournie dans `disks/diskA.st`. Outils :
-
-```sh
-python3 tools/make_floppy.py                 # (re)génère disks/diskA.st (FAT12 de test)
-python3 tools/fetch_disk.py <url planetemu>  # télécharge une disquette de test (scrapling)
-```
-
-> ⚠ `fetch_disk.py` n'est à utiliser que pour des logiciels auxquels vous avez droit
-> (domaine public, freeware, démos), afin de tester l'émulateur.
-
-## Disque dur GEMDOS (dossier hôte → C:)
-
-Plutôt qu'émuler un contrôleur ACSI/IDE, NeoST peut monter un **dossier de l'hôte**
-comme lecteur **C:** en interceptant les appels GEMDOS et en les redirigeant vers le
-système de fichiers réel (technique d'Hatari). Lire, écrire, lister et **lancer des
-programmes** depuis C: fonctionnent ; un PRG placé dans `C:\AUTO\` est exécuté au boot.
-
-```sh
-./build/neost-headless roms/etos192us.img --gemdos /chemin/vers/dossier   # headless
-NEOST_GEMDOS_DIR=/chemin/vers/dossier ./build/neost                       # fenêtré
-```
-
-Le bureau EmuTOS affiche alors une icône **DISK C** (disque dur). Si le dossier ne
-contient QUE des sous-dossiers d'une lettre (`C`, `D`…), chacun devient un lecteur.
-Exclusif d'une cartouche externe (`--cart`).
-
-## Disque dur ACSI (vraie image de disque)
-
-Pour booter depuis une **image de disque dur** réelle (dump de secteurs brut avec
-table de partitions Atari/AHDI ou DOS), NeoST émule le contrôleur ACSI (port de
-`hdc.c`). Le TOS/EmuTOS détecte le périphérique, lit la table de partitions et monte
-les partitions FAT (C:, D:…). Lecture **et écriture** sont persistées dans l'image.
-
-```sh
-./build/neost-headless roms/etos192us.img --acsi disque.hd        # headless (alias --hd)
-NEOST_ACSI_IMG=disque.hd ./build/neost                            # fenêtré
-```
-
-Contrairement au disque dur GEMDOS (redirection vers un dossier), l'ACSI utilise un
-vrai système de fichiers FAT dans l'image — idéal pour booter un environnement Atari
-complet. Jusqu'à 8 cibles. Indépendant du disque dur GEMDOS.
-
-## Build WebAssembly (local)
-
-Nécessite l'[emsdk](https://emscripten.org/docs/getting_started/downloads.html) activé
-(`source .../emsdk_env.sh`). La cible `neost-web` écrit dans `wasm/` :
-
-```sh
-emcmake cmake -B build-web -DCMAKE_BUILD_TYPE=Release
-cmake --build build-web -j --target neost-web    # → wasm/index.{html,js,wasm,data}
-python3 -m http.server -d wasm 8000              # puis ouvrir http://localhost:8000/
-```
-
-`-DNEOST_WEB_FREE_ONLY=ON` réduit la build aux seuls contenus libres (EmuTOS + `diskA`).
-Le déploiement GitHub Pages est automatisé par `.github/workflows/deploy-web.yml`.
+⚠️ The ROM decides the scan rate: a `us` suffix means **60 Hz NTSC**, while
+`uk`/`fr`/`de`/`es` mean **50 Hz PAL**. European demos come out visibly torn at 60 Hz —
+faithfully so, that is what real hardware does. If a demo looks wrong, check the status
+bar first.
 
 ## Documentation
 
-| Fichier                        | Contenu                                                       |
-|--------------------------------|--------------------------------------------------------------|
-| [`DEV.md`](DEV.md)             | Architecture détaillée, modèle d'horloge, débogage headless, pièges matériels, extension d'un composant. |
-| [`CHANGELOG.md`](CHANGELOG.md) | Tout ce qui est déjà implémenté et validé.                    |
-| [`TODO.md`](TODO.md)           | Feuille de route — ce qui reste à faire (fidélité Hatari, MegaSTE, précision cycle). |
-| [`CLAUDE.md`](CLAUDE.md)       | Hub d'orientation (méthode de travail, sources de vérité).    |
+| File | What's in it |
+|------|--------------|
+| [`DEV.md`](DEV.md) | Architecture, clock model, headless debugging, hardware gotchas, how to add a chip |
+| [`CHANGELOG.md`](CHANGELOG.md) | Release history and dated work |
+| [`docs/IMPLEMENTED.md`](docs/IMPLEMENTED.md) | What is implemented, chip by chip — "does NeoST do X?" |
+| [`TODO.md`](TODO.md) | What is left — game catalogue and per-subsystem roadmap |
+| [`CLAUDE.md`](CLAUDE.md) | Working method and sources of truth (also the map to everything else) |
+| [`docs/`](docs/) | Deep dives: cycle accuracy, Hatari divergences, headless oracle, reference software |
 
-> Références techniques pointues dans [`docs/`](docs/) — précision cycle
-> ([`CYCLE_ACCURACY.md`](docs/CYCLE_ACCURACY.md)), beam-sync, divergences Hatari, oracle headless,
-> logiciels étalons. Carte complète dans [`CLAUDE.md`](CLAUDE.md).
+## Status
 
-## État
+**0.5.1.** EmuTOS and TOS 1.02/1.62/2.06 boot; all three Field Service diagnostic
+cartridges pass their internal tests. Demanding games and demos run: Enchanted Land,
+Super Hang-On, Lethal Xcess, The Cuddly Demos, No Cooper. Spectrum 512 pictures and
+No Cooper's med-res overscan come out **0 pixels different** from the Hatari oracle
+(`tools/run_all.py --tier full`).
 
-Version **0.5 « Newborn »** — première release taguée (cf. [`CHANGELOG.md`](CHANGELOG.md)).
+The long game is **cycle accuracy** — borders and the fine timing of games and demos.
+See [`TODO.md`](TODO.md) and [`docs/CYCLE_ACCURACY.md`](docs/CYCLE_ACCURACY.md).
 
-EmuTOS (FR/US), TOS 1.02/1.62/2.06 bootent (green desktop, disquette, souris, son) et les
-trois cartouches de diagnostic passent leurs tests internes. Des jeux et démos
-**limites** tournent : Enchanted Land, Super Hang-On, Lethal Xcess, The Cuddly Demos,
-No Cooper. Les images **Spectrum 512** (palette intra-ligne, jusqu'à 512 couleurs) et
-l'**overscan med-res** de No Cooper sont rendus **pixel-identiques à l'oracle Hatari**
-(0 px d'écart, suite `tools/run_all.py --tier full`).
-
-Le grand chantier reste la **précision cycle** (bordures et timing fin des jeux/démos) —
-voir [`TODO.md`](TODO.md) et [`docs/CYCLE_ACCURACY.md`](docs/CYCLE_ACCURACY.md). L'interface
-et les messages de journal sont en **anglais** ; le code (commentaires) et la documentation
-sont en français.
+The interface and log messages are in English; code comments and documentation are in
+French.
 
 ## Licence
 
-NeoST est publié sous **GNU GPL v3** (voir [`LICENSE`](LICENSE)) —
-(c) 2026 VERHILLE Arnaud. Le comportement matériel est largement porté depuis
-[Hatari](https://hatari.tuxfamily.org/) (GPLv2+), dont NeoST est redevable ;
-la GPLv3 est compatible avec ce portage.
+**GNU GPL v3** (see [`LICENSE`](LICENSE)) — (c) 2026 VERHILLE Arnaud. Hardware behaviour
+is largely ported from [Hatari](https://hatari.tuxfamily.org/) (GPLv2+), to which NeoST
+owes a great deal; GPLv3 is compatible with that port.
 
-Composants tiers embarqués, avec gratitude :
+Bundled third-party components, with thanks:
 
-| Composant | Rôle | Licence |
+| Component | Role | Licence |
 |-----------|------|---------|
-| [Moira](https://github.com/dirkwhoffmann/Moira) (vendorisé) | cœur 68000 cycle-exact | MIT — © Dirk W. Hoffmann |
-| [Dear ImGui](https://github.com/ocornut/imgui) (sous-module) | interface | MIT |
-| [miniaudio](https://miniaud.io/) (sous-module) | sortie audio | MIT-0 / domaine public |
-| [EmuTOS](https://emutos.sourceforge.io/) (`roms/etos*`) | TOS libre par défaut | GPLv2 |
-| Fonts DejaVu / Font Awesome | UI | licences libres respectives |
+| [Moira](https://github.com/dirkwhoffmann/Moira) (vendored) | cycle-exact 68000 core | MIT — © Dirk W. Hoffmann |
+| [Dear ImGui](https://github.com/ocornut/imgui) (submodule) | interface | MIT |
+| [miniaudio](https://miniaud.io/) (submodule) | audio output | MIT-0 / public domain |
+| [EmuTOS](https://emutos.sourceforge.io/) (`roms/etos*`) | free TOS, the default | GPLv2 |
+| DejaVu / Font Awesome | UI fonts | respective free licences |
 
-[Hatari](https://framagit.org/hatari/hatari) et MAME servent de **références de
-comportement** (sources lues, oracle d'exécution) — voir [`CLAUDE.md`](CLAUDE.md).
+[Hatari](https://framagit.org/hatari/hatari) and MAME are the **behavioural references**
+— read as sources, and run as an oracle.

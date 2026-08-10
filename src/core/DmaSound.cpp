@@ -301,8 +301,12 @@ void DmaSound::onMicrowireShift() {
 // bypass exact des appelants quand les deux codes valent 6.
 static void shelf1(bool lowShelf, double dB, double f0, double fs,
                    double& b0, double& b1, double& a1) {
+    // M_PI n'est PAS standard (POSIX seulement) : MinGW ne le définit pas sans
+    // _USE_MATH_DEFINES, et le build Windows échouait ici. Constante locale plutôt
+    // qu'une macro conditionnelle — même valeur, aucune dépendance de plateforme.
+    constexpr double kPi = 3.14159265358979323846;
     const double g = std::pow(10.0, dB / 20.0);
-    const double t = std::tan(M_PI * f0 / fs);
+    const double t = std::tan(kPi * f0 / fs);
     if (lowShelf) {
         a1 = (g < 1.0) ? (t - g) / (t + g) : (t - 1.0) / (t + 1.0);
         b0 = (1.0 + a1) * (g - 1.0) / 2.0 + 1.0;

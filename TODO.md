@@ -1,7 +1,10 @@
 # TODO — NeoST
 
-(c) 2026 VERHILLE Arnaud. **Ce qui reste à faire.** Le fait (implémenté + validé) est dans
-[`CHANGELOG.md`](CHANGELOG.md) ; les diagnostics de bugs en cours sont en mémoire projet.
+(c) 2026 VERHILLE Arnaud. **Ce qui reste à faire.**
+
+- Ce qui est fait, par puce → [`docs/IMPLEMENTED.md`](docs/IMPLEMENTED.md)
+- Titres déjà diagnostiqués (corrigés **ou** jugés fidèles) → [`docs/CASE_STUDIES.md`](docs/CASE_STUDIES.md)
+- Chronologie → [`CHANGELOG.md`](CHANGELOG.md)
 
 **Objectif** : émuler proprement un **MegaSTE** (68000 8/16 MHz, 1/2/4 Mo, TOS 2.05/2.06, STE
 vidéo/son/joypads, blitter, RTC, SCC, SCU, ACSI/SCSI, DD/HD) avec un timing assez fidèle pour
@@ -70,40 +73,32 @@ Autres points de conformité relevés à la même passe (non bloquants mais à t
 
 ---
 
-## Catalogue logiciels — bugs en cours
+## Catalogue logiciels — bugs OUVERTS
 
-Rapports terrain. TOS 1.02fr sauf mention contraire. Chemins sous `disks/st/` (`.st`) ou
-`disks/stx/` (`.stx`). Pilotage headless : `--keys`/`--joy-at`, trace `--irq`, diff Hatari.
+Rapports terrain non expliqués. TOS 1.02fr sauf mention. Chemins sous `disks/st/` (`.st`)
+ou `disks/stx/` (`.stx`). Pilotage headless : `--keys`/`--joy-at`, trace `--irq`, diff
+Hatari.
 
 | Jeu | Symptôme | Piste / renvoi |
 |-----|----------|----------------|
 | **Arkanoid (1987)** (Imagine) | Atteint l'écran-titre mais ne franchit pas la partie (boucle `$31736`/`$26E7`). | Gel FDC `$31736` **résolu** (modèle rotationnel) ; reste une cause distincte (protection ? 2ᵉ chargement ? IRQ ?). 🎯 étalon FDC/protection. |
-| **Captain Blood (1988)** (ERE) | ✅ **JOUABLE en TOS US. Cas TOS FR TRANCHÉ (2026-07-09) = FIDÈLE, pas un bug.** « KEYBOARD PROBLEM » en TOS FR : oracle Hatari TOS FR montre EXACTEMENT le même écran (diff visuel identique). Le jeu n'envoie AUCUNE commande IKBD spéciale (flux IKBD US==FR : $08/$0F/$12/$80 init standard) → détection purement logicielle (lecture table clavier TOS) ; NeoST fait tourner la même ROM FR que Hatari → même résultat. La version crackée `[cr 42-Crew]` rejette la table AZERTY. Rien à corriger. | Vérifié à l'oracle (cmd-fifo+SPACE, tos102fr) : Hatari FR == NeoST FR. |
-| **Enchanted Land (1990)** (Thalion) | ✅✅✅ **RÉSOLU (5ᵉ passe 2026-07-02) : moteur fullscreen verrouillé 100 %** (12402/12402 écritures freq à la position Hatari-exacte). Le dernier verrou n'était PAS la reconnaissance IPL mais un **double comptage du saut STOP** dans la comptabilité de quantum → `sched.now()`/datation vidéo en avance de δ∈{4..26} sur l'horloge CPU (quand δ≡2 mod 4, le calibrateur $8209 déverrouillait). Micro-sauts éliminés. **Son Thalion OK** (confirmé GUI 2026-07-02 — réparé par la même passe). Jeu complet. | Fix = rebase `quantumStartBus_` au saut STOP (`Cpu68k::run`) → `docs/MOIRA_WINUAE_CONVERGENCE.md` (5ᵉ passe). Les 3 mystères (lock, commit-VBL↔loader, IPLFETCH↔loader) avaient cette même cause. |
-| **Lethal Xcess** (`.STX`, TOS 1.62) | ✅ titre stable + **in-game RÉPARÉ (2026-07-12)** : la régression « commit scanline au HBL » (617d030) faisait committer les 29 lignes de bordure haute sur l'ancre sticky `liveStartHBL_=34` (paire 60/50 de calibration ligne 32, qui n'ouvre PAS le haut) → poll $8209 fin de trame faux (+29×160 octets) → écran en jeu déchiré + chargements en échec. Fix `commitAnchor()` (fenêtre Glue LIVE, latchée) → pixel-identique au pré-régression, flux $8209 byte-identique (~3 M lectures). ◑ Titre « buggé à ~8 % » GUI (2026-07-02) : probablement même cause (calibration $8209 chaque trame), à re-vérifier en GUI. | Recette in-game headless : `--disk Disk_1.STX --diskb Disk_2.STX --keys-at 3000 " " --joy-script 16500 "FFFF" --joy-at 21000 0x80` → jeu ≈ trame 21900 (⚠ le jeu NE DÉMARRE qu'avec le disque 2 monté : titre→SPACE→music select→FEU→briefing→FEU tenu). Oracle Hatari : mêmes disques, Xvfb+xdotool, feu=Control_R tenu pendant chargement+briefing. |
 | **Beyond the Ice Palace** (D-BUG) | Rapport GUI : écran scramblé en jeu. **NON reproduit en headless** : gameplay PROPRE (ST et STE, 1 Mo, boot AUTO). ⚠ Le PRG exige > 512 Ko (BSS dépack 384 Ko → TPA ~471 Ko) : en 512 Ko le TOS skippe l'AUTO — comportement CORRECT (pas un bug). Le chemin GUI = double-clic bureau GEM (Pexec sous AES) ≠ AUTO — à reproduire avec la config GUI exacte. | Recette headless : copier le disque + `mmd ::AUTO` + `mcopy` ; `--mem 1m --keys-at 4000 "n" --keys-at 6200 " " --keys-at 9600 " " --keys-at 12000 "y" --keys-at 14500 "s" --keys-at 16000 " " --keys-at 19600 "y"` → jeu ≈ trame 21000. |
-| **The Cuddly Demos** (TCB) | ✅ **menu robot RÉSOLU (2026-07-03, commit `125388b`)** : clignotement vertical 10-47 % → **0** (250/250 trames verrouillées, mur régulier = Hatari). 1ʳᵉ page OK. | Cause : datations lecture (`−14`) / écriture (`−6`) du compteur vidéo co-calibrées autour d'une « origine −8 » devenue artefact après le fix STOP — ramenées ENSEMBLE aux valeurs fidèles §8 (**read −6, write +2**). Le synchroniseur (pc=f264, sortie sur octet bas `$8209` > `$40` SIGNÉ) lisait 4-6 octets de moins qu'Hatari au même instant → sortie L34→L36 → paire 60/50 une ligne trop tard. ⚠ Ne bouger ces offsets que PAR PAIRE (read seul casse EL). Repro : `--fastfdc --keys-at 3000 " "`, ≈ trame 6000. → `docs/MOIRA_WINUAE_CONVERGENCE.md`. |
 | **Shadow Warriors** (2Hot2Handle) | Après SPACE : titre + musique OK ; le bouton joystick ne lance pas le jeu. (Castle Warrior, lui, fonctionne.) | À diff'er Hatari. |
-| **Rick Dangerous II (1989)** (Core) | ✅ **JOUABLE** (résolu ; l'ancien plantage « 4 bombes » ne se reproduit plus). | — |
 | **Wings of Death** (`.stx`) | Après bouton : titre **corrompu** + son ralenti ; SPACE lance le jeu, qui tourne ensuite très bien. | Corruption titre (vidéo) + son chargement. |
-| **Stardust (1994)** (Daze) | ✅ **TRANCHÉ (2026-07-09) : jeu STE-ONLY, « crash ST » = FIDÈLE.** Sur `--machine st` le jeu lit `$FFFF8900` (son DMA **STE**) à PC=$38800 → bus error : **Hatari HALTE aussi** (« double bus/address error => CPU halted ») → pas un bug NeoST. Sur `--machine ste` (tos162fr, 1 Mo) : intro crack HARDCORE + « présente STARDUST » rendus. ⚠ Après l'intro → noir (multi-disque « Disk 1 of 3 » / touche — non creusé). ◑ Divergence secondaire NON creusée : sur ST, NeoST reste en écran noir (CPU tourne) là où Hatari **halte** (double-fault) — la détection double-fault NeoST ne se déclenche pas sur cette séquence ; faible valeur (ne concerne qu'un jeu STE lancé par erreur sur ST). | Lancer sur **STE**. Diff double-fault ST = suivi optionnel. |
-| **Spectrum 512 — palettes « foirées » sur STE** (2026-07-09) | ✅ **PAS UN BUG — comportement FIDÈLE** : l'auto-diapo scramblait les palettes sur STE/Mega STE (parfait sur ST). Diag : le viewer spec512 est calibré timing **STF** → sur STE il se désynchronise **sur vrai matériel aussi**. NeoST STE == **oracle Hatari STE byte-exact (0 px, plage f1645-1660)** → NeoST reproduit fidèlement, ce n'est pas sa faute. La vraie lacune était l'**absence de détection** (rien ne disait « fidèle » vs « bug »). | ✅ Étalon `spectrum512_diapo_ste` ajouté (épinglé à l'oracle Hatari STE `tests/reference/spectrum512_diapo_ste.png`). ⚠ `9f0d2bc` (res-tricks) écarté : ne touche que MED_OFFSET ; ST reste 0 px vs oracle. Leçon → « Système de régression » ci-dessous. |
-| **Blood Money (1989)** (Psygnosis) | ✅ **PAS UN BUG — manque de RAM (2026-08-07)** : « plante après le cracktro » = écran noir définitif en **512 Ko**, sur les DEUX cracks. **Oracle Hatari : même écran noir** (même ROM/disque/SPACE, jusqu'à 7000 VBL) → fidèle. Trace : recopie emballée à `$E26` avec `D2=$FFCC0484` (compteur négatif ≈ 4,3 G d'itérations) et `A0` déjà à `$34CA84` alors que `phystop` (D5) = `$00080000` — le dépaqueteur du crack calcule une taille bidon faute de RAM ; Hatari logge le même emballement (`Bus Error writing at address $400000, PC=$e28`). En **`--mem 1m`** : ça charge et ça joue. | ✅ Jouable en **1 Mo** avec `[cr Delight][m Superior][t]` (version « file », mono-disquette) : jeu ≈ trame 4800. `[cr Replicants][t]` démarre aussi mais réclame la **disquette 2** (non présente dans `disks/st/`). Recette : `--mem 1m --fastfdc --key-down 900 " " --key-up 906 " " --shot-every 600`. |
-| **HotPot (2002)** (Reservoir Gods, notre build `build.sh --game`) | ✅ **RÉSOLU (2026-07-09)** : front-end JOUABLE (menu « DOUBLE JUGGLE », INFO/OPTIONS/PLAY/EXIT) sur STE 1 Mo/tos162fr et tos106uk 4m. Le « noir après l'intro » N'était **PAS** une divergence d'émulation (identique dans Hatari) mais un **bug toolchain** : `build.sh` ignorait les `-D` du `.PRJ`, donc `-DdGODLIB_FADE` jamais défini → `Fade_Init()` (dans `#ifdef dGODLIB_FADE` de PLATFORM.C) compilé hors → callback VBL `Fade_Vbl` jamais installé → **fade-in de palette jamais armé** (palette figée noire alors que le front-end était bien dessiné). | Fix : `build.sh` collecte les `-D` actifs du `.PRJ` (`GAME_DEFS`) → toutes les compilations `vc`. Diag : symboles DRI du `.TOS` + `--dump-at` (`$FFFF8240`, `gFade`, `mfCalls`) + oracle Hatari `--harddrive/--avirecord`. Renvoi mémoire `hotpot-jouable-divergence`. |
 
-> ⚠ **Avant de déclarer un bug : vérifier la RAM (et la ROM).** Beaucoup de titres 1989+ et
-> la plupart des cracks/dépaqueteurs exigent **1 Mo** ; en 512 Ko ils ne râlent pas, ils
-> partent en vrille (compteur de recopie négatif, écran noir figé, ou l'AUTO simplement
-> skippé par le TOS). Symptôme typique = « ça plante juste après le cracktro / l'intro ».
-> Cas déjà tranchés ainsi : **Blood Money**, **Beyond the Ice Palace** (BSS 384 Ko),
-> **Stardust** (STE-only). Réflexe : rejouer en `--mem 1m` **avant** de tracer, puis
-> confirmer à l'oracle Hatari (mêmes ROM/disque/touches) — dans ces trois cas Hatari
-> plantait **à l'identique**, la config était en cause, pas l'émulation. Second réflexe :
-> la ROM fixe 50/60 Hz (suffixe `us` = NTSC, cf. `CLAUDE.md`).
+Deux suivis mineurs laissés ouverts sur des cas par ailleurs tranchés :
+- **Lethal Xcess** — titre « buggé à ~8 % » constaté en GUI (2026-07-02), probablement la
+  même calibration `$8209` que l'in-game déjà réparé ; à re-vérifier en GUI.
+- **Stardust** — sur ST, NeoST reste en écran noir là où Hatari **halte** (double-fault) :
+  la détection double-fault ne se déclenche pas sur cette séquence. Faible valeur (ne
+  concerne qu'un jeu STE lancé par erreur sur ST).
 
-> **Récemment résolus** (passés au CHANGELOG) : **Super Hang-On** (bruit blanc → filtre YM
-> LowPass STF ; lignes colorées → rendu raster `PAL_SNAP` ; FDC 9→10 spt) ; **Rick Dangerous**
-> (1, exception erreur d'adresse) ; **Castle Warrior**, slideshow Spectrum 512.
+> ⚠ **Avant de déclarer un bug : vérifier la RAM, puis la ROM.** Le réflexe et les cas
+> qu'il a tranchés → [`docs/CASE_STUDIES.md`](docs/CASE_STUDIES.md).
+
+> **Déjà expliqués** (9 titres, corrigés ou jugés fidèles) : Captain Blood, Enchanted
+> Land, Lethal Xcess, The Cuddly Demos, Rick Dangerous II, Stardust, Spectrum 512 STE,
+> Blood Money, HotPot → [`docs/CASE_STUDIES.md`](docs/CASE_STUDIES.md).
 
 ---
 

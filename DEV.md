@@ -43,46 +43,38 @@ extern/  imgui/ miniaudio/ (sous-modules) · moira/ (VENDORISÉ, cf. NEOST_VENDO
 extern/hatari/src           SOURCE DE VÉRITÉ matérielle (lue, pas compilée)
 ```
 
-## Mode kiosk (`main.cpp`)
+## Mode kiosk — invariants d'implémentation (`main.cpp`)
 
-Borne d'exposition : `--kiosk` (vrai plein écran EXCLUSIF, moniteur passé à
-`glfwCreateWindow` → reste au-dessus de tout) / `--kiosk-monitor N`. Piloté par le
-global `g_kiosk`. Points clés :
+Usage, menu manette et réglages → [`docs/KIOSK.md`](docs/KIOSK.md). Ici, seulement ce
+qu'il ne faut pas casser en touchant au code :
 
 - **Parsing** : les drapeaux `--*` sont filtrés ; les arguments POSITIONNELS restants
   donnent ROM (0) et disquette (1). Ne pas remettre d'accès `argv[1/2]` en dur.
-- **Config figée** : `saveConfig()` sort immédiatement si `g_kiosk` **ou** `g_kioskLaunched`
-  (invariant de DÉPLOIEMENT : une session lancée en `--kiosk` reste figée même après un
-  retour au bureau par F8), **sauf** appel explicite `force=true` — réservé aux réglages que
-  la borne DOIT mémoriser depuis son propre menu : `kiosk_romdir=` et `joymap=`. Un
-  `--kiosk` de test n'écrase donc jamais la config de jeu (rom/disk/machine).
-- **Chrome masqué** : tout le bloc ImGui (menu/toolbar/fenêtres) est sous `if (!g_kiosk)` ;
-  la trame ImGui reste créée/rendue à vide (léger, pas de refonte du flux).
-- **Rendu** : `drawStKiosk()` cale la **zone active** (`Shifter::activeWidth/Height/Top`,
-  = l'image « de base » 320×200 hors bandes overscan) sur la **hauteur** de l'écran, ratio
-  gardé, pillarbox latéral. On échantillonne les texcoords de la zone active (bordures
-  exclues) : un jeu normal remplit l'écran comme une démo, sans être rapetissé par les
-  bordures unies qu'il n'exploite pas. Les rares plein-overscan (Enchanted Land, Tali) sont
-  rognés — assumé. Fond effacé en NOIR (barres).
-- **Entrées** : souris capturée + curseur masqué d'emblée ; `g_kbdJoy` forcé ON (jeux
-  joystick jouables au clavier) ; DEL ne libère PAS la souris en kiosk. Sortie : **Alt+F4**
-  (immédiat, géré explicitement car l'exclusif ne relaie pas toujours le « close » du WM)
-  ou chord **Ctrl+Shift+Q** ~0,7 s. On ne bloque jamais `glfwWindowShouldClose` (le WM
-  reste un moyen de sortie).
-- **Attract** : autostart via `#Z` d'un `DESKTOP.INF`/`NEWDESK.INF` dans le dossier GEMDOS
-  monté (aucun code dédié — data-driven).
-- **Latence audio** : `--audio-latency MS` (persisté `audio_latency_ms=`) fixe le coussin
-  d'amorçage de l'anneau (`Audio::setLatencyMs`, défaut 85, borné `[20,250]` — au-delà on
-  s'approche de la capacité de `SampleRing{32768}` = 341 ms à 48 kHz stéréo et le
-  producteur jetterait des échantillons à chaque trame). À appeler AVANT `start()` :
-  c'est `start()` qui convertit en échantillons, la fréquence réelle n'étant connue
-  qu'après `ma_device_init`.
-- **Borne Raspberry Pi** : `packaging/raspberry/` (Pi OS Lite + X nu sur VT1 par systemd,
-  ALSA sans serveur de son, gouverneur `performance`, `irqaffinity=0`, build natif
-  `-mcpu=cortex-a72/a76`). Deux contraintes non évidentes : miniaudio demande `SCHED_FIFO`
-  pour son thread ALSA et **échoue silencieusement** sans `LimitRTPRIO=` dans l'unité
-  systemd ; le `libglfw3` de Debian bookworm est **X11 uniquement**, donc pas de kiosk
-  Wayland (`cage`) sans recompiler GLFW.
+- **Config figée** : `saveConfig()` sort immédiatement si `g_kiosk` **ou**
+  `g_kioskLaunched` (invariant de DÉPLOIEMENT : une session lancée en `--kiosk` reste
+  figée même après un retour au bureau par F8), **sauf** `force=true` — réservé aux deux
+  réglages que la borne doit mémoriser depuis son menu, `kiosk_romdir=` et `joymap=`.
+  Un `force=true` repart de `g_cfgPristine` et n'y reporte QUE ces champs : la structure
+  en mémoire est salie en séance, la réécrire entière ferait fuir les réglages du dernier
+  visiteur. Un `--kiosk` de test n'écrase donc jamais rom/disk/machine.
+- **Chrome masqué** : tout le bloc ImGui est sous `if (!g_kiosk)` ; la trame ImGui reste
+  créée/rendue à vide. Le dockspace est gardé VIVANT (`KeepAliveOnly`) sinon l'aller-retour
+  bureau→borne→bureau désancre toutes les fenêtres.
+- **Bascule à chaud (F8)** : instantané `saveState` → changement de moniteur GLFW →
+  `loadState`. À faire ENTRE deux trames uniquement.
+- **Rendu** : `drawStKiosk()` cale la zone active (`Shifter::activeWidth/Height/Top`) sur
+  la HAUTEUR, ratio gardé. La passe CRT est demandée à la taille du cadre entier À CE
+  ZOOM, pas à celle de l'écran — sinon masque et scanlines sont magnifiés par le viewport
+  et moirent.
+- **Entrées** : souris capturée + curseur masqué d'emblée ; `g_kbdJoy` forcé ON ; DEL ne
+  libère PAS la souris. Sortie : **Alt+F4** (géré explicitement — l'exclusif ne relaie pas
+  toujours le « close » du WM) ou chord **Ctrl+Shift+Q** ~0,7 s. On ne bloque jamais
+  `glfwWindowShouldClose`.
+- **Latence audio** : `--audio-latency MS` (persisté) fixe le coussin d'amorçage
+  (`Audio::setLatencyMs`, défaut 85, borné `[20,250]` — au-delà on s'approche de la
+  capacité de `SampleRing{32768}` = 341 ms à 48 kHz stéréo, et le producteur jetterait des
+  échantillons). À appeler AVANT `start()` : c'est `start()` qui convertit en échantillons,
+  la fréquence réelle n'étant connue qu'après `ma_device_init`.
 
 ## Modèle d'horloge (`Machine::runFrame`)
 
@@ -147,6 +139,30 @@ en OU câblé), I5 FDC, I7 son DMA XSINT, bit7 moniteur.
 4. **Valider en headless** avant le GUI (`--trace`, `--screenshot`).
 5. Pour lever une IRQ : mettre à jour le `Mfp` (canal / ligne GPIP), `updateIpl` est appelé
    par le `Bus` après l'accès MMIO.
+
+## Builds spécialisés
+
+**WebAssembly** — nécessite l'[emsdk](https://emscripten.org/) activé. La cible
+`neost-web` écrit dans `wasm/` :
+
+```sh
+emcmake cmake -B build-web -DCMAKE_BUILD_TYPE=Release
+cmake --build build-web -j --target neost-web   # → wasm/index.{html,js,wasm,data}
+python3 -m http.server -d wasm 8000
+```
+
+`-DNEOST_WEB_FREE_ONLY=ON` restreint le FS virtuel aux contenus libres (c'est ce que fait
+la CI). Déploiement Pages : `.github/workflows/deploy-web.yml`. La page hôte est
+`web/shell.html` ; `wasm/index.html` est l'artefact GÉNÉRÉ, pas la source.
+
+**Windows** — MinGW-w64 dans un shell MSYS2/MINGW64,
+`NEOST_VERSION=<ver> packaging/windows/build_mingw.sh`. Tout est lié en statique et le
+script REFUSE le paquet s'il importe une DLL non système : une DLL manquante est
+invisible en CI (MSYS2 les a dans son `PATH`) et fatale au double-clic.
+
+**Paquets de release** — 7 artefacts, cf. `.github/workflows/release.yml`. Le contenu
+embarqué est une liste EXPLICITE (`packaging/stage_free_data.sh`) avec un garde-fou qui
+refuse toute ROM hors liste.
 
 ## Débogage headless (l'outil n°1)
 
