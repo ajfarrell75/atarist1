@@ -42,7 +42,7 @@ void Audio::render(float* out, uint32_t frames, uint32_t /*sampleRate*/) {
     // callbacks). Un bloc PLUS GRAND que le coussin (primeSamples_) rendrait
     // l'underrun STRUCTUREL : chaque callback viderait l'anneau tout juste amorcé.
     static int dbg = 0;
-    if (dbg < 3) { std::fprintf(stderr, "[Audio] callback: %u frames (anneau %zu floats, coussin %u frames)\n",
+    if (dbg < 3) { std::fprintf(stderr, "[Audio] callback: %u frames (ring %zu floats, cushion %u frames)\n",
                                 frames, ring_.available(), primeSamples_); ++dbg; }
     if (!primed_) {
         if (ring_.available() < size_t(primeSamples_) * 2) { std::fill(out, out + need, 0.0f); return; }
@@ -71,9 +71,9 @@ void Audio::produceFrame(int64_t frameCycles) {
         auto* dev = static_cast<ma_device*>(device_);
         if (ma_device_get_state(dev) == ma_device_state_stopped) {
             if (devLostFrames_++ == 0)
-                std::fprintf(stderr, "[Audio] périphérique audio arrêté — reprise auto…\n");
+                std::fprintf(stderr, "[Audio] audio device stopped — auto-resuming…\n");
             if (devLostFrames_ % 50 == 0 && ma_device_start(dev) == MA_SUCCESS) {
-                std::fprintf(stderr, "[Audio] périphérique audio repris\n");
+                std::fprintf(stderr, "[Audio] audio device resumed\n");
                 devLostFrames_ = 0;
             }
         } else devLostFrames_ = 0;
@@ -155,8 +155,8 @@ void Audio::produceFrame(int64_t frameCycles) {
     const uint32_t u = underruns_.load(std::memory_order_relaxed);
     if (u != underrunsSeen_ && underrunMuteFrames_ <= 0) {
         const double secs = std::chrono::duration<double>(dclock::now() - t0).count();
-        std::fprintf(stderr, "[Audio] underrun anneau (total %u) — boucle émulation : %.1f trames/s "
-                             "réelles (attendu ~50/60), anneau %zu\n",
+        std::fprintf(stderr, "[Audio] ring underrun (total %u) — emulation loop: %.1f real frames/s "
+                             "(expected ~50/60), ring %zu\n",
                      u, secs > 0 ? calls / secs : 0.0, ring_.available());
         underrunsSeen_ = u;
         underrunMuteFrames_ = 250;                        // ≈ 5 s à 50 trames/s
@@ -174,7 +174,7 @@ bool Audio::start() {
     cfg.pUserData         = this;            // le callback reçoit l'instance Audio
 
     if (ma_device_init(nullptr, &cfg, dev) != MA_SUCCESS) {
-        std::fprintf(stderr, "[Audio] ma_device_init a échoué\n");
+        std::fprintf(stderr, "[Audio] ma_device_init failed\n");
         delete dev;
         return false;
     }
@@ -189,14 +189,14 @@ bool Audio::start() {
     primed_      = false;                     // ré-amorçage propre
     sampleCarry_ = 0.0;
     if (ma_device_start(dev) != MA_SUCCESS) {
-        std::fprintf(stderr, "[Audio] ma_device_start a échoué\n");
+        std::fprintf(stderr, "[Audio] ma_device_start failed\n");
         ma_device_uninit(dev);
         delete dev;
         return false;
     }
     device_  = dev;
     started_ = true;
-    std::printf("[Audio] miniaudio démarré : %u Hz STÉRÉO, latence ~%u ms (modèle push : PSG horodaté + DMA L/R + lecteur)\n",
+    std::printf("[Audio] miniaudio started: %u Hz STEREO, latency ~%u ms (push model: timestamped PSG + DMA L/R + drive)\n",
                 rate_, primeSamples_ * 1000 / rate_);
     std::fflush(stdout);   // visible même si l'appli est tuée (diagnostic)
     return true;

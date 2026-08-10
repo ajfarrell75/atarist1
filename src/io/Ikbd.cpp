@@ -123,7 +123,7 @@ uint8_t Ikbd::read8(uint32_t addr) {
     }
     if (dbgRdr)
         std::fprintf(stderr, "[acia] rd %s$%02X%s reste=%zu cyc=%lld\n",
-                     had ? "" : "VIDE (", b, had ? "" : ")",
+                     had ? "" : "EMPTY (", b, had ? "" : ")",
                      rx_.size(), sched_ ? (long long)sched_->now() : 0LL);
     armRx();                         // octet suivant éventuel → livraison datée
     raiseIfReady();                  // RDRF/overrun retombés → l'IRQ RX peut retomber

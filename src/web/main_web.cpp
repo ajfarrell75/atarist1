@@ -108,7 +108,7 @@ void initGl() {
     GLuint vs = compileShader(GL_VERTEX_SHADER, kVert);
     GLuint fs = compileShader(GL_FRAGMENT_SHADER, kFrag);
     if (!vs || !fs) {
-        std::fprintf(stderr, "[web] shaders non compilés — rendu désactivé\n");
+        std::fprintf(stderr, "[web] shaders did not compile — rendering disabled\n");
         if (vs) glDeleteShader(vs);
         if (fs) glDeleteShader(fs);
         g_prog = 0; g_locPos = g_locUV = -1;
@@ -125,7 +125,7 @@ void initGl() {
     if (!linked) {
         char log[512];
         glGetProgramInfoLog(g_prog, sizeof log, nullptr, log);
-        std::fprintf(stderr, "[web] link programme: %s\n", log);
+        std::fprintf(stderr, "[web] program link: %s\n", log);
         glDeleteProgram(g_prog); g_prog = 0;
     }
     // Les shaders sont référencés par le programme : plus besoin des objets.
@@ -421,13 +421,13 @@ int main(int argc, char** argv) {
          : wantsMegaSte ? "/roms/etos256us.img"
                         : "/roms/tos102uk.img");
 
-    if (!glfwInit()) { std::fprintf(stderr, "[web] glfwInit a échoué\n"); return 1; }
+    if (!glfwInit()) { std::fprintf(stderr, "[web] glfwInit failed\n"); return 1; }
 
     // L'écran ST le plus grand est 640×400 (mono) ; le canvas est dimensionné par
     // la page. Pas de hint de profil : le port GLFW d'Emscripten crée un contexte
     // WebGL (GLES2) compatible avec nos shaders.
     g_window = glfwCreateWindow(640, 400, "NeoST — Atari ST (WASM)", nullptr, nullptr);
-    if (!g_window) { std::fprintf(stderr, "[web] création fenêtre échouée\n"); glfwTerminate(); return 1; }
+    if (!g_window) { std::fprintf(stderr, "[web] window creation failed\n"); glfwTerminate(); return 1; }
     glfwMakeContextCurrent(g_window);
 
     // Garde machine/TOS au boot, comme le headless (main_headless.cpp) : un
@@ -435,15 +435,15 @@ int main(int argc, char** argv) {
     const MachineType machTypeAdj = Machine::adjustMachineForTos(machType, romPath);
     static Machine machine(ramBytes, cpuCore, machTypeAdj); // RAM+cœur+machine (statique)
     g_machine = &machine;
-    std::fprintf(stderr, "[web] cœur CPU : %s | machine : %s | RAM : %s\n",
+    std::fprintf(stderr, "[web] CPU core: %s | machine: %s | RAM: %s\n",
                  Cpu68k::coreName(machine.cpu.core()), machineName(machTypeAdj), ramLabel(ramBytes));
     if (!machine.loadTos(romPath)) {
-        std::fprintf(stderr, "[web] TOS introuvable (%s) — repli EmuTOS 192 Ko.\n", romPath.c_str());
+        std::fprintf(stderr, "[web] TOS not found (%s) — falling back to EmuTOS 192 KB.\n", romPath.c_str());
         if (romPath != "/roms/etos192us.img" && !machine.loadTos("/roms/etos192us.img"))
-            std::fprintf(stderr, "[web] aucun TOS chargeable — CPU à vide.\n");
+            std::fprintf(stderr, "[web] no loadable TOS — CPU running on nothing.\n");
     }
     if (!machine.loadDisk(diskPath))
-        std::fprintf(stderr, "[web] disquette introuvable (%s).\n", diskPath.c_str());
+        std::fprintf(stderr, "[web] floppy not found (%s).\n", diskPath.c_str());
     machine.mfp.setColorMonitor(true);  // couleur (basse rés) par défaut
 
     // Bruits mécaniques du lecteur : le cœur émet des FdcSound, la page les joue
@@ -460,7 +460,7 @@ int main(int argc, char** argv) {
     glfwSetKeyCallback(g_window, onKey);
     glfwSetMouseButtonCallback(g_window, onMouseButton);
 
-    std::printf("[web] NeoST démarré. Clic = capture souris, Suppr (DEL) = libère.\n");
+    std::printf("[web] NeoST started. Click = capture mouse, DEL = release.\n");
 
     // fps=0 → requestAnimationFrame ; simulate_infinite_loop=1 → main() ne rend
     // pas la main (le cœur reste vivant via la Machine statique).

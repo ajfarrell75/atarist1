@@ -244,13 +244,13 @@ void Mfp::updateSerialConfig() {
     if (!traceAll && nLogs > kMaxLogs) return;
     if (!traceAll && nLogs == kMaxLogs) {
         ++nLogs;
-        std::fprintf(stderr, "[mfp] USART : reconfigurations suivantes silencieuses "
-                             "(Timer D détourné par le programme ; NEOST_MFP_TRACE=1 pour tout voir)\n");
+        std::fprintf(stderr, "[mfp] USART: further reconfigurations are silent "
+                             "(Timer D repurposed by the program; NEOST_MFP_TRACE=1 to see them all)\n");
         return;
     }
     ++nLogs;
     static const char* kStops[4] = {"sync", "1", "1.5", "2"};   // UCR bits 3-4
-    std::fprintf(stderr, "[mfp] USART : %d bauds, %d%c%s (UCR=$%02X, TDDR=%d, prescaler /%d)\n",
+    std::fprintf(stderr, "[mfp] USART: %d baud, %d%c%s (UCR=$%02X, TDDR=%d, prescaler /%d)\n",
                  baud, 8 - ((ucr >> 5) & 3),                    // taille du mot (bits 5-6)
                  (ucr & 4) ? ((ucr & 2) ? 'E' : 'O') : 'N',     // parité (bits 1-2)
                  kStops[(ucr >> 3) & 3], ucr, data, kDiv[ctrl]);

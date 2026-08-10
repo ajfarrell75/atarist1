@@ -273,7 +273,7 @@ inline void debug(GLFWwindow* win, bool kbdEnabled, int kbdPort, float deadzone)
 #ifndef __EMSCRIPTEN__
         GLFWgamepadstate gs;
         const bool mapped = glfwGetGamepadState(jid, &gs);
-        std::fprintf(stderr, " gamepad=%s", mapped ? "OUI" : "non");
+        std::fprintf(stderr, " gamepad=%s", mapped ? "YES" : "no");
         if (mapped) {
             std::fprintf(stderr, " | LX=%+.2f LY=%+.2f RX=%+.2f RY=%+.2f",
                          gs.axes[GLFW_GAMEPAD_AXIS_LEFT_X],  gs.axes[GLFW_GAMEPAD_AXIS_LEFT_Y],
@@ -291,7 +291,7 @@ inline void debug(GLFWwindow* win, bool kbdEnabled, int kbdPort, float deadzone)
     }
     uint8_t j0 = 0, j1 = 0;
     compose(win, kbdEnabled, kbdPort, deadzone, j0, j1);
-    std::fprintf(stderr, "[joy] composé : port0=$%02X port1=$%02X (dz=%.2f)\n", j0, j1, deadzone);
+    std::fprintf(stderr, "[joy] composed: port0=$%02X port1=$%02X (dz=%.2f)\n", j0, j1, deadzone);
 }
 
 } // namespace stjoy

@@ -604,7 +604,7 @@ CpuCore Cpu68k::parseCore(const std::string& s) {
     // L'ancien cœur Musashi a été retiré : on tolère la valeur historique pour ne pas
     // casser les vieux neost.cfg / scripts, mais on AVERTIT et on reste sur Moira.
     if (l == "musashi" || l == "uae")
-        std::fprintf(stderr, "[cpu] cœur « %s » supprimé — NeoST utilise Moira (cycle-exact).\n", s.c_str());
+        std::fprintf(stderr, "[cpu] core \"%s\" removed — NeoST uses Moira (cycle-exact).\n", s.c_str());
     return CpuCore::Moira;
 }
 
@@ -640,7 +640,7 @@ void Cpu68k::rebaseQuantumAndSync() {
         ++total;
         if (nd >= 0 && nd <= busNow) ++hits;
         if (total % 100000 == 0)
-            std::fprintf(stderr, "[IACKDISP] %ld/%ld IACK avec événement échu (%.3f %%)\n",
+            std::fprintf(stderr, "[IACKDISP] %ld/%ld IACK with a due event (%.3f %%)\n",
                          hits, total, 100.0 * double(hits) / double(total));
     }
     g_sched->syncTo(busNow);
@@ -950,7 +950,7 @@ void Cpu68k::setMegaSteSpeed(bool sixteenMhz) {
     // Réajuste les seuils du délai IPL (en clock-units) à la nouvelle vitesse CPU.
     if (g_iplFetch) g_moira->setIplDelay(static_cast<int64_t>(g_iplFetch4) * g_cpuMul,
                                          static_cast<int64_t>(g_iplFetch2) * g_cpuMul);
-    std::fprintf(stderr, "[cpu] Mega STE : 68000 à %d MHz\n", sixteenMhz ? 16 : 8);
+    std::fprintf(stderr, "[cpu] Mega STE: 68000 at %d MHz\n", sixteenMhz ? 16 : 8);
 }
 
 bool Cpu68k::megaSte16Mhz() const { return g_cpuMul == 2; }

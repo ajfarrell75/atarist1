@@ -272,7 +272,7 @@ GemdosHd::~GemdosHd() { clearAllFileHandles(); }
 
 bool GemdosHd::setDirectory(const std::string& hostDir) {
     if (!dirExists(hostDir)) {
-        std::fprintf(stderr, "[gemdos] dossier introuvable ou non-dossier : %s\n", hostDir.c_str());
+        std::fprintf(stderr, "[gemdos] folder not found or not a folder: %s\n", hostDir.c_str());
         return false;
     }
     trace_ = getenv("NEOST_GEMDOS_TRACE") != nullptr;
@@ -290,8 +290,8 @@ bool GemdosHd::setDirectory(const std::string& hostDir) {
     // laissait le montage PRÉCÉDENT en miettes — un simple dossier disparu (clé USB
     // retirée) suffisait à tuer le C: de la session, sans reset ni retour en arrière.
     if (countMappableDrives(absDir) == 0) {
-        std::fprintf(stderr, "[gemdos] aucun lecteur GEMDOS mappé depuis %s "
-                     "(montage courant conservé)\n", hostDir.c_str());
+        std::fprintf(stderr, "[gemdos] no GEMDOS drive mapped from %s "
+                     "(current mount kept)\n", hostDir.c_str());
         return false;
     }
     initDrives(absDir);
@@ -326,7 +326,7 @@ void GemdosHd::unmount() {
     // les deux partageant le même stockage bus_.cart ($FA0000).
     if (bus_.mountedCartPath().empty()) bus_.ejectCart();
     active_ = false;
-    std::fprintf(stderr, "[gemdos] HDD GEMDOS démonté\n");
+    std::fprintf(stderr, "[gemdos] GEMDOS HDD unmounted\n");
 }
 
 void GemdosHd::reset() {
@@ -403,7 +403,7 @@ static bool determineMaxPartitions(const std::string& dir, int& maxDrives) {
     maxDrives = 0;
     DIR* d = opendir(dir.c_str());
     if (!d) {
-        std::fprintf(stderr, "[gemdos] accès impossible : %s\n", dir.c_str());
+        std::fprintf(stderr, "[gemdos] cannot access: %s\n", dir.c_str());
         return false;
     }
     int count = 0, last = 0;
@@ -711,7 +711,7 @@ void GemdosHd::clampToSandbox(const EmuDrive& d, const std::string& gemName, std
     if (isRoot || canon.compare(0, root.size(), root) == 0) { out = canon; return; }
     const std::size_t sep = canon.rfind(PATHSEP);
     const std::string base = (sep == std::string::npos) ? canon : canon.substr(sep + 1);
-    std::fprintf(stderr, "[gemdos] REFUS : '%s' sortait du lecteur (%s) — rabattu sur la racine\n",
+    std::fprintf(stderr, "[gemdos] REFUSED: '%s' escaped the drive (%s) — clamped to the root\n",
                  gemName.c_str(), canon.c_str());
     out = root + base;
 }
@@ -768,7 +768,7 @@ void GemdosHd::createHostFileName(int drive, const std::string& gemNameIn, std::
             out.push_back(PATHSEP);
             out += filename;                       // (conversion charset off)
         } else if (!addPathComponent(out, filename, false)) {
-            if (trace_) std::fprintf(stderr, "[gemdos] introuvable: %s\n", out.c_str());
+            if (trace_) std::fprintf(stderr, "[gemdos] not found: %s\n", out.c_str());
             clampToSandbox(d, gemNameIn, out);
             return;
         }
@@ -1603,7 +1603,7 @@ void GemdosHd::boot() {
         bus_.cart[off + 3] = (uint8_t)(oldVec);
     }
     writeLong(0x0084, CART_GEMDOS);
-    if (trace_) std::fprintf(stderr, "[gemdos] hook installé : (0x84)=$%06X, ancien=$%06X, act_pd=$%06X\n",
+    if (trace_) std::fprintf(stderr, "[gemdos] hook installed: (0x84)=$%06X, previous=$%06X, act_pd=$%06X\n",
                              CART_GEMDOS, oldVec, actPd_);
 }
 

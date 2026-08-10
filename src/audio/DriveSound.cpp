@@ -26,7 +26,7 @@ bool DriveSound::init(const std::string& dir, uint32_t sampleRate) {
 
     auto* eng = new ma_engine();
     if (ma_engine_init(&cfg, eng) != MA_SUCCESS) {
-        std::fprintf(stderr, "[DriveSound] ma_engine_init a échoué — pas de bruits lecteur\n");
+        std::fprintf(stderr, "[DriveSound] ma_engine_init failed — no drive noises\n");
         delete eng;
         return false;
     }
@@ -41,7 +41,7 @@ bool DriveSound::init(const std::string& dir, uint32_t sampleRate) {
     const std::string spin = dir + "/drive_spin.wav";
     if (ma_sound_init_from_file(eng, spin.c_str(), MA_SOUND_FLAG_DECODE,
                                 nullptr, nullptr, m) != MA_SUCCESS) {
-        std::fprintf(stderr, "[DriveSound] %s introuvable — moteur muet\n", spin.c_str());
+        std::fprintf(stderr, "[DriveSound] %s not found — motor silent\n", spin.c_str());
         delete m;
     } else {
         ma_sound_set_looping(m, MA_TRUE);
@@ -59,7 +59,7 @@ bool DriveSound::init(const std::string& dir, uint32_t sampleRate) {
     }
 
     ok_ = true;
-    std::printf("[DriveSound] prêt (%s, mixé au YM2149)\n", dir.c_str());
+    std::printf("[DriveSound] ready (%s, mixed into the YM2149)\n", dir.c_str());
     return true;
 }
 
