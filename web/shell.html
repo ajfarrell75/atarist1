@@ -218,7 +218,7 @@
     // Paramètres de construction (machine + RAM), lus une fois : aussi affichés
     // dans le badge sous l'écran et utilisés pour préselectionner la bonne ROM.
     var urlParams = new URLSearchParams(location.search);
-    var machineParam = urlParams.get('machine') || 'megaste';
+    var machineParam = urlParams.get('machine') || 'st';
     var memParam = urlParams.get('mem') || '1m';
     var isSteFamily = (machineParam === 'ste' || machineParam === 'megaste');
 
