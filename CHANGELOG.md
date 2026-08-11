@@ -132,6 +132,35 @@ que le job vient de construire EST le bundle à recommiter, donc on le récupèr
 CI sans installer emsdk. Marche à suivre dans `DEV.md` § *Builds spécialisés*, qui
 pointait encore le `deploy-web.yml` supprimé.
 
+## CI : 8ᵉ paquet — l'APK Android entre dans release.yml (2026-08-11)
+
+Nouveau job `android` dans `release.yml`, sur le modèle des sept autres : chaque
+push/PR vérifie que l'APK se construit, un tag l'attache à la Release
+(`NeoST-<ver>-android-arm64-debug.apk` — signé clé de DEBUG, installable tel quel ;
+le projet n'a pas de clé de store et n'en aura pas dans le dépôt). Le job `publish`
+compte désormais **8** paquets et ramasse aussi les `.apk`.
+
+Le job rejoue exactement la recette locale : JDK 17 **complet** via setup-java (un
+JRE n'a pas `jlink`, dont AGP a besoin — piège documenté), composants SDK épinglés
+aux versions du README (NDK 27, CMake 3.22, API 34) sur le SDK préinstallé du
+runner, `fetch_sdl.sh`, `build_apk.sh debug` (garde-fous bibliothèques/assets
+intégrés), puis vérification STATIQUE du manifeste (`aapt dump badging` : paquet,
+activité lançable, arm64-v8a) — pas d'appareil ni de KVM sur les runners ; le cœur
+arm64 est validé par ailleurs (bit-exact sous qemu, cf. packaging/android/README.md).
+
+Avant de pousser, le chemin CI a été **répété dans un clone frais** du dépôt
+(checkout vierge → sous-module imgui → fetch_sdl → build_apk) : c'est ce test qui
+prouve que le dépôt commité contient tout — le poste de dev, lui, avait déjà tout
+sous la main.
+
+Au passage, le job `wasm` du push précédent était tombé au rouge sur sa garde de
+fraîcheur — à raison : `SOURCE_STAMP` avait été écrit AVANT le `git add` complet,
+et l'empreinte (assise sur `git ls-files src/**`) a changé quand les nouveaux
+fichiers Android sont entrés dans l'index. Le bundle, lui, était bon : reconstruit
+pour vérifier, il ressort **identique au bit près** au commité (même md5) — emcc
+est reproductible à version fixe sur la même machine. Empreinte réécrite ; leçon :
+`--write` toujours APRÈS le stage complet.
+
 ## Plein écran WASM : zoom adaptatif (2026-08-11)
 
 Le plein écran de la démo web montrait le CADRE COMPLET, bordures comprises — l'image
