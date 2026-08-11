@@ -1,0 +1,6 @@
+// Racine Gradle. Les versions sont ÉPINGLÉES : AGP 8.5 et Gradle 8.9 sont le
+// premier couple qui accepte un JDK 21 (les gabarits SDL2 sont restés en 8.1,
+// qui refuse ce JDK — d'où le décalage assumé avec extern/SDL2).
+plugins {
+    id 'com.android.application' version '8.5.2' apply false
+}
