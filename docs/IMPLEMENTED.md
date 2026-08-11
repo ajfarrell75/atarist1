@@ -942,9 +942,14 @@ Pour ce qui reste → [`../TODO.md`](../TODO.md).
     underrun** ; le producteur calibre le nombre d'échantillons par report fractionnaire + un
     asservissement proportionnel (|adj| ≤ 8 ech., < 0,8 % de hauteur) qui remplit vite à l'amorçage
     et recale ensuite. Latence régime ~80 ms, stable. **Validé à l'oreille sur _Magic Pocket_.**
-  - Chemins **headless** (pas d'audio) et **WASM** (`synthesize` direct) inchangés : le modèle push
-    n'est armé que si le frontend pose l'horloge (`setCycleClock`). _Reste (refinement) : FIFO
-    8 octets du DMA remplie sur HBL (cf. `docs/SOUND_HATARI_DIFF.md`)._
+  - Le modèle push n'est armé que si le frontend pose l'horloge (`setCycleClock`). **Les TROIS
+    frontends le posent désormais** : GUI, headless (`--sound-dump`) et WASM (2026-08-11 — il
+    était resté sur `synthesize` direct, ce qui aplatissait tous les samples). _Reste
+    (refinement) : FIFO 8 octets du DMA remplie sur HBL (cf. `docs/SOUND_HATARI_DIFF.md`)._
+  - **Chaîne de mixage UNIQUE** (`core/AudioMix.cpp`, 2026-08-11) : YM horodaté → DMA STE
+    horodaté → HPF → gains/tonalité LMC1992. Elle était recopiée dans les trois frontends, et
+    c'est la copie web qui avait dérivé. Extraction prouvée neutre : `--sound-dump` avant/après
+    donne des WAV identiques au bit près.
 - **Compteur de trame DMA LIVE cycle-exact** (`DmaSound::liveCounter`, équivalent du
   `Sound_Update` en tête de `DmaSnd_GetFrameCount`) : `$FF8909/0B/0D` sont désormais
   dérivés de l'**horloge émulée** (trame latchée au démarrage — début/fin/cycle de
@@ -993,7 +998,17 @@ Pour ce qui reste → [`../TODO.md`](../TODO.md).
 - **Bruits mécaniques du lecteur** (immersion, pas du matériel — repris de STeem SSE) :
   le cœur émet des événements `FdcSound` (moteur/pas/seek/index) via un sink ; frontends
   GUI (`DriveSound`, miniaudio) et WASM (Web Audio). WAV embarqués dans `roms/drivesound/`.
-- **Son PSG en WASM** : export `neost_audio_render` tiré par un `ScriptProcessorNode`.
+- **Son de la machine en WASM — modèle « push », stéréo** (2026-08-11) : le cœur produit
+  le son PAR TRAME ÉMULÉE (après `runFrame`, chaîne `core/AudioMix.cpp`) et le remet à la
+  page (`neost_audio_open/close/set_queued`, `neost_set_volume`) ; sortie par **AudioWorklet**
+  (mixage sur le thread audio, insensible aux à-coups du thread principal) avec repli
+  automatique sur `ScriptProcessorNode`. File d'attente à coussin de 90 ms, amorçage,
+  asservissement de débit (±8 ech./trame) sur la profondeur de file renvoyée par la page,
+  garde-fous anti-enflement quand le contexte est suspendu, curseur de volume (rampe
+  anti-clic côté cœur). **Avant** : synthèse mono NON horodatée tirée par le nœud audio →
+  digidrums et bruitages courts aplatis (« les samples ne s'entendent presque pas »).
+  Étalon dédié : `tools/make_digidrum_test.py` (carré ~997 Hz écrit dans le registre de
+  volume à 7 979 Hz — un frontend non horodaté ne peut pas le rendre).
 - **Imprimante Centronics** (port de `psg.c:388-390` + `printer.c`) : sur chaque FRONT de strobe
   (PSG port A R14 bit5), l'octet du port parallèle (port B R15) est **capturé dans un fichier hôte**
   (`Machine::setPrinterFile`, option headless `--printer FILE`) et la ligne **BUSY (GPIP0)** est
@@ -1602,6 +1617,20 @@ fidèles à Hatari, pas des bugs.
   TOUS OK.
 - Écran ST dans une fenêtre ImGui ; visualiseur hexa + registres 68000 ; boutons Reset /
   Hard Reset ; barre résolution. Bridage **50 fps réels**. Persistance (`neost.cfg`).
+- **Profils de réglages nommés (2026-08-10)** : page `Profiles` de la fenêtre Configuration
+  (ou `Machine → Settings profiles…`) — `Save current settings` / `Load` / `Overwrite` /
+  `Delete` (confirmation en deux temps). Un fichier `profiles/<nom>.cfg` par profil, à côté
+  de `neost.cfg` et **au même format** (`parseConfigLine`/`writeConfigKeys` partagés,
+  écriture atomique). Contenu : modèle, RAM, FPU, ROM, supports montés (A/B/cartouche/
+  GEMDOS/ACSI), moniteur, CRT, son, entrées. **Hors profil** : `rtc=` (état machine),
+  `kiosk_romdir=` (installation), `dock=`/`showXxx=`/`uiVersion=` (disposition ImGui) —
+  et ce qu'un profil ne dit pas reste inchangé au chargement. Charger = `reqRebuild`
+  (`applyConfig`) + requêtes de montage pour les lecteurs. Nom de fichier assaini
+  (anti-traversée de chemin). **Écriture interdite en kiosk** (config figée), lecture OK.
+- **Son du lecteur mémorisé** (`drivesound=`, 2026-08-10) : la case « Floppy drive sound »
+  ne survivait pas au relancement. Le câblage `DriveSound`→`Audio` suit désormais la
+  DISPONIBILITÉ des échantillons (`roms/drivesound/`) et non le réglage — qui reste
+  basculable à chaud ; case grisée si les échantillons manquent.
 - **`neost-headless`** : trace d'instructions façon MAME, registres, IRQ (`--irq`), capture
   PPM, injection clavier (`--keys`) / souris (`--walk-mouse`), bouclage (`--loopback`).
   C'est l'outil de débogage principal.

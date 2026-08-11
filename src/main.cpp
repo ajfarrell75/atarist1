@@ -121,6 +121,7 @@ struct Config { std::string rom; std::string disk; std::string diskb; std::strin
                 float joydeadzone = 0.30f; bool fastfdc = false;
                 float volume = 1.0f;   // volume maître de la sortie audio (0..1, barre de menu)
                 int audioLatencyMs = 85; // coussin audio visé (cf. Audio::setLatencyMs, --audio-latency)
+                bool driveSound = true;  // bruits mécaniques du lecteur (roms/drivesound/, cf. DriveSound)
                 bool showHex = true, showCpu = true;
                 bool showJoy = false;
                 bool showCfg = true;           // fenêtre « Configuration » (tout se règle là)
@@ -160,71 +161,78 @@ static void snapshotRtc(Machine& m, Config& c) {
     c.rtc = buf;
     c.rtcSaved = std::time(nullptr);
 }
+// Applique UNE ligne « clé=valeur » à `c`. Extrait de loadConfig pour être partagé
+// avec les PROFILS nommés (profiles/*.cfg, même format) : un profil n'écrit qu'un
+// sous-ensemble des clés, et tout ce qu'il omet garde donc la valeur déjà présente
+// dans `c`. C'est ce qui permet de charger un profil PAR-DESSUS la configuration
+// courante sans tenir à jour une liste de recopie champ par champ.
+static void parseConfigLine(Config& c, std::string line) {
+    // Fin de ligne CRLF (fichier passé par Windows, un éditeur, un partage réseau) :
+    // getline ne retire que le \n, et TOUTES les valeurs sont comparées EXACTEMENT
+    // (parseMachine, parseRamBytes, == "1"). Un \r collé faisait donc tomber chaque
+    // clé sur son défaut SILENCIEUX — machine ST demandée, STE démarrée ; 4 Mo
+    // demandés, 512 Ko alloués — et rendait tout chemin introuvable. Pire : saveConfig
+    // réécrivait ensuite le fichier avec les \r intacts, donc la panne était définitive.
+    // Même rognage que SymbolTable (Symbols.cpp). On retire aussi les espaces de fin.
+    while (!line.empty() && (line.back() == '\r' || line.back() == ' ' || line.back() == '\t'))
+        line.pop_back();
+    if      (line.rfind("rom=", 0)  == 0) c.rom  = line.substr(4);
+    else if (line.rfind("disk=", 0) == 0) c.disk = line.substr(5);
+    else if (line.rfind("cart=", 0) == 0) c.cart = line.substr(5);
+    else if (line.rfind("gemdos=", 0) == 0) c.gemdos = line.substr(7);
+    else if (line.rfind("acsi=", 0) == 0) c.acsi = line.substr(5);
+    else if (line.rfind("mono=", 0) == 0) c.mono = (line.substr(5) == "1");
+    else if (line.rfind("cpu=", 0)  == 0) c.cpu  = line.substr(4);
+    else if (line.rfind("machine=", 0) == 0) c.machine = line.substr(8);
+    else if (line.rfind("mem=", 0)  == 0) c.mem  = line.substr(4);
+    else if (line.rfind("fpu=", 0)  == 0) c.fpu  = (line.substr(4) == "1");
+    else if (line.rfind("joyport=", 0) == 0) c.joyport = (line.substr(8) == "0") ? 0 : 1;
+    else if (line.rfind("joymap=", 0) == 0) c.joymap = line.substr(7);
+    else if (line.rfind("joydeadzone=", 0) == 0) c.joydeadzone = std::strtof(line.substr(12).c_str(), nullptr);
+    else if (line.rfind("fastfdc=", 0) == 0) c.fastfdc = (line.substr(8) == "1");
+    else if (line.rfind("volume=", 0) == 0) {
+        c.volume = std::strtof(line.substr(7).c_str(), nullptr);
+        if (c.volume < 0.0f) c.volume = 0.0f;
+        if (c.volume > 1.0f) c.volume = 1.0f;
+    }
+    else if (line.rfind("audio_latency_ms=", 0) == 0) c.audioLatencyMs = std::atoi(line.substr(17).c_str());
+    else if (line.rfind("drivesound=", 0) == 0) c.driveSound = (line.substr(11) == "1");
+    // showDisk=/showCart=/showHd= : clés d'anciennes fenêtres (bibliothèques),
+    // devenues des pages de la Configuration. Ignorées silencieusement.
+    else if (line.rfind("showHex=", 0) == 0) c.showHex = (line.substr(8) == "1");
+    else if (line.rfind("showCpu=", 0) == 0) c.showCpu = (line.substr(8) == "1");
+    else if (line.rfind("showJoy=", 0) == 0) c.showJoy = (line.substr(8) == "1");
+    else if (line.rfind("showCfg=", 0) == 0) c.showCfg = (line.substr(8) == "1");
+    else if (line.rfind("uiVersion=", 0) == 0) c.uiVersion = std::atoi(line.c_str() + 10);
+    else if (line.rfind("diskb=", 0)  == 0) c.diskb   = line.substr(6);
+    else if (line.rfind("dock=", 0) == 0) c.dock = (line.substr(5) == "1");
+    else if (line.rfind("autozoom=", 0) == 0) c.autoZoom = (line.substr(9) == "1");
+    else if (line.rfind("rtc_saved=", 0) == 0) c.rtcSaved = std::strtoll(line.substr(10).c_str(), nullptr, 10);
+    else if (line.rfind("rtc=", 0) == 0) c.rtc = line.substr(4);
+    else if (line.rfind("kiosk_romdir=", 0) == 0) { const std::string d = line.substr(13); if (!d.empty()) c.romDirs.push_back(d); }
+    // Effets CRT (cf. gui/CrtParams.h). Un preset (--crt-preset / applyCrtPreset)
+    // n'est qu'un raccourci qui écrit ces mêmes clés numériques.
+    else if (line.rfind("crt=", 0) == 0) c.crt = (line.substr(4) == "1");
+    else if (line.rfind("crt_bright=", 0)  == 0) c.crtParams.brightness  = std::strtof(line.substr(11).c_str(), nullptr);
+    else if (line.rfind("crt_contrast=", 0) == 0) c.crtParams.contrast   = std::strtof(line.substr(13).c_str(), nullptr);
+    else if (line.rfind("crt_sat=", 0)     == 0) c.crtParams.saturation  = std::strtof(line.substr(8).c_str(), nullptr);
+    else if (line.rfind("crt_hue=", 0)     == 0) c.crtParams.hue         = std::strtof(line.substr(8).c_str(), nullptr);
+    else if (line.rfind("crt_sharp=", 0)   == 0) c.crtParams.sharpness   = std::strtof(line.substr(10).c_str(), nullptr);
+    else if (line.rfind("crt_persist=", 0) == 0) c.crtParams.persistence = std::strtof(line.substr(12).c_str(), nullptr);
+    else if (line.rfind("crt_scanlines=", 0) == 0) c.crtParams.scanlines = std::strtof(line.substr(14).c_str(), nullptr);
+    else if (line.rfind("crt_barrel=", 0)  == 0) c.crtParams.barrel      = std::strtof(line.substr(11).c_str(), nullptr);
+    else if (line.rfind("crt_mask=", 0)    == 0) c.crtParams.shadowMask  = static_cast<neost::CrtParams::ShadowMask>(std::atoi(line.substr(9).c_str()));
+    else if (line.rfind("crt_maskstr=", 0) == 0) c.crtParams.shadowMaskStrength = std::strtof(line.substr(12).c_str(), nullptr);
+    else if (line.rfind("crt_lumgain=", 0) == 0) c.crtParams.luminanceGain = std::strtof(line.substr(12).c_str(), nullptr);
+    else if (line.rfind("crt_center=", 0)  == 0) c.crtParams.centerLighting = std::strtof(line.substr(11).c_str(), nullptr);
+    else if (line.rfind("crt_gamma=", 0)   == 0) c.crtParams.phosphorGamma  = std::strtof(line.substr(10).c_str(), nullptr);
+}
 static Config loadConfig(const std::string& exeDir) {
     Config c;
     std::ifstream f(cfgPath(exeDir));
     if (!f) f.open("neost.cfg");
     std::string line;
-    while (std::getline(f, line)) {
-        // Fin de ligne CRLF (fichier passé par Windows, un éditeur, un partage réseau) :
-        // getline ne retire que le \n, et TOUTES les valeurs sont comparées EXACTEMENT
-        // (parseMachine, parseRamBytes, == "1"). Un \r collé faisait donc tomber chaque
-        // clé sur son défaut SILENCIEUX — machine ST demandée, STE démarrée ; 4 Mo
-        // demandés, 512 Ko alloués — et rendait tout chemin introuvable. Pire : saveConfig
-        // réécrivait ensuite le fichier avec les \r intacts, donc la panne était définitive.
-        // Même rognage que SymbolTable (Symbols.cpp). On retire aussi les espaces de fin.
-        while (!line.empty() && (line.back() == '\r' || line.back() == ' ' || line.back() == '\t'))
-            line.pop_back();
-        if      (line.rfind("rom=", 0)  == 0) c.rom  = line.substr(4);
-        else if (line.rfind("disk=", 0) == 0) c.disk = line.substr(5);
-        else if (line.rfind("cart=", 0) == 0) c.cart = line.substr(5);
-        else if (line.rfind("gemdos=", 0) == 0) c.gemdos = line.substr(7);
-        else if (line.rfind("acsi=", 0) == 0) c.acsi = line.substr(5);
-        else if (line.rfind("mono=", 0) == 0) c.mono = (line.substr(5) == "1");
-        else if (line.rfind("cpu=", 0)  == 0) c.cpu  = line.substr(4);
-        else if (line.rfind("machine=", 0) == 0) c.machine = line.substr(8);
-        else if (line.rfind("mem=", 0)  == 0) c.mem  = line.substr(4);
-        else if (line.rfind("fpu=", 0)  == 0) c.fpu  = (line.substr(4) == "1");
-        else if (line.rfind("joyport=", 0) == 0) c.joyport = (line.substr(8) == "0") ? 0 : 1;
-        else if (line.rfind("joymap=", 0) == 0) c.joymap = line.substr(7);
-        else if (line.rfind("joydeadzone=", 0) == 0) c.joydeadzone = std::strtof(line.substr(12).c_str(), nullptr);
-        else if (line.rfind("fastfdc=", 0) == 0) c.fastfdc = (line.substr(8) == "1");
-        else if (line.rfind("volume=", 0) == 0) {
-            c.volume = std::strtof(line.substr(7).c_str(), nullptr);
-            if (c.volume < 0.0f) c.volume = 0.0f;
-            if (c.volume > 1.0f) c.volume = 1.0f;
-        }
-        else if (line.rfind("audio_latency_ms=", 0) == 0) c.audioLatencyMs = std::atoi(line.substr(17).c_str());
-        // showDisk=/showCart=/showHd= : clés d'anciennes fenêtres (bibliothèques),
-        // devenues des pages de la Configuration. Ignorées silencieusement.
-        else if (line.rfind("showHex=", 0) == 0) c.showHex = (line.substr(8) == "1");
-        else if (line.rfind("showCpu=", 0) == 0) c.showCpu = (line.substr(8) == "1");
-        else if (line.rfind("showJoy=", 0) == 0) c.showJoy = (line.substr(8) == "1");
-        else if (line.rfind("showCfg=", 0) == 0) c.showCfg = (line.substr(8) == "1");
-        else if (line.rfind("uiVersion=", 0) == 0) c.uiVersion = std::atoi(line.c_str() + 10);
-        else if (line.rfind("diskb=", 0)  == 0) c.diskb   = line.substr(6);
-        else if (line.rfind("dock=", 0) == 0) c.dock = (line.substr(5) == "1");
-        else if (line.rfind("autozoom=", 0) == 0) c.autoZoom = (line.substr(9) == "1");
-        else if (line.rfind("rtc_saved=", 0) == 0) c.rtcSaved = std::strtoll(line.substr(10).c_str(), nullptr, 10);
-        else if (line.rfind("rtc=", 0) == 0) c.rtc = line.substr(4);
-        else if (line.rfind("kiosk_romdir=", 0) == 0) { const std::string d = line.substr(13); if (!d.empty()) c.romDirs.push_back(d); }
-        // Effets CRT (cf. gui/CrtParams.h). Un preset (--crt-preset / applyCrtPreset)
-        // n'est qu'un raccourci qui écrit ces mêmes clés numériques.
-        else if (line.rfind("crt=", 0) == 0) c.crt = (line.substr(4) == "1");
-        else if (line.rfind("crt_bright=", 0)  == 0) c.crtParams.brightness  = std::strtof(line.substr(11).c_str(), nullptr);
-        else if (line.rfind("crt_contrast=", 0) == 0) c.crtParams.contrast   = std::strtof(line.substr(13).c_str(), nullptr);
-        else if (line.rfind("crt_sat=", 0)     == 0) c.crtParams.saturation  = std::strtof(line.substr(8).c_str(), nullptr);
-        else if (line.rfind("crt_hue=", 0)     == 0) c.crtParams.hue         = std::strtof(line.substr(8).c_str(), nullptr);
-        else if (line.rfind("crt_sharp=", 0)   == 0) c.crtParams.sharpness   = std::strtof(line.substr(10).c_str(), nullptr);
-        else if (line.rfind("crt_persist=", 0) == 0) c.crtParams.persistence = std::strtof(line.substr(12).c_str(), nullptr);
-        else if (line.rfind("crt_scanlines=", 0) == 0) c.crtParams.scanlines = std::strtof(line.substr(14).c_str(), nullptr);
-        else if (line.rfind("crt_barrel=", 0)  == 0) c.crtParams.barrel      = std::strtof(line.substr(11).c_str(), nullptr);
-        else if (line.rfind("crt_mask=", 0)    == 0) c.crtParams.shadowMask  = static_cast<neost::CrtParams::ShadowMask>(std::atoi(line.substr(9).c_str()));
-        else if (line.rfind("crt_maskstr=", 0) == 0) c.crtParams.shadowMaskStrength = std::strtof(line.substr(12).c_str(), nullptr);
-        else if (line.rfind("crt_lumgain=", 0) == 0) c.crtParams.luminanceGain = std::strtof(line.substr(12).c_str(), nullptr);
-        else if (line.rfind("crt_center=", 0)  == 0) c.crtParams.centerLighting = std::strtof(line.substr(11).c_str(), nullptr);
-        else if (line.rfind("crt_gamma=", 0)   == 0) c.crtParams.phosphorGamma  = std::strtof(line.substr(10).c_str(), nullptr);
-    }
+    while (std::getline(f, line)) parseConfigLine(c, line);
     return c;
 }
 // Mode kiosk (borne/expo) : plein écran sans chrome, config figée, sortie par chord.
@@ -300,6 +308,99 @@ static int g_browseSel = 0;
 // Image PRISTINE de la configuration, telle que lue au démarrage : c'est elle que le
 // mode borne réécrit (cf. saveConfig), et non la structure de travail salie en séance.
 static Config g_cfgPristine;
+
+// Sérialise `w` en « clé=valeur ». `full` = le neost.cfg complet ; false = un PROFIL
+// nommé, qui laisse dehors ce qui n'appartient pas à un jeu de réglages :
+//   · rtc= / rtc_saved=  → état de la machine, pas un réglage ;
+//   · kiosk_romdir=      → déploiement de la borne, propre à l'installation ;
+//   · showXxx= / dock= / uiVersion= → disposition de l'interface (cousins d'imgui.ini) :
+//     charger un profil ne doit pas déplacer les fenêtres de l'utilisateur.
+// Tout ce qui n'est PAS écrit ici reste donc inchangé au chargement d'un profil
+// (cf. parseConfigLine) — les deux fonctions se répondent, ne toucher qu'ensemble.
+static void writeConfigKeys(std::ostream& f, const Config& w, bool full) {
+    f << "rom=" << w.rom << "\ndisk=" << w.disk << "\ndiskb=" << w.diskb
+      << "\ncart=" << w.cart
+      << "\ngemdos=" << w.gemdos << "\nacsi=" << w.acsi
+      << "\nmono=" << (w.mono ? 1 : 0)
+      << "\ncpu=" << w.cpu << "\nmachine=" << w.machine << "\nmem=" << w.mem
+      << "\nfpu=" << (w.fpu ? 1 : 0)
+      << "\njoyport=" << w.joyport
+      << "\njoymap=" << w.joymap
+      << "\njoydeadzone=" << w.joydeadzone << "\nfastfdc=" << (w.fastfdc ? 1 : 0)
+      << "\nvolume=" << w.volume
+      << "\naudio_latency_ms=" << w.audioLatencyMs
+      << "\ndrivesound=" << (w.driveSound ? 1 : 0) << "\n";
+    if (full)
+        f << "showHex=" << (w.showHex ? 1 : 0)
+          << "\nshowCpu=" << (w.showCpu ? 1 : 0)
+          << "\nshowJoy=" << (w.showJoy ? 1 : 0)
+          << "\nshowCfg=" << (w.showCfg ? 1 : 0)
+          << "\nuiVersion=" << w.uiVersion
+          << "\ndock=" << (w.dock ? 1 : 0) << "\n";
+    f << "autozoom=" << (w.autoZoom ? 1 : 0)
+      << "\ncrt=" << (w.crt ? 1 : 0)
+      << "\ncrt_bright=" << w.crtParams.brightness
+      << "\ncrt_contrast=" << w.crtParams.contrast
+      << "\ncrt_sat=" << w.crtParams.saturation
+      << "\ncrt_hue=" << w.crtParams.hue
+      << "\ncrt_sharp=" << w.crtParams.sharpness
+      << "\ncrt_persist=" << w.crtParams.persistence
+      << "\ncrt_scanlines=" << w.crtParams.scanlines
+      << "\ncrt_barrel=" << w.crtParams.barrel
+      << "\ncrt_mask=" << static_cast<int>(w.crtParams.shadowMask)
+      << "\ncrt_maskstr=" << w.crtParams.shadowMaskStrength
+      << "\ncrt_lumgain=" << w.crtParams.luminanceGain
+      << "\ncrt_center=" << w.crtParams.centerLighting
+      << "\ncrt_gamma=" << w.crtParams.phosphorGamma << "\n";
+    if (full) {
+        f << "rtc=" << w.rtc << "\nrtc_saved=" << w.rtcSaved << "\n";
+        // Dossiers ROM additionnels (0..N) : une ligne kiosk_romdir= par dossier.
+        for (const auto& d : w.romDirs) f << "kiosk_romdir=" << d << "\n";
+    }
+}
+
+// Écriture ATOMIQUE : on rédige un fichier temporaire à côté, on vérifie que tout
+// s'est bien écrit, PUIS on renomme par-dessus. Auparavant, ouvrir le flux tronquait
+// (O_TRUNC) le fichier AVANT de savoir si on saurait le réécrire, et aucun retour
+// n'était testé : disque plein, quota atteint ou coupure au mauvais moment laissaient
+// un neost.cfg amputé — réglages CRT, horloge, joymap et TOUS les kiosk_romdir perdus,
+// sans le moindre message. L'échec survenait dans le destructeur du flux, hors de
+// portée de tout point de contrôle.
+// `cwdFallback` autorise le repli historique du neost.cfg vers le répertoire courant
+// quand le dossier du dépôt n'est pas inscriptible ; un profil, lui, échoue franchement
+// (le message remonte dans l'interface). false ⇒ RIEN n'a été écrit, l'ancien fichier
+// est intact, et `err` porte le motif.
+static bool writeConfigAtomic(const std::string& finalPath, const Config& w, bool full,
+                              bool cwdFallback, std::string& err) {
+    std::string tmpPath = finalPath + ".tmp";
+    std::ofstream f(tmpPath);
+    if (!f && cwdFallback) { tmpPath = "neost.cfg.tmp"; f.open(tmpPath); }
+    if (!f) {
+        err = "cannot write (" + tmpPath + ")";
+        f.close(); std::error_code rmec; fs::remove(tmpPath, rmec);
+        return false;
+    }
+    writeConfigKeys(f, w, full);
+    f.flush();
+    const bool ok = f.good();
+    f.close();
+    if (!ok) {   // le flush a échoué : on garde l'ANCIEN fichier intact
+        err = "incomplete write (" + tmpPath + ") — previous file kept";
+        std::error_code rmec; fs::remove(tmpPath, rmec);
+        return false;
+    }
+    // Le nom de destination est celui du .tmp amputé de son suffixe : si l'ouverture est
+    // retombée sur le dossier courant, le rename doit y rester aussi.
+    const std::string dest = tmpPath.substr(0, tmpPath.size() - 4);
+    std::error_code mvec;
+    fs::rename(tmpPath, dest, mvec);
+    if (mvec) {
+        err = "cannot replace (" + tmpPath + " → " + dest + "): " + mvec.message();
+        std::error_code rmec; fs::remove(tmpPath, rmec);
+        return false;
+    }
+    return true;
+}
 // force=true : écrit la config MÊME en kiosk (normalement figé). Utilisé pour le seul
 // réglage que la borne a le droit de persister : le dossier ROM additionnel choisi via
 // le menu in-game (le reste de la config kiosk reste identique à ce qui a été chargé).
@@ -326,77 +427,101 @@ static void saveConfig(const std::string& exeDir, Config& c, Machine* machine = 
         src = &kioskOut;
     }
     const Config& w = *src;
-    // Écriture ATOMIQUE : on rédige un fichier temporaire à côté, on vérifie que tout
-    // s'est bien écrit, PUIS on renomme par-dessus. Auparavant, ouvrir le flux tronquait
-    // (O_TRUNC) le fichier AVANT de savoir si on saurait le réécrire, et aucun retour
-    // n'était testé : disque plein, quota atteint ou coupure au mauvais moment laissaient
-    // un neost.cfg amputé — réglages CRT, horloge, joymap et TOUS les kiosk_romdir perdus,
-    // sans le moindre message. L'échec survenait dans le destructeur du flux, hors de
-    // portée de tout point de contrôle.
-    const std::string finalPath = cfgPath(exeDir);
-    std::string tmpPath = finalPath + ".tmp";
-    std::ofstream f(tmpPath);
-    if (!f) { tmpPath = "neost.cfg.tmp"; f.open(tmpPath); }
-    if (f) f << "rom=" << w.rom << "\ndisk=" << w.disk << "\ndiskb=" << w.diskb
-             << "\ncart=" << w.cart
-             << "\ngemdos=" << w.gemdos << "\nacsi=" << w.acsi
-             << "\nmono=" << (w.mono ? 1 : 0)
-             << "\ncpu=" << w.cpu << "\nmachine=" << w.machine << "\nmem=" << w.mem
-             << "\nfpu=" << (w.fpu ? 1 : 0)
-             << "\njoyport=" << w.joyport
-             << "\njoymap=" << w.joymap
-             << "\njoydeadzone=" << w.joydeadzone << "\nfastfdc=" << (w.fastfdc ? 1 : 0)
-             << "\nvolume=" << w.volume
-             << "\naudio_latency_ms=" << w.audioLatencyMs
-             << "\nshowHex=" << (w.showHex ? 1 : 0)
-             << "\nshowCpu=" << (w.showCpu ? 1 : 0)
-             << "\nshowJoy=" << (w.showJoy ? 1 : 0)
-             << "\nshowCfg=" << (w.showCfg ? 1 : 0)
-             << "\nuiVersion=" << w.uiVersion
-             << "\ndock=" << (w.dock ? 1 : 0)
-             << "\nautozoom=" << (w.autoZoom ? 1 : 0)
-             << "\ncrt=" << (w.crt ? 1 : 0)
-             << "\ncrt_bright=" << w.crtParams.brightness
-             << "\ncrt_contrast=" << w.crtParams.contrast
-             << "\ncrt_sat=" << w.crtParams.saturation
-             << "\ncrt_hue=" << w.crtParams.hue
-             << "\ncrt_sharp=" << w.crtParams.sharpness
-             << "\ncrt_persist=" << w.crtParams.persistence
-             << "\ncrt_scanlines=" << w.crtParams.scanlines
-             << "\ncrt_barrel=" << w.crtParams.barrel
-             << "\ncrt_mask=" << static_cast<int>(w.crtParams.shadowMask)
-             << "\ncrt_maskstr=" << w.crtParams.shadowMaskStrength
-             << "\ncrt_lumgain=" << w.crtParams.luminanceGain
-             << "\ncrt_center=" << w.crtParams.centerLighting
-             << "\ncrt_gamma=" << w.crtParams.phosphorGamma
-             << "\nrtc=" << w.rtc << "\nrtc_saved=" << w.rtcSaved << "\n";
-    // Dossiers ROM additionnels (0..N) : une ligne kiosk_romdir= par dossier.
-    if (f) for (const auto& d : w.romDirs) f << "kiosk_romdir=" << d << "\n";
-    if (!f) { std::fprintf(stderr, "[cfg] cannot write (%s) — configuration NOT saved\n",
-                           tmpPath.c_str());
-              f.close(); std::error_code rmec; fs::remove(tmpPath, rmec); return; }
-    f.flush();
-    const bool ok = f.good();
-    f.close();
-    if (!ok) {   // le flush a échoué : on garde l'ANCIEN fichier intact
-        std::fprintf(stderr, "[cfg] incomplete write (%s) — previous configuration kept\n",
-                     tmpPath.c_str());
-        std::error_code rmec; fs::remove(tmpPath, rmec);
-        return;
-    }
-    // Le nom de destination est celui du .tmp amputé de son suffixe : si l'ouverture est
-    // retombée sur le dossier courant, le rename doit y rester aussi.
-    const std::string dest = tmpPath.substr(0, tmpPath.size() - 4);
-    std::error_code mvec;
-    fs::rename(tmpPath, dest, mvec);
-    if (mvec) {
-        std::fprintf(stderr, "[cfg] cannot replace (%s → %s): %s\n",
-                     tmpPath.c_str(), dest.c_str(), mvec.message().c_str());
-        std::error_code rmec; fs::remove(tmpPath, rmec);
-    }
+    std::string err;
+    if (!writeConfigAtomic(cfgPath(exeDir), w, /*full=*/true, /*cwdFallback=*/true, err))
+        std::fprintf(stderr, "[cfg] %s — configuration NOT saved\n", err.c_str());
 }
 
 #if defined(NEOST_WITH_IMGUI)
+// ─────────────────────────────────────────────────────────────────────────────
+// PROFILS DE RÉGLAGES NOMMÉS — dossier profiles/, un fichier .cfg par profil, au
+// MÊME format que neost.cfg (cf. writeConfigKeys/parseConfigLine). neost.cfg reste
+// la configuration COURANTE, écrite automatiquement à chaque changement ; un profil
+// est une photo nommée qu'on rappelle plus tard (« 520 ST + TOS 1.02 + ma démo »).
+// Charger un profil = repartir de la config courante et lui appliquer les lignes du
+// fichier : ce qu'un profil ne dit pas ne change pas. Réservé à l'interface (le
+// headless n'a pas de notion de profil) → sous garde ImGui pour ne pas laisser de
+// fonctions inutilisées dans une compilation sans GUI.
+// ─────────────────────────────────────────────────────────────────────────────
+// Dossier des profils : à côté de neost.cfg. Quand ce dossier-là n'est pas inscriptible
+// (installation en lecture seule), writeConfigAtomic replie neost.cfg sur le répertoire
+// COURANT — on suit le même repli, sinon les profils seraient la seule chose cassée là où
+// la configuration, elle, fonctionne. Résolu UNE fois, après la première écriture de
+// neost.cfg (c'est elle qui tranche l'emplacement) : cf. l'appelant. Ne CRÉE rien ; seul
+// l'enregistrement d'un profil crée le dossier.
+static std::string profilesDir(const std::string& exeDir) {
+    const std::string primary = exeDir + "/../profiles";
+    std::error_code ec;
+    if (fs::is_directory(primary, ec)) return primary;      // déjà utilisé : on y reste
+    if (fs::exists(cfgPath(exeDir), ec)) return primary;    // neost.cfg est là → les profils aussi
+    return "profiles";
+}
+
+// Nom saisi → nom de FICHIER sûr. Le champ est libre : sans ce filtre, « ../neost.cfg »
+// ou un nom contenant « / » écrirait HORS du dossier des profils. On ne garde donc pas
+// une liste blanche de lettres (elle mangerait les accents, « Démos » → « Dmos ») : on
+// retire les séparateurs de chemin, les caractères de contrôle et les réservés Windows,
+// puis les points et espaces de bord (« .. », fichiers cachés, noms refusés par Windows).
+// Renvoie "" si rien d'utilisable ne reste — l'appelant refuse alors d'écrire.
+static std::string profileFileName(const std::string& in) {
+    static const std::string kBanned = "/\\:*?\"<>|";
+    std::string out;
+    for (unsigned char ch : in) {
+        if (ch < 0x20 || ch == 0x7f) continue;
+        if (kBanned.find(char(ch)) != std::string::npos) continue;
+        out += char(ch);
+    }
+    while (!out.empty() && (out.front() == ' ' || out.front() == '.')) out.erase(out.begin());
+    while (!out.empty() && (out.back()  == ' ' || out.back()  == '.')) out.pop_back();
+    if (out.size() > 64) out.resize(64);
+    return out;
+}
+
+// Profils présents, triés sans tenir compte de la casse. Itération MANUELLE comme les
+// pages Disquettes/Cartouche : l'incrément d'un range-for LANCE filesystem_error si le
+// dossier devient illisible en cours de parcours, et rien ne l'attrape ici.
+static std::vector<std::string> listProfiles(const std::string& dir) {
+    std::vector<std::string> names;
+    std::error_code ec;
+    fs::directory_iterator it(dir, fs::directory_options::skip_permission_denied, ec), end;
+    while (!ec && it != end) {
+        std::error_code ec2;
+        if (it->is_regular_file(ec2) && it->path().extension() == ".cfg")
+            names.push_back(it->path().stem().string());
+        it.increment(ec);
+    }
+    std::sort(names.begin(), names.end(), [](const std::string& a, const std::string& b) {
+        return std::lexicographical_compare(a.begin(), a.end(), b.begin(), b.end(),
+                                            [](unsigned char x, unsigned char y) {
+                                                return std::tolower(x) < std::tolower(y);
+                                            });
+    });
+    return names;
+}
+
+static bool saveProfile(const std::string& dir, const std::string& name,
+                        const Config& c, std::string& err) {
+    std::error_code ec;
+    fs::create_directories(dir, ec);
+    if (!fs::is_directory(dir, ec)) { err = "cannot create " + dir; return false; }
+    return writeConfigAtomic(dir + "/" + name + ".cfg", c, /*full=*/false, /*cwdFallback=*/false, err);
+}
+
+// Applique le profil PAR-DESSUS `c` (déjà rempli avec la config courante) : les clés
+// qu'un profil n'écrit pas (horloge, disposition de l'interface) restent telles quelles.
+static bool loadProfileInto(const std::string& dir, const std::string& name, Config& c) {
+    std::ifstream f(dir + "/" + name + ".cfg");
+    if (!f) return false;
+    std::string line;
+    while (std::getline(f, line)) parseConfigLine(c, line);
+    return true;
+}
+
+static bool deleteProfile(const std::string& dir, const std::string& name) {
+    std::error_code ec;
+    return fs::remove(fs::path(dir) / (name + ".cfg"), ec) && !ec;
+}
+
 #include "imgui.h"
 #include "imgui_internal.h"   // gestionnaire de réglages personnalisé (ImGuiSettingsHandler)
 #include "imgui_impl_glfw.h"
@@ -2422,12 +2547,14 @@ void drawHardDiskPage(const std::string& hdDir, const std::string& gemdosDefault
 struct ConfigUi {
     // Dossiers scannés (résolus une fois au démarrage).
     std::string disksDir, cartsDir, romsDir, hdDir, gemdosDir;
+    std::string profDir;          // dossier des profils nommés (profiles/)
     // Lecture de l'état courant.
     const Config* cfg = nullptr;
     Machine* machine  = nullptr;
     float volume = 1.0f;          // volume maître courant (0..1)
     bool  color  = true;          // moniteur courant : couleur (vs mono)
     bool  driveSound = false;     // son du lecteur de disquettes
+    bool  driveSoundAvail = false;    // échantillons roms/drivesound/ chargés (sinon : réglage sans effet)
     std::string curGemdos, curAcsi;   // chemins RÉSOLUS des disques durs montés
 
     // Réglages matériels EN ATTENTE (cf. « Appliquer et redémarrer »).
@@ -2447,14 +2574,17 @@ struct ConfigUi {
     int   reqFastFdc = -1;        // 0/1 → nouvelle valeur du FDC rapide
     bool  cfgDirty = false;       // un réglage à effet immédiat a changé → saveConfig
     bool  reqSaveState = false, reqLoadState = false;
+    // Profils nommés (page « Profiles ») : le nom demandé, consommé par la boucle.
+    std::string reqSaveProfile, reqLoadProfile, reqDeleteProfile;
 };
 
 // Page ouverte. Statique : on revient là où on était en rouvrant la fenêtre.
 enum ConfigPage {
     kCfgMachine = 0, kCfgMem, kCfgRom, kCfgFloppy, kCfgHd, kCfgCart,
-    kCfgScreen, kCfgSound, kCfgInput, kCfgEmul, kCfgKiosk, kCfgCount
+    kCfgScreen, kCfgSound, kCfgInput, kCfgEmul, kCfgProfiles, kCfgKiosk, kCfgCount
 };
 int g_cfgPage = kCfgFloppy;   // au premier lancement : ce qu'on cherche le plus souvent
+bool g_profilesDirty = false; // un profil vient d'être écrit/supprimé → relire le dossier
 
 // Suffixe pays d'une ROM → fréquence de balayage. C'est LA cause d'écran « déchiré »
 // la plus fréquente sur les démos européennes (images Spectrum 512 calculées pour le
@@ -2477,7 +2607,9 @@ void drawConfigWindow(ConfigUi& ui) {
         ui.pendInit = true;
     }
 
-    // ── Profils : la config matérielle complète en un clic ────────────────
+    // ── Préréglages : la config matérielle complète en un clic. Codés en dur et
+    // limités au MATÉRIEL (ils ne font que garnir les champs « en attente »). Les
+    // configurations de l'utilisateur, elles, vivent dans la page « Profiles ».
     struct Profil { const char* label; const char* machine; const char* mem;
                     const char* rom; };
     static const Profil kProfils[] = {
@@ -2485,7 +2617,7 @@ void drawConfigWindow(ConfigUi& ui) {
         { "1040 STE", "ste",     "1m",   "roms/tos162uk.img" },
         { "Mega STE", "megaste", "4m",   "roms/tos206fr.img" },
     };
-    ImGui::TextDisabled("Profiles:");
+    ImGui::TextDisabled("Presets:");
     for (const auto& p : kProfils) {
         ImGui::SameLine();
         const bool cur = ui.pendMachine == p.machine && ui.pendMem == p.mem
@@ -2506,7 +2638,7 @@ void drawConfigWindow(ConfigUi& ui) {
         ICON_FA_HDD " Hard disks",     ICON_FA_COMPACT_DISC " Cartridge",
         ICON_FA_DESKTOP " Screen",     ICON_FA_VOLUME_UP " Sound",
         ICON_FA_GAMEPAD " Input",      ICON_FA_BOLT " Emulation",
-        ICON_FA_DESKTOP " Kiosk",
+        ICON_FA_STAR " Profiles",      ICON_FA_DESKTOP " Kiosk",
     };
     // Hauteur réservée au pied de page : le message « à jour » tient sur deux lignes
     // dans une fenêtre étroite — sans la deuxième, il déborde sous le bord.
@@ -2641,7 +2773,13 @@ void drawConfigWindow(ConfigUi& ui) {
             ui.volumeDone = true;
         }
         ImGui::Separator();
+        // Réglage MÉMORISÉ (drivesound=) — il ne l'était pas : la case se cochait, se
+        // décochait, et repartait à « on » au lancement suivant.
+        ImGui::BeginDisabled(!ui.driveSoundAvail);
         if (ImGui::Checkbox("Floppy drive sound", &ui.driveSound)) ui.cfgDirty = true;
+        ImGui::EndDisabled();
+        if (!ui.driveSoundAvail)
+            ImGui::TextDisabled("(samples not found in roms/drivesound/)");
         ImGui::Separator();
         ImGui::TextDisabled("Audio latency is set at launch (--audio-latency MS, stored");
         ImGui::TextDisabled("in neost.cfg): changing it live would rebuild the audio");
@@ -2695,6 +2833,77 @@ void drawConfigWindow(ConfigUi& ui) {
         if (ImGui::Button(ICON_FA_FOLDER_OPEN " Load (F7)"))  ui.reqLoadState = true;
         ImGui::TextDisabled("A state carries a fingerprint of the config: one taken on");
         ImGui::TextDisabled("another machine/ROM is refused rather than applied.");
+        break;
+    }
+    case kCfgProfiles: {
+        // Un profil = une PHOTO NOMMÉE des réglages en vigueur. neost.cfg reste la
+        // configuration courante (écrite toute seule à chaque changement) ; les profils
+        // servent à revenir en un clic sur un attelage machine + ROM + support connu.
+        // Lignes COURTES pré-découpées et boutons sur leur propre ligne, comme les
+        // autres pages : ancrée sur le côté, la fenêtre est étroite — un TextWrapped y
+        // débordait (le défilement horizontal de la page repousse le point de coupure)
+        // et un bouton mis en SameLine sortait tout simplement du cadre.
+        ImGui::TextDisabled("A named snapshot of the settings in effect:");
+        ImGui::TextDisabled("machine, RAM, FPU, ROM, media, monitor, CRT,");
+        ImGui::TextDisabled("sound, input. Loading one restarts the machine");
+        ImGui::TextDisabled("(same single restart as \"Apply and restart\").");
+        ImGui::Separator();
+        // Le mode borne n'écrit RIEN sur le disque (« la borne repart identique ») :
+        // les profils y sont consultables mais ni créés ni supprimés.
+        const bool frozen = g_kiosk || g_kioskLaunched;
+        static char nameBuf[80] = "";
+        ImGui::SetNextItemWidth(220.0f);
+        ImGui::InputTextWithHint("##profname", "profile name", nameBuf, sizeof nameBuf);
+        const std::string clean = profileFileName(nameBuf);
+        ImGui::BeginDisabled(clean.empty() || frozen);
+        if (ImGui::Button(ICON_FA_SAVE " Save current settings")) {
+            ui.reqSaveProfile = clean;
+            nameBuf[0] = '\0';
+        }
+        ImGui::EndDisabled();
+        if (frozen) ImGui::TextDisabled("(kiosk: frozen configuration, nothing is written)");
+        ImGui::Separator();
+
+        // Scan du dossier MIS EN CACHE : la fenêtre est redessinée à chaque trame, et
+        // la page Disquettes a déjà payé le prix d'un parcours de dossier par trame
+        // (21 ms, le budget PAL entier). Rafraîchi toutes les 2 s, et immédiatement
+        // après une écriture ou une suppression (g_profilesDirty).
+        struct ProfCache { std::vector<std::string> names; std::string dir; double t = -1.0; };
+        static ProfCache pc;
+        const double nowP = ImGui::GetTime();
+        if (g_profilesDirty || pc.dir != ui.profDir || pc.t < 0.0 || (nowP - pc.t) > 2.0) {
+            pc.names = listProfiles(ui.profDir);
+            pc.dir   = ui.profDir;
+            pc.t     = nowP;
+            g_profilesDirty = false;
+        }
+        if (pc.names.empty()) ImGui::TextDisabled("(no profile saved yet)");
+        // Suppression en DEUX temps : un profil est le fruit d'un réglage patient, et
+        // les boutons sont côte à côte dans une fenêtre étroite.
+        static std::string confirmDel;
+        for (const std::string& n : pc.names) {
+            ImGui::PushID(n.c_str());
+            if (ImGui::SmallButton("Load")) ui.reqLoadProfile = n;
+            ImGui::SameLine(0.0f, 4.0f);
+            ImGui::BeginDisabled(frozen);
+            if (confirmDel == n) {
+                if (ImGui::SmallButton("Delete?")) { ui.reqDeleteProfile = n; confirmDel.clear(); }
+                ImGui::SameLine(0.0f, 4.0f);
+                if (ImGui::SmallButton("Cancel")) confirmDel.clear();
+            } else {
+                if (ImGui::SmallButton("Overwrite")) ui.reqSaveProfile = n;
+                ImGui::SameLine(0.0f, 4.0f);
+                if (ImGui::SmallButton("Delete")) confirmDel = n;
+            }
+            ImGui::EndDisabled();
+            ImGui::SameLine();
+            ImGui::TextUnformatted(n.c_str());
+            ImGui::PopID();
+        }
+        ImGui::Separator();
+        ImGui::TextDisabled("Files: profiles/*.cfg, next to neost.cfg.");
+        ImGui::TextDisabled("Debug windows / docking layout are NOT saved.");
+        ImGui::TextDisabled("Audio latency only applies at the next launch.");
         break;
     }
     case kCfgKiosk: {
@@ -2957,14 +3166,22 @@ int main(int argc, char** argv) {
     // roms/drivesound/ (jeu « epson_smd480l » = vrai lecteur) et Audio les
     // additionne au flux PSG (cf. Audio::render).
     DriveSound drive;
-    bool driveSoundOn = drive.init(resolveData("roms/drivesound/epson_smd480l", exeDir), 48000);
-    Audio audio(machine.psg, driveSoundOn ? &drive : nullptr, &machine.dmasnd);
+    // DISPONIBILITÉ (échantillons chargés) et ACTIVATION (réglage drivesound=) sont deux
+    // choses : c'est la disponibilité qui décide du câblage — brancher DriveSound sur
+    // l'Audio et armer le sink FdcSound — car ce câblage se fait UNE fois, ici. Le
+    // réglage, lui, se rebascule à chaud (case de la page Son, chargement d'un profil) ;
+    // s'il avait décidé du câblage, démarrer son coupé aurait rendu la case sans effet
+    // pour toute la session.
+    const bool driveSoundAvail = drive.init(resolveData("roms/drivesound/epson_smd480l", exeDir), 48000);
+    bool driveSoundOn = driveSoundAvail && cfg.driveSound;
+    drive.setEnabled(driveSoundOn);
+    Audio audio(machine.psg, driveSoundAvail ? &drive : nullptr, &machine.dmasnd);
     audio.setLatencyMs(uint32_t(cfg.audioLatencyMs < 0 ? 0 : cfg.audioLatencyMs));  // AVANT start (borné dans Audio)
     audio.start();   // échec silencieux possible (CI / pas de carte son)
     // Sink FdcSound armé SEULEMENT si la sortie audio existe : sans elle, produceFrame ne
     // draine jamais DriveSound et chaque Step/Seek/Index allouait un son miniaudio jamais
     // recyclé (croissance mémoire non bornée sur une longue session).
-    if (driveSoundOn && audio.ok())
+    if (driveSoundAvail && audio.ok())
         machine.fdc.setSoundSink([&drive](FdcSound e) { drive.onEvent(e); });
     audio.setMasterVolume(cfg.volume);   // volume maître mémorisé (menu Son, neost.cfg)
     // La chaîne DMA/LMC1992 ne s'applique QUE si la machine courante a le son DMA :
@@ -3492,6 +3709,10 @@ int main(int argc, char** argv) {
         static ConfigUi cfgUi;
         cfgUi.disksDir = disksDir; cfgUi.cartsDir = cartsDir; cfgUi.romsDir = romsDir;
         cfgUi.hdDir    = hdDir;    cfgUi.gemdosDir = gemdosDir;
+        // Résolu à la PREMIÈRE trame, donc après le saveConfig de démarrage : c'est lui
+        // qui a tranché où vit neost.cfg, et les profils le suivent (cf. profilesDir).
+        static const std::string profDirResolved = profilesDir(exeDir);
+        cfgUi.profDir = profDirResolved;        // créé à la 1re sauvegarde de profil
 #endif
 #if defined(NEOST_WITH_IMGUI)
         ImGui_ImplOpenGL2_NewFrame();
@@ -3514,6 +3735,11 @@ int main(int argc, char** argv) {
                 if (ImGui::MenuItem(ICON_FA_POWER_OFF " Hard Reset"))  reqHardReset = true;
                 ImGui::Separator();
                 ImGui::MenuItem(ICON_FA_COG " Configuration…", nullptr, &g_showCfg);
+                // Raccourci vers la page des profils : sans lui, « enregistrer mes
+                // réglages » n'était visible qu'en descendant la colonne de la fenêtre.
+                if (ImGui::MenuItem(ICON_FA_STAR " Settings profiles…")) {
+                    g_showCfg = true; g_cfgPage = kCfgProfiles;
+                }
                 ImGui::Separator();
                 if (ImGui::MenuItem(ICON_FA_SAVE " Save state", "F5")) {
                     const bool ok = machine.saveStateFile(exeDir + "/../neost.state");
@@ -3718,6 +3944,7 @@ int main(int argc, char** argv) {
             cfgUi.color   = color;
             cfgUi.volume  = audio.masterVolume();
             cfgUi.driveSound = driveSoundOn;
+            cfgUi.driveSoundAvail = driveSoundAvail;
             cfgUi.curGemdos = cfg.gemdos.empty() ? std::string() : resolvePath(cfg.gemdos);
             cfgUi.curAcsi   = cfg.acsi.empty()   ? std::string() : resolvePath(cfg.acsi);
             drawConfigWindow(cfgUi);
@@ -3750,6 +3977,7 @@ int main(int argc, char** argv) {
             }
             if (cfgUi.driveSound != driveSoundOn) {
                 driveSoundOn = cfgUi.driveSound; drive.setEnabled(driveSoundOn);
+                cfg.driveSound = driveSoundOn;   // persisté par cfgDirty (la case l'a levé)
             }
             if (cfgUi.reqSaveState) {
                 const bool ok = machine.saveStateFile(exeDir + "/../neost.state");
@@ -3781,6 +4009,94 @@ int main(int argc, char** argv) {
                 cfg.crt = g_crtOn; cfg.crtParams = g_crtParams;
                 saveConfig(exeDir, cfg, &machine);
                 cfgUi.cfgDirty = false;
+            }
+            // ── Profils nommés (page « Profiles ») ─────────────────────────────
+            // Borne : rien ne s'écrit sur le disque (invariant « la borne repart
+            // identique »). La page grise déjà les boutons ; on double la garde ici,
+            // seul endroit qui touche réellement au système de fichiers.
+            if ((g_kiosk || g_kioskLaunched)
+                && (!cfgUi.reqSaveProfile.empty() || !cfgUi.reqDeleteProfile.empty())) {
+                cfgUi.reqSaveProfile.clear(); cfgUi.reqDeleteProfile.clear();
+                g_stateMsg = "Kiosk mode: configuration frozen"; g_stateMsgFrames = 150;
+            }
+            if (!cfgUi.reqSaveProfile.empty()) {
+                // On fige les réglages EN VIGUEUR, pas les champs « en attente » : un
+                // profil décrit une machine qui tourne, pas un formulaire à moitié rempli.
+                // Realignement préalable sur les globals d'interface — plusieurs chemins
+                // les changent sans repasser par saveConfig (F10 en borne, panneau CRT,
+                // fenêtre Joysticks), et le profil hériterait sinon de valeurs périmées.
+                cfg.autoZoom = g_autoZoom;
+                cfg.crt      = g_crtOn; cfg.crtParams = g_crtParams;
+                cfg.volume   = audio.masterVolume();
+                cfg.joyport  = g_kbdJoyPort; cfg.joydeadzone = g_joyDeadzone;
+                cfg.joymap   = joymapSerialize();
+                cfg.driveSound = driveSoundOn;
+                std::string err;
+                if (saveProfile(cfgUi.profDir, cfgUi.reqSaveProfile, cfg, err)) {
+                    g_stateMsg = "\xef\x83\x87 Profile saved: " + cfgUi.reqSaveProfile;
+                } else {
+                    g_stateMsg = "Profile NOT saved";
+                    std::fprintf(stderr, "[cfg] profile: %s\n", err.c_str());
+                }
+                g_stateMsgFrames = 150; g_profilesDirty = true;
+                cfgUi.reqSaveProfile.clear();
+            }
+            if (!cfgUi.reqLoadProfile.empty()) {
+                // On part de la config COURANTE : un profil n'écrit qu'un sous-ensemble
+                // de clés, et tout ce qu'il tait (horloge, disposition, dossiers ROM de
+                // la borne) doit rester en place.
+                Config p = cfg;
+                if (loadProfileInto(cfgUi.profDir, cfgUi.reqLoadProfile, p)) {
+                    const std::string prevA = cfg.disk, prevB = cfg.diskb;
+                    cfg = p;
+                    // Réglages à effet immédiat (le matériel, lui, part au rebuild ci-dessous).
+                    g_autoZoom = cfg.autoZoom;
+                    g_crtOn    = cfg.crt; g_crtParams = cfg.crtParams;
+                    g_kbdJoyPort  = cfg.joyport;
+                    g_joyDeadzone = cfg.joydeadzone;
+                    joymapParse(cfg.joymap);
+                    audio.setMasterVolume(cfg.volume);
+                    driveSoundOn = driveSoundAvail && cfg.driveSound;
+                    drive.setEnabled(driveSoundOn);
+                    // Disquettes : applyConfig() ne touche PAS aux lecteurs (« le disque
+                    // monté est conservé ») → on monte/éjecte explicitement ce que dit le
+                    // profil, par les requêtes normales de montage.
+                    // Une image DISPARUE depuis l'enregistrement du profil ne doit pas
+                    // s'inscrire dans neost.cfg : l'invariant des montages est qu'on ne
+                    // persiste QU'un montage réussi, sinon le fantôme est retenté à chaque
+                    // démarrage. Le lecteur garde alors ce qu'il avait, et on le dit.
+                    std::string missing;
+                    auto wantDisk = [&](std::string& want, const std::string& prev,
+                                        std::string& reqMountSlot, bool& reqEjectSlot) {
+                        if (want == prev) return;
+                        if (want.empty()) { reqEjectSlot = true; return; }
+                        const std::string img = resolveData(want, exeDir);
+                        if (fileExists(img)) { reqMountSlot = img; return; }
+                        if (missing.empty()) missing = want;
+                        want = prev;
+                    };
+                    wantDisk(cfg.disk,  prevA, reqMount,  reqEject);
+                    wantDisk(cfg.diskb, prevB, reqMountB, reqEjectB);
+                    saveConfig(exeDir, cfg, &machine);
+                    reqRebuild = true;        // modèle/RAM/FPU/ROM/cartouche/HD/moniteur/FDC
+                    cfgUi.pendInit = false;   // resème les champs « en attente »
+                    g_stateMsg = missing.empty()
+                        ? "\xef\x80\x9e Profile loaded: " + cfgUi.reqLoadProfile
+                        : "Profile loaded — missing floppy: "
+                              + fs::path(missing).filename().string();
+                } else {
+                    g_stateMsg = "Profile not readable";
+                    g_profilesDirty = true;   // disparu du dossier ? on relit la liste
+                }
+                g_stateMsgFrames = 150;
+                cfgUi.reqLoadProfile.clear();
+            }
+            if (!cfgUi.reqDeleteProfile.empty()) {
+                const bool okDel = deleteProfile(cfgUi.profDir, cfgUi.reqDeleteProfile);
+                g_stateMsg = okDel ? "Profile deleted: " + cfgUi.reqDeleteProfile
+                                   : "Delete failed";
+                g_stateMsgFrames = 150; g_profilesDirty = true;
+                cfgUi.reqDeleteProfile.clear();
             }
         }
         if (g_showHex)  drawHexViewer(machine.bus);

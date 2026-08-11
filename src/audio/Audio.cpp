@@ -11,6 +11,7 @@
 
 #include "audio/Audio.hpp"
 #include "audio/DriveSound.hpp"
+#include "core/AudioMix.hpp"
 #include "core/YM2149.hpp"
 #include "core/DmaSound.hpp"
 
@@ -96,30 +97,18 @@ void Audio::produceFrame(int64_t frameCycles) {
     n += adj;
     if (n <= 0) { psg_.clearEvents(); if (dma_) dma_->clearEvents(); return; }   // anneau saturé : on draine
 
-    // Tampons : YM mono (n), bruits lecteur mono (n), sortie stéréo entrelacée (2n).
-    if (int(ymScratch_.size())    < n)     ymScratch_.assign(n, 0.0f);
-    if (int(scratch_.size())      < 2 * n) scratch_.assign(2 * n, 0.0f);
-    float* ym = ymScratch_.data();
-    float* st = scratch_.data();
-
-    psg_.synthesizeFrame(ym, uint32_t(n), rate_, frameCycles);   // (1) PSG horodaté → ym mono (écrase)
-    // Branche DMA/LMC1992 gatée par le MODÈLE COURANT (cf. setDmaGate) : sur ST/Mega ST
-    // le gain de rattrapage LMC ×2 (compensation du ½-YM STE, outScale_ 0.5) doublerait
+    // Chaîne YM horodaté + DMA STE + LMC1992 : PARTAGÉE avec le headless et le
+    // frontend web (core/AudioMix.cpp). Elle vivait ici en clair, recopiée dans les
+    // deux autres — et la copie web avait dérivé sur l'ancienne API mono non
+    // horodatée (samples inaudibles dans le navigateur).
+    // Branche DMA gatée par le MODÈLE COURANT (cf. setDmaGate) : sur ST/Mega ST le
+    // gain de rattrapage LMC ×2 (compensation du ½-YM STE, outScale_ 0.5) doublerait
     // un YM à pleine échelle (outScale_ 1.0) → clipping ; et l'état microwire d'une
-    // session STE (reconfigure à chaud) colorerait le ST. Le headless a la même garde
-    // (machineHasDmaSound). Les événements DMA sont drainés même gatés.
+    // session STE (reconfigure à chaud) colorerait le ST.
     const bool dmaOn = dma_ && (!dmaGate_ || dmaGate_());
-    if (dmaOn) {
-        dma_->mixStereo(st, ym, uint32_t(n), rate_, frameCycles);   // (2) DMA STE horodaté → stéréo L/R
-        dma_->applyHpfStereo(st, uint32_t(n));             // (2b) HPF sous-sonique du MIX (≙ dmaSnd.c:699,706)
-        const float gL = dma_->gainLeft(), gR = dma_->gainRight();   // (3) volume maître × G/D (panoramique)
-        if (gL != 1.0f || gR != 1.0f)
-            for (int i = 0; i < n; ++i) { st[2 * i] *= gL; st[2 * i + 1] *= gR; }
-        dma_->applyToneStereo(st, uint32_t(n), rate_);     // (4) basses/aigus LMC1992 (L/R indépendants)
-    } else {
-        if (dma_) dma_->clearEvents();                     // machine sans DMA : drainer quand même
-        for (int i = 0; i < n; ++i) { st[2 * i] = ym[i]; st[2 * i + 1] = ym[i]; }   // YM centré
-    }
+    float* st = neost::mixEmulatedFrame(psg_, dma_, dmaOn,
+                                        uint32_t(n), rate_, frameCycles, mixBuf_);
+    if (!st) return;
     if (drive_) {                                          // (5) bruits lecteur (mono, hors LMC1992) → centrés
         if (int(driveScratch_.size()) < n) driveScratch_.assign(n, 0.0f);
         float* dv = driveScratch_.data();

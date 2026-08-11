@@ -26,6 +26,9 @@ neost-headless
 # Fichiers locaux de l'emulateur / GUI
 imgui.ini
 neost.cfg
+# Profils de réglages nommés (Configuration → Profiles) : configurations de
+# l'utilisateur, au même format que neost.cfg — donc pas plus suivies que lui.
+profiles/
 *.state
 *.ppm
 !tests/reference/*.ppm

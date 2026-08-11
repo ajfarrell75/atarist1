@@ -20,10 +20,13 @@
 #include <emscripten.h>
 #include <emscripten/html5.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <string>
+#include <vector>
 
+#include "core/AudioMix.hpp"
 #include "core/Machine.hpp"
 #include "io/JoystickInput.hpp"
 
@@ -39,6 +42,26 @@ float  g_joyDeadzone = 0.30f;            // zone morte centrale des sticks analo
 GLuint g_tex = 0, g_prog = 0, g_vbo = 0;
 GLint  g_locPos = -1, g_locUV = -1, g_locTex = -1;
 int    g_texW = 0, g_texH = 0;
+
+// --- Sortie audio : modèle « push », comme le frontend natif ------------------
+// AVANT : la page tirait des échantillons quand son ScriptProcessorNode le
+// demandait (~toutes les 43 ms) et le cœur synthétisait alors en lisant les
+// registres du YM EN DIRECT. Tout ce qui module le son SOUS la trame — digidrums
+// (volume écrit à plusieurs kHz), sync-buzzer, bruitages DMA courts — était donc
+// échantillonné une seule fois par bloc : les samples devenaient inaudibles.
+//
+// MAINTENANT : le son est produit PAR TRAME ÉMULÉE, juste après runFrame, par la
+// chaîne partagée du cœur (core/AudioMix.cpp) qui REJOUE les écritures horodatées
+// à leur cycle. La page ne fait plus que mettre en file et sortir — elle nous
+// renvoie la profondeur de sa file, dont on asservit le débit.
+neost::FrameMixBuffers g_mixBuf;
+uint32_t g_audioRate     = 0;      // 0 = sortie fermée (rien n'est produit)
+double   g_sampleCarry   = 0.0;    // report fractionnaire : débit moyen EXACT
+int      g_queuedFrames  = 0;      // profondeur de la file de la page (frames)
+int      g_cushionFrames = 0;      // coussin visé (frames) — cf. neost_audio_open
+float    g_masterVol     = 1.0f;   // volume maître utilisateur (0..1)
+float    g_volSmooth     = 1.0f;   // volume effectif du bloc précédent (rampe anti-clic)
+uint32_t g_audioUnderruns = 0;     // signalés par la page (diagnostic)
 
 // --- État souris -------------------------------------------------------------
 bool   g_mouseCaptured = false;
@@ -271,6 +294,58 @@ void onMouseButton(GLFWwindow* w, int /*button*/, int /*action*/, int /*mods*/) 
     g_machine->ikbd.mouseEvent(0, 0, l, r);
 }
 
+// Produit le son d'UNE trame émulée et le remet à la page. À appeler APRÈS
+// Machine::runFrame, et à CHAQUE trame : les écritures horodatées du YM et les
+// événements DMA appartiennent à la trame qui vient de s'exécuter, et doivent être
+// consommés là — sinon ils s'accumulent sans fin (fuite mémoire) et le son se
+// désaligne. Sortie fermée (avant le geste utilisateur, onglet muet) : on appelle
+// quand même la chaîne avec 0 échantillon, ce qui ne fait que DRAINER.
+void produceAudioFrame() {
+    Machine& m = *g_machine;
+    const int64_t fc = m.frameCycles();
+    if (g_audioRate == 0) { neost::mixEmulatedFrame(m.psg, &m.dmasnd, false, 0, 0, fc, g_mixBuf); return; }
+
+    // Débit : durée émulée × fréquence de sortie, avec report fractionnaire (la
+    // moyenne colle EXACTEMENT au temps émulé). Puis asservissement proportionnel
+    // vers le coussin, comme le natif : ±8 échantillons sur ~960, soit ≤ 0,8 % de
+    // hauteur — inaudible, mais suffisant pour absorber la dérive entre l'horloge
+    // de l'AudioContext et celle de la machine (elles ne sont PAS les mêmes).
+    static constexpr double kCpuHz = 8021248.0;
+    g_sampleCarry += double(fc) * g_audioRate / kCpuHz;
+    int n = int(g_sampleCarry);
+    g_sampleCarry -= n;
+    int adj = (g_cushionFrames - g_queuedFrames) / 256;
+    if      (adj >  8) adj =  8;
+    else if (adj < -8) adj = -8;
+    n += adj;
+    if (n <= 0) { neost::mixEmulatedFrame(m.psg, &m.dmasnd, false, 0, 0, fc, g_mixBuf); return; }
+
+    // Chaîne PARTAGÉE avec le GUI et le headless (core/AudioMix.cpp) : YM horodaté,
+    // DMA STE horodaté, HPF, gains et tonalité LMC1992. La branche DMA est gatée par
+    // le modèle courant — sur ST/Mega ST il n'y a pas de LMC, et son gain de
+    // rattrapage ×2 doublerait un YM déjà à pleine échelle.
+    float* st = neost::mixEmulatedFrame(m.psg, &m.dmasnd, machineHasDmaSound(m.bus.machine),
+                                        uint32_t(n), g_audioRate, fc, g_mixBuf);
+    if (!st) return;
+
+    // Volume maître en RAMPE sur le bloc (un saut poserait une marche par bloc :
+    // clic audible au mute et « zipper » en glissant le curseur), puis clamp.
+    if (g_masterVol != g_volSmooth || g_masterVol != 1.0f) {
+        const float v0 = g_volSmooth, vt = g_masterVol;
+        for (int i = 0; i < n; ++i) {
+            const float v = v0 + (vt - v0) * (float(i + 1) / float(n));
+            st[2 * i] *= v; st[2 * i + 1] *= v;
+        }
+        g_volSmooth = vt;
+    }
+    for (int i = 0; i < 2 * n; ++i) st[i] = std::max(-1.0f, std::min(1.0f, st[i]));
+
+    // Estimation locale entre deux rapports de la page : sans elle, l'asservissement
+    // verrait une file figée pendant plusieurs trames et sur-corrigerait.
+    g_queuedFrames += n;
+    EM_ASM({ if (window.neostAudioPush) window.neostAudioPush($0, $1); }, st, n);
+}
+
 // Boucle principale appelée par requestAnimationFrame. Une trame émulée par
 // rappel (≈ 60 Hz ici, contre 50 Hz réels : la machine tourne légèrement vite,
 // acceptable pour un test navigateur).
@@ -335,6 +410,7 @@ void mainLoop() {
     int ran = 0;
     while (nowMs >= g_emuNextMs && ran < 4) {
         g_machine->runFrame();
+        produceAudioFrame();          // le son suit la trame, pas le rythme de l'écran
         g_emuNextMs += double(g_machine->frameCycles()) * 1000.0 / kCpuHz;
         ++ran;
     }
@@ -411,26 +487,44 @@ EMSCRIPTEN_KEEPALIVE void neost_set_joy_deadzone(float dz) {
     g_joyDeadzone = (dz < 0.0f) ? 0.0f : (dz > 0.95f ? 0.95f : dz);
 }
 
-// Synthèse audio du YM2149 : remplit `buf` (heap WASM) de `frames` échantillons
-// mono float à la fréquence `rate`. Appelé par le ScriptProcessorNode de la page
-// (Web Audio) ; les bruits de lecteur, eux, passent par leurs propres nœuds —
-// le navigateur mixe tous les nœuds connectés à la destination.
-EMSCRIPTEN_KEEPALIVE void neost_audio_render(float* buf, int frames, int rate) {
-    if (!g_machine || !buf || frames <= 0) return;
-    const uint32_t n = static_cast<uint32_t>(frames), r = static_cast<uint32_t>(rate);
-    g_machine->psg.synthesize(buf, n, r);          // YM2149 (écrase ; BRUT sur STE)
-    g_machine->dmasnd.mix(buf, n, r);              // + son DMA STE (additionné)
-    // Chaîne LMC1992 gatée par la machine, comme le GUI (Audio.cpp setDmaGate) et
-    // le headless : sur ST/Mega ST il n'y a PAS de LMC — le gain ×2 (kLmcMakeup,
-    // compensation du ½-YM STE) doublait un YM déjà à pleine échelle (écrêtage,
-    // +6 dB vs natif), et l'état microwire d'une session STE colorait le ST.
-    if (machineHasDmaSound(g_machine->bus.machine)) {
-        g_machine->dmasnd.applyHpfMono(buf, n);    // HPF sous-sonique du MIX (STE)
-        const float g = g_machine->dmasnd.masterGain();   // volume maître LMC1992
-        if (g != 1.0f) for (uint32_t i = 0; i < n; ++i) buf[i] *= g;
-        g_machine->dmasnd.applyTone(buf, n, r);           // basses/aigus LMC1992
+// --- Sortie audio pilotée par la page ---------------------------------------
+// La page ouvre la sortie une fois son AudioContext créé (elle seule connaît la
+// fréquence réelle : 48 000 chez les uns, 44 100 chez les autres) et annonce le
+// coussin qu'elle tient. Tant que ce n'est pas fait, rien n'est produit — mais les
+// horodatages sont drainés à chaque trame (cf. produceAudioFrame).
+EMSCRIPTEN_KEEPALIVE void neost_audio_open(int rate, int cushionMs) {
+    if (rate <= 0) return;
+    if (cushionMs < 20)  cushionMs = 20;
+    if (cushionMs > 250) cushionMs = 250;
+    g_audioRate     = static_cast<uint32_t>(rate);
+    g_cushionFrames = rate * cushionMs / 1000;
+    g_sampleCarry   = 0.0;
+    g_queuedFrames  = 0;
+    std::fprintf(stderr, "[web] audio out: %d Hz stereo, cushion %d ms (%d frames)\n",
+                 rate, cushionMs, g_cushionFrames);
+}
+
+// Ferme la sortie (onglet muet, échec Web Audio) : la production s'arrête, le cœur
+// continue de tourner. Rouvrir avec neost_audio_open repart d'un coussin neuf.
+EMSCRIPTEN_KEEPALIVE void neost_audio_close() { g_audioRate = 0; g_queuedFrames = 0; }
+
+// La page annonce ce qu'il lui reste en file (frames par canal) : c'est l'entrée de
+// l'asservissement de débit. `underruns` = compteur cumulé, pour le diagnostic.
+EMSCRIPTEN_KEEPALIVE void neost_audio_set_queued(int frames, int underruns) {
+    g_queuedFrames = frames < 0 ? 0 : frames;
+    if (uint32_t(underruns) != g_audioUnderruns) {
+        g_audioUnderruns = uint32_t(underruns);
+        std::fprintf(stderr, "[web] audio underrun (total %u) — the emulation loop is "
+                             "not keeping up with real time\n", g_audioUnderruns);
     }
 }
+
+// Volume maître utilisateur (0..1), appliqué en rampe au mix final. Indépendant du
+// LMC1992 ÉMULÉ, qui appartient à la machine.
+EMSCRIPTEN_KEEPALIVE void neost_set_volume(float v) {
+    g_masterVol = v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
+}
+EMSCRIPTEN_KEEPALIVE float neost_get_volume() { return g_masterVol; }
 
 } // extern "C"
 
@@ -505,6 +599,16 @@ int main(int argc, char** argv) {
     if (!machine.loadDisk(diskPath))
         std::fprintf(stderr, "[web] floppy not found (%s).\n", diskPath.c_str());
     machine.mfp.setColorMonitor(true);  // couleur (basse rés) par défaut
+
+    // MODÈLE « PUSH » (comme le GUI et le headless) : on ARME l'horodatage des
+    // écritures du PSG et des transitions PLAY/STOP du son DMA. Dès lors chaque
+    // écriture porte son cycle DANS la trame, et produceAudioFrame les REJOUE à
+    // leur instant — c'est ce qui rend les digidrums, le sync-buzzer et les
+    // bruitages courts. Ces deux lignes ne sont pas un réglage : sans elles,
+    // synthesizeFrame rend le jeu de registres « audio » que plus rien ne met à
+    // jour, et la machine devient MUETTE.
+    machine.psg.setCycleClock([] { return g_machine->frameRelCycle(); });
+    machine.dmasnd.setCycleClock([] { return g_machine->frameRelCycle(); });
 
     // Bruits mécaniques du lecteur : le cœur émet des FdcSound, la page les joue
     // via Web Audio (cf. shell.html, window.neostDriveSound). Codes : 0 = moteur,
