@@ -1,5 +1,5 @@
 # =============================================================================
-#  Artefacts NeoST — 7 paquets, calqués sur la release POM1 (jobs natifs,
+#  Artefacts NeoST — 8 paquets, calqués sur la release POM1 (jobs natifs,
 #  vérifications structurelles, smoke-launch headless, publication sur tag) :
 #
 #    1. NeoST-<ver>-x86_64.AppImage             (Linux Intel/AMD, image bionic
@@ -17,6 +17,9 @@
 #                                                tout statique — aucune DLL à
 #                                                installer, non signé)
 #    7. NeoST-<ver>-web-wasm.zip                (WebAssembly, contenu libre)
+#    8. NeoST-<ver>-android-arm64-debug.apk     (Android 5.0+ arm64-v8a, signé
+#                                                clé de DEBUG → installable tel
+#                                                quel ; EmuTOS + diskA seulement)
 #
 #
 #  Chaque job SMOKE-LANCE le paquet via neost-headless (déterministe, sans
@@ -26,7 +29,7 @@
 #  EmuTOS GPL + tos102uk/tos162uk des profils 520 ST / 1040 STE + diskA.st) —
 #  jamais les autres TOS ni les jeux du dépôt.
 #
-#  Déclencheurs : chaque push/PR vérifie que la génération des 7 artefacts
+#  Déclencheurs : chaque push/PR vérifie que la génération des 8 artefacts
 #  passe ; un tag de version (v1.0.0 ou 1.0.0) les attache en plus à la Release.
 #
 #  Planchers glibc : x86_64 = 2.27 (image bionic gelée neost-bionic-builder,
@@ -761,8 +764,81 @@ jobs:
           if-no-files-found: error
 
   # ----------------------------------------------- attacher à la Release ----
+  # ------------------------------------------------------ Android arm64 ------
+  # APK arm64-v8a signé avec la clé de DEBUG d'Android : installable directement
+  # (adb install / « sources inconnues »), mais PAS publiable sur un store — le
+  # projet n'a pas de clé de signature et n'en aura pas dans le dépôt (cf.
+  # packaging/android/README.md § Signature). SDL2 est récupéré par
+  # fetch_sdl.sh (vendorisé non commité, comme Hatari) ; les assets sont
+  # STRICTEMENT la liste libre (stage_assets.sh, garde-fou intégré) — la
+  # politique des stores est plus stricte que celle des paquets de bureau, donc
+  # PAS de tos102uk/tos162uk ici, contrairement aux AppImage/DMG.
+  #
+  # Le runner ubuntu-latest livre un SDK Android préinstallé ($ANDROID_HOME) ;
+  # on n'installe que les VERSIONS ÉPINGLÉES du projet (NDK 27, CMake 3.22,
+  # API 34) — celles du README, validées en local. JDK 17 COMPLET via
+  # setup-java : un JRE headless n'a pas `jlink`, dont AGP a besoin pour ses
+  # « system modules », et son message d'erreur ne dit pas qu'il manque un
+  # paquet (piège documenté dans packaging/android/README.md).
+  android:
+    needs: version
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive     # extern/imgui : le menu Android en dépend
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin     # JDK COMPLET (jlink inclus), pas un JRE
+          java-version: '17'
+
+      - name: Installer les composants SDK épinglés (NDK 27, CMake 3.22, API 34)
+        run: |
+          set -eu
+          yes | sdkmanager --licenses > /dev/null || true
+          sdkmanager --install "platforms;android-34" "build-tools;34.0.0" \
+                     "ndk;27.2.12479018" "cmake;3.22.1"
+
+      - name: Récupérer SDL2 (couche plateforme, vendorisée non commitée)
+        run: ./packaging/android/fetch_sdl.sh
+
+      - name: Build APK (debug = signé clé de debug, installable)
+        run: ./packaging/android/build_apk.sh debug
+
+      # Pas d'appareil ni de KVM sur les runners : vérification STATIQUE, la
+      # même qui a validé le premier APK en local — bibliothèques natives et
+      # assets (déjà garantis par build_apk.sh), plus le manifeste (paquet,
+      # activité lançable, arm64-v8a). Le CŒUR arm64, lui, est validé par
+      # ailleurs : image et son identiques au bit près au x86-64 sous
+      # qemu-aarch64 (packaging/android/README.md § Vérifier sans appareil).
+      - name: Vérifier le manifeste de l'APK
+        run: |
+          set -eu
+          APK=packaging/android/app/build/outputs/apk/debug/app-debug.apk
+          AAPT="$ANDROID_HOME/build-tools/34.0.0/aapt"
+          "$AAPT" dump badging "$APK" | tee badging.txt
+          grep -q "package: name='net.gistlabs.neost" badging.txt
+          grep -q "native-code: 'arm64-v8a'" badging.txt
+          grep -q "launchable-activity: name='net.gistlabs.neost.NeoSTActivity'" badging.txt
+
+      - name: Renommer pour la release
+        env:
+          NEOST_VERSION: ${{ needs.version.outputs.neost_version }}
+        run: |
+          mkdir -p dist
+          cp packaging/android/app/build/outputs/apk/debug/app-debug.apk \
+             "dist/NeoST-$NEOST_VERSION-android-arm64-debug.apk"
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: NeoST-android-arm64
+          path: dist/*.apk
+          if-no-files-found: error
+
   publish:
-    needs: [linux-bionic, linux-arm64, raspberry, pi400, macos, wasm, windows]
+    needs: [linux-bionic, linux-arm64, raspberry, pi400, macos, wasm, windows, android]
     runs-on: ubuntu-latest
     if: github.ref_type == 'tag'
     steps:
@@ -770,7 +846,7 @@ jobs:
         with:
           path: artifacts
 
-      - name: Attacher les 5 paquets + sommes SHA-256 à la Release
+      - name: Attacher les 8 paquets + sommes SHA-256 à la Release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
@@ -780,11 +856,12 @@ jobs:
         run: |
           set -eu
           mkdir -p staging
-          find artifacts -type f \( -name '*.AppImage' -o -name '*.dmg' -o -name '*.zip' \) \
+          find artifacts -type f \( -name '*.AppImage' -o -name '*.dmg' -o -name '*.zip' \
+                                     -o -name '*.apk' \) \
                -exec cp -v {} staging/ \;
           cd staging
           COUNT=$(ls | wc -l)
-          test "$COUNT" -eq 7 || { echo "ERREUR : $COUNT paquet(s) au lieu de 7"; exit 1; }
+          test "$COUNT" -eq 8 || { echo "ERREUR : $COUNT paquet(s) au lieu de 8"; exit 1; }
           sha256sum -- * > SHA256SUMS.txt
           cat SHA256SUMS.txt
           if gh release view "$TAG" >/dev/null 2>&1; then
