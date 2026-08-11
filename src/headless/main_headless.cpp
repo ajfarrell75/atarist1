@@ -24,6 +24,7 @@
 #include "core/Machine.hpp"
 #include "core/Tracer.hpp"
 #include "core/Symbols.hpp"
+#include "core/AudioMix.hpp"   // chaîne de mixage partagée (--sound-dump)
 
 namespace {
 void usage() {
@@ -437,13 +438,14 @@ int main(int argc, char** argv) {
                      joy1Hold, joy0Hold);
     }
 
-    // Dump audio (--sound-dump) : même chaîne que Audio::produceFrame (GUI) —
-    // YM2149 horodaté (modèle push) + DMA STE + gains/tonalité LMC1992 — mais
-    // débit EXACT (frameCycles × 48 kHz / CPU_HZ, report fractionnaire) sans
-    // asservissement d'anneau (pas de périphérique). Couvre la boucle --frames.
+    // Dump audio (--sound-dump) : LA chaîne de mixage du projet (core/AudioMix.cpp,
+    // partagée avec le GUI et le frontend web) — YM2149 horodaté (modèle push) +
+    // DMA STE + gains/tonalité LMC1992 — mais débit EXACT (frameCycles × 48 kHz /
+    // CPU_HZ, report fractionnaire) sans asservissement d'anneau (pas de
+    // périphérique). Couvre la boucle --frames.
     constexpr uint32_t kDumpRate = 48000;
     std::vector<int16_t> dumpPcm;                 // stéréo entrelacé s16
-    std::vector<float>   dumpYm, dumpSt;
+    neost::FrameMixBuffers dumpBuf;
     double dumpCarry = 0.0;
     const bool soundDump = !soundDumpPath.empty();
     if (soundDump) {
@@ -462,21 +464,10 @@ int main(int argc, char** argv) {
         const int n = int(dumpCarry);
         dumpCarry -= n;
         if (n <= 0) return;
-        if (int(dumpYm.size()) < n)     dumpYm.assign(n, 0.0f);
-        if (int(dumpSt.size()) < 2 * n) dumpSt.assign(2 * n, 0.0f);
-        float* ym = dumpYm.data();
-        float* st = dumpSt.data();
-        machine.psg.synthesizeFrame(ym, uint32_t(n), kDumpRate, fc);
-        if (machineHasDmaSound(machine.bus.machine)) {
-            machine.dmasnd.mixStereo(st, ym, uint32_t(n), kDumpRate, fc);
-            machine.dmasnd.applyHpfStereo(st, uint32_t(n));   // HPF du mix (≙ chaîne GUI)
-            const float gL = machine.dmasnd.gainLeft(), gR = machine.dmasnd.gainRight();
-            if (gL != 1.0f || gR != 1.0f)
-                for (int i = 0; i < n; ++i) { st[2 * i] *= gL; st[2 * i + 1] *= gR; }
-            machine.dmasnd.applyToneStereo(st, uint32_t(n), kDumpRate);
-        } else {
-            for (int i = 0; i < n; ++i) { st[2 * i] = ym[i]; st[2 * i + 1] = ym[i]; }
-        }
+        float* st = neost::mixEmulatedFrame(machine.psg, &machine.dmasnd,
+                                            machineHasDmaSound(machine.bus.machine),
+                                            uint32_t(n), kDumpRate, fc, dumpBuf);
+        if (!st) return;
         for (int i = 0; i < 2 * n; ++i) {         // clamp → s16 (comme l'anneau GUI)
             float s = st[i];
             if (s >  1.0f) s =  1.0f;
