@@ -5,7 +5,9 @@ Hub d'orientation pour Claude Code. **Ces instructions priment.**
 NeoST — émulateur Atari ST « boîte à hack » pédagogique. C++17, GLFW3 + OpenGL
 (immediate mode) + Dear ImGui, miniaudio, Moira (68000 cycle-exact, vendorisé).
 Développé sur **macOS Silicon / CachyOS Linux** ; **Windows x64 est livré** depuis la
-0.5.1 (MinGW-w64, `packaging/windows/`) mais n'est vérifié qu'en CI.
+0.5.1 (MinGW-w64, `packaging/windows/`) mais n'est vérifié qu'en CI. Un **APK Android**
+arm64 existe depuis le 2026-08-11 (`packaging/android/`, SDL2 + GLES2) — il démarre et
+sonne, mais n'a **pas d'interface** et n'a jamais tourné sur un appareil réel.
 **Commentaires et documentation en français ; interface et journaux en ANGLAIS.**
 
 Architecture en deux mots : **le `Bus` *est* le plan mémoire** (route read8/write8 vers
@@ -29,6 +31,7 @@ les puces) et **`neost_core` ne dépend pas du GUI**.
 | [`docs/MOIRA_WINUAE_CONVERGENCE.md`](docs/MOIRA_WINUAE_CONVERGENCE.md) | **Beam-sync** : convergence Moira↔WinUAE, mesures, pistes éliminées. |
 | [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md) | Recette callgrind, points chauds, build PGO+LTO et son piège. |
 | [`docs/KIOSK.md`](docs/KIOSK.md) | Mode borne : options, menu manette, zoom adaptatif, Raspberry Pi. |
+| [`packaging/android/README.md`](packaging/android/README.md) | **Paquet Android** : build, pièges (jlink, Gradle/JDK), validation ARM64 sous QEMU. |
 
 ## Build & run
 

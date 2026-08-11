@@ -65,7 +65,9 @@ add_library(neost_core STATIC
     src/io/Fpu.cpp
     src/io/GemdosHd.cpp
     src/io/Acsi.cpp
-    src/io/Scc.cpp)
+    src/io/Scc.cpp
+    src/io/MediaScan.cpp
+    src/core/Framing.cpp)
 
 target_include_directories(neost_core PUBLIC "${CMAKE_SOURCE_DIR}/src")
 # (Cpu68k.cpp est traité à part : il inclut l'en-tête tiers Moira.h → C++20 sans
@@ -73,7 +75,7 @@ target_include_directories(neost_core PUBLIC "${CMAKE_SOURCE_DIR}/src")
 set_source_files_properties(
     src/core/Bus.cpp src/core/Shifter.cpp src/core/YM2149.cpp src/core/DmaSound.cpp
     src/core/Blitter.cpp
-    src/core/Machine.cpp src/core/Tracer.cpp src/core/Symbols.cpp src/io/Mfp.cpp src/io/Ikbd.cpp src/io/Fdc.cpp src/io/StxImage.cpp src/io/Rtc.cpp src/io/MidiAcia.cpp src/io/Fpu.cpp src/io/GemdosHd.cpp src/io/Acsi.cpp src/io/Scc.cpp
+    src/core/Machine.cpp src/core/Tracer.cpp src/core/Symbols.cpp src/io/Mfp.cpp src/io/Ikbd.cpp src/io/Fdc.cpp src/io/StxImage.cpp src/io/Rtc.cpp src/io/MidiAcia.cpp src/io/Fpu.cpp src/io/GemdosHd.cpp src/io/Acsi.cpp src/io/Scc.cpp src/io/MediaScan.cpp src/core/Framing.cpp
     PROPERTIES COMPILE_OPTIONS "${NEOST_STRICT_OPTS}")
 
 # --- Moira (cœur 68000 cycle-exact, MIT) — SEUL cœur CPU de NeoST ------------
@@ -151,6 +153,63 @@ add_executable(neost-stx-test EXCLUDE_FROM_ALL tests/stx_writetrack_test.cpp src
 target_include_directories(neost-stx-test PRIVATE "${CMAKE_SOURCE_DIR}/src")
 
 # =============================================================================
+#  neost (Android) — bibliothèque native chargée par SDL2 (libneost.so).
+#
+#  Même logique que la branche EMSCRIPTEN ci-dessous : on réutilise neost_core
+#  TEL QUEL et on ne construit QUE le frontend de la plateforme — jamais les
+#  cibles de bureau, qui dépendent de GLFW et de l'OpenGL en mode immédiat,
+#  absents d'Android. La couche plateforme (fenêtre, contexte GLES, tactile,
+#  manettes, audio, cycle de vie) vient de SDL2, vendorisé dans extern/SDL2.
+#
+#  Ce fichier n'est PAS lancé à la main : c'est Gradle qui l'appelle, via
+#  packaging/android (externalNativeBuild). Cf. packaging/android/README.md.
+# =============================================================================
+if(ANDROID)
+    # OFF = on ne bâtit que le cœur (et neost-headless, défini plus haut) pour
+    # arm64, sans SDL : c'est ainsi qu'on valide le CŒUR sur l'architecture cible
+    # — sous qemu-aarch64 ou sur appareil — sans dépendre de la couche graphique.
+    option(NEOST_ANDROID_APP "Android : bâtir l'application SDL (sinon cœur seul)" ON)
+    set(NEOST_SDL_DIR "${CMAKE_SOURCE_DIR}/extern/SDL2" CACHE PATH "Source SDL2 (Android)")
+    if(NOT NEOST_ANDROID_APP)
+        return()
+    endif()
+    if(NOT EXISTS "${NEOST_SDL_DIR}/CMakeLists.txt")
+        message(FATAL_ERROR
+            "SDL2 absent de ${NEOST_SDL_DIR} — lancer packaging/android/fetch_sdl.sh")
+    endif()
+    add_subdirectory("${NEOST_SDL_DIR}" SDL2-build)
+
+    # Dear ImGui pour le MENU (grammaire du menu borne). Backends SDL2 +
+    # OpenGL3 : ce dernier sait produire du GLSL ES 1.00, donc il tourne sur le
+    # contexte GLES2 de l'application.
+    set(IMGUI_DIR "${CMAKE_SOURCE_DIR}/extern/imgui")
+    if(NOT EXISTS "${IMGUI_DIR}/imgui.cpp")
+        message(FATAL_ERROR "Dear ImGui absent (extern/imgui) — git submodule update --init")
+    endif()
+
+    # SDL charge « libSDL2.so » puis la bibliothèque de l'application ; le nom est
+    # déclaré côté Java (NeoSTActivity.getLibraries) — ici, « neost ».
+    add_library(neost SHARED
+        src/android/main_android.cpp
+        src/android/AndroidMenu.cpp
+        "${IMGUI_DIR}/imgui.cpp"
+        "${IMGUI_DIR}/imgui_draw.cpp"
+        "${IMGUI_DIR}/imgui_tables.cpp"
+        "${IMGUI_DIR}/imgui_widgets.cpp"
+        "${IMGUI_DIR}/backends/imgui_impl_sdl2.cpp"
+        "${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp")
+    target_include_directories(neost PRIVATE
+        "${CMAKE_SOURCE_DIR}/src" "${IMGUI_DIR}" "${IMGUI_DIR}/backends")
+    target_compile_definitions(neost PRIVATE IMGUI_IMPL_OPENGL_ES2=1)
+    target_link_libraries(neost PRIVATE neost_core SDL2::SDL2 SDL2::SDL2main
+                                        GLESv2 EGL android log)
+    # -Wpedantic sur NOS sources seulement : ImGui et SDL ont leurs propres usages.
+    set_source_files_properties(src/android/main_android.cpp src/android/AndroidMenu.cpp
+        PROPERTIES COMPILE_OPTIONS "${NEOST_STRICT_OPTS}")
+    return()   # sous Android on ne construit QUE le cœur + le frontend SDL
+endif()
+
+# =============================================================================
 #  neost-web — frontend WebAssembly (Emscripten + GLFW3 port + WebGL).
 #
 #  Réutilise tel quel neost_core ; remplace l'OpenGL immédiat par un shader
@@ -184,7 +243,7 @@ if(EMSCRIPTEN)
         "-sUSE_GLFW=3"
         "-sALLOW_MEMORY_GROWTH=1"
         "-sEXPORTED_RUNTIME_METHODS=ccall,cwrap,FS,HEAPF32"
-        "-sEXPORTED_FUNCTIONS=_main,_neost_reset,_neost_set_mono,_neost_mount_disk,_neost_mount_disk_b,_neost_load_tos,_neost_set_kbd_joystick,_neost_set_joy_deadzone,_neost_audio_open,_neost_audio_close,_neost_audio_set_queued,_neost_set_volume,_neost_get_volume,_malloc,_free"
+        "-sEXPORTED_FUNCTIONS=_main,_neost_reset,_neost_set_mono,_neost_mount_disk,_neost_mount_disk_b,_neost_load_tos,_neost_set_kbd_joystick,_neost_set_joy_deadzone,_neost_set_fullscreen,_neost_audio_open,_neost_audio_close,_neost_audio_set_queued,_neost_set_volume,_neost_get_volume,_malloc,_free"
         "SHELL:--shell-file ${CMAKE_SOURCE_DIR}/web/shell.html")
 
     # Choix des données embarquées dans le FS virtuel (--preload-file). Pour un
@@ -298,4 +357,28 @@ if(NEOST_WITH_IMGUI)
     else()
         message(WARNING "Dear ImGui introuvable dans extern/imgui — UI de debug désactivée.")
     endif()
+endif()
+
+# =============================================================================
+#  neost-menu-preview — aperçu BUREAU du menu Android (EXCLUDE_FROM_ALL).
+#
+#  Le menu Android ne dépend que d'ImGui et de io/MediaScan : on peut donc le
+#  dessiner ici pour itérer sur sa mise en page SANS téléphone — c'est le seul
+#  moyen de voir ce qu'on fait quand on n'a pas d'appareil sous la main.
+#      cmake --build build --target neost-menu-preview
+#      ./build/neost-menu-preview disks/st 2.0
+# =============================================================================
+if(NEOST_WITH_IMGUI AND EXISTS "${IMGUI_DIR}/imgui.cpp")
+    add_executable(neost-menu-preview EXCLUDE_FROM_ALL
+        tests/android_menu_preview.cpp
+        src/android/AndroidMenu.cpp
+        "${IMGUI_DIR}/imgui.cpp"
+        "${IMGUI_DIR}/imgui_draw.cpp"
+        "${IMGUI_DIR}/imgui_tables.cpp"
+        "${IMGUI_DIR}/imgui_widgets.cpp"
+        "${IMGUI_DIR}/backends/imgui_impl_glfw.cpp"
+        "${IMGUI_DIR}/backends/imgui_impl_opengl2.cpp")
+    target_include_directories(neost-menu-preview PRIVATE
+        "${CMAKE_SOURCE_DIR}/src" "${IMGUI_DIR}" "${IMGUI_DIR}/backends")
+    target_link_libraries(neost-menu-preview PRIVATE neost_core glfw ${OPENGL_LIBRARIES})
 endif()

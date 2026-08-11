@@ -1,0 +1,19 @@
+// Projet Gradle du paquet Android de NeoST. Le natif est bâti par le CMakeLists
+// RACINE du dépôt (branche `if(ANDROID)`), pas par un fichier dupliqué ici.
+pluginManagement {
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+rootProject.name = "NeoST"
+include ":app"

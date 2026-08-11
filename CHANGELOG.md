@@ -132,6 +132,128 @@ que le job vient de construire EST le bundle à recommiter, donc on le récupèr
 CI sans installer emsdk. Marche à suivre dans `DEV.md` § *Builds spécialisés*, qui
 pointait encore le `deploy-web.yml` supprimé.
 
+## Plein écran WASM : zoom adaptatif (2026-08-11)
+
+Le plein écran de la démo web montrait le CADRE COMPLET, bordures comprises — l'image
+utile flottait, petite, au milieu des bandes. Il applique désormais le **zoom
+adaptatif** du mode borne : cadré sur la ZONE ACTIVE (rectangle matériel, jamais au
+pixel → zéro saccade), et **buffer entier dès qu'une démo ouvre les bordures**
+(hystérésis ~0,6 s). En fenêtré, rien ne change : le « moniteur » de la page montre
+les bordures, c'est son charme.
+
+- **Calcul partagé, pas recopié** : `stContentRegion` (latches d'hystérésis compris)
+  quitte `main.cpp` pour `core/Framing.cpp` — bureau, kiosk et WASM appellent la même
+  fonction. C'était la prochaine copie divergente en puissance, après `AudioMix` (son)
+  et `MediaScan` (ludothèque) cette même semaine.
+- Le shell signale `fullscreenchange` au cœur (`neost_set_fullscreen`) — l'écouteur
+  couvre aussi la sortie par Échap, que le bouton ne voit pas.
+- **Piège mesuré, pas supposé** : en plein écran, le port GLFW d'Emscripten
+  redimensionne LUI-MÊME le canvas à la taille de l'écran (640×400 demandés, 800×600
+  imposés) — compter sur la taille intrinsèque du canvas pour le ratio aurait ÉTIRÉ
+  l'image. Le letterbox est donc fait au viewport GL (recette de `drawStKiosk` et du
+  frontend Android), et le canvas est rendu à Emscripten pendant le plein écran ;
+  `syncCanvasSize` compare à la taille RÉELLE du canvas pour reposer le ratio fenêtré
+  à la sortie.
+
+Vérifié dans Chrome headless (Puppeteer, clic de confiance sur le vrai bouton) :
+l'image plein écran mesure un ratio de **1,605** (zone active = 1,600 attendu ; le
+cadre complet ferait 1,507, l'étirement écran 1,333), et la sortie de plein écran
+restaure le canvas 832×552. Le repli overscan n'a pas été rejoué en navigateur : sa
+logique est le code du bureau, déplacé tel quel.
+
+## Paquet Android : premier APK qui tourne (2026-08-11)
+
+Quatrième plateforme. `packaging/android/build_apk.sh` produit un **APK arm64-v8a**
+(Android 5.0+) : la machine démarre sur EmuTOS, l'image et le son sont là, la souris se
+pilote au doigt et une manette physique tient le port joystick 1.
+
+**Le portage n'est pas celui du GUI, c'est celui du WEB** — et ce n'est pas un choix
+esthétique : `src/main.cpp` rend en OpenGL mode immédiat (`glBegin`/`GL_QUADS`) et
+pilote son interface avec `imgui_impl_opengl2`, deux choses qui n'existent pas sur
+Android. Le frontend web, lui, rendait déjà en **GLES 2** et produisait son son au
+modèle « push ». `src/android/main_android.cpp` en est la transposition : même shader,
+même chaîne audio partagée (`core/AudioMix.cpp`, extraite la veille), même cadence sur
+le **temps émulé** — un tour de boucle exécute 0, 1 ou 2 trames selon ce que le temps
+réel réclame, jamais « une trame par image écran ».
+
+Le cœur est repris **tel quel** : aucune ligne de `neost_core` n'a bougé. C'est le
+dividende du découplage « le cœur ne dépend pas du GUI ».
+
+- **SDL2** fournit ce que GLFW ne sait pas faire ici (fenêtre, contexte GLES, cycle de
+  vie, tactile, manettes, audio). Vendorisé **non commité** dans `extern/SDL2` comme
+  Hatari — `packaging/android/fetch_sdl.sh` le récupère.
+- **Branche `if(ANDROID)` du CMakeLists racine**, sur le modèle exact de `if(EMSCRIPTEN)` :
+  on ne construit que le cœur et le frontend de la plateforme. Gradle appelle ce
+  CMakeLists — pas de définition dupliquée de `neost_core`.
+- **Données embarquées : EmuTOS + `diskA.st` seulement** (~1 Mo), avec un garde-fou qui
+  refuse tout autre fichier. Aucun TOS Atari, aucun jeu : le Play Store est plus strict
+  que nos paquets de bureau. Déballage dans le stockage interne au 1er lancement.
+- **Entrées v1** : glissé = souris relative (le bureau GEM se pilote ainsi), appui bref
+  = clic gauche, deux doigts = clic droit, manette SDL → port 1.
+
+**Validation sans appareil.** Ni `/dev/kvm` ni téléphone ici, donc l'APK est vérifié
+statiquement (bibliothèques natives, assets, manifeste, classes SDL dans le dex,
+`SDL_main` exporté) — et le **cœur** est validé sur l'architecture cible autrement :
+compilé pour ARM64 Linux et lancé sous `qemu-aarch64`, il rend une image et un son
+**identiques au bit près** au x86-64 (`cmp` sur PPM et WAV). Perf : 1000 trames ST en
+7,1 s sous QEMU, qui coûte lui-même un facteur 5 à 10.
+
+Trois pièges consignés dans `packaging/android/README.md` : `jlink` absent des JRE
+headless (le plugin Android en a besoin, et le message ne le dit pas), Gradle 8.1 du
+gabarit SDL2 qui refuse le JDK 21 (d'où Gradle 8.9 + AGP 8.5.2), et
+`-DNEOST_ANDROID_APP=OFF` pour bâtir le cœur seul sans SDL.
+
+**Interface : le menu borne, décalqué (même jour).** Plutôt qu'inventer une interface
+mobile, on reprend la grammaire du **menu borne** — elle a été pensée pour être lue à
+distance et pilotée sans clavier, ce qui est exactement la contrainte d'un téléphone :
+voile sombre et machine EN PAUSE, ludothèque en rangées énormes avec le disque inséré
+en vert et les **suites** du jeu en cours teintées et remontées en tête, **insérer ne
+redémarre pas** (seul `RESTART` relance), et une page **clavier** ancrée en bas où la
+machine continue de TOURNER — c'est ce qui permet de répondre à un « PRESS SPACE ».
+
+Le tri de la ludothèque n'est pas recopié : `kioskScanDisks` est extrait en
+**`io/MediaScan`**, partagé par la borne et Android (scan borné, détection des suites
+par préfixe/suffixe communs, ordre de proximité). Vérifié : monté sur un *Blood Money*,
+l'autre version du même jeu ressort en 2ᵉ position.
+
+Deux écarts assumés avec la borne, dictés par le support : les rangées sont **tapables**
+(pas seulement navigables au curseur), et les actions passent sur une **rangée
+horizontale** — empilées comme sur un téléviseur, elles ne laissaient que deux jeux
+visibles sur un écran de téléphone en paysage.
+
+**`neost-menu-preview`** : le menu ne dépendant que d'ImGui et de `io/MediaScan`, une
+cible de bureau (`EXCLUDE_FROM_ALL`) le dessine dans une fenêtre au format d'un
+téléphone. C'est elle qui a rattrapé l'erreur du premier jet — des tailles en pixels
+multipliées par l'échelle alors que la police l'était déjà : rangées deux fois trop
+hautes, deux jeux visibles, actions hors cadre. Sans appareil sous la main, dessiner
+une interface à l'aveugle n'est pas une option.
+
+**Chasse aux bugs (même jour), 8 corrections** — presque toutes trouvées en comparant
+mon code à ce que la borne fait DÉJÀ, la recette exacte étant à trois écrans de la
+table de touches que j'avais recopiée :
+
+- **injection touche/clic** : la borne MAINTIENT 4 trames puis relâche, et refuse
+  toute nouvelle injection pendant le maintien. Mon premier jet faisait le clic
+  down+up dans la même trame (ratable par un jeu qui scrute chaque VBL) et laissait
+  un 2ᵉ tap rapide écraser le relâchement en attente — touche « collée » côté ST,
+  le bug même que le commentaire kiosk décrit ;
+- **clic fantôme** : taper le bouton MENU envoyait aussi un clic gauche au ST
+  (gate `WantCaptureMouse`), et un FINGERUP avalé par l'interface désynchronisait
+  le compteur de doigts (le tap suivant passait pour un clic droit à deux doigts) ;
+- **boucle libre** : depuis que le menu est redessiné à chaque itération, swap
+  immédiat + `Delay(1)` ≈ 50 rendus par trame émulée — vsync ON (repli si refusé),
+  la cadence d'émulation restant sur le temps émulé ;
+- **data race** : `g_primed` (thread audio) était écrit par le thread principal au
+  retour de veille — retiré, l'anneau se gère seul ; underruns passés en atomique
+  et JOURNALISÉS (~1 msg/5 s, comme le natif) ;
+- **contexte EGL perdu en veille** : texture/programme/VBO recréés au retour au
+  premier plan (écran noir muet sinon, sur les appareils qui ne préservent pas le
+  contexte) ; troncation UTF-8 du pied de page calée sur un bord de point de code.
+
+**Ce n'est pas fini** : pas de stick virtuel, pas d'import de disquettes (SAF), pas de
+sélecteur de ROM ni de réglages, pas de sauvegarde d'état, pas d'effets CRT — et rien
+n'a tourné sur un appareil réel.
+
 ## Son de la démo WASM : les samples redeviennent audibles (2026-08-11)
 
 Symptôme rapporté : dans le navigateur, « les samples ne s'entendent presque pas ».

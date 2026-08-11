@@ -147,7 +147,7 @@
     <div id="screenbar">
       <span id="status">Loading the WebAssembly module…</span>
       <span class="badge" id="machineBadge">—</span>
-      <button class="iconbtn" id="btnFullscreen" title="Full screen (Esc to leave)">⛶ Full screen</button>
+      <button class="iconbtn" id="btnFullscreen" title="Full screen — adaptive zoom on the active area (Esc to leave)">⛶ Full screen</button>
     </div>
   </div>
 
@@ -572,6 +572,13 @@
       if (document.fullscreenElement) document.exitFullscreen();
       else if (bezel.requestFullscreen) bezel.requestFullscreen();
       document.getElementById('canvas').focus();
+    });
+    // Plein écran ⇒ ZOOM ADAPTATIF côté cœur (cadrage sur la zone active, comme
+    // le mode borne du bureau ; cadre entier dès qu'une démo ouvre les bordures).
+    // L'écouteur couvre AUSSI la sortie par Échap, que le bouton ne voit pas.
+    document.addEventListener('fullscreenchange', function () {
+      if (ready) Module.ccall('neost_set_fullscreen', null, ['number'],
+                              [document.fullscreenElement ? 1 : 0]);
     });
 
     // Changer de ROM/TOS dans le menu = chargement à chaud + reset (choix explicite).
