@@ -797,9 +797,14 @@ jobs:
       - name: Installer les composants SDK épinglés (NDK 27, CMake 3.22, API 34)
         run: |
           set -eu
-          yes | sdkmanager --licenses > /dev/null || true
-          sdkmanager --install "platforms;android-34" "build-tools;34.0.0" \
-                     "ndk;27.2.12479018" "cmake;3.22.1"
+          # ubuntu-latest préinstalle le SDK mais n'expose PAS sdkmanager dans le
+          # PATH (vérifié : « command not found » au premier run) → chemin complet,
+          # avec repli sur le PATH pour un éventuel runner qui l'y mettrait.
+          SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          command -v sdkmanager >/dev/null 2>&1 && SDKM=sdkmanager
+          yes | "$SDKM" --licenses > /dev/null || true
+          "$SDKM" --install "platforms;android-34" "build-tools;34.0.0" \
+                  "ndk;27.2.12479018" "cmake;3.22.1"
 
       - name: Récupérer SDL2 (couche plateforme, vendorisée non commitée)
         run: ./packaging/android/fetch_sdl.sh
