@@ -132,6 +132,117 @@ que le job vient de construire EST le bundle à recommiter, donc on le récupèr
 CI sans installer emsdk. Marche à suivre dans `DEV.md` § *Builds spécialisés*, qui
 pointait encore le `deploy-web.yml` supprimé.
 
+## Son de la démo WASM : les samples redeviennent audibles (2026-08-11)
+
+Symptôme rapporté : dans le navigateur, « les samples ne s'entendent presque pas ».
+La mélodie passait, la batterie non.
+
+**Cause.** La chaîne de mixage vivait en TROIS copies : `Audio::produceFrame` (GUI),
+le dump `--sound-dump` du headless — dont le commentaire disait déjà « même chaîne
+que » — et le frontend web. Cette troisième copie était restée sur l'ANCIENNE API :
+la page TIRAIT des échantillons quand son `ScriptProcessorNode` réclamait un bloc
+(~43 ms) et le cœur synthétisait alors en lisant les registres du YM **en direct**.
+
+Or tout ce qui fait un sample sur ST module le son SOUS la trame : un digidrum écrit
+le registre de volume à plusieurs kHz, le sync-buzzer réarme l'enveloppe en rafale,
+les bruitages DMA durent quelques millisecondes. Échantillonner ça une fois par bloc,
+c'est n'en garder qu'un point sur mille : la modulation disparaît, et il ne reste que
+ce qui varie lentement — la mélodie. Le son n'était pas « trop faible », il était
+**aplati**.
+
+**Correctif.** La chaîne devient une unité du cœur, `core/AudioMix.cpp`, appelée par
+les trois frontends : YM horodaté (`synthesizeFrame`), DMA STE horodaté (`mixStereo`),
+HPF, gains et tonalité LMC1992, dans cet ordre — celui qui a été calé contre les WAV
+oracles. Le web produit désormais le son **par trame émulée**, juste après `runFrame`,
+comme le natif ; la page ne fait plus que mettre en file et sortir.
+
+Détails qui comptent :
+
+- **`setCycleClock` armé côté web** (PSG et son DMA). C'est la ligne sans laquelle
+  rien ne marche : `synthesizeFrame` rend le jeu de registres « audio », que SEULS les
+  événements horodatés mettent à jour — sans horloge, la machine est muette. Vérifié
+  en le manquant : la sortie tombait à zéro absolu.
+- **Sortie stéréo** (elle était mono) : le DMA STE est stéréo et le LMC1992 panoramique.
+- **AudioWorklet** quand le navigateur le sait, repli automatique sur
+  `ScriptProcessorNode` (déprécié) sinon. Le mixage vit alors sur le thread audio : un
+  à-coup du thread principal — qui porte l'émulation ET le rendu — ne coupe plus le son.
+- **File d'attente avec coussin de 90 ms**, amorçage, et **asservissement de débit** :
+  la page renvoie sa profondeur de file, le cœur ajuste de ±8 échantillons par trame
+  (≤ 0,8 % de hauteur, inaudible) pour absorber la dérive entre l'horloge de
+  l'AudioContext et celle de la machine. Garde-fou des deux côtés : une sortie qui ne
+  consomme pas (contexte suspendu avant le geste utilisateur) ne fait plus enfler la
+  file de ~380 Ko/s.
+- **Curseur de volume** dans la page, appliqué par le cœur en rampe anti-clic.
+
+**Nouvel étalon : `tools/make_digidrum_test.py`.** Une disquette bootable qui joue un
+digidrum — mixeur YM à $3F (ni tonalité ni bruit, seul le DAC de volume sort) et Timer A
+à 7 979 Hz écrivant une table de 8 points → carré de ~997 Hz. C'est le test qui
+DISCRIMINE : une synthèse « en direct » ne peut pas le rendre. Le disque `make_dmasnd_test`,
+lui, joue un flux continu et sortait au même niveau AVANT comme APRÈS — il mesure le
+niveau, pas la fidélité temporelle.
+
+Mesures (Chrome headless, analyse spectrale de la sortie réelle du navigateur) :
+
+| digidrum ~997 Hz | avant | après | référence native |
+|---|---|---|---|
+| raie dominante | 211 Hz (fantôme) | **1008 Hz** (1 case de FFT) | 996 Hz |
+| saillance | ×6 | **×28** | ×104 |
+| niveau | −19,8 dBFS | **−13,7 dBFS** (volume 80 %) | −12,7 dBFS |
+
+Non-régression du natif prouvée au bit près : `--sound-dump` avant/après l'extraction
+donne des WAV **identiques** (`cmp`), sur le test DMA STE et sur une démo ST.
+
+## Profils de réglages nommés (2026-08-10)
+
+`neost.cfg` **était** déjà écrit tout seul à chaque changement — mais il n'y a qu'UNE
+configuration courante, et l'émulateur sert des attelages incompatibles : une démo
+Spectrum 512 veut 512 Ko + TOS européen (50 Hz), un crack veut 1 Mo, une image `.stx`
+veut son lecteur B. Refaire la manœuvre à chaque fois, c'est exactement ce que la barre
+d'état du 2026-08-07 a montré comme source n°1 de faux rapports de bug.
+
+**Page `Profiles`** (fenêtre Configuration, ou `Machine → Settings profiles…`) :
+on nomme la configuration EN VIGUEUR, on la retrouve d'un clic. Un fichier
+`profiles/<nom>.cfg` par profil, à côté de `neost.cfg` et **au même format** —
+lisible, éditable, copiable d'une machine à l'autre. `Load` / `Overwrite` / `Delete`
+(en deux temps : le bouton devient `Delete?` + `Cancel`).
+
+Un profil enregistre les réglages, pas l'état de la machine : modèle, RAM, FPU, ROM,
+supports montés (A, B, cartouche, GEMDOS, ACSI), moniteur, CRT, son, entrées. Il laisse
+volontairement dehors l'**horloge** (`rtc=`, état machine), les **dossiers ROM de la
+borne** (`kiosk_romdir=`, propre à l'installation) et la **disposition de l'interface**
+(`dock=`, `showXxx=`, `uiVersion=` — cousins d'`imgui.ini`) : rappeler un profil ne doit
+pas déplacer les fenêtres de l'utilisateur.
+
+Trois points de mise en œuvre, tous conséquences de choix déjà faits dans le fichier :
+
+- **Un seul format, deux lecteurs.** `parseConfigLine` / `writeConfigKeys` /
+  `writeConfigAtomic` sont extraits de `loadConfig`/`saveConfig`. Charger un profil, c'est
+  partir de la config courante et lui appliquer les lignes du fichier : ce qu'un profil
+  **ne dit pas** ne change pas, sans liste de recopie champ par champ à tenir à jour.
+  L'écriture atomique (tmp + rename, échec = ancien fichier intact) profite aux profils.
+- **Application par les requêtes existantes.** Charger pose `reqRebuild` (`applyConfig`
+  refait déjà modèle/RAM/FPU/ROM/cartouche/HD/moniteur/FDC en une reconstruction) et,
+  pour les lecteurs — qu'`applyConfig` conserve délibérément —, les requêtes normales de
+  montage, qui valident l'image avant d'écrire quoi que ce soit.
+- **Nom de fichier assaini.** Le champ est libre : séparateurs de chemin, caractères de
+  contrôle et réservés Windows sont retirés, points et espaces de bord rognés, nom vide
+  refusé (`../../evil` → `evil.cfg`, dans `profiles/`). Les accents, eux, passent.
+
+**En borne, rien ne s'écrit** : les profils restent consultables et chargeables, mais
+`Save`/`Overwrite`/`Delete` sont grisés et doublés d'une garde côté boucle — l'invariant
+« la borne repart identique » vaut aussi pour ce dossier.
+
+**Au passage : le son du lecteur était un réglage sans mémoire.** La case « Floppy drive
+sound » se cochait, se décochait… et repartait à ON au lancement suivant : `drivesound=`
+n'existait pas. Clé ajoutée. Le câblage (brancher `DriveSound` sur l'`Audio`, armer le
+sink `FdcSound`) suit désormais la **disponibilité** des échantillons et non le réglage,
+sinon démarrer son coupé rendait la case sans effet pour toute la session ; et la case est
+grisée si `roms/drivesound/` manque, au lieu de mentir.
+
+La rangée de préréglages matériels en haut de la fenêtre s'appelle maintenant `Presets:`
+(520 ST / 1040 STE / Mega STE) — elle ne garnit que les champs « en attente », là où un
+profil est une configuration complète de l'utilisateur.
+
 ## Interface : une fenêtre « Configuration » unique + barre d'état (2026-08-07)
 
 Réorganisation de la GUI. Le diagnostic tenait en trois points : **trois idiomes pour la

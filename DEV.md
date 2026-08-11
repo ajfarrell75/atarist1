@@ -18,7 +18,9 @@ read8/write8 vers les composants), et **le cœur ne dépend pas du GUI**.
 ```
 src/
   main.cpp                  Frontend GUI : GLFW + OpenGL (texture Shifter) + ImGui,
-                            clavier/souris → IKBD, barre résolution, persistance.
+                            clavier/souris → IKBD, barre résolution, persistance
+                            (neost.cfg + profils nommés profiles/*.cfg, même format :
+                            parseConfigLine / writeConfigKeys / writeConfigAtomic).
   core/
     Bus.{hpp,cpp}           Memory map + dispatch MMIO + bus errors (busFault/buildIoFault).
     Cpu68k.{hpp,cpp}        Wrapper Moira (cycle-exact) : accès mémoire, int-ack vectorisé,
@@ -27,6 +29,9 @@ src/
     YM2149.{hpp,cpp}        PSG : registres + synthèse 3 voies + bruit + enveloppe.
     DmaSound.{hpp,cpp}      Son DMA STE + Microwire/LMC1992.
     Blitter.{hpp,cpp}       Blitter ST : données + partage de bus hog ET non-hog (64/64).
+    AudioMix.{hpp,cpp}      Chaîne de mixage d'UNE trame (YM horodaté + DMA STE + LMC1992),
+                            partagée par les TROIS frontends — elle en était la copie
+                            divergente qui rendait les samples inaudibles en WASM.
     Machine.{hpp,cpp}       Assemble tout + runFrame() événementiel.
     Scheduler.hpp           Ordonnanceur d'événements datés (cycles).
     Tracer.{hpp,cpp}        Trace d'instructions/IRQ.
@@ -56,7 +61,10 @@ qu'il ne faut pas casser en touchant au code :
   réglages que la borne doit mémoriser depuis son menu, `kiosk_romdir=` et `joymap=`.
   Un `force=true` repart de `g_cfgPristine` et n'y reporte QUE ces champs : la structure
   en mémoire est salie en séance, la réécrire entière ferait fuir les réglages du dernier
-  visiteur. Un `--kiosk` de test n'écrase donc jamais rom/disk/machine.
+  visiteur. Un `--kiosk` de test n'écrase donc jamais rom/disk/machine. **Les profils
+  nommés obéissent au même gel** : `profiles/*.cfg` reste lisible et chargeable, mais
+  enregistrer/écraser/supprimer est grisé ET refusé côté boucle (double garde — c'est le
+  seul autre chemin du frontend qui écrit sur le disque).
 - **Chrome masqué** : tout le bloc ImGui est sous `if (!g_kiosk)` ; la trame ImGui reste
   créée/rendue à vide. Le dockspace est gardé VIVANT (`KeepAliveOnly`) sinon l'aller-retour
   bureau→borne→bureau désancre toutes les fenêtres.
@@ -195,6 +203,11 @@ tail t.txt                                   # localiser la boucle d'attente (PC
 #   DMA STE : NEOST_DMASND_TRACE=1 émet chaque fetch FIFO au format « DMA snd fifo refill »
 #   d'Hatari (--trace dmasound) → diff direct des séquences adr/contenu ; étalon dédié
 #   tools/make_dmasnd_test.py (tampon modifié pendant la lecture, cas Mental Hangover)
+#   DIGIDRUM : tools/make_digidrum_test.py — carré ~997 Hz écrit dans le registre de VOLUME
+#   du YM à 7 979 Hz (Timer A), tonalités coupées. C'est le seul de nos étalons qui
+#   DISCRIMINE une synthèse horodatée d'une lecture « en direct » des registres : un flux
+#   continu (make_dmasnd_test) sort au même niveau dans les deux cas. Chercher la raie à
+#   ~997 Hz dans le WAV — son absence = modèle push non armé (cf. setCycleClock).
 
 # Suite étalons (captures + régression) : tools/run_etalons.py — voir docs/TEST_SOFTWARE.md
 python3 tools/fetch_etalons.py && python3 tools/run_etalons.py --update-ref
