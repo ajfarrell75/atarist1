@@ -56,6 +56,8 @@
 #include "audio/Audio.hpp"
 #include "audio/DriveSound.hpp"
 #include "io/JoystickInput.hpp"
+#include "io/MediaScan.hpp"
+#include "core/Framing.hpp"
 
 namespace fs = std::filesystem;
 
@@ -819,58 +821,11 @@ static bool applyCrtPreset(const std::string& name, neost::CrtParams& p, bool& o
     return true;
 }
 
-// Région de CONTENU de la trame courante, en lignes du buffer ST — le cœur du zoom
-// adaptatif, PARTAGÉ par le kiosk (qui la cale en viewport GL) et par la fenêtre
-// « Atari ST Screen » du bureau (qui la cale en UV d'image). Deux cadrages francs,
-// jamais au pixel (→ zéro saccade) :
-//  · Défaut (99 % des jeux) : cadre FIXE sur la ZONE ACTIVE (rectangle net donné par
-//    le matériel — activeTop/activeHeight), qui ne bouge JAMAIS. Un champ d'étoiles,
-//    un fond noir : rien ne fait « respirer » le zoom.
-//  · Overscan (démos, ouvertures de bordures — Enchanted Land, Lethal Xcess) : quand
-//    la Glue signale une bordure retirée, on montre le BUFFER ENTIER. Hystérésis
-//    (latch) pour ne pas basculer sur un retrait d'une seule trame.
-// Les latches sont des statiques de fonction : un seul jeu pour toute l'application,
-// donc un aller-retour bureau ⇄ kiosk ne réinitialise pas l'hystérésis en cours.
-// cW = largeur (en px du buffer) qui doit RESTER visible : la zone active seule en
-// régime normal (les bordures latérales sont du décor, rognables), le buffer entier
-// dès qu'une bordure est ouverte (l'image déborde alors DANS les bordures). Le
-// cadrage du bureau s'en sert comme plancher : il n'ampute jamais l'image elle-même.
+// Région de CONTENU (zoom adaptatif) : le calcul vit dans core/Framing.cpp,
+// PARTAGÉ avec le plein écran WASM — même règle, mêmes latches d'hystérésis.
+// Ici on ne garde que l'adaptation de signature (Machine& → Shifter&).
 static void stContentRegion(Machine& machine, int& cTop, int& cH, int& cW) {
-    static int overscanLatch     = 0;   // bordure ouverte (haut ou bas)
-    static int fullOverscanLatch = 0;   // bordure BASSE retirée (démos full-overscan)
-    cW = std::max(1, machine.shifter.activeWidth());   // défaut : la zone active
-    // snapBordersOpen/snapLiveTop/snapLiveHeight : snapshot capturé à finishFrame(),
-    // stable au rendu (les champs live glueStartHBL_/glueEndHBL_ sont remis à zéro
-    // par beginFrame_() du cycle suivant AVANT que le rendu GL ne s'exécute).
-    if (machine.shifter.snapBordersOpen()) overscanLatch = 30;   // ~0,6 s de maintien
-    else if (overscanLatch > 0)             --overscanLatch;
-    if (overscanLatch == 0) {
-        fullOverscanLatch = 0;              // plus de trick : reset du second latch
-        cTop = machine.shifter.activeTop();
-        cH   = machine.shifter.activeHeight();
-        return;
-    }
-    // Second latch : détecte une bordure BASSE retirée (LX, Cuddly…) et latche ce
-    // constat pour éviter les basculements frame-à-frame.
-    if (machine.shifter.snapLiveHeight() + machine.shifter.snapLiveTop()
-            > machine.shifter.activeHeight() + machine.shifter.activeTop())
-        fullOverscanLatch = 30;
-    else if (fullOverscanLatch > 0)
-        --fullOverscanLatch;
-
-    // Bordure ouverte : l'image occupe aussi les bordures latérales → tout le buffer
-    // devient du contenu, y compris en largeur.
-    cW = std::max(1, machine.shifter.width());
-    if (fullOverscanLatch > 0) {
-        // Bordure BASSE retirée (démos full-overscan : Cuddly, LX…) : buffer entier.
-        cTop = 0;
-        cH   = machine.shifter.height();
-    } else {
-        // Bordure HAUTE seule (ex. Enchanted Land en jeu) : même zoom que la zone
-        // active, légèrement remontée pour montrer 2 lignes overscan en haut.
-        cTop = std::max(0, machine.shifter.activeTop() - 2);
-        cH   = machine.shifter.activeHeight();
-    }
+    neost::stContentRegion(machine.shifter, cTop, cH, cW);
 }
 
 // Rendu kiosk ADAPTATIF : on cale la région de contenu [cTop, cTop+cH) sur la
@@ -1577,92 +1532,15 @@ void drawDebugger(Machine& machine) {
 // Longueur du préfixe commun (insensible à la casse) entre deux noms de fichier.
 // Sert à mesurer la « proximité » : les disquettes d'un même jeu (« Jeu (Disk A) »,
 // « Jeu (Disk B) »…) partagent un long préfixe et ne diffèrent qu'au marqueur B/C/D.
-static size_t commonPrefixLenCI(const std::string& a, const std::string& b) {
-    const size_t n = std::min(a.size(), b.size());
-    size_t i = 0;
-    while (i < n && std::tolower((unsigned char)a[i]) == std::tolower((unsigned char)b[i])) ++i;
-    return i;
-}
 
-// Deux noms de fichier sont-ils des SUITES du même jeu (face A/B, partie 1/2/3,
-// Disk 1 of 2 / Disk 2 of 2…) ? Vrai si les noms sont identiques SAUF un court
-// jeton central : long préfixe commun + long suffixe commun, écart au milieu
-// borné. Rejette « Space Harrier » / « Space Crusade » (préfixe commun mais
-// suffixes/milieux tout différents). `a`, `b` supposés déjà en minuscules.
-static bool kioskAreSiblings(const std::string& a, const std::string& b) {
-    if (a == b) return true;
-    const size_t p = commonPrefixLenCI(a, b);
-    if (p < 3) return false;
-    size_t s = 0;
-    const size_t maxS = std::min(a.size(), b.size()) - p;   // ne pas empiéter sur le préfixe
-    while (s < maxS && a[a.size() - 1 - s] == b[b.size() - 1 - s]) ++s;
-    const size_t gapA = a.size() - p - s, gapB = b.size() - p - s;
-    if (gapA > 12 || gapB > 12) return false;               // le morceau qui diffère doit être court
-    return (p + s) * 2 >= std::min(a.size(), b.size());      // préfixe+suffixe couvrent l'essentiel
-}
-
-// Recense les images montables (.st/.msa/.dim/.stx) sous disks/ (récursif) →
-// g_kioskDisks, TRIÉES par proximité au disque courant `mounted` (préfixe commun
-// décroissant, puis alphabétique). Les « suites » du jeu en cours (phases B/C/D)
-// remontent ainsi en tête. Appelé à l'ouverture de l'overlay kiosk.
+// Recense les images montables sous disks/ (+ dossiers ROM additionnels) →
+// g_kioskDisks, TRIÉES par proximité au disque courant. Le MODÈLE (scan borné,
+// détection des suites, ordre de tri) vit dans io/MediaScan.cpp : il est partagé
+// avec le frontend Android, dont le menu reprend cette ludothèque.
 static void kioskScanDisks(const std::string& disksDir, const std::string& mounted) {
-    g_kioskDisks.clear();
-    // Scanne récursivement un dossier → images montables, avec dédup (le dossier ROM
-    // additionnel peut recouvrir disks/). Appelé pour disks/ PUIS pour g_kioskRomDir.
-    auto scanInto = [&](const std::string& dir) {
-        std::error_code e2;
-        if (dir.empty() || !fs::is_directory(dir, e2)) return;
-        // ⚠ Le range-for incrémente via operator++() qui LANCE filesystem_error sur
-        // un dossier illisible (EACCES — le raccourci « / » du kiosk traverse /root,
-        // /proc…) : itération manuelle avec increment(ec) + skip_permission_denied.
-        fs::recursive_directory_iterator it(dir, fs::directory_options::skip_permission_denied, e2), end;
-        // BORNES DURES. Ce scan tourne dans le THREAD GUI, à chaque ouverture du menu
-        // borne : sans limite, un dossier vaste fige l'interface (mesuré : /home =
-        // 2,7 M d'entrées, 4,6 s cache chaud, et c'est à une touche du raccourci
-        // « Home »). Refuser la racine et $HOME ne suffit pas — il faut borner le
-        // parcours lui-même : profondeur, nombre d'entrées, et budget de temps.
-        constexpr int  kMaxDepth   = 6;
-        constexpr long kMaxEntries = 40000;
-        const auto     tStart      = std::chrono::steady_clock::now();
-        long seen = 0;
-        while (!e2 && it != end) {
-            if (++seen > kMaxEntries) break;
-            if ((seen & 0x3FF) == 0 &&
-                std::chrono::steady_clock::now() - tStart > std::chrono::milliseconds(800)) break;
-            if (it.depth() >= kMaxDepth) it.disable_recursion_pending();
-            const fs::directory_entry& e = *it;
-            std::error_code e3;
-            if (e.is_regular_file(e3)) {
-                std::string ext = e.path().extension().string();
-                for (auto& c : ext) c = (char)std::tolower((unsigned char)c);
-                if (ext == ".st" || ext == ".msa" || ext == ".dim" || ext == ".stx") {
-                    const std::string p = e.path().string();
-                    if (std::find(g_kioskDisks.begin(), g_kioskDisks.end(), p) == g_kioskDisks.end())
-                        g_kioskDisks.push_back(p);
-                }
-            }
-            it.increment(e2);
-        }
-    };
-    scanInto(disksDir);
-    for (const auto& d : g_kioskRomDirs) scanInto(d);
-    auto lower = [](std::string s) { for (auto& c : s) c = (char)std::tolower((unsigned char)c); return s; };
-    const std::string mref = lower(fs::path(mounted).filename().string());
-    std::sort(g_kioskDisks.begin(), g_kioskDisks.end(),
-              [&](const std::string& a, const std::string& b) {
-                  const std::string an = lower(fs::path(a).filename().string());
-                  const std::string bn = lower(fs::path(b).filename().string());
-                  // 1) les VRAIES suites du jeu monté (face A/B, partie 1/2/3) en tête
-                  if (!mref.empty()) {
-                      const bool sa = kioskAreSiblings(an, mref), sb = kioskAreSiblings(bn, mref);
-                      if (sa != sb) return sa;
-                  }
-                  // 2) puis par proximité de nom (préfixe commun), 3) alphabétique
-                  const size_t pa = commonPrefixLenCI(an, mref);
-                  const size_t pb = commonPrefixLenCI(bn, mref);
-                  if (pa != pb) return pa > pb;
-                  return an < bn;
-              });
+    std::vector<std::string> dirs{ disksDir };
+    for (const auto& d : g_kioskRomDirs) dirs.push_back(d);
+    g_kioskDisks = neost::scanDiskImages(dirs, mounted);
 }
 
 // Recense les SOUS-DOSSIERS immédiats de `dir` (triés, insensible à la casse) →
@@ -1846,7 +1724,7 @@ void drawKioskDiskMenu(const std::string& disksDir, const std::string& mounted) 
             const bool sel = (i == g_kioskDiskSel);
             const bool cur = (g_kioskDisks[i] == mounted);
             const std::string fn = fs::path(g_kioskDisks[i]).filename().string();
-            const bool sibling = !mrefL.empty() && !cur && kioskAreSiblings(lower(fn), mrefL);
+            const bool sibling = !mrefL.empty() && !cur && neost::areSiblingImages(lower(fn), mrefL);
             // Cursor vert seulement si le menu JEUX a le focus ; sinon item courant estompé.
             if (sel)          ImGui::PushStyleColor(ImGuiCol_Text, zList ? kGreen : kDim);
             else if (sibling) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.95f, 0.6f, 1.0f));

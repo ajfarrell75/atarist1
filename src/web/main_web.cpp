@@ -27,6 +27,7 @@
 #include <vector>
 
 #include "core/AudioMix.hpp"
+#include "core/Framing.hpp"
 #include "core/Machine.hpp"
 #include "io/JoystickInput.hpp"
 
@@ -62,6 +63,13 @@ int      g_cushionFrames = 0;      // coussin visé (frames) — cf. neost_audio
 float    g_masterVol     = 1.0f;   // volume maître utilisateur (0..1)
 float    g_volSmooth     = 1.0f;   // volume effectif du bloc précédent (rampe anti-clic)
 uint32_t g_audioUnderruns = 0;     // signalés par la page (diagnostic)
+
+// Plein écran (posé par le shell sur fullscreenchange) : l'image passe alors en
+// ZOOM ADAPTATIF — cadrée sur la région de contenu (règle du kiosk, calcul
+// partagé core/Framing), buffer entier dès qu'une démo ouvre les bordures. En
+// fenêtré on garde le cadre complet : le « moniteur » de la page montre les
+// bordures, c'est son charme.
+bool   g_fullscreen = false;
 
 // --- État souris -------------------------------------------------------------
 bool   g_mouseCaptured = false;
@@ -182,17 +190,6 @@ void uploadFrame(const uint32_t* px, int w, int h) {
     glBindTexture(GL_TEXTURE_2D, g_tex);
     if (w != g_texW || h != g_texH) {     // la résolution ST a changé → réalloue
         g_texW = w; g_texH = h;
-        // …et le CANVAS suit. Sans ça il restait figé au 640×400 de la création
-        // et l'image ST y était ÉTIRÉE : une trame overscan 416×276 (dont
-        // l'affichage correct fait 832×552, ratio 1.507) était déformée de 6 %
-        // pour entrer dans un cadre 1.6. La page met `width:100%; height:auto`,
-        // donc c'est la taille INTRINSÈQUE du canvas qui fixe le ratio : la
-        // poser juste ici suffit à ce que la fenêtre corresponde toujours à la
-        // résolution courante, bordures comprises.
-        int dw = 0, dh = 0;
-        displaySize(w, h, dw, dh);
-        glfwSetWindowSize(g_window, dw, dh);   // port GLFW Emscripten → taille du canvas
-        std::fprintf(stderr, "[web] resolution %dx%d → canvas %dx%d\n", w, h, dw, dh);
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0,
                      GL_RGBA, GL_UNSIGNED_BYTE, px);
     } else {
@@ -201,18 +198,68 @@ void uploadFrame(const uint32_t* px, int w, int h) {
     }
 }
 
-void drawScreen() {
+// Taille INTRINSÈQUE du canvas : c'est elle qui fixe le RATIO — la page met
+// `width:100%; height:auto` en fenêtré et `object-fit:contain` en plein écran.
+// Elle suit donc ce qu'on DESSINE (la VUE), pas la résolution du Shifter : le
+// buffer entier en fenêtré, la seule région de contenu en plein écran adaptatif.
+// Sans ça, une trame overscan 416×276 (affichage correct 832×552, ratio 1.507)
+// était étirée de 6 % dans le cadre 1.6 initial — et le recadrage plein écran
+// serait pareillement déformé si le canvas gardait le ratio du cadre complet.
+void syncCanvasSize(int viewW, int viewH) {
+    int dw = 0, dh = 0;
+    displaySize(viewW, viewH, dw, dh);
+    // Comparer à la taille RÉELLE du canvas, pas à la dernière posée : à la
+    // sortie du plein écran, le port GLFW d'Emscripten laisse le canvas à la
+    // taille de l'ÉCRAN — un cache « dernière valeur » croirait n'avoir rien à
+    // faire et la page garderait un ratio faux.
+    int cw = 0, ch = 0;
+    glfwGetWindowSize(g_window, &cw, &ch);
+    if (cw == dw && ch == dh) return;
+    glfwSetWindowSize(g_window, dw, dh);   // port GLFW Emscripten → taille du canvas
+    std::fprintf(stderr, "[web] view %dx%d → canvas %dx%d\n", viewW, viewH, dw, dh);
+}
+
+// [u0,v0]–[u1,v1] = portion du buffer ST affichée ; viewAspect = ratio
+// d'AFFICHAGE de cette portion (aspect pixel ST compris).
+//
+// LETTERBOX AU VIEWPORT, et non « le canvas fait déjà le bon ratio » : en plein
+// écran, le port GLFW d'Emscripten redimensionne LUI-MÊME le canvas à la taille
+// de l'écran (mesuré : 640×400 demandés, 800×600 imposés) — dessiner plein cadre
+// y étirerait l'image au ratio de l'écran. On centre donc un viewport au ratio
+// de la vue ; en fenêtré, le canvas suit la vue (syncCanvasSize) et le letterbox
+// est neutre. Même recette que drawStKiosk et que le frontend Android.
+void drawScreen(float u0, float v0, float u1, float v1, float viewAspect) {
     int fbw = 0, fbh = 0;
     glfwGetFramebufferSize(g_window, &fbw, &fbh);
-    glViewport(0, 0, fbw, fbh);
+    glViewport(0, 0, fbw, fbh);            // effacement : tout le canvas
     glClearColor(0.10f, 0.10f, 0.12f, 1.f);
     glClear(GL_COLOR_BUFFER_BIT);
     // Programme absent (compilation/link en échec, cf. initGl) : on s'arrête après
     // l'effacement plutôt que d'émettre des appels GL avec des locations à -1.
     if (!g_prog || g_locPos < 0 || g_locUV < 0) return;
 
+    int vpW = fbw, vpH = fbh;
+    const float fbAspect = (fbh > 0) ? float(fbw) / float(fbh) : viewAspect;
+    if (fbAspect > viewAspect) vpW = int(float(fbh) * viewAspect + 0.5f);   // pillarbox
+    else                       vpH = int(float(fbw) / viewAspect + 0.5f);   // letterbox
+    glViewport((fbw - vpW) / 2, (fbh - vpH) / 2, std::max(1, vpW), std::max(1, vpH));
+
     glUseProgram(g_prog);
     glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
+    // Le quad ne change que si le CADRAGE change (entrée/sortie de plein écran,
+    // latch overscan) : on ne réécrit pas 16 floats par trame pour rien.
+    static float lu0 = 0.f, lv0 = 0.f, lu1 = 1.f, lv1 = 1.f;
+    if (u0 != lu0 || v0 != lv0 || u1 != lu1 || v1 != lv1) {
+        const float quad[] = {
+            //  x,    y,    u,  v
+            -1.f,  1.f,  u0, v0,   // haut-gauche
+            -1.f, -1.f,  u0, v1,   // bas-gauche
+             1.f,  1.f,  u1, v0,   // haut-droite
+             1.f, -1.f,  u1, v1,   // bas-droite
+        };
+        glBufferData(GL_ARRAY_BUFFER, sizeof quad, quad, GL_DYNAMIC_DRAW);
+        lu0 = u0; lv0 = v0; lu1 = u1; lv1 = v1;
+    }
     glEnableVertexAttribArray(g_locPos);
     glVertexAttribPointer(g_locPos, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)0);
     glEnableVertexAttribArray(g_locUV);
@@ -420,9 +467,36 @@ void mainLoop() {
     // montrer, on garde l'image précédente plutôt que de re-téléverser la même.
     if (ran == 0) return;
 
-    uploadFrame(g_machine->shifter.pixels(),
-                g_machine->shifter.width(), g_machine->shifter.height());
-    drawScreen();
+    const int w = g_machine->shifter.width(), h = g_machine->shifter.height();
+    uploadFrame(g_machine->shifter.pixels(), w, h);
+
+    // Région de contenu calculée à CHAQUE trame rendue, plein écran ou non :
+    // l'hystérésis se compte en trames, et le passage en plein écran hérite
+    // ainsi d'un latch déjà à jour au lieu de partir à froid.
+    int cTop = 0, cH = h, cW = w;
+    neost::stContentRegion(g_machine->shifter, cTop, cH, cW);
+
+    float u0 = 0.f, v0 = 0.f, u1 = 1.f, v1 = 1.f;
+    int viewW = w, viewH = h;
+    if (g_fullscreen) {
+        // Bornage défensif, comme le bureau : la région vient du Glue LIVE, une
+        // trame de transition (changement de résolution) peut la donner hors du
+        // buffer courant.
+        const int visTop = std::max(0, std::min(cTop, std::max(0, h - 1)));
+        const int visH   = std::max(1, std::min(cH, h - visTop));
+        const int visW   = std::max(1, std::min(cW, w));
+        const int visX   = (w - visW) / 2;             // zone active centrée
+        u0 = float(visX) / float(w);   u1 = float(visX + visW) / float(w);
+        v0 = float(visTop) / float(h); v1 = float(visTop + visH) / float(h);
+        viewW = visW; viewH = visH;
+    }
+    // En plein écran, le canvas appartient à Emscripten (taille écran) : le poser
+    // nous-mêmes déclencherait un bras de fer à chaque trame. Le ratio est garanti
+    // par le viewport de drawScreen, pas par le canvas.
+    if (!g_fullscreen) syncCanvasSize(viewW, viewH);
+    int dispW = 0, dispH = 0;
+    displaySize(viewW, viewH, dispW, dispH);
+    drawScreen(u0, v0, u1, v1, (dispH > 0) ? float(dispW) / float(dispH) : 4.f / 3.f);
     glfwSwapBuffers(g_window);
 }
 
@@ -492,6 +566,10 @@ EMSCRIPTEN_KEEPALIVE void neost_set_joy_deadzone(float dz) {
 // fréquence réelle : 48 000 chez les uns, 44 100 chez les autres) et annonce le
 // coussin qu'elle tient. Tant que ce n'est pas fait, rien n'est produit — mais les
 // horodatages sont drainés à chaque trame (cf. produceAudioFrame).
+// Le shell nous signale l'état plein écran (fullscreenchange) : c'est LUI qui
+// sait, le port GLFW d'Emscripten ne voit pas un requestFullscreen fait en JS.
+EMSCRIPTEN_KEEPALIVE void neost_set_fullscreen(int on) { g_fullscreen = (on != 0); }
+
 EMSCRIPTEN_KEEPALIVE void neost_audio_open(int rate, int cushionMs) {
     if (rate <= 0) return;
     if (cushionMs < 20)  cushionMs = 20;
