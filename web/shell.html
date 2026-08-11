@@ -193,6 +193,12 @@
         <button id="btnJoy" class="toggle" title="Arrows + right Ctrl = joystick port 1 (USB pads are always detected)">Keyboard joystick: off</button>
         <button id="btnSound" class="toggle on" title="Mechanical floppy drive noises">Drive sound: on</button>
       </div>
+      <div class="row" style="margin-top:0.45rem">
+        <label for="volSlider" style="font-size:0.78rem;color:var(--muted)">Volume</label>
+        <input type="range" id="volSlider" min="0" max="100" value="80" style="flex:1;min-width:110px"
+               title="Master volume of the machine sound (YM2149 + STE DMA)">
+        <span id="volValue" class="badge">80 %</span>
+      </div>
     </fieldset>
   </div>
 
@@ -234,7 +240,7 @@
         // aussi le geste utilisateur qui débloque l'audio (politique navigateur).
         c.addEventListener('click', function () {
           c.focus();
-          if (window.drive && drive.ctx && drive.ctx.state === 'suspended') drive.ctx.resume();
+          if (window.au && au.ctx && au.ctx.state === 'suspended') au.ctx.resume();
         });
         return c;
       })(),
@@ -264,28 +270,165 @@
       populateSelect('diskSel', '/disks', /\.(st|msa|dim|stx)$/i, '/disks/diskA.st');
       populateSelect('romSel', '/roms', /\.(img|rom|tos|bin)$/i,
                      isSteFamily ? '/roms/etos256us.img' : '/roms/etos192us.img');
-      driveLoad();   // précharge les WAV de bruits de lecteur (roms/drivesound/)
-      psgAudioStart();   // branche la sortie son du YM2149 (Web Audio)
+      driveLoad();       // crée l'AudioContext + précharge les WAV de bruits de lecteur
+      audioStart();      // branche la sortie son de la machine (YM2149 + DMA STE)
+      if (window.neostApplyVolume) neostApplyVolume();   // volume initial du curseur
     };
 
-    // ===== Son du YM2149 (Web Audio) ==========================================
-    // Un ScriptProcessorNode tire les échantillons synthétisés par le cœur
-    // (neost_audio_render) ; il partage l'AudioContext de DriveSound, donc le PSG
-    // et les bruits de lecteur sont mixés par le navigateur à la destination.
-    function psgAudioStart() {
-      if (!drive.ctx || drive.psgNode) return;
-      var size = 2048;                              // ~43 ms à 48 kHz : compromis latence/glitch
-      var node = drive.ctx.createScriptProcessor(size, 0, 1);
-      var ptr  = Module._malloc(size * 4);          // buffer float persistant côté heap WASM
-      node.onaudioprocess = function (e) {
-        var out = e.outputBuffer.getChannelData(0);
-        Module.ccall('neost_audio_render', null, ['number', 'number', 'number'],
-                     [ptr, size, drive.ctx.sampleRate]);
-        out.set(Module.HEAPF32.subarray(ptr >> 2, (ptr >> 2) + size));   // relu frais (mem growth)
-      };
-      node.connect(drive.ctx.destination);
-      drive.psgNode = node;
+    // ===== Sortie son de la machine (YM2149 + DMA STE) ========================
+    // MODÈLE « PUSH », comme le frontend natif. Le cœur produit le son PAR TRAME
+    // ÉMULÉE (juste après runFrame) en rejouant ses écritures horodatées, et nous
+    // le remet ici ; ce module ne fait plus que mettre en file et sortir.
+    //
+    // Avant, c'était l'inverse : ce nœud TIRAIT des échantillons toutes les ~43 ms
+    // et le cœur synthétisait alors en lisant les registres du YM en direct. Tout
+    // ce qui module le son sous la trame — digidrums, sync-buzzer, bruitages DMA
+    // courts — était donc échantillonné une fois par bloc, et les samples
+    // devenaient inaudibles.
+    //
+    // Sortie par AudioWorklet quand le navigateur le sait (le mixage vit alors sur
+    // le THREAD AUDIO : un à-coup du thread principal — où tournent l'émulation et
+    // le rendu — ne coupe plus le son, le coussin l'absorbe). Repli automatique sur
+    // ScriptProcessorNode (déprécié, thread principal) pour les navigateurs anciens.
+    var au = { ctx: null, node: null, worklet: false, queue: [], off: 0, queued: 0,
+               cushionFrames: 0, primed: false, underruns: 0, cushionMs: 90 };
+
+    // Code du worklet, injecté en Blob : la démo doit rester un dossier de fichiers
+    // statiques (GitHub Pages), sans module séparé à déployer.
+    var WORKLET_SRC = [
+      'class NeoSTSink extends AudioWorkletProcessor {',
+      '  constructor(o) {',
+      '    super();',
+      '    this.q = []; this.off = 0; this.queued = 0; this.primed = false;',
+      '    this.underruns = 0; this.ticks = 0;',
+      '    this.cushion = (o.processorOptions && o.processorOptions.cushion) | 0;',
+      '    this.port.onmessage = (e) => {',
+      '      if (e.data === "flush") { this.q.length = 0; this.off = 0; this.queued = 0; this.primed = false; return; }',
+      '      this.q.push(e.data); this.queued += e.data.length >> 1;',
+      '    };',
+      '  }',
+      '  process(inputs, outputs) {',
+      '    const L = outputs[0][0], R = outputs[0][1], n = L.length;',
+      // AMORÇAGE : tant que le coussin n'est pas atteint, silence SANS consommer.
+      // Jouer une file quasi vide, c'est l'underrun permanent — seules les
+      // transitoires passent et la musique continue se perd.
+      '    if (!this.primed) {',
+      '      if (this.queued < this.cushion) { L.fill(0); R.fill(0); this.tick(); return true; }',
+      '      this.primed = true;',
+      '    }',
+      '    for (let i = 0; i < n; ++i) {',
+      '      if (!this.q.length) {',
+      '        for (let j = i; j < n; ++j) { L[j] = 0; R[j] = 0; }',
+      '        this.primed = false; this.underruns++; break;',
+      '      }',
+      '      const b = this.q[0], o = this.off << 1;',
+      '      L[i] = b[o]; R[i] = b[o + 1];',
+      '      this.off++; this.queued--;',
+      '      if ((this.off << 1) >= b.length) { this.q.shift(); this.off = 0; }',
+      '    }',
+      // Garde-fou : une sortie qui ne consomme pas (contexte suspendu) ferait
+      // grossir la file sans fin — le producteur, lui, tourne avec rAF.
+      '    while (this.queued > sampleRate) {',
+      '      const d = this.q.shift(); if (!d) { this.queued = 0; break; }',
+      '      this.queued -= (d.length >> 1) - this.off; this.off = 0;',
+      '    }',
+      '    this.tick(); return true;',
+      '  }',
+      // Rapport de profondeur de file : c'est l'entrée de l'asservissement de débit
+      // côté cœur. Toutes les 8 quanta (~21 ms à 48 kHz) — assez frais pour un
+      // réglage qui ne bouge que de ±8 échantillons par trame.
+      '  tick() {',
+      '    if ((++this.ticks & 7) === 0) this.port.postMessage({ q: this.queued, u: this.underruns });',
+      '  }',
+      '}',
+      'registerProcessor("neost-sink", NeoSTSink);'
+    ].join('\n');
+
+    function audioStart() {
+      if (!au.ctx || au.node) return;
+      var rate = au.ctx.sampleRate;
+      au.cushionFrames = Math.round(rate * au.cushionMs / 1000);
+      Module.ccall('neost_audio_open', null, ['number', 'number'], [rate, au.cushionMs]);
+
+      if (au.ctx.audioWorklet && typeof AudioWorkletNode === 'function') {
+        var url = URL.createObjectURL(new Blob([WORKLET_SRC], { type: 'application/javascript' }));
+        au.ctx.audioWorklet.addModule(url).then(function () {
+          URL.revokeObjectURL(url);
+          var node = new AudioWorkletNode(au.ctx, 'neost-sink', {
+            numberOfInputs: 0, numberOfOutputs: 1, outputChannelCount: [2],
+            processorOptions: { cushion: au.cushionFrames }
+          });
+          node.port.onmessage = function (e) {
+            au.queued = e.data.q; au.underruns = e.data.u;
+            Module.ccall('neost_audio_set_queued', null, ['number', 'number'], [e.data.q, e.data.u]);
+          };
+          node.connect(au.ctx.destination);
+          au.node = node; au.worklet = true;
+          console.log('[NeoST] audio: AudioWorklet ' + rate + ' Hz stereo');
+        }).catch(function (err) {
+          URL.revokeObjectURL(url);
+          console.warn('[NeoST] AudioWorklet unavailable, falling back:', err);
+          audioStartFallback(rate);
+        });
+      } else {
+        audioStartFallback(rate);
+      }
     }
+
+    // Repli : ScriptProcessorNode (déprécié, tourne sur le thread principal). La
+    // file vit alors dans la page et se draine ici.
+    function audioStartFallback(rate) {
+      if (au.node) return;
+      var node = au.ctx.createScriptProcessor(2048, 0, 2);   // ~43 ms : le thread principal porte AUSSI l'émulation
+      node.onaudioprocess = function (e) {
+        var L = e.outputBuffer.getChannelData(0), R = e.outputBuffer.getChannelData(1);
+        var n = L.length;
+        if (!au.primed) {
+          if (au.queued < au.cushionFrames) { L.fill(0); R.fill(0); return; }
+          au.primed = true;
+        }
+        for (var i = 0; i < n; ++i) {
+          if (!au.queue.length) {
+            for (var j = i; j < n; ++j) { L[j] = 0; R[j] = 0; }
+            au.primed = false; au.underruns++;
+            break;
+          }
+          var b = au.queue[0], o = au.off << 1;
+          L[i] = b[o]; R[i] = b[o + 1];
+          au.off++; au.queued--;
+          if ((au.off << 1) >= b.length) { au.queue.shift(); au.off = 0; }
+        }
+        Module.ccall('neost_audio_set_queued', null, ['number', 'number'], [au.queued, au.underruns]);
+      };
+      node.connect(au.ctx.destination);
+      au.node = node; au.worklet = false;
+      console.log('[NeoST] audio: ScriptProcessorNode (fallback) ' + rate + ' Hz stereo');
+    }
+
+    // Appelée par le cœur à CHAQUE trame émulée (cf. produceAudioFrame) : `ptr`
+    // pointe un bloc stéréo entrelacé de `frames` échantillons dans le heap WASM.
+    // On COPIE : le heap peut être déplacé par une croissance mémoire, et le worklet
+    // reçoit le tampon par transfert.
+    window.neostAudioPush = function (ptr, frames) {
+      if (!au.node || frames <= 0) return;
+      // Sortie suspendue (avant le geste utilisateur qui débloque l'audio, onglet
+      // en arrière-plan) : personne ne consomme, on ne met donc rien en file —
+      // sinon elle grossit de ~380 Ko par seconde d'attente.
+      if (au.ctx.state !== 'running') { au.queued = 0; return; }
+      var i0 = ptr >> 2;
+      var buf = new Float32Array(Module.HEAPF32.subarray(i0, i0 + frames * 2));
+      if (au.worklet) {
+        au.node.port.postMessage(buf, [buf.buffer]);
+      } else {
+        au.queue.push(buf); au.queued += frames;
+        // Même garde-fou que le worklet : au-delà d'une seconde en file, on jette
+        // le plus ancien (le début du bloc courant est déjà consommé → au.off).
+        while (au.queued > au.ctx.sampleRate) {
+          var d = au.queue.shift(); if (!d) { au.queued = 0; break; }
+          au.queued -= (d.length >> 1) - au.off; au.off = 0;
+        }
+      }
+    };
 
     // ===== Bruits mécaniques du lecteur de disquette (Web Audio) ==============
     // Le cœur (C) appelle window.neostDriveSound(code) sur chaque événement FDC,
@@ -293,11 +436,13 @@
     // 1 = pas de tête (clic), 2 = seek, 3 = moteur OFF (coupé par le cœur après
     // ~10 tours d'inactivité), 4 = impulsion d'index (léger « tic » 1/tour).
     // Les échantillons WAV sont embarqués dans le FS virtuel (roms/drivesound/).
-    var drive = { ctx: null, buf: {}, motorSrc: null, psgNode: null, enabled: true,
+    // L'AudioContext est celui de `au` (un seul pour toute la page) : bruits de
+    // lecteur et son de la machine se mélangent naturellement à la destination.
+    var drive = { buf: {}, motorSrc: null, enabled: true,
                   dir: '/roms/drivesound/epson_smd480l/' };
 
     function driveLoad() {
-      try { drive.ctx = new (window.AudioContext || window.webkitAudioContext)(); }
+      try { au.ctx = new (window.AudioContext || window.webkitAudioContext)(); }
       catch (e) { console.warn('Web Audio indisponible :', e); return; }
       var files = { spin: 'drive_spin.wav', startup: 'drive_startup.wav',
                     click: 'drive_click.wav', seek: 'drive_seek.wav' };
@@ -305,7 +450,7 @@
         try {
           var d = Module.FS.readFile(drive.dir + files[k]);   // Uint8Array
           var ab = d.buffer.slice(d.byteOffset, d.byteOffset + d.byteLength);
-          drive.ctx.decodeAudioData(ab,
+          au.ctx.decodeAudioData(ab,
             function (b) { drive.buf[k] = b; },
             function (e) { console.warn('decode ' + k, e); });
         } catch (e) { console.warn('FS read ' + files[k], e); }
@@ -313,31 +458,31 @@
     }
 
     function driveOneShot(name) {
-      var b = drive.buf[name]; if (!b || !drive.ctx) return;
-      var s = drive.ctx.createBufferSource();
-      s.buffer = b; s.connect(drive.ctx.destination); s.start();
+      var b = drive.buf[name]; if (!b || !au.ctx) return;
+      var s = au.ctx.createBufferSource();
+      s.buffer = b; s.connect(au.ctx.destination); s.start();
     }
     function driveMotorStart() {
       if (drive.motorSrc || !drive.buf.spin) return;
-      var s = drive.ctx.createBufferSource();
+      var s = au.ctx.createBufferSource();
       s.buffer = drive.buf.spin; s.loop = true;
-      var g = drive.ctx.createGain(); g.gain.value = 0.7;
-      s.connect(g); g.connect(drive.ctx.destination); s.start();
+      var g = au.ctx.createGain(); g.gain.value = 0.7;
+      s.connect(g); g.connect(au.ctx.destination); s.start();
       drive.motorSrc = s;
     }
     function driveMotorStop() {
       if (drive.motorSrc) { try { drive.motorSrc.stop(); } catch (e) {} drive.motorSrc = null; }
     }
     function driveTick() {                    // « tic » d'index : clic à volume bas
-      var b = drive.buf.click; if (!b || !drive.ctx) return;
-      var s = drive.ctx.createBufferSource(); s.buffer = b;
-      var g = drive.ctx.createGain(); g.gain.value = 0.18;
-      s.connect(g); g.connect(drive.ctx.destination); s.start();
+      var b = drive.buf.click; if (!b || !au.ctx) return;
+      var s = au.ctx.createBufferSource(); s.buffer = b;
+      var g = au.ctx.createGain(); g.gain.value = 0.18;
+      s.connect(g); g.connect(au.ctx.destination); s.start();
     }
 
     window.neostDriveSound = function (code) {
-      if (!drive.enabled || !drive.ctx) return;
-      if (drive.ctx.state === 'suspended') drive.ctx.resume();   // débloque après geste
+      if (!drive.enabled || !au.ctx) return;
+      if (au.ctx.state === 'suspended') au.ctx.resume();   // débloque après geste
       switch (code) {
         case 0:                               // moteur ON : spin-up + boucle ronron
           if (!drive.motorSrc) driveOneShot('startup');
@@ -349,6 +494,20 @@
         case 4: driveTick();           break; // impulsion d'index
       }
     };
+
+    // Volume maître : appliqué par le CŒUR (rampe anti-clic sur le bloc, comme le
+    // frontend natif) plutôt que par un GainNode — un seul endroit décide du niveau.
+    (function () {
+      var sl = document.getElementById('volSlider'), lab = document.getElementById('volValue');
+      function apply() {
+        var pct = parseInt(sl.value, 10);
+        lab.textContent = pct + ' %';
+        if (window.Module && Module.ccall && ready)
+          Module.ccall('neost_set_volume', null, ['number'], [pct / 100]);
+      }
+      sl.addEventListener('input', apply);
+      window.neostApplyVolume = apply;      // rappelé une fois le runtime prêt
+    })();
 
     document.getElementById('btnSound').addEventListener('click', function () {
       drive.enabled = !drive.enabled;
