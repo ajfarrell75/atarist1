@@ -515,7 +515,10 @@ void Shifter::liveGlueCatchUp(int targetLine) {
             if (wl <= liveGlueLine_) {
                 if (w.isRes) liveGlueRes_    = w.val & 0x03;
                 else         liveGlueFreq50_ = (w.val & 0x02) ? 1 : 0;
-                const int freqHz = (liveGlueRes_ == 2) ? 71 : (liveGlueFreq50_ ? 50 : 60);
+                // La GLUE ne décode que le bit 1 de $FF8260 : res 3 = haute
+                // résolution pour elle (Hatari Video_Update_Glue_State,
+                // « IoMem[0xff8260] & 2 » — trick « stop the shifter » Troed/Sync).
+                const int freqHz = (liveGlueRes_ & 0x02) ? 71 : (liveGlueFreq50_ ? 50 : 60);
                 // DIAG (NEOST_GLUE_DIAG) : chaque écriture appliquée à la Glue, avec
                 // sa datation ligne/cycle et le masque résultant — à diff'er contre
                 // Hatari `video_border_h` (les « detect ... » de Video_Update_Glue_State).
@@ -552,7 +555,7 @@ void Shifter::liveGlueCatchUp(int targetLine) {
                 glueLineStart_[liveGlueLine_] = (liveGlueLine_ == 0) ? 0 : prevStart + liveGlueLen_;
             liveGlueLen_ = cpl;
         }
-        const int freqHz = (liveGlueRes_ == 2) ? 71 : (liveGlueFreq50_ ? 50 : 60);
+        const int freqHz = (liveGlueRes_ & 0x02) ? 71 : (liveGlueFreq50_ ? 50 : 60);
         startHBL(liveGlueLine_, liveGlueRes_, freqHz);
     }
 }
@@ -687,11 +690,14 @@ void Shifter::renderLine(int y) {
     uint32_t* dst = frame_.data() + static_cast<std::size_t>(activeY_ + y) * curW_ + activeX_;
 
     // Émet W pixels à partir de l'offset `scroll`. En haute résolution = moniteur
-    // MONOCHROME : blanc (0) / noir (1), sans la palette couleur (sinon un
-    // palette[1] non noir — ex. rouge sous TOS 1.02 — colore l'écran à tort).
+    // MONOCHROME : seule la polarité vient du registre 0 de la palette — reg0
+    // sans bit couleur ($000) = vidéo INVERSE, blanc sur noir (Hatari conv_st.c,
+    // « HBLPalettes[0] & 0x777 »). palette[1] reste ignoré (sinon un palette[1]
+    // non noir — ex. rouge sous TOS 1.02 — colorerait l'écran à tort).
     if (hi) {
+        const uint8_t inv = (palette[0] & 0x777) ? 0 : 1;
         for (int c = 0; c < W; ++c)
-            dst[c] = (idx[c + scroll] & 1) ? 0xFF000000u : 0xFFFFFFFFu;
+            dst[c] = ((idx[c + scroll] ^ inv) & 1) ? 0xFF000000u : 0xFFFFFFFFu;
     } else {
         // Conversion $0RGB → ARGB8888 SORTIE de la boucle : elle était refaite pour
         // chacun des 320 à 640 pixels de chaque ligne, alors que `palette` ne peut
@@ -1657,7 +1663,7 @@ void Shifter::replayGlue() {
     const std::size_t nw = syncWrites_.size();
     int64_t lineCyc = 0;                                  // cycle-trame du début de la ligne (V2/LINELEN)
     for (int line = 0; line < lpf; ++line) {
-        int freqHz = (curRes == 2) ? 71 : (curFreq50 ? 50 : 60);
+        int freqHz = (curRes & 0x02) ? 71 : (curFreq50 ? 50 : 60);
         startHBL(line, curRes, freqHz);
         int len = cpl;
         if (v2 && !lineLen) {                            // ligne raccourcie ? (heuristique V2)
@@ -1677,7 +1683,7 @@ void Shifter::replayGlue() {
             const int prevRes = curRes;
             if (w.isRes) curRes    = w.val & 0x03;
             else         curFreq50 = (w.val & 0x02) ? 1 : 0;
-            freqHz = (curRes == 2) ? 71 : (curFreq50 ? 50 : 60);
+            freqHz = (curRes & 0x02) ? 71 : (curFreq50 ? 50 : 60);
             updateGlueState(line, lc, w.isRes, freqHz);
             // V2 : détections spécifiques aux bascules de résolution (med res
             // overscan, stab/scrolls hardware) — APRÈS la machine commune, comme
@@ -1753,7 +1759,7 @@ void Shifter::replayGlue() {
                 else                      f2 = (syncWrites_[j].val & 2) ? 1 : 0;
                 ++j;
             }
-            const int freqHz = (r2 == 2) ? 71 : (f2 ? 50 : 60);
+            const int freqHz = (r2 & 0x02) ? 71 : (f2 ? 50 : 60);
             const int len = (freqHz == 71) ? 224 : (freqHz == 60 ? 508 : 512);
             while (i < nw && syncWrites_[i].frameCycle < cyc + len) {
                 const SyncWrite& w = syncWrites_[i];
