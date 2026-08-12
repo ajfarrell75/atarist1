@@ -827,10 +827,13 @@ void Shifter::endVideoLine() {
     if (!noSnap && (!syncWrites_.empty() || spec512Active_) && bpl > 0 &&
         sl >= 0 && sl < static_cast<int>(lineSnapLen_.size())) {
         int n = bpl + scrollCounterAdvance() + 8;
-        if (n > kLineSnapBytes) n = kLineSnapBytes;
+        if (n > kLineSnapBytes - kSnapLead) n = kLineSnapBytes - kSnapLead;
         uint8_t* snap = lineSnap_.data() + static_cast<std::size_t>(sl) * kLineSnapBytes;
-        for (int i = 0; i < n; ++i)
-            snap[i] = bus_.read8((vcLineBase_ + static_cast<uint32_t>(i)) & 0xFFFFFFu);
+        // kSnapLead octets de garde AVANT la base de ligne (offsets sources
+        // négatifs du scroll hard, cf. déclaration kSnapLead) puis la ligne.
+        for (int i = 0; i < n + kSnapLead; ++i)
+            snap[i] = bus_.read8((vcLineBase_ - static_cast<uint32_t>(kSnapLead)
+                                  + static_cast<uint32_t>(i)) & 0xFFFFFFu);
         lineSnapLen_[sl] = static_cast<uint16_t>(n);
         // Scroll fin de CETTE ligne (capturé AVANT le latch différé newHwScrollCount_
         // quelques lignes plus bas) — consommé par renderGlueFrame (idx[s + scroll]).
@@ -1962,8 +1965,8 @@ void Shifter::renderGlueFrame() {
         int nPix = lineHasDE ? (de - ds) * lppc : 0;
         if (nPix > 1024) nPix = 1024;                      // garde idx : cf. dimensionnement ci-dessus
         if (rtr && displayed && (renderAll || sl < baseStart + 12))
-            std::fprintf(stderr, "  sl%d ds=%d de=%d bm=%03x nPix=%d addr=%06x snap=%d snapLen=%d gbytes=%d\n",
-                         sl, ds, de, bm, nPix, addr & 0xFFFFFF,
+            std::fprintf(stderr, "  sl%d ds=%d de=%d bm=%03x sh=%d nPix=%d addr=%06x snap=%d snapLen=%d gbytes=%d\n",
+                         sl, ds, de, bm, shift, nPix, addr & 0xFFFFFF,
                          (sl >= 0 && sl < (int)lineSnapLen_.size() && lineSnapLen_[sl] > 0) ? 1 : 0,
                          (sl >= 0 && sl < (int)lineSnapLen_.size()) ? lineSnapLen_[sl] : -1,
                          glueLineBytes(sl));
@@ -1997,22 +2000,50 @@ void Shifter::renderGlueFrame() {
             const char* e = std::getenv("NEOST_MED_CAL");
             return e ? std::atoi(e) : -4;
         }();
-        const int medSrcBytes = lineMed
+        int medSrcBytes = lineMed
             ? 2 - static_cast<int>((bm & glue::MED_OFFSET_MASK) >> 20) : 0;
         const int medSrcPx = lineMed ? kMedCal : 0;
+        // Scroll hardware STF 4 px / stab med (port video.c:3946-3990, « ST Cnx »
+        // et « 'Closure' demo Troed/Sync ») : le retrait gauche par bascule
+        // hi→med→lo déplace CHAQUE ligne selon le cycle de sa bascule retour
+        // (displayPixelShift stocké 13/9/5/1, ou 0 = stab). Hatari applique un
+        // OFFSET SOURCE en octets (VideoOffset {2,0,−2,−4}, −4 pour le stab :
+        // « planes are shifted » — l'octet d'origine PERMUTE les plans, comme le
+        // chemin med) PLUS « STF_PixelScroll −= 8 » (le retrait gauche med décale
+        // l'affichage de 8 px). Exprimé RELATIVEMENT à notre repère calibré
+        // (LEFT_OFF standard shift −4, offset 0, nocooper 0 px ↔ Hatari
+        // VideoOffset −2) : srcOff = VideoOffset + 2. Sans ce port, les lignes
+        // X-DISTING de Closure sortaient au shift brut sans permutation de
+        // plans → damier à marches (+11 px / ~9 lignes) au lieu du slide lisse.
+        int shEff = shift;
+        if (!lineMed && (bm & (glue::LEFT_OFF | glue::LEFT_OFF_MED))) {
+            switch (shift) {
+                case 13: medSrcBytes += 4; shEff = 5;  break;
+                case 9:  medSrcBytes += 2; shEff = 1;  break;
+                case 5:  medSrcBytes += 0; shEff = -3; break;
+                case 1:  medSrcBytes -= 2; shEff = -7; break;
+                case 0:  if (bm & glue::LEFT_OFF_MED) { medSrcBytes -= 2; shEff = -8; }
+                         break;                    // stab med (Closure STF)
+                default: break;                    // −4 : left-off standard calibré
+            }
+        }
         // Source des pixels : la CAPTURE datée au faisceau de cette scanline si elle
         // existe (cf. lineSnap_ — seul l'échantillon voit un sprite dessiné puis
         // effacé EN COURSE avec le faisceau, ex. robot du menu Cuddly), sinon repli
         // relecture RAM en fin de trame (lignes non committées : bordure haute
         // ouverte, bas de trame au-delà des lignes actives).
         if (nPix > 0 && !lineBlank) {
+            // Les slots de capture portent kSnapLead octets de garde en tête :
+            // un offset source négatif (scroll hard / stab med, ≥ −kSnapLead)
+            // reste DANS le slot — pas de repli RAM (qui ré-introduirait
+            // l'artefact « dessin en course avec le faisceau », cf. kSnapLead).
             const bool haveSnap = snapHere;
             if (haveSnap)
                 decodeWindowIndicesFromBytes(lineSnap_.data() + static_cast<std::size_t>(sl) * kLineSnapBytes
-                                                 + medSrcBytes,
+                                                 + kSnapLead + medSrcBytes,
                                              lineSnapLen_[sl] - medSrcBytes, nPix, idx, lineMed);
             else
-                decodeWindowIndices(addr + static_cast<uint32_t>(medSrcBytes), nPix, idx, lineMed);
+                decodeWindowIndices(addr + static_cast<uint32_t>(static_cast<int32_t>(medSrcBytes)), nPix, idx, lineMed);
         }
 
         uint32_t* dst = frame_.data() + static_cast<std::size_t>(row) * W;
@@ -2041,7 +2072,7 @@ void Shifter::renderGlueFrame() {
                 // hi (−4) ne s'applique pas au chemin med (Hatari rend ces
                 // lignes via VideoOffset seul, video.c:3932).
                 int s = lineMed ? ((cyc - ds) * 2 + medSrcPx)
-                                : ((cyc - ds) * ppc + (x % ppc) - shift + lineScroll);
+                                : ((cyc - ds) * ppc + (x % ppc) - shEff + lineScroll);
                 if (s < 0) s = 0; else if (s >= nDec) s = nDec - 1;
                 if (lineMed) {
                     const int s2 = (s + 1 < nDec) ? s + 1 : s;

@@ -18,6 +18,7 @@
 #include "io/StePads.hpp"
 #include <cstdint>
 #include <cstddef>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -128,6 +129,10 @@ public:
         addr &= stmap::ADDR_MASK;
         // (pas de garde overlay : write8 n'en a jamais eu — l'overlay est une
         //  redirection de LECTURE, l'écriture va bien en RAM.)
+        // DEBUG (NEOST_WATCH=hex, cf. Machine.cpp) : trace datée des écritures dans
+        // [watchBase_, watchBase_+0x300) — l'équivalent du breakpoint tracking
+        // Hatari « b ($addr).w ! ($addr).w :trace ». Désarmé : un test de bool.
+        if (watchHook && addr - watchBase_ < 0x300u) watchHook(addr, v);
         if (addr < mmuFastLimit()) { ram[addr] = v; return; }
         write8Slow(addr, v);
     }
@@ -267,6 +272,9 @@ public:
     Rtc*     rtc     = nullptr;   // horloge RP5C15 ($FFFC21) — Mega ST / Mega STE
     MidiAcia* midi   = nullptr;   // ACIA MIDI ($FFFC04) — bouclage OUT→IN
     Cpu68k*  cpu     = nullptr;   // pour rafraîchir l'IPL après un accès MMIO
+    // Watch d'écriture (debug, cf. write8) : hook posé par Machine si NEOST_WATCH.
+    uint32_t watchBase_ = 0xFF000000u;
+    std::function<void(uint32_t, uint8_t)> watchHook;
     // Émulation disque dur GEMDOS (redirection des appels GEMDOS vers un dossier
     // hôte, port de Hatari gemdos.c). Non nul = HD GEMDOS actif : le CPU intercepte
     // alors les opcodes magiques de la cartouche système (cf. Cpu68k::run). Posé par

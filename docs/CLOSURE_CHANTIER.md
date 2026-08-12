@@ -313,3 +313,135 @@ hatari ... --run-vbls 3000 --avirecord on --avi-file o.avi --avi-vcodec png \
 # Couplage base↔couleurs par trame : --trace video_color,video_hbl et segmenter
 #   sur « restart video counter 0x... » (= base de la trame SUIVANTE).
 ```
+
+## Cycle 6 (2026-08-12) — le hachis cerné : motifs de transitoires hors répertoire
+
+**Acquis préalables du cycle** (tous mesurés, méthode et pièges inclus) :
+
+1. **512 Ko = FIDÈLE** : la démo affiche « AT STNICCC IN 2015 » (996 px oracle,
+   même message chez NeoST) et refuse de démarrer — Hatari pareil. Closure
+   exige 1 Mo. Le « ne démarre pas » GUI en 512k n'était pas un bug.
+2. **⚠ MÉTHODE : Hatari est NON-DÉTERMINISTE run-à-run sur cette démo**
+   (probe : liste d'offsets à VBL 1500 = $C8 run A, $92 run B). L'ancrage de
+   boot varie → TOUTE comparaison par VBL absolu des canaux d'animation est
+   INVALIDE. Comparer par grandeurs INVARIANTES (deltas par ligne, séries de
+   motifs, cohérence interne). Deux runs Hatari d'ancrages différents sont
+   TOUS DEUX lisses (var1/var2_f.png) — la démo est auto-cohérente par phase.
+3. **Chaîne du rendu exonérée pièce à pièce** (trame 1500) : écritures palette
+   NeoST = Hatari −2 UNIFORME sur 11306/11314 writes de la trame ENTIÈRE
+   (les 8 restants = lignes 1/32, VBL handler) ; accumWait spec512 = 0 (tout
+   ≡2 mod 4) ; pyrender2 (re-rendu python aux adresses du renderer + couleurs
+   datées) == notre PPM → le renderer applique fidèlement ses données ; la
+   démo est un runner 100 % compté (AUCUNE IRQ MFP pendant l'effet — trace
+   mfp_exception vide) ; le remplisseur de listes (pc=$24F2E/30, période
+   1792 cyc = structure de boucle, pas un timer) est SYNCHRONE à instant égal
+   (piège de convention : --dump-at N NeoST == b VBL=N+1 Hatari).
+4. **Oracle INSTRUMENTÉ** : `[LADDR]` dans Video_CopyScreenLineColor
+   (extern/hatari/src/video.c, gated HATARI_LINE_ADDR=1, marqué « NEOST TEMP
+   for closure ») : adresse du raster à CHAQUE ligne → octets consommés par
+   ligne. Les deltas sont invariants à l'ancrage.
+
+**LA MESURE DÉCISIVE** : les octets consommés par les lignes de transition
+34-38 (le haut animé du logo, lignes BLANK où la démo bascule 60/50) forment
+un MOTIF par trame qui change chaque trame. Séries mesurées :
+
+- Hatari vbl 1498→1501 : [160,160,160,158,…] [160,162,0,186,…]
+  [160,184,158,158,…] [160,184,0,186,…]
+- NeoST vbl 1493→1496 : LES MÊMES QUATRE, dans le même ordre (ancrage +5) ✓
+- NeoST vbl 1497→1500 : [160,160,204,158] [160,162,230,0] [204,184,158,158]
+  [160,230,184,0] — **valeurs 204/230 à des positions JAMAIS produites par
+  Hatari** (le 230 = mask 1011 : un RIGHT_OFF détecté sur ligne blank là où
+  l'oracle voit RIGHT_MINUS_2/rien — frontière ~373-377, MÊME famille que le
+  Freq_match du crash résolu au Cycle 5).
+
+**Conséquence** : dès qu'un motif étranger apparaît, le cumul d'octets des
+transitoires diverge de ce que la démo (auto-calibrée) attend → tout le
+bitmap de la trame est décalé de ±44/±46 octets → le damier pré-compensé
+sort haché (sauts +11 px / ~9 lignes, période = les marches du dessin).
+
+**PROCHAINE ÉTAPE** : prolonger les deux séries ([LADDR] 1490-1515 vs
+[render] NEOST_RENDER_ALL), aligner (offset ~5), isoler LA première trame au
+motif étranger, extraire les écritures 60/50 de ses lignes 34-38
+(NEOST_WRITE_DIAG/[GLUP] vs --trace video_sync) et comparer la datation de
+la bascule qui fait le RIGHT_OFF fantôme — vraisemblablement une classe
+d'opcode dont la datation par parité (Cycle 5) reste fausse, ou la fenêtre
+RIGHT_OFF sur ligne BLANK. Corriger, puis : banc complet + les deux AVI.
+
+Diags neufs : NEOST_WATCH=hex (watch d'écriture bus daté, Bus.hpp/Machine.cpp)
+— non commité, comme le [LADDR] Hatari.
+
+### Cycle 6 — RÉSOLUTION : le port manquant du scroll hardware STF (X-DISTING)
+
+⚠ La piste « motifs de transitoires hors répertoire » ci-dessus est RÉFUTÉE : en
+prolongeant la série Hatari à VBL 1515, nos motifs « étrangers » apparaissent
+TOUS chez lui (vbl 1504-1507, même ordre — huit motifs consécutifs identiques,
+ancrage +7 sur ce run-là ; chaque run son ancrage). Transitoires FIDÈLES.
+
+**La preuve décisive** : le re-rendu python nourri des données d'HATARI
+(sa RAM + ses adresses [LADDR] + ses couleurs video_color datées, un seul run)
+produit le DAMIER HACHÉ — alors que son image réelle est lisse. L'ingrédient
+absent du modèle (et de notre renderer) était le différenciateur :
+**video.c:3946-3990 — le scroll hardware 4 px STF / stab med** (« ST Cnx » et,
+nominativement, « 'Closure' demo Troed/Sync »). Pour les lignes
+LEFT_OFF/LEFT_OFF_MED avec displayPixelShift ∈ {13,9,5,1,0}, Hatari applique
+PAR LIGNE : un OFFSET SOURCE en octets (VideoOffset {+2,0,−2,−4}, −4 pour le
+stab 0 — « planes are shifted » : l'origine octet PERMUTE les plans) ET
+« STF_PixelScroll −= 8 ». Notre renderer utilisait le shift BRUT sans offset
+source : chaque ligne X-DISTING sortait fausse d'un montant dépendant de SON
+scroll → les dents (+11 px / ~9 lignes = la période du pattern de la démo).
+
+**Le port** (renderGlueFrame) : table (srcOff, shEff) relative à notre repère
+calibré (LEFT_OFF standard shift −4 ↔ Hatari VideoOffset −2, nocooper 0 px) :
+13→(+4,+5), 9→(+2,+1), 5→(0,−3), 1→(−2,−7), 0 (LEFT_OFF_MED seul)→(−2,−8).
+srcOff en OCTETS sur la source (permutation de plans naturelle par le
+décodage) ; offset négatif → repli RAM (les slots lineSnap_ ne sont pas
+contigus). Résultat trame 1500 : **24 sauts → 5** (résidu lignes 66/74/114/
+234/242), logo lisse, famille visuelle de l'oracle.
+
+**Validation** : --tier full VERT (nocooper/greetings/diapos ×3/scrolls/
+overscan_top/trace_odd/etos), Cuddly 3400 pixel-identique, EL/SHO/LX
+pixel-identiques à l'avant-port (aucun titre du parc n'a ces lignes).
+
+**Résidu : NUL.** Les « 5 sauts » restants (lignes 66/74/114/234/242) sont
+mesurés À L'IDENTIQUE sur l'oracle (cal_f1500 : 69/77/237/245/253 ; var2 :
+70/78/238/246/254 — mêmes familles ~67-78 et ~234-254, glissant avec la phase
+d'ancrage) : ce sont les discontinuités LÉGITIMES du contenu (bords des
+lettres du logo), pas des défauts. **Closure est à parité visuelle.**
+
+### Cycle 6 — confirmations finales (couleurs décalées)
+
+Les trois écrans signalés « couleurs décalées » (petit logo SYNC, cartons texte
+« FOUR/BITPLANE/… », photo de la fée) sont VÉRIFIÉS PROPRES avec le binaire
+post-port : cartons texte trame ~4750 (headless ET GUI ST/tos102uk/1M —
+dégradés métalliques nets), photo trame ~10500 (153 couleurs, détails parfaits),
+logo trame 1500 lisse. Les captures striées de l'utilisateur dataient d'avant
+les correctifs du matin (datation par parité + port X-DISTING). Le shift des
+lignes de la trame 1500 est 0 partout DES DEUX CÔTÉS (le X-DISTING de cette
+phase n'utilise que le cas stab) — la table complète 13/9/5/1 servira aux
+phases de morphing rapide.
+
+⚠ Config : Closure se joue en **ST + tos102uk + 1 Mo**. La ROM tos162fr
+(STE-only) bascule la machine en STE : le chemin STE de Closure n'est PAS
+porté (Hatari lui-même le marque « FIXME : should be measured on real STE »,
+video.c:3966-3970 : VideoOffset −6 / scroll −10) — écrans divergents attendus
+sur STE, chantier séparé si besoin.
+
+Carte de la démo (headless, trames) : 0-1000 chargement/intro noir ; ~800-1000
+petit logo SYNC ; 1250-2300 grand logo X-DISTING ; 2500 flash blanc ; 2750-3750
+écrans 4-5 couleurs ; 4250-5250 cartons texte métal ; 5750-6000 lettres
+arc-en-ciel ; 7000-8500 effets 64-129 couleurs ; 10500 photo fée (153 coul.) ;
+13500 écran 130 couleurs. `--shot-every 250/500` pour re-cartographier.
+
+### Cycle 6 — addendum : logo d'intro (kSnapLead)
+
+Le premier port (garde « srcOff négatif → repli RAM ») TUAIT le logo d'intro
+SYNC (trames ~300-1200, pendant le chargement) : cet écran single-buffer
+dessine/efface son logo EN COURSE avec le faisceau — la RAM de fin de trame est
+déjà effacée, le repli la lisait → écran noir. C'est PRÉCISÉMENT l'artefact que
+lineSnap_ prévient. Fix : **kSnapLead = 8 octets de garde en TÊTE de chaque
+slot de capture** (les octets [base−8, base) capturés au faisceau aussi) → un
+offset source négatif (≥ −8) reste dans le slot, plus aucun repli RAM pour ces
+lignes. Vérifié : logo intro net trame 700 (2756 px ≈ oracle 11204/4), grand
+logo intact trame 1400, banc full 39/39 VERT, Cuddly/EL/SHO/LX
+pixel-identiques (la capture change pour TOUTES les lignes → banc obligatoire,
+passé).
