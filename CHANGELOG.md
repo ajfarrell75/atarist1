@@ -104,6 +104,50 @@ par `packaging/stage_free_data.sh` (EmuTOS, `tos102uk`/`tos162uk` des profils 52
 autre ROM. ⚠ `tos102uk`/`tos162uk` sont des **ROM Atari sous copyright** : leur
 redistribution est un choix assumé du projet, pas une donnée libre.
 
+## Closure : l'image rejoint l'oracle — scroll hardware STF 4 px / stab med (2026-08-12)
+
+Suite (et fin du volet visuel) du chantier Closure : après le crash au boot
+(chantier précédent), la démo tournait mais **hachée** — logo en damier à
+marches, cartons texte et photo aux couleurs striées. L'enquête (dossier
+[`docs/CLOSURE_CHANTIER.md`](docs/CLOSURE_CHANTIER.md) § Cycle 6) a exonéré une
+à une toutes les données (bitmap RAM, adresses par ligne, écritures palette —
+11 306/11 314 identiques à l'oracle à une constante près) grâce à deux outils
+neufs : un **oracle instrumenté** (`[LADDR]` dans le Hatari du dépôt : adresse
+du raster à chaque ligne, deltas invariants à l'ancrage) et le **re-rendu
+modèle en boucle fermée** — un pipeline Python nourri des données d'Hatari
+lui-même, qui produisait le damier là où l'image d'Hatari est lisse : preuve
+que l'ingrédient manquant du modèle était aussi celui du renderer.
+
+Cet ingrédient : **le scroll hardware 4 px du STF** (`video.c:3946-3990`, qui
+cite nommément « 'Closure' demo Troed/Sync »). Le retrait de bordure gauche
+par bascule hi→med→lo déplace chaque ligne de 1 à 13 px selon le cycle de la
+bascule retour — le « X-DISTING » de la démo — et le matériel réalise ce
+déplacement en **désalignant les plans** : l'offset d'origine en octets fait
+charger les bitplanes dans les mauvais registres. Port dans `renderGlueFrame` :
+table par ligne (offset source, shift effectif) relative au repère calibré —
+13→(+4,+5), 9→(+2,+1), 5→(0,−3), 1→(−2,−7), stab 0→(−2,−8) — l'offset
+s'applique en octets à la source (la permutation de plans émerge du décodage,
+comme le chemin med l'avait établi).
+
+Deuxième pièce : **kSnapLead** — 8 octets de garde en tête des captures
+par-ligne (`lineSnap_`), pour que les offsets sources négatifs restent dans le
+slot. Le premier essai (repli RAM) tuait le logo d'intro SYNC : cet écran
+single-buffer dessine et efface son logo en course avec le faisceau, la RAM de
+fin de trame est déjà vide — précisément l'artefact que la capture au faisceau
+prévient.
+
+Résultat : logo d'intro net, grand logo lisse (les 5 discontinuités restantes
+sont mesurées à l'identique sur l'oracle : bords de lettres, résidu NUL),
+cartons texte et photo impeccables — **parité visuelle**. Leçons de méthode au
+dossier, dont une majeure : **Hatari est non-déterministe run-à-run sur cette
+démo** (ancrage de boot) — les canaux d'animation ne se comparent JAMAIS par
+VBL absolu, seulement par invariants (deltas par ligne, séries de motifs,
+cohérence interne). Diag `NEOST_WATCH=hex` ajouté (watch d'écriture bus daté,
+coût nul désarmé). Validation : `--tier full` 39/39 vert, menu Cuddly,
+Enchanted Land, Super Hang-On et Lethal Xcess pixel-identiques. ⚠ Closure se
+joue en ST + tos102uk + 1 Mo (512 Ko : refus fidèle ; chemin STE non porté —
+FIXME assumé chez Hatari aussi).
+
 ## Closure (Sync) boote : datation des écritures freq/res par parité d'accès (2026-08-12)
 
 La démo **Closure** de Sync (`disks/etalons/closure.msa`, ST 1 Mo + TOS 1.02 UK)
