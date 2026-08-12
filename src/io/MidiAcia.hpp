@@ -24,6 +24,7 @@
 #pragma once
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <vector>
 
 #include "core/Scheduler.hpp"
@@ -37,6 +38,21 @@ public:
 
     // Ordonnanceur : date le re-remplissage de TDRE sous TIE (cf. onTxEmpty).
     void setScheduler(Scheduler* s) { sched_ = s; }
+
+    // Pont MIDI RÉSEAU (MIDIMaze en ligne — extension NeoST). Sans sink, l'ACIA
+    // boucle OUT→IN sur elle-même (défaut, requis par le diagnostic « M MIDI »).
+    // Avec un sink posé, les octets MIDI OUT partent vers le RÉSEAU (l'anneau
+    // MIDI) au lieu de reboucler, et les octets de l'anneau reviennent par
+    // receiveExternal — exactement le câblage d'un anneau MIDI physique.
+    void setMidiSink(std::function<void(uint8_t)> fn) { midiSink_ = std::move(fn); }
+    bool midiNetworked() const { return static_cast<bool>(midiSink_); }
+    // Injecte un octet reçu du réseau dans MIDI IN (comme le bouclage, mais depuis
+    // l'extérieur). Lève l'IRQ ACIA si RIE est armé.
+    void receiveExternal(uint8_t b);
+    // Le 6850 n'a que 2 octets (RDR + registre à décalage) : l'anneau réseau doit
+    // n'injecter QUE lorsque la puce a de la place, sinon overrun (jitter buffer
+    // côté adaptateur — cf. MidiRing). Vrai = receiveExternal ne débordera pas.
+    bool rxCanAccept() const { return rx_.size() < kMidiRxMax; }
 
     uint8_t read8(uint32_t addr);            // $FFFC04 statut / $FFFC06 données
     void    write8(uint32_t addr, uint8_t v);
@@ -87,4 +103,7 @@ private:
     uint8_t control_ = 0;                    // registre contrôle ACIA (bit7 = RX int enable)
     bool    txEnableInt_ = false;            // IRQ d'émission armée : CR bits5-6 = 01
     bool    tdre_ = true;                    // Transmit Data Register Empty (0 en émission sous TIE)
+    // Pont MIDI réseau (cf. setMidiSink). Non sérialisé (liaison frontend).
+    std::function<void(uint8_t)> midiSink_;
+    void pushRx(uint8_t v);                  // ajoute un octet à MIDI IN (RDR + shift)
 };

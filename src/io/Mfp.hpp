@@ -175,6 +175,17 @@ public:
         // --- Config USART effective (dérivée du Timer D / UCR) -----------------------
         ar(serialBaud_);
         ar(serialUcr_);
+
+        // --- File RX côté hôte (v10) : deque via vector, comme MidiAcia --------------
+        {
+            std::vector<uint8_t> q(hostRx_.begin(), hostRx_.end());
+            ar.vec(q);
+            if (ar.loading()) {
+                ar.check(q.size() <= kHostRxMax, "Mfp::hostRx_ au-delà de kHostRxMax");
+                hostRx_.assign(q.begin(), q.end());
+            }
+        }
+        ar(serialRxArmed_);
     }
 
     // Lignes d'interruption des DEUX ACIA (clavier ET MIDI), câblées en WIRE-OR
@@ -222,6 +233,12 @@ public:
     // y est transmis. Les ROMs de diagnostic y impriment leur rapport quand la
     // vidéo n'est pas (encore) opérationnelle.
     void setSerialSink(std::function<void(uint8_t)> sink) { serialSink_ = std::move(sink); }
+    // Injection RX série côté hôte (modem Hayes, FujiNet RS-232) : octets mis en
+    // file et livrés au débit configuré via l'ordonnanceur (Scheduler::SERIAL_RX),
+    // IRQ RxFull (canal 12) par octet. Cf. Mfp.cpp § Injection RX série.
+    void receiveByte(uint8_t b);
+    void onSerialRxEvent();                       // échéance SERIAL_RX (Machine)
+    std::size_t hostRxPending() const { return hostRx_.size(); }
     bool colorMonitor() const { return colorMonitor_; }
 
     // Config EFFECTIVE de l'USART (port de rs232.c RS232_SetBaudRateFromTimerD +
@@ -311,6 +328,12 @@ public:
     uint8_t rxByte_  = 0;
     bool    rxFull_   = false;
     bool    rxOverrun_ = false;   // RSR bit6 : un octet est arrivé buffer déjà plein
+    // File RX côté hôte (cf. receiveByte) : bornée, livrée octet par octet au
+    // débit série par l'événement SERIAL_RX. serialRxArmed_ = échéance en vol.
+    static constexpr std::size_t kHostRxMax = 4096;
+    std::deque<uint8_t> hostRx_;
+    bool serialRxArmed_ = false;
+    void scheduleSerialRx();
 public:
     void setLoopback(bool plugged) { loopback_ = plugged; }
     bool loopback() const { return loopback_; }

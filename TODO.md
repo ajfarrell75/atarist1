@@ -337,3 +337,20 @@ ACIA) ; si une vraie démo spec512 **overscan** (bordures ouvertes) est rapatri�
 - **Matrice de compatibilité MegaSTE** : TOS 2.05/06, EmuTOS, 1/2/4 Mo, 8/16 MHz, cache on/off,
   DD/HD, mono/couleur.
 - Capturer des **traces Hatari de référence** pour `trace_diff` (Arkanoid & co).
+
+### Réseau (extensions NeoST — base livrée 2026-08-12, cf. `docs/FUJINET.md`)
+- **FujiNet — TLS/HTTPS** : brancher mbedTLS (dépendance optionnelle, `NEOST_WITH_TLS`) — v1
+  refuse `https://`. Puis POST/headers custom côté N:, UDP, **TNFS**, FTP, imprimante P: (PDF).
+- **FujiNet — `FujiHostBridge`** : backend UDP relayant vers le **vrai firmware FujiNet-PC**
+  (façon NetSIO, requête de sync qui met l'émulation en pause). Interface `FujiHost` déjà
+  pluggable — c'est un simple ajout de backend, hérite de tous les protocoles amont.
+- **FujiNet — lib ST** : proposer le dossier `atarist/` en amont à `fujinet-lib` pour cadrer le
+  binding ACSI tôt ; device slots 0-7 différenciés ; montage lecteur B.
+- **EtherNEC — backend réel** : `SlirpNat` (NAT mode utilisateur, `libslirp` — seul le runtime
+  est présent ici, pas le `-dev`) ou pcap/TAP ; puis **valider STinG + `ENEC.STX` sous TOS 1.04**
+  (DHCP + ping/GET) et consigner dans `docs/CASE_STUDIES.md`. Livrer les pilotes libres GPL.
+- **Modem/STinG** : documenter l'installation STinG (noyau+`sting.inf` dans `AUTO`, modules dans
+  `C:\STING`) dans `docs/TEST_SOFTWARE.md` ; banc SLIP bout-en-bout.
+- **MIDI ring** : option GUI (saisie du pair) ; test en anneau à 2 nœuds (deux instances NeoST).
+- **Sécurité** : liste blanche de domaines optionnelle ; rejouer les scénarios d'évasion GEMDOS
+  (chemins/symlinks) contre les écritures de fichiers déclenchées par FujiNet.

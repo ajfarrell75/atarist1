@@ -34,6 +34,7 @@ class Rtc;
 class MidiAcia;
 class GemdosHd;
 class Scc;
+class Ne2000;
 // -----------------------------------------------------------------------------
 //  Plan mémoire de l'Atari ST (bus d'adresses 24 bits → 16 Mo adressables).
 //  Les constantes documentent le POURQUOI de chaque zone.
@@ -283,6 +284,10 @@ public:
     // Contrôleur série SCC Z85C30 ($FF8C80-$FF8C87) — Mega STE uniquement. IRQ niv5
     // vectorisée gatée par le SCU. Posé par Machine (Mega STE). Cf. io/Scc.hpp.
     Scc*     scc    = nullptr;
+    // Carte réseau NE2000 sur le port cartouche (EtherNEC — extension NeoST).
+    // Non nul + activée = les lectures dans $FA0000-$FBFFFF sont décodées comme
+    // accès EtherNEC AVANT la ROM cartouche. Posé par Machine. Cf. io/Ne2000.hpp.
+    Ne2000*  ne2000 = nullptr;
 
     // Profil machine : décide quel matériel optionnel répond (son DMA STE, etc.)
     // et où une bus error se produit. Posé par Machine. Défaut : 1040 STE.

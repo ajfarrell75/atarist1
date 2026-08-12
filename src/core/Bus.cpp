@@ -17,6 +17,7 @@
 #include "io/Rtc.hpp"
 #include "io/MidiAcia.hpp"
 #include "io/Scc.hpp"
+#include "io/Ne2000.hpp"
 
 #include <algorithm>
 #include <cassert>
@@ -369,6 +370,15 @@ uint8_t Bus::read8Slow(uint32_t addr) {
     // d'Hatari (memory.c) — PAS de bus error dans la fenêtre.
     if (addr >= romBase && addr < romBase + romWindowSize())
         return addr < romBase + rom.size() ? rom[addr - romBase] : 0x00;
+
+    // Carte réseau NE2000 sur le port cartouche (EtherNEC — extension NeoST) :
+    // les lectures $FA0000-$FBFFFF encodent les accès registre (cf. Ne2000.hpp).
+    // Décodée AVANT la ROM cartouche ; les deux sont mutuellement exclusives
+    // (Machine::enableEtherNec refuse si une cartouche est montée).
+    if (ne2000 && addr >= stmap::CART_BASE && addr < stmap::CART_END) {
+        uint8_t v;
+        if (ne2000->cartRead(addr, v)) return v;
+    }
 
     // Port cartouche ($FA0000-$FBFFFF) : si une cartouche est montée, on expose
     // sa ROM ; le TOS lit le magic à $FA0000 et amorce (diagnostic/applicative).

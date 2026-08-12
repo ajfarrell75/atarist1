@@ -66,13 +66,25 @@ void MidiAcia::write8(uint32_t addr, uint8_t v) {
         tdre_ = false;
         sched_->schedule(Scheduler::MIDI_TX, sched_->now() + kMidiTxByteCycles);
     }
+    // Pont MIDI RÉSEAU actif : l'octet part vers l'anneau au lieu de reboucler
+    // (sinon on s'entendrait soi-même). Les octets de l'anneau reviennent par
+    // receiveExternal (cf. MidiRing). Sans sink : bouclage interne (défaut).
+    if (midiSink_) { midiSink_(v); return; }
+    pushRx(v);                       // bouclage OUT→IN (câble physique)
+}
+
+void MidiAcia::pushRx(uint8_t v) {
     // Profondeur physique d'un 6850 : RDR + registre à décalage. Au-delà, l'octet le
     // plus ancien tombe — ce qui modélise en prime l'overrun réel du composant (le
     // bit OVRN reste non modélisé, cf. HATARI_DIVERGENCES.md).
     if (rx_.size() >= kMidiRxMax) rx_.pop_front();
     rx_.push_back(v);
-    rdrf_ = true;                    // un octet bouclé est disponible (RDRF)
+    rdrf_ = true;                    // un octet disponible (RDRF)
     raiseIfReady();
+}
+
+void MidiAcia::receiveExternal(uint8_t b) {
+    pushRx(b);                       // octet de l'anneau MIDI → MIDI IN
 }
 
 void MidiAcia::onTxEmpty() {

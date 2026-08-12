@@ -6,6 +6,30 @@ l'ordre inverse. Version courante : **0.5.2**.
 - « NeoST gère-t-il X ? » → [`docs/IMPLEMENTED.md`](docs/IMPLEMENTED.md) (inventaire par puce)
 - « Que reste-t-il ? » → [`TODO.md`](TODO.md)
 
+## Réseau : FujiNet + modem Hayes + EtherNEC + anneau MIDI (2026-08-12)
+
+Première ouverture de la machine émulée sur le réseau — **quatre extensions NeoST**,
+toutes **OFF par défaut**, sans équivalent Hatari (`docs/HATARI_DIVERGENCES.md` §
+Extensions), **sans effet sur les étalons** (réseau jamais ouvert par `run_all.py`).
+Réf. complète : [`docs/FUJINET.md`](docs/FUJINET.md). Principe : `neost_core` reste sans
+socket ni thread ; une nouvelle lib **`neost_net`** (frontends) fait l'I/O (option CMake
+`NEOST_WITH_NET`, forcée OFF sur WASM/Android).
+
+- **FujiNet virtuel** sur le bus ACSI (opcode vendeur $60, devices Fuji $70 + N1:-N8:).
+  Déport de protocole HTTP/TCP/JSON et **montage d'images distantes** (démarrer une
+  disquette HTTP sans un octet de code ST — validé **0 px** vs montage local). Backends
+  live (sockets) / rejeu (déterministe) / hors ligne. Lib 68000 + `NWGET.TOS`
+  (`dev/fujinet/`). Panneau GUI **Network**, clés `neost.cfg`. Save-state **v10**.
+- **Modem Hayes** RS-232 (`--modem`) → pont TCP réel pour STiK/STinG, terminaux, BBS ;
+  a nécessité `Mfp::receiveByte` (injection RX cadencée, `Scheduler::SERIAL_RX`).
+- **EtherNEC** : NE2000 émulée sur le port cartouche (`--ethernec`), pour les pilotes
+  STinG/MiNTnet/MagiCNet historiques ; exclusive d'une cartouche montée.
+- **Anneau MIDI réseau** (`--midi-net`) : MIDIMaze jouable en ligne.
+
+Auto-tests fil déterministes ajoutés au palier `fast` : `--fuji-selftest` (11/11),
+`--enec-selftest` (5/5). Tier **full vert** (pixels inchangés). Save-state v10 :
+`FujiDevice` + `Ne2000` + file RX MFP sérialisés, flags d'en-tête GEMDOS/FujiNet/EtherNEC.
+
 ## 0.5.2 — la 0.5.1, mais réellement livrée (2026-08-10)
 
 **Aucun changement fonctionnel par rapport à la 0.5.1** : mêmes 7 paquets, même cœur

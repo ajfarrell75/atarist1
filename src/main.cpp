@@ -53,6 +53,12 @@
 #endif
 
 #include "core/Machine.hpp"
+#include "net/FujiHost.hpp"
+#include "net/NetBackend.hpp"
+#ifdef NEOST_WITH_NET
+#include "net/FujiHostLive.hpp"
+#include "net/HayesModem.hpp"
+#endif
 #include "audio/Audio.hpp"
 #include "audio/DriveSound.hpp"
 #include "io/JoystickInput.hpp"
@@ -113,6 +119,11 @@ static std::string pickTosForMachine(const std::string& machine,
 struct Config { std::string rom; std::string disk; std::string diskb; std::string cart; bool mono = false;
                 std::string gemdos;   // HD GEMDOS : dossier hôte monté en C: (vide = off)
                 std::string acsi;     // image disque dur ACSI cible 0 (vide = off)
+                bool fujinet = false; // FujiNet virtuel sur le bus ACSI (extension NeoST)
+                int  fujinetTarget = 6;      // cible ACSI du FujiNet (0-7)
+                std::string fujinetHosts;    // host slots, séparés par '|' (slot 0 en tête)
+                bool modem = false;   // modem Hayes sur l'USART (pont AT → TCP)
+                bool ethernec = false; // NE2000/EtherNEC sur le port cartouche
                 std::string cpu = "moira"; std::string machine = "st";
                 std::string mem = "512k"; bool fpu = false;   // MC68881 Mega STE (cf. Fpu.hpp)
                 int joyport = 1;
@@ -183,6 +194,11 @@ static void parseConfigLine(Config& c, std::string line) {
     else if (line.rfind("cart=", 0) == 0) c.cart = line.substr(5);
     else if (line.rfind("gemdos=", 0) == 0) c.gemdos = line.substr(7);
     else if (line.rfind("acsi=", 0) == 0) c.acsi = line.substr(5);
+    else if (line.rfind("fujinet=", 0) == 0) c.fujinet = (line.substr(8) == "1");
+    else if (line.rfind("fujinet_target=", 0) == 0) c.fujinetTarget = std::atoi(line.substr(15).c_str());
+    else if (line.rfind("fujinet_hosts=", 0) == 0) c.fujinetHosts = line.substr(14);
+    else if (line.rfind("modem=", 0) == 0) c.modem = (line.substr(6) == "1");
+    else if (line.rfind("ethernec=", 0) == 0) c.ethernec = (line.substr(9) == "1");
     else if (line.rfind("mono=", 0) == 0) c.mono = (line.substr(5) == "1");
     else if (line.rfind("cpu=", 0)  == 0) c.cpu  = line.substr(4);
     else if (line.rfind("machine=", 0) == 0) c.machine = line.substr(8);
@@ -323,6 +339,11 @@ static void writeConfigKeys(std::ostream& f, const Config& w, bool full) {
     f << "rom=" << w.rom << "\ndisk=" << w.disk << "\ndiskb=" << w.diskb
       << "\ncart=" << w.cart
       << "\ngemdos=" << w.gemdos << "\nacsi=" << w.acsi
+      << "\nfujinet=" << (w.fujinet ? 1 : 0)
+      << "\nfujinet_target=" << w.fujinetTarget
+      << "\nfujinet_hosts=" << w.fujinetHosts
+      << "\nmodem=" << (w.modem ? 1 : 0)
+      << "\nethernec=" << (w.ethernec ? 1 : 0)
       << "\nmono=" << (w.mono ? 1 : 0)
       << "\ncpu=" << w.cpu << "\nmachine=" << w.machine << "\nmem=" << w.mem
       << "\nfpu=" << (w.fpu ? 1 : 0)
@@ -563,6 +584,8 @@ static bool deleteProfile(const std::string& dir, const std::string& name) {
 #define ICON_FA_EXPAND        "\xef\x81\xa5"
 // Engrenage U+F013 : la plage 0xf000-0xf8ff chargée dans la police le couvre déjà.
 #define ICON_FA_COG           "\xef\x80\x93"
+// WiFi U+F1EB (page Network / FujiNet) : même plage de police.
+#define ICON_FA_WIFI          "\xef\x87\xab"
 
 // Bouton à ICÔNE SEULE (le texte est superflu quand le pictogramme est explicite) :
 // l'infobulle au survol rappelle l'action. Renvoie true au clic.
@@ -2405,6 +2428,110 @@ void drawHardDiskPage(const std::string& hdDir, const std::string& gemdosDefault
     ImGui::TextDisabled("the machine (TOS only probes disks at boot).");
 }
 
+// Page « Network » : le FujiNet virtuel (extension NeoST — cf. docs/FUJINET.md).
+// Discipline habituelle : données en entrée, requêtes en sortie, AUCUNE E/S ici.
+void drawNetworkPage(bool fujiOn, int fujiTarget, const char* backendName,
+                     const FujiDevice& fuji, FujiHost* host, bool modemOn, bool etherOn,
+                     bool cartMounted,
+                     int& reqFujinet, int& reqFujinetTarget,
+                     std::string& reqFujinetMount,
+                     std::string& reqFujinetHosts, bool& reqFujinetHostsSet,
+                     int& reqModem, int& reqEther) {
+    ImGui::TextDisabled("FujiNet — virtual network device (NeoST extension)");
+    ImGui::TextWrapped("Protocol offloading for the ST: mount disk images from URLs, "
+                       "give 68000 programs HTTP/TCP/JSON without a TCP/IP stack. "
+                       "Attached to the ACSI bus (vendor opcode $60 — docs/FUJINET.md).");
+    ImGui::Separator();
+
+    // Modem Hayes : indépendant du FujiNet (le logiciel d'époque — terminaux,
+    // BBS, STinG/STiK en SLIP — parle à « un modem sur le port série »).
+    bool mdm = modemOn;
+    if (ImGui::Checkbox("Hayes modem on RS-232 (AT commands \xe2\x86\x92 TCP bridge)", &mdm))
+        reqModem = mdm ? 1 : 0;
+
+    // EtherNEC : NE2000 sur le port cartouche → pilotes STinG/MiNTnet historiques.
+    bool eth = etherOn;
+    if (cartMounted && !etherOn) {
+        ImGui::TextDisabled("EtherNEC (NE2000): free the cartridge port to enable");
+    } else if (ImGui::Checkbox("EtherNEC (NE2000 on the cartridge port)", &eth)) {
+        reqEther = eth ? 1 : 0;
+    }
+    ImGui::Separator();
+
+    bool on = fujiOn;
+    if (ImGui::Checkbox("Enable FujiNet (restarts the machine)", &on))
+        reqFujinet = on ? 1 : 0;
+
+    if (!fujiOn) {
+        ImGui::TextDisabled("(disabled — no network access from the emulated machine)");
+        return;
+    }
+
+    ImGui::Text("Backend: %s", backendName);
+    int tgt = fujiTarget;
+    ImGui::SetNextItemWidth(120.0f);
+    if (ImGui::InputInt("ACSI target (0-7)", &tgt))
+        reqFujinetTarget = (tgt < 0) ? 0 : (tgt > 7 ? 7 : tgt);
+
+    // ── Montage direct d'une image distante ─────────────────────────────────
+    ImGui::Separator();
+    ImGui::TextDisabled("Mount a remote disk image (http://…/file.st or a raw HD image)");
+    static char g_fujiUrlBuf[512] = "";
+    ImGui::SetNextItemWidth(-110.0f);
+    ImGui::InputTextWithHint("##fujiUrl", "http://host/path/disk.st…",
+                             g_fujiUrlBuf, sizeof g_fujiUrlBuf);
+    ImGui::SameLine();
+    if (ImGui::Button("Download##fuji") && g_fujiUrlBuf[0]) reqFujinetMount = g_fujiUrlBuf;
+
+    // ── Slots d'hôtes (préfixes d'URL pour les programmes ST) ───────────────
+    ImGui::Separator();
+    ImGui::TextDisabled("Host slots (URL prefixes offered to ST-side programs)");
+    static char g_fujiHostBuf[4][256];
+    static bool g_fujiHostSeeded = false;
+    if (!g_fujiHostSeeded) {
+        for (int i = 0; i < 4; ++i)
+            std::snprintf(g_fujiHostBuf[i], sizeof g_fujiHostBuf[i], "%s",
+                          fuji.hostSlot(i).c_str());
+        g_fujiHostSeeded = true;
+    }
+    for (int i = 0; i < 4; ++i) {
+        ImGui::PushID(i);
+        ImGui::SetNextItemWidth(-60.0f);
+        char label[16];
+        std::snprintf(label, sizeof label, "slot %d", i);
+        ImGui::InputText(label, g_fujiHostBuf[i], sizeof g_fujiHostBuf[i]);
+        ImGui::PopID();
+    }
+    if (ImGui::Button("Apply host slots")) {
+        std::string joined;
+        for (int i = 0; i < 4; ++i) {
+            if (i) joined += '|';
+            joined += g_fujiHostBuf[i];
+        }
+        // Rogne les '|' de queue (slots vides) pour un neost.cfg propre.
+        while (!joined.empty() && joined.back() == '|') joined.pop_back();
+        reqFujinetHosts = joined;
+        reqFujinetHostsSet = true;
+    }
+
+    // ── État des canaux N: ──────────────────────────────────────────────────
+    if (host) {
+        ImGui::Separator();
+        ImGui::TextDisabled("N: channels");
+        bool any = false;
+        for (int i = 0; i < FujiHost::MAX_CHANNELS; ++i) {
+            const FujiChanStatus st = host->status(i);
+            if (st.connected == 0 && st.avail == 0 && st.error == fn_err::OFFLINE) continue;
+            ImGui::Text("N%d:  %u byte(s) ready, %s (err %u)", i + 1, st.avail,
+                        st.connected ? "connected" : "closed", st.error);
+            any = true;
+        }
+        if (!any) ImGui::TextDisabled("(no channel open)");
+    }
+    ImGui::Separator();
+    ImGui::TextDisabled("Last device error: %u", fuji.lastError());
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Fenêtre « Configuration » — UNE adresse pour tout régler.
 //
@@ -2444,6 +2571,14 @@ struct ConfigUi {
     std::string reqMountA, reqMountB, reqMountCart, reqMountGemdos, reqMountAcsi;
     bool reqEjectA = false, reqEjectB = false, reqEjectCart = false;
     bool reqEjectGemdos = false, reqEjectAcsi = false;
+    // FujiNet (page Network) : bascule, cible ACSI, montage d'URL, slots d'hôtes.
+    int  reqFujinet = -1, reqFujinetTarget = -1;
+    std::string reqFujinetMount, reqFujinetHosts;
+    bool reqFujinetHostsSet = false;
+    int  reqModem = -1;                   // modem Hayes RS-232 (0/1)
+    int  reqEther = -1;                   // EtherNEC NE2000 (0/1)
+    const char* fujiBackendName = "";     // lecture : nom du backend actif
+    FujiHost* fujiHost = nullptr;         // lecture : statut des canaux N:
     bool reqApply  = false;       // appliquer les réglages matériels en attente
     bool reqKiosk  = false;
     int  reqMonitor = -1;         // 1 = couleur, 0 = mono
@@ -2458,7 +2593,7 @@ struct ConfigUi {
 
 // Page ouverte. Statique : on revient là où on était en rouvrant la fenêtre.
 enum ConfigPage {
-    kCfgMachine = 0, kCfgMem, kCfgRom, kCfgFloppy, kCfgHd, kCfgCart,
+    kCfgMachine = 0, kCfgMem, kCfgRom, kCfgFloppy, kCfgHd, kCfgCart, kCfgNet,
     kCfgScreen, kCfgSound, kCfgInput, kCfgEmul, kCfgProfiles, kCfgKiosk, kCfgCount
 };
 int g_cfgPage = kCfgFloppy;   // au premier lancement : ce qu'on cherche le plus souvent
@@ -2514,6 +2649,7 @@ void drawConfigWindow(ConfigUi& ui) {
         ICON_FA_MICROCHIP " Machine",  ICON_FA_MEMORY " Memory",
         ICON_FA_SAVE " ROM / TOS",     ICON_FA_SAVE " Floppies",
         ICON_FA_HDD " Hard disks",     ICON_FA_COMPACT_DISC " Cartridge",
+        ICON_FA_WIFI " Network",
         ICON_FA_DESKTOP " Screen",     ICON_FA_VOLUME_UP " Sound",
         ICON_FA_GAMEPAD " Input",      ICON_FA_BOLT " Emulation",
         ICON_FA_STAR " Profiles",      ICON_FA_DESKTOP " Kiosk",
@@ -2622,6 +2758,16 @@ void drawConfigWindow(ConfigUi& ui) {
     case kCfgCart:
         drawCartPage(ui.cartsDir, ui.machine->bus.mountedCartPath(),
                      ui.reqMountCart, ui.reqEjectCart);
+        break;
+    case kCfgNet:
+        drawNetworkPage(ui.machine->fuji.enabled(),
+                        ui.cfg ? ui.cfg->fujinetTarget : 6,
+                        ui.fujiBackendName, ui.machine->fuji, ui.fujiHost,
+                        ui.cfg && ui.cfg->modem, ui.machine->ne2000.enabled(),
+                        !ui.machine->bus.mountedCartPath().empty(),
+                        ui.reqFujinet, ui.reqFujinetTarget,
+                        ui.reqFujinetMount, ui.reqFujinetHosts, ui.reqFujinetHostsSet,
+                        ui.reqModem, ui.reqEther);
         break;
     case kCfgScreen: {
         ImGui::TextDisabled("Atari monitor");
@@ -3031,6 +3177,70 @@ int main(int argc, char** argv) {
             std::fprintf(stderr, "[main] ACSI : %d partition(s)\n", machine.fdc.acsiPartitionCount());
         else cfg.acsi.clear();                 // image invalide → idem
     }
+    // FujiNet virtuel (fujinet= dans neost.cfg) : cible ACSI dédiée + backend hôte
+    // (sockets si le build les a — cf. NEOST_WITH_NET). Extension NeoST, OFF par défaut.
+    std::unique_ptr<FujiHost> fujiHost;
+    auto fujiApply = [&](bool on) {
+        if (on) {
+            if (!fujiHost) {
+#ifdef NEOST_WITH_NET
+                fujiHost = std::make_unique<FujiHostLive>();
+#else
+                fujiHost = std::make_unique<FujiHostNull>();
+#endif
+            }
+            machine.fuji.setHost(fujiHost.get());
+            const int tgt = (cfg.fujinetTarget >= 0 && cfg.fujinetTarget <= 7)
+                                ? cfg.fujinetTarget : 6;
+            machine.enableFujiNet(tgt);
+            // Slots d'hôtes mémorisés : « url|url|… », slot 0 en tête.
+            std::size_t pos = 0;
+            for (int slot = 0; slot < FujiDevice::kHostSlots
+                               && pos <= cfg.fujinetHosts.size(); ++slot) {
+                std::size_t bar = cfg.fujinetHosts.find('|', pos);
+                if (bar == std::string::npos) bar = cfg.fujinetHosts.size();
+                if (bar > pos) machine.fuji.setHostSlot(slot, cfg.fujinetHosts.substr(pos, bar - pos));
+                pos = bar + 1;
+            }
+        } else {
+            machine.disableFujiNet();
+        }
+    };
+    if (cfg.fujinet) fujiApply(true);
+#ifdef NEOST_WITH_NET
+    // Modem Hayes (modem= dans neost.cfg) : commandes AT sur l'USART → pont TCP.
+    std::unique_ptr<HayesModem> hayesModem;
+    auto modemApply = [&](bool on) {
+        if (on && !hayesModem) {
+            hayesModem = std::make_unique<HayesModem>(machine.mfp);
+            HayesModem* m = hayesModem.get();
+            machine.mfp.setSerialSink([m](uint8_t b) { m->onTx(b); });
+        } else if (!on && hayesModem) {
+            machine.mfp.setSerialSink({});
+            hayesModem.reset();
+        }
+    };
+    if (cfg.modem) modemApply(true);
+#endif
+    // EtherNEC (ethernec= dans neost.cfg) : NE2000 sur le port cartouche. Backend
+    // par défaut = boucle locale (NetBackendNull une fois un pont SLIRP/pcap
+    // absent) : la carte est DÉTECTÉE par le pilote, sans trafic hôte v1.
+    NetBackendNull etherNull;
+    auto etherApply = [&](bool on) {
+        if (on) {
+            if (!machine.bus.cart.empty()) {
+                g_stateMsg = "EtherNEC needs the cartridge port free";
+                g_stateMsgFrames = 150;
+                cfg.ethernec = false;
+                return;
+            }
+            machine.ne2000.setBackend(&etherNull);
+            machine.enableEtherNec();
+        } else {
+            machine.disableEtherNec();
+        }
+    };
+    if (cfg.ethernec) etherApply(true);
     machine.mfp.setColorMonitor(!cfg.mono);   // moniteur mémorisé (avant le reset)
     machine.fdc.setFastFdc(cfg.fastfdc);      // FDC rapide mémorisé (accès disque ÷10)
     // Socket MC68881 (Mega STE uniquement, cf. Fpu.hpp) : sonde + trapping.
@@ -3529,6 +3739,10 @@ int main(int argc, char** argv) {
             // SANS trou audible (le coussin de l'anneau fait ~85 ms).
             int ran = 0;
             while (clock::now() >= emuNext && ran < 6) {
+#ifdef NEOST_WITH_NET
+                if (hayesModem) hayesModem->poll();   // TCP entrant → file RX du MFP
+#endif
+                if (machine.ne2000.enabled()) machine.ne2000.poll();   // trames RX → anneau
                 machine.runFrame();                          // une trame (timing + décodage)
                 audio.produceFrame(machine.frameCycles());   // son de la trame → anneau (push)
                 emuNext += std::chrono::nanoseconds(
@@ -3587,6 +3801,8 @@ int main(int argc, char** argv) {
         static ConfigUi cfgUi;
         cfgUi.disksDir = disksDir; cfgUi.cartsDir = cartsDir; cfgUi.romsDir = romsDir;
         cfgUi.hdDir    = hdDir;    cfgUi.gemdosDir = gemdosDir;
+        cfgUi.fujiBackendName = fujiHost ? fujiHost->name() : "none";
+        cfgUi.fujiHost = machine.fuji.enabled() ? fujiHost.get() : nullptr;
         // Résolu à la PREMIÈRE trame, donc après le saveConfig de démarrage : c'est lui
         // qui a tranché où vit neost.cfg, et les profils le suivent (cf. profilesDir).
         static const std::string profDirResolved = profilesDir(exeDir);
@@ -3852,6 +4068,62 @@ int main(int argc, char** argv) {
                 machine.fdc.setFastFdc(cfg.fastfdc);
                 saveConfig(exeDir, cfg, &machine);
                 cfgUi.reqFastFdc = -1;
+            }
+            // FujiNet (page Network) : bascule / cible / montage d'URL / slots.
+            if (cfgUi.reqFujinet >= 0) {
+                cfg.fujinet = (cfgUi.reqFujinet == 1);
+                fujiApply(cfg.fujinet);
+                saveConfig(exeDir, cfg, &machine);
+                reqHardReset = true;          // le TOS ne sonde l'ACSI qu'au boot
+                cfgUi.reqFujinet = -1;
+            }
+            if (cfgUi.reqFujinetTarget >= 0) {
+                cfg.fujinetTarget = cfgUi.reqFujinetTarget;
+                if (cfg.fujinet) { fujiApply(true); reqHardReset = true; }
+                saveConfig(exeDir, cfg, &machine);
+                cfgUi.reqFujinetTarget = -1;
+            }
+            if (!cfgUi.reqFujinetMount.empty()) {
+                const std::string url = cfgUi.reqFujinetMount;
+                cfgUi.reqFujinetMount.clear();
+                if (machine.fuji.mountRemote(url)) {
+                    g_stateMsg = "\xef\x87\xab Remote image mounted";
+                    // Une image DISQUE DUR ne sera vue qu'au prochain boot.
+                    const auto dot = url.find_last_of('.');
+                    std::string ext = dot == std::string::npos ? "" : url.substr(dot + 1);
+                    for (char& ch : ext) ch = char(tolower(uint8_t(ch)));
+                    if (ext != "st" && ext != "msa" && ext != "dim" && ext != "stx")
+                        reqHardReset = true;
+                } else {
+                    g_stateMsg = "Download/mount failed (see console)";
+                }
+                g_stateMsgFrames = 120;
+            }
+            if (cfgUi.reqFujinetHostsSet) {
+                cfg.fujinetHosts = cfgUi.reqFujinetHosts;
+                if (cfg.fujinet) fujiApply(true);   // re-sème les slots
+                saveConfig(exeDir, cfg, &machine);
+                cfgUi.reqFujinetHostsSet = false;
+                cfgUi.reqFujinetHosts.clear();
+            }
+            if (cfgUi.reqModem >= 0) {
+                cfg.modem = (cfgUi.reqModem == 1);
+#ifdef NEOST_WITH_NET
+                modemApply(cfg.modem);
+#else
+                g_stateMsg = "This build has no network backend";
+                g_stateMsgFrames = 120;
+                cfg.modem = false;
+#endif
+                saveConfig(exeDir, cfg, &machine);
+                cfgUi.reqModem = -1;
+            }
+            if (cfgUi.reqEther >= 0) {
+                cfg.ethernec = (cfgUi.reqEther == 1);
+                etherApply(cfg.ethernec);        // etherApply peut refuser (cartouche)
+                saveConfig(exeDir, cfg, &machine);
+                reqHardReset = true;             // le pilote sonde la carte au boot
+                cfgUi.reqEther = -1;
             }
             if (cfgUi.driveSound != driveSoundOn) {
                 driveSoundOn = cfgUi.driveSound; drive.setEnabled(driveSoundOn);

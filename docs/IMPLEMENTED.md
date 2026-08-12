@@ -1515,6 +1515,42 @@ atteignent leur menu et passent leur batterie de tests internes (Z) **sans erreu
 les **2 cœurs**, avec un vrai TOS. Restes (« Hard error »/VME/FPU) = périphériques absents,
 fidèles à Hatari, pas des bugs.
 
+## Réseau — extensions NeoST (INACTIVES par défaut, cf. `docs/FUJINET.md`)
+
+Ces fonctionnalités **n'existent pas dans Hatari** (extensions assumées, consignées dans
+`docs/HATARI_DIVERGENCES.md` § Extensions) ; OFF par défaut, **sans effet sur les
+étalons** (réseau jamais ouvert par `run_all.py`). Cœur sans socket : `neost_core`
+*signale*, la lib `neost_net` (frontends) *fait l'I/O* — patron `Fdc::soundSink_`/
+`Mfp::serialSink_`.
+
+- **FujiNet virtuel sur le bus ACSI** (`io/FujiDevice`, cible ACSI dédiée, défaut 6) :
+  périphérique WiFi de **déport de protocole** — la machine envoie
+  `{device, cmd, aux1, aux2, dir, len}` (opcode vendeur ACSI **$60**, 10 octets) et le
+  périphérique fait le travail. Devices `$70` (Fuji : WiFi, host/device slots, montage
+  d'images, horloge) et `$71-$78` (**N1:-N8:** : open/close/read/write/status, JSON
+  parse/query déportés). HTTP(GET)/TCP via `FujiHostLive` (sockets, thread de travail) ;
+  `FujiHostReplay` (fixtures, **déterministe**) ; `FujiHostNull` (hors ligne).
+  Montage d'une **image distante** en lecteur A (bootable sans un octet de pilote ST).
+  Les commandes SCSI standard restent intactes sur la cible ; l'opcode $60 **verrouillé**
+  à la cible FujiNet (toute autre cible = port `hdc.c` byte-identique). Lib 68000 +
+  `NWGET.TOS` dans `dev/fujinet/`. Auto-test fil : `--fuji-selftest` (palier `fast`).
+  Save-state **v10**.
+- **Modem Hayes sur RS-232** (`net/HayesModem`, `--modem`) : commandes `AT` sur l'USART
+  MFP → **pont TCP réel** (`ATDT hôte:port` → `CONNECT`, `+++`/`ATH`, DCD suit la
+  porteuse). Débloque STiK/STinG (SLIP/PPP), terminaux, BBS. S'appuie sur
+  **`Mfp::receiveByte`** — injection RX **cadencée** au débit série (`Scheduler::SERIAL_RX`,
+  IRQ RxFull par octet). Vérifié `MODMTEST.TOS` ↔ serveur TCP local.
+- **EtherNEC — NE2000 sur le port cartouche** (`io/Ne2000`, `--ethernec`) : carte réseau
+  NE2000/DP8390 (pages 0/1, anneau RX, Remote DMA, filtrage MAC) décodée dans la fenêtre
+  cartouche — **lecture** `$FB0000+n*512`, **écriture** = fausse lecture
+  `$FA0000+n*512+d*2`. Fait tourner les pilotes STinG/MiNTnet/MagiCNet **sans modif**.
+  Backend `NetBackend` (boucle locale ; SLIRP/pcap = point d'extension). **Exclusif d'une
+  cartouche** ($FA0000). Auto-test fil : `--enec-selftest` (palier `fast`).
+- **Anneau MIDI réseau** (`net/MidiRing`, `--midi-net H:P[:L]`) : **MIDIMaze en ligne** —
+  MIDI OUT → UDP → pair aval, datagrammes amont → MIDI IN (`MidiAcia::setMidiSink`/
+  `receiveExternal`, tampon de gigue respectant les 2 octets du 6850). Vérifié
+  `MIDITEST.TOS` (OUT 10/10 octets ordre exact ; round-trip complet OUT→réseau→IN→ACIA).
+
 ## Frontend & outillage
 - **Menu kiosk « Joysticks » : affectation des manettes hôte aux ports ST + boutons
   ESPACE/RETURN (2026-07-12)** : nouvelle action du menu in-game (START) — une ligne par

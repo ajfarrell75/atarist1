@@ -1085,3 +1085,20 @@ mid-trame toujours capturée (l'écrêtage sur ce signal synthétique extrême e
 des chasseurs bien ciblés (code frais de la session) plus que des vérificateurs laxistes :
 chaque correctif ci-dessus a été RE-vérifié à la main contre les sources Hatari avant d'être
 appliqué.
+
+## Extensions NeoST sans équivalent Hatari (divergences délibérées, hors fidélité)
+
+Ces fonctionnalités **n'existent pas dans Hatari** et ne sont donc pas des écarts à
+corriger : ce sont des extensions NeoST, **inactives par défaut** et **sans effet sur
+les étalons de fidélité** (réseau OFF pendant `run_all.py --tier fast/full`).
+
+- **[EXTENSION] FujiNet virtuel sur le bus ACSI** (`src/io/FujiDevice.*`,
+  `src/net/*`, cible ACSI dédiée). Périphérique WiFi de déport de protocole (HTTP/TCP/
+  JSON, montage d'images distantes) attaché via un **opcode vendeur ACSI `$60`**. La
+  méthode imposée (« porter Hatari d'abord ») s'applique seulement aux **formes** :
+  `rs232.c` (redirection série hôte), `midi.c` (I/O MIDI hôte), `hdc.c` (déjà porté
+  dans `Acsi`). Le protocole FujiNet lui-même vient du firmware amont
+  ([fujinet-firmware](https://github.com/FujiNetWIFI/fujinet-firmware/wiki)) — pas
+  d'Hatari. Spec complète : `docs/FUJINET.md`. Garde-fou : l'opcode `$60` n'est routé
+  que sur la cible FujiNet ; toute autre cible ACSI reste **byte-identique** au port
+  de `hdc.c`. Auto-test déterministe : `neost-headless --fuji-selftest` (palier `fast`).
