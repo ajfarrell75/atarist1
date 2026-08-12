@@ -116,6 +116,9 @@ void DmaSound::fifoRefill() {
             } else {
                 ctrl_   &= ~0x01;                      // one-shot : le HW auto-efface PLAY
                 playing_ = false;
+                recordEvent(1);                        // STOP daté, comme l'arrêt CPU — sinon
+                                                       // le rendu push garde aPlaying_ vrai et
+                                                       // tient la sortie DMA (YM muet) à jamais
                 break;
             }
         }
@@ -531,11 +534,14 @@ void DmaSound::write8(uint32_t addr, uint8_t v) {
             }
             break;
         }
-        // Adresses 24 bits (paires forcées : bit0 de l'octet bas ignoré).
-        case 0x03: startAddr_ = (startAddr_ & 0x00FFFF) | (uint32_t(v) << 16); break;
+        // Adresses 24 bits (paires forcées : bit0 de l'octet bas ignoré). Octet
+        // haut masqué à $3F : sur ST/STE ≤ 4 Mo le compteur DMA n'a que 22 bits
+        // (Hatari DMA_MaskAddressHigh, m68000.c) — le pointeur son ne sort
+        // jamais de l'espace RAM, comme sur le vrai matériel.
+        case 0x03: startAddr_ = (startAddr_ & 0x00FFFF) | (uint32_t(v & 0x3F) << 16); break;
         case 0x05: startAddr_ = (startAddr_ & 0xFF00FF) | (uint32_t(v) << 8);  break;
         case 0x07: startAddr_ = (startAddr_ & 0xFFFF00) | (uint32_t(v) & 0xFE); break;
-        case 0x0F: endAddr_   = (endAddr_   & 0x00FFFF) | (uint32_t(v) << 16); break;
+        case 0x0F: endAddr_   = (endAddr_   & 0x00FFFF) | (uint32_t(v & 0x3F) << 16); break;
         case 0x11: endAddr_   = (endAddr_   & 0xFF00FF) | (uint32_t(v) << 8);  break;
         case 0x13: endAddr_   = (endAddr_   & 0xFFFF00) | (uint32_t(v) & 0xFE); break;
         // $FF8920 : octet scratch relisible (cf. read8 — Hatari ne l'intercepte pas).

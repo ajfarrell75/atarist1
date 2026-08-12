@@ -681,6 +681,12 @@ bool Bus::megaSteCacheUpdate(uint32_t addr, int size, uint16_t val, bool write, 
 uint8_t Bus::dmaRead8(uint32_t addr) {
     addr &= stmap::ADDR_MASK;
     if (busFault(addr)) return 0x00;         // DMA_READ_BYTE_BUS_ERR
+    // Jamais de dispatch MMIO : certains registres whitelistés (pads STE
+    // $FF9200, FDC $FF8604-07) déclenchent une bus error périphérique en accès
+    // octet — levée ici hors du try/catch de Moira, elle terminerait le
+    // processus. Chez Hatari le pointeur DMA masqué n'atteint jamais l'espace
+    // IO ; on lit 0 comme pour une zone fautive (et sans effet de bord puce).
+    if (addr >= stmap::MMIO_BASE) return 0x00;
     return read8(addr);
 }
 
@@ -693,6 +699,7 @@ void Bus::dmaWrite8(uint32_t addr, uint8_t v) {
     // l'idiome de reboot à chaud « move.l $4.w,a0 ; jmp (a0) ». Chez Hatari l'écriture
     // est simplement perdue (cpu/memory.c:775, SysMem_bput : « if (addr < 0x8) »).
     if (addr < 0x8 || busFault(addr)) return;   // écriture en zone protégée/fautive perdue
+    if (addr >= stmap::MMIO_BASE) return;       // pas de dispatch MMIO (cf. dmaRead8)
     write8(addr, v);
 }
 
