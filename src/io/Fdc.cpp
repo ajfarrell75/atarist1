@@ -2516,7 +2516,11 @@ void Fdc::write8(uint32_t addr, uint8_t v) {
 
 // Réception d'un octet de commande ACSI (port de Acsi_WriteCommandByte).
 void Fdc::writeAcsi(uint32_t /*addr*/, uint8_t v) {
-    setIntrqLine(false);                   // efface l'IRQ HDC (réarmée si l'octet est accepté)
+    // Port de FDC_ClearHdcIRQ (fdc.c) : n'efface QUE la source HDC — la ligne
+    // INTRQ est partagée avec le FDC, la rabaisser inconditionnellement perdrait
+    // une IRQ disquette encore pendante (elle est réarmée si l'octet est accepté).
+    irqSignal_ &= ~IRQ_HDC;
+    if (irqSignal_ == 0) setIntrqLine(false);
     // La broche A1 de l'ACSI est câblée sur le bit de contrôle DMA_A0 (0x02) : 0 pour le
     // 1er octet du paquet (sélection cible + opcode), 1 pour les octets suivants. On
     // ignore A1 pour le 2e octet (byteCount==1), comme le vrai matériel (pilotes bogués).
@@ -2539,7 +2543,7 @@ void Fdc::writeAcsi(uint32_t /*addr*/, uint8_t v) {
         // acsiDmaTransfer) rapportait « erreur » au bit0 de $FF8606 après chaque
         // octet de commande accepté, y compris juste APRÈS un transfert réussi.
         dmaError_ = acsi_.dmaError();
-        setIntrqLine(true);
+        fdcSetIrq(IRQ_HDC);                // FDC_SetIRQ(FDC_IRQ_SOURCE_HDC) : source datée
     }
 }
 
@@ -2570,5 +2574,5 @@ void Fdc::acsiDmaTransfer() {
     // dmaError_ (« erreur ») = l'erreur ACSI telle quelle. L'ancien `!` inversé
     // rapportait une erreur DMA après chaque transfert RÉUSSI.
     dmaError_ = acsi_.dmaError() || !rangeOk;
-    setIntrqLine(true);                  // IRQ HDC de fin de transfert
+    fdcSetIrq(IRQ_HDC);                  // IRQ HDC de fin de transfert (FDC_SetIRQ)
 }

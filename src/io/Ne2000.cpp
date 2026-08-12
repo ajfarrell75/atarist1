@@ -22,7 +22,7 @@ namespace {
 constexpr uint8_t CR_STP = 0x01, CR_STA = 0x02, CR_TXP = 0x04;
 constexpr uint8_t CR_RD0 = 0x08, CR_RD1 = 0x10, CR_RD2 = 0x20;  // Remote DMA cmd
 // Interrupt Status/Mask (ISR/IMR)
-constexpr uint8_t ISR_PRX = 0x01, ISR_PTX = 0x02, ISR_RDC = 0x40;
+constexpr uint8_t ISR_PRX = 0x01, ISR_PTX = 0x02, ISR_OVW = 0x10, ISR_RDC = 0x40;
 // Receive Status (posé dans l'en-tête de paquet de l'anneau)
 constexpr uint8_t RSR_PRX = 0x01;
 } // namespace
@@ -206,12 +206,23 @@ void Ne2000::deliverFrame(const uint8_t* f, int len) {
     const int total = len + 4;
     const int pages = (total + 255) / 256;
 
-    // Place d'écriture : page CURR. Vérifie qu'on ne rattrape pas BNRY (overflow).
+    // Place d'écriture : page CURR. Vérifie que la trame ne rattrape NI ne
+    // franchit BNRY : le DP8390 compare à chaque frontière de page pendant la
+    // réception — un test d'égalité seul laissait une trame multi-pages
+    // enjamber BNRY et écraser des paquets non lus. Distance libre en ordre
+    // d'anneau (CURR == BNRY = anneau vide, comme ne2000.c de QEMU).
     int start = curr_;
-    int next  = start + pages;
+    const int ringPages = pstop_ - pstart_;
+    if (ringPages <= 0) return;
+    int freePages = (bnry_ - start + ringPages) % ringPages;
+    if (freePages == 0) freePages = ringPages;
+    if (pages >= freePages) {                            // toucherait/franchirait BNRY
+        trace("rx-overflow", unsigned(start), unsigned(bnry_));
+        setIsr(ISR_OVW);                                 // Overwrite Warning : le pilote est prévenu
+        return;
+    }
+    int next = start + pages;
     if (next >= pstop_) next = pstart_ + (next - pstop_);
-    // Overflow (rattrape la page lue) : on jette la trame (comme le HW en satu).
-    if (next == bnry_) { trace("rx-overflow", start, bnry_); return; }
 
     uint8_t hdr[4] = { RSR_PRX, uint8_t(next),
                        uint8_t(total & 0xFF), uint8_t((total >> 8) & 0xFF) };
