@@ -104,6 +104,54 @@ par `packaging/stage_free_data.sh` (EmuTOS, `tos102uk`/`tos162uk` des profils 52
 autre ROM. ⚠ `tos102uk`/`tos162uk` sont des **ROM Atari sous copyright** : leur
 redistribution est un choix assumé du projet, pas une donnée libre.
 
+## Closure (Sync) boote : datation des écritures freq/res par parité d'accès (2026-08-12)
+
+La démo **Closure** de Sync (`disks/etalons/closure.msa`, ST 1 Mo + TOS 1.02 UK)
+crashait au boot (opcode illégal `$19C0` auto-généré) là où Hatari l'exécute. Un
+travail d'oracle en cinq cycles (dossier complet :
+[`docs/CLOSURE_CHANTIER.md`](docs/CLOSURE_CHANTIER.md)) a remonté la chaîne causale
+au cycle près : la démo classe le *wakestate* de la machine en mesurant le compteur
+vidéo à travers des bascules 60/50 Hz beam-racées, et NeoST datait l'écriture du
+retour 50 Hz de la ligne 64 à 56 (> `Line_Set_Pal` 55, Freq_match refusé) là où
+Hatari mesure 54 — ligne restée à 508 cycles, grille −4, right-off de la ligne 65
+manqué, 44 octets perdus, delta `$A2` au lieu de `$CE`, verdict 0, file d'épreuves
+corrompue, crash.
+
+**Le correctif** (`Shifter::recordSyncWrite`) : la datation `fcRaw + 2` constante
+devient une datation par **parité de la position de l'accès dans l'instruction** —
+`+2` quand `cyclesIntoInstr() ≡ 2 (mod 4)` (la classe historique `move Dn,(An)`/abs,
+tout le parc calibré inchangé), `+0` quand `≡ 0` (la classe `move An,(An)` du
+classificateur de Closure, que Moira place 2 cycles après WinUAE). C'est la
+transposition de la loi Hatari CE (`Cycles_GetInternalCycleOnWriteAccess` :
+position de l'accès + 4). ⚠ Un premier essai « début d'instruction + 4 » uniforme
+cassait nocooper de 19 361 px (les `move` vers abs.w exigent start+8) — la parité
+réconcilie tout. `NEOST_SYNC_MODE=0` restaure l'ancienne datation pour l'A/B.
+Validation : `--tier full` 39/39 vert (nocooper oracle et les 3 diapos spec512
+compris), menu Cuddly trame 3400 pixel-identique, A/B pixel-identique sur
+Enchanted Land, Super Hang-On et Lethal Xcess (2600 trames chacun).
+
+S'ajoutent, issus de la même enquête (fidélité Hatari, étalons verts à chaque pas) :
+
+- **Timer B positionné par ligne réelle** (`Machine::onTimerB`,
+  `Shifter::timerBPosForLine`/`timerBFrameCycleForLine`) : la position du tir suit
+  le DE réel de la ligne (Glue live, `(DE_start|DE_end) + 24` comme
+  `Video_TimerB_GetPosFromDE`) au lieu d'une position fixe ; re-check du callback
+  sur l'ÉCHÉANCE planifiée (`tbScheduledAt_`, robuste au service quantifié par
+  STOP). Mesuré : 580/763 tirs à la cible Glue sur le balayage per-line de Closure.
+- **MFP fidèle au reset** (`Mfp.cpp`) : GPIP initialisé à `0x00` (Hatari
+  `mfp.c:523`) et bits 6 (RI) / 3 (GPU idle) au repos BAS dans `gpipInput()` —
+  la table d'identité machine de Closure (`$2E22F`) converge à l'octet près.
+- **Diags d'enquête** (zéro coût hors env) : `NEOST_COL_DIAG` (datation des
+  écritures palette, appariable au `--trace video_color` d'Hatari),
+  `NEOST_NO_SNAP` (neutralise la capture par-ligne), `[GLUP]`/`[VC]`/`[render]`
+  enrichis, `NEOST_WRITE_DIAG`/`NEOST_TB_TRACE`.
+
+Reste ouvert (consigné au dossier § Cycle 5) : le logo animé de l'effet 2 est
+haché chez NeoST (interférence bitmap×palette : le remplisseur de listes de
+couleurs de la démo publie sa vague plus tard dans la trame que chez Hatari —
+chantier d'ordonnancement CPU intra-trame, suspects Timer B fallback / latences
+IRQ / e-clock, toutes les mesures archivées).
+
 ## CI verte : bundle web reconstruit, et une empreinte qui ne dépend plus de la machine (2026-08-10)
 
 Le job `wasm` de `release.yml` bloquait la 0.5.1 : sa garde de fraîcheur refusait le

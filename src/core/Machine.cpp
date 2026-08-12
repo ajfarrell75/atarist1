@@ -336,7 +336,8 @@ void Machine::scheduleFrameEvents() {
     // Timer B : événement à CHAQUE scanline (comme le HBL) ; le tic n'est compté que
     // si la ligne est réellement AFFICHÉE d'après la machine Glue LIVE (cf. onTimerB) —
     // un retrait de bordure haut/bas en cours de trame déplace les tics, comme Hatari.
-    sched.schedule(Scheduler::TIMER_B, frameStart_ + timerBPos());
+    tbScheduledAt_ = frameStart_ + timerBPos();
+    sched.schedule(Scheduler::TIMER_B, tbScheduledAt_);
     // Position de l'IRQ HBL dans la ligne : Hatari HBL_VIDEO_CYCLE_OFFSET = 0 →
     // l'interruption tombe à la FRONTIÈRE de ligne (cycle 512 = 0 de la suivante).
     // L'ancien −4 était une calibration d'avant la refonte IACK (2026-07-02) ;
@@ -388,19 +389,63 @@ void Machine::onRender() {
 }
 
 void Machine::onTimerB() {
+    // DIAG (NEOST_TB_TRACE=1) : chaque tic Timer B avec sa ligne, sa position DANS
+    // la ligne et s'il a réellement pulsé (ligne affichée) — à diff'er contre les
+    // « EndLine TB » de Hatari --trace video_hbl (chantier Closure : la démo
+    // chronomètre les événements TB, cf. docs/CLOSURE_CHANTIER.md).
     // Timer B en event-count : décompte une fois par ligne AFFICHÉE (sur DE). La
     // fenêtre verticale est LIVE (machine Glue) : un retrait de bordure haut (60 Hz
     // vers la ligne 33 → VDE_On 34) ou bas en COURS de trame ajoute ses tics, comme
     // Hatari (Video_AddInterruptTimerB par ligne) — Enchanted Land VÉRIFIE l'effet
     // de ses impulsions en comptant les événements DE. tbLine_ = scanline ABSOLUE.
+    // Position CIBLE au moment du callback : le DE de la ligne a pu être élargi par
+    // une écriture POSTÉRIEURE à la planification (retrait de bordure droite : 60 Hz
+    // à ~cyc 374 → DE_end 462 → tic à ~488). Hatari REPROGRAMME l'IRQ TB à chaque
+    // écriture qui change le DE (Video_AddInterruptTimerB, video.c:2880-2891) ; ici
+    // on re-vérifie à l'arrivée : cible plus loin → on se replanifie SANS tirer.
+    // (Un DE raccourci après coup laisse le tic à l'ancienne position — même
+    // approximation que la reprogrammation tardive d'Hatari quand le tic est passé.)
+    {
+        const int64_t real = shifter.timerBFrameCycleForLine(tbLine_, mfp.timerBStartOfLine());
+        const int64_t target = (real >= 0)
+            ? frameStart_ + real
+            : frameStart_ + static_cast<int64_t>(tbLine_) * cpl_ + timerBPosLine(tbLine_) - lineCarry_;
+        // Comparer à l'ÉCHÉANCE PLANIFIÉE, pas à l'heure de service : pendant un
+        // STOP (la mesure de Closure vit sous stop #$2100), le réveil est
+        // quantifié et le callback peut être servi des dizaines de cycles APRÈS
+        // son échéance — « now ≥ target » concluait alors à tort que la cible
+        // était passée, et le tic partait à la position par défaut (400) alors
+        // que la Glue affichait 487 (mesuré : 310 tics sur 1344 chez Closure).
+        if (tbScheduledAt_ < target) {
+            tbScheduledAt_ = target;
+            sched.schedule(Scheduler::TIMER_B, target);
+            return;
+        }
+    }
+    static const bool tbTrace = std::getenv("NEOST_TB_TRACE") != nullptr;
+    if (tbTrace) {
+        const int64_t pos = sched.now() - frameStart_
+                          - static_cast<int64_t>(tbLine_) * cpl_ + lineCarry_;
+        // posLine = ce que voit la Glue MAINTENANT (déclenche le catch-up) ; le
+        // delta pos↔posLine au tir révèle les tics partis avant leur re-cible.
+        const int pl = timerBPosLine(tbLine_);
+        std::fprintf(stderr, "[TB] line=%d pos=%lld posLine=%d fired=%d\n",
+                     tbLine_, (long long)pos, pl, shifter.liveLineDisplayed(tbLine_) ? 1 : 0);
+    }
     if (shifter.liveLineDisplayed(tbLine_)) {
         mfp.hblank();
         cpu.updateIpl();                           // un underflow Timer B → IPL 6
     }
     ++tbLine_;
-    if (tbLine_ < lpf_)
-        sched.schedule(Scheduler::TIMER_B,                         // position recalculée → suit
-                       frameStart_ + static_cast<int64_t>(tbLine_) * cpl_ + timerBPos() - lineCarry_);
+    if (tbLine_ < lpf_) {
+        // Grille RÉELLE si disponible (cf. timerBFrameCycleForLine) ; sinon nominale.
+        // La position sera de toute façon RE-VÉRIFIÉE au callback (bloc ci-dessus).
+        const int64_t real = shifter.timerBFrameCycleForLine(tbLine_, mfp.timerBStartOfLine());
+        tbScheduledAt_ = (real >= 0)
+            ? frameStart_ + real
+            : frameStart_ + static_cast<int64_t>(tbLine_) * cpl_ + timerBPosLine(tbLine_) - lineCarry_;
+        sched.schedule(Scheduler::TIMER_B, tbScheduledAt_);
+    }
 }
 
 void Machine::onHbl() {

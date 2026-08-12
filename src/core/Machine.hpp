@@ -219,6 +219,10 @@ private:
     // Display-Enable (résolution + 50/60 Hz du Shifter, front début/fin via l'AER du
     // MFP) — cf. Shifter::timerBLinePos / Hatari Video_TimerB_GetDefaultPos.
     int timerBPos() const { return shifter.timerBLinePos(mfp.timerBStartOfLine()); }
+    // Position PAR LIGNE (DE réel de la machine Glue — tricks compris), pour le
+    // Timer B event-count : cf. Shifter::timerBPosForLine et Machine::onTimerB.
+    int timerBPosLine(int line) { return shifter.timerBPosForLine(line, mfp.timerBStartOfLine()); }
+    int64_t tbScheduledAt_ = 0;   // échéance PLANIFIÉE du tic Timer B courant (cf. onTimerB)
 
     MachineType machineType_ = MachineType::Ste;   // profil matériel (figé au boot)
 

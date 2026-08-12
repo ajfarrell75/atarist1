@@ -28,7 +28,14 @@ namespace { const int g_mfpExact = []{ const char* s = std::getenv("NEOST_MFP_EX
 // AVANT le reset) et les lignes d'ENTRÉE des autres puces (FDC/ACIA/RS232), reforcées
 // à la lecture du GPIP et resynchronisées par leurs puces respectives.
 void Mfp::resetChip() {
-    gpip = 0xFF; aer = 0; ddr = 0;        // GPIP au repos (entrées non assertées), AER/DDR neutres
+    // GPIP au reset : **0x00, comme Hatari** (mfp.c:523 `pMFP->GPIP = 0`) — les
+    // lignes démarrent BASSES et ce sont les périphériques qui les assertent
+    // (moniteur bit7, FDC bit5, ACIA bit4 : forcés en lecture par readGpip).
+    // L'ancien 0xFF (« entrées non assertées = 1 ») rendait bits 6 (RI) et 3 à 1 :
+    // l'inventaire matériel de CLOSURE (Sync) lit $FA01 dans sa table d'identité
+    // ($2E22F) et la machine générée divergeait de l'oracle dès cet octet
+    // (NeoST $F9 vs Hatari $B1, cf. docs/CLOSURE_CHANTIER.md).
+    gpip = 0x00; aer = 0; ddr = 0;
     iera = ierb = 0;                      // enable
     ipra = iprb = 0;                      // pending
     imra = imrb = 0;                      // mask
@@ -97,10 +104,24 @@ uint8_t Mfp::read8(uint32_t addr) {
         case 0x11: return isrb;
         case 0x13: return imra;
         case 0x15: return imrb;
+        // (diag lectures TBDR : cf. case 0x21 ci-dessous)
         case 0x17: return vr;
         case 0x1B: return tbcr_;     // Timer B control
-        case 0x1F: return readTimerData(0);  // TADR : compteur VIVANT de Timer A
-        case 0x21: return readTimerData(1);  // TBDR : compteur VIVANT de Timer B
+        case 0x1F: {                          // TADR : compteur VIVANT de Timer A
+            const uint8_t r = readTimerData(0);
+            // DIAG (NEOST_MFPRD_DIAG=1) : lectures TADR/TBDR datées — à diff'er
+            // contre Hatari --trace mfp_read (chantier Closure : la démo mesure
+            // par les compteurs de timers, cf. docs/CLOSURE_CHANTIER.md).
+            static const bool d = std::getenv("NEOST_MFPRD_DIAG") != nullptr;
+            if (d) std::fprintf(stderr, "[MFPRD] TADR=%02X\n", r);
+            return r;
+        }
+        case 0x21: {                          // TBDR : compteur VIVANT de Timer B
+            const uint8_t r = readTimerData(1);
+            static const bool d = std::getenv("NEOST_MFPRD_DIAG") != nullptr;
+            if (d) std::fprintf(stderr, "[MFPRD] TBDR=%02X\n", r);
+            return r;
+        }
         case 0x23: return readTimerData(2);  // TCDR : compteur VIVANT de Timer C
         case 0x25: return readTimerData(3);  // TDDR : compteur VIVANT de Timer D
         case 0x2B: {                 // RSR : bit7 = Buffer Full ; bit6 = Overrun Error
@@ -568,7 +589,15 @@ bool Mfp::mfpSelfTest() {
 }
 
 uint8_t Mfp::gpipInput() const {
-    uint8_t v = 0xFF;                            // bits au repos (haut)
+    // Repos des lignes : bits 6 (RS232 RI) et 3 (blitter GPU_DONE) au repos BAS —
+    // comme Hatari, dont MFP_GPIP_ReadByte_Main recalcule 7/4/2/1/0 mais ne pose
+    // JAMAIS 6 ni 3 : ils restent au registre, à 0 depuis le reset (mfp.c:523).
+    // L'ancien repos « haut » rendait $F9 là où l'oracle rend $B1 — l'inventaire
+    // matériel de CLOSURE (Sync) stocke cet octet dans sa table d'identité et
+    // toute sa génération de code divergeait ensuite (docs/CLOSURE_CHANTIER.md).
+    // Les FRONTS d'IRQ des lignes (loopback RI, blitter) restent portés par les
+    // transitions via gpipSetLine/gpipUpdateInterrupt — seule la valeur LUE change.
+    uint8_t v = 0xFF & ~0x48;                    // bits au repos (haut, sauf 6 et 3)
     bool bit7 = colorMonitor_;                   // moniteur : couleur=1, mono=0
     if (hasDmaSound_) bit7 ^= xsint_;            // STE/Mega STE : XOR ligne XSINT son DMA
     if (!bit7)          v &= ~0x80;              // bit7 = moniteur^XSINT
