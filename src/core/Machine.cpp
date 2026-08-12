@@ -303,6 +303,9 @@ void Machine::installSchedulerCallbacks() {
     // Idem pour l'ACIA MIDI (~1 octet à 31250 bauds = 2560 cycles) : cadence l'IRQ
     // d'émission des séquenceurs MIDI (cf. MidiAcia::onTxEmpty).
     sched.setCallback(Scheduler::MIDI_TX, [this] { midi.onTxEmpty(); cpu.updateIpl(); });
+    // Livraison cadencée d'un octet RX à l'USART MFP (injection hôte : modem
+    // Hayes, FujiNet RS-232) : RxFull (canal 12) par octet, au débit configuré.
+    sched.setCallback(Scheduler::SERIAL_RX, [this] { mfp.onSerialRxEvent(); cpu.updateIpl(); });
     // Étape de shift série Microwire ($FF8922 → 0) du son STE.
     sched.setCallback(Scheduler::MICROWIRE, [this] { dmasnd.onMicrowireShift(); });
     // Tranche non-hog du blitter (64 accès bus / 64 accès CPU) : la fin de blit
@@ -646,11 +649,12 @@ static uint32_t cartFingerprint(const std::vector<uint8_t>& cart) {
 static uint32_t stateCrc32(const uint8_t* p, std::size_t n);   // défini plus bas
 void Machine::serializeState(StateArchive& ar) {
     uint32_t magic   = 0x4E535453u;   // 'NSTS'
-    uint16_t version = 9;             // v9 : + lineScrollSnap_ (scroll fin STE par ligne,
-                                      // renderGlueFrame per-line) ; v8 : empreinte cartouche
-                                      // INSENSIBLE aux octets mutés par le HD GEMDOS + CTS/DCD
-                                      // actives au repos ; v7 : + empreinte GEMDOS/cartouche et
-                                      // cart sérialisée ; v6 : + commitAnchor_
+    uint16_t version = 10;            // v10 : + FujiDevice + Acsi::fujiPending_ + flag bit1
+                                      // FujiNet ; v9 : + lineScrollSnap_ (scroll fin STE par
+                                      // ligne, renderGlueFrame per-line) ; v8 : empreinte
+                                      // cartouche INSENSIBLE aux octets mutés par le HD GEMDOS
+                                      // + CTS/DCD actives au repos ; v7 : + empreinte GEMDOS/
+                                      // cartouche et cart sérialisée ; v6 : + commitAnchor_
     ar(magic); ar(version);
     // Empreinte de configuration : un état n'est rechargeable QUE dans la même
     // config (loadState la vérifie AVANT de restaurer — sinon machine hybride :
@@ -669,7 +673,13 @@ void Machine::serializeState(StateArchive& ar) {
     //    dans le décor. Tant que ce composant n'est pas sérialisable, on REFUSE.
     //  · empreinte de la cartouche : le port $FA0000 n'est peuplé que si une cartouche
     //    est montée, et la RAM restaurée peut y pointer.
-    uint8_t flags = uint8_t(gemdos.active() ? 1u : 0u);
+    //  · bit1 = FujiNet attaché (v10). L'état du protocole EST sérialisé (FujiDevice),
+    //    mais les canaux réseau du backend ne survivent pas — recharger entre une
+    //    session avec et une session sans laisserait la cible ACSI muette/bavarde.
+    //  · bit2 = EtherNEC attaché (v10). Idem : le pointeur bus.ne2000 est réétabli
+    //    par enableEtherNec avant un load, pas par la sérialisation.
+    uint8_t flags = uint8_t((gemdos.active() ? 1u : 0u) | (fuji.enabled() ? 2u : 0u)
+                            | (ne2000.enabled() ? 4u : 0u));
     uint32_t cartFp = cartFingerprint(bus.cart);
     ar(flags); ar(cartFp);
     // CRC32 du payload (tout ce qui suit ce champ) : écrit par saveState (patch à
@@ -736,7 +746,9 @@ void Machine::serializeState(StateArchive& ar) {
     midi.serialize(ar);     mapAt("rtc",     ar.saveSize());
     rtc.serialize(ar);      mapAt("fdc",     ar.saveSize());
     fdc.serialize(ar);      mapAt("scc",     ar.saveSize());   // inclut l'ACSI
-    scc.serialize(ar);      mapAt("fin",     ar.saveSize());   // SCC Z85C30 (Mega STE)
+    scc.serialize(ar);      mapAt("fuji",    ar.saveSize());   // SCC Z85C30 (Mega STE)
+    fuji.serialize(ar);     mapAt("ne2000",  ar.saveSize());   // FujiNet virtuel (v10)
+    ne2000.serialize(ar);   mapAt("fin",     ar.saveSize());   // NE2000/EtherNEC (v10)
 }
 
 // En-tête d'un .state v7 : magic(4) version(2) machine(1) ram(4) tos(2) flags(1)
@@ -776,9 +788,9 @@ bool Machine::loadState(const uint8_t* data, std::size_t n) {
     uint32_t magic;   std::memcpy(&magic, data, 4);
     uint16_t version; std::memcpy(&version, data + 4, 2);
     if (magic != 0x4E535453u) return false;
-    if (version != 9) {
+    if (version != 10) {
         std::fprintf(stderr, "[state] rejected: unsupported format v%u (this build of "
-                     "NeoST writes v9) — re-save the state with F5\n", version);
+                     "NeoST writes v10) — re-save the state with F5\n", version);
         return false;
     }
     uint8_t  mt    = data[6];
@@ -794,12 +806,15 @@ bool Machine::loadState(const uint8_t* data, std::size_t n) {
     }
     const uint8_t  flags  = data[13];
     uint32_t cartFp; std::memcpy(&cartFp, data + 14, 4);
-    const uint8_t  curFlags  = uint8_t(gemdos.active() ? 1u : 0u);
+    const uint8_t  curFlags  = uint8_t((gemdos.active() ? 1u : 0u) | (fuji.enabled() ? 2u : 0u)
+                                       | (ne2000.enabled() ? 4u : 0u));
     const uint32_t curCartFp = cartFingerprint(bus.cart);
     if (flags != curFlags) {
-        std::fprintf(stderr, "[state] rejected: GEMDOS HD was %s when saved and is %s "
-                     "now (the HD state is not serializable)\n",
-                     (flags & 1) ? "active" : "inactive", curFlags ? "active" : "inactive");
+        std::fprintf(stderr, "[state] rejected: peripheral config mismatch — GEMDOS HD "
+                     "%s->%s, FujiNet %s->%s, EtherNEC %s->%s (these must match the save)\n",
+                     (flags & 1) ? "active" : "inactive", (curFlags & 1) ? "active" : "inactive",
+                     (flags & 2) ? "active" : "inactive", (curFlags & 2) ? "active" : "inactive",
+                     (flags & 4) ? "active" : "inactive", (curFlags & 4) ? "active" : "inactive");
         return false;
     }
     if (cartFp != curCartFp) {

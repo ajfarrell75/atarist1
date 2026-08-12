@@ -24,6 +24,8 @@
 
 #include "core/StateArchive.hpp"
 
+class FujiDevice;
+
 class Acsi {
 public:
     static constexpr int MAX_DEVS = 8;
@@ -34,6 +36,15 @@ public:
     // si possible, sinon lecture seule. Taille = multiple de 512. Renvoie true si OK.
     bool mount(int target, const std::string& path);
     void unmountAll();
+
+    // --- FujiNet (extension NeoST, cf. docs/FUJINET.md) ----------------------
+    // Attache le périphérique FujiNet virtuel sur `target` : la cible devient
+    // peuplée (IRQ ACSI au boot) et accepte l'opcode vendeur $60 en plus des
+    // commandes SCSI standard (une image montée sur la MÊME cible reste
+    // bootable). Le comportement des autres cibles est STRICTEMENT inchangé.
+    void attachFujiNet(int target, FujiDevice* dev);
+    void detachFujiNet();
+    int  fujiTarget() const { return fujiTarget_; }
 
     // Reset complet (statut + paquet) — hors toggle DMA, cf. resetCommand.
     void reset();
@@ -87,6 +98,7 @@ public:
             ar.vec(live);
         }
         ar(dataLen_); ar(dmaWrite_);
+        ar(fujiPending_);   // v10 : commande FujiNet dir=2 en attente de payload DMA
         // Invariants : byteCount_ indexe command_[16], dataLen_ borne la lecture de
         // buf_ par le DMA, target_ indexe devs_ — des valeurs restaurées hors bornes
         // (négatives comprises) liraient/écriraient hors du tas.
@@ -122,6 +134,12 @@ private:
     std::vector<uint8_t> buf_;          // tampon de réponse (disque→RAM)
     int      dataLen_  = 0;
     bool     dmaWrite_ = false;         // commande d'écriture en attente de données RAM
+
+    // FujiNet (cf. attachFujiNet) : périphérique virtuel + cible qui le porte.
+    FujiDevice* fuji_ = nullptr;
+    int  fujiTarget_  = -1;
+    bool fujiPending_ = false;          // CDB $60 dir=2 en attente du payload DMA
+    void executeFuji();
 
     // Helpers (port des HDC_*).
     unsigned lun() const  { return (command_[1] & 0xE0) >> 5; }

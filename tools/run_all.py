@@ -25,9 +25,9 @@ HEADLESS = ROOT / "build" / "neost-headless"
 
 # Étapes par palier : (label, [argv]). Exécutées dans l'ordre ; tout code ≠ 0 = échec.
 FAST = [
-    ("P0 auto-tests logique (glue + spec512 + bus + mfp + msa)",
+    ("P0 auto-tests logique (glue + spec512 + bus + mfp + msa + fuji + enec)",
      [sys.executable, str(TOOLS / "run_etalons.py"), "--only",
-      "glue_selftest,spec512_selftest,bus_selftest,mfp_selftest,msa_selftest"]),
+      "glue_selftest,spec512_selftest,bus_selftest,mfp_selftest,msa_selftest,fuji_selftest,enec_selftest"]),
     ("P1 verdicts série (cartouche diagnostic)",
      [sys.executable, str(TOOLS / "run_selftests.py")]),
     ("Cycle-bench (auto-régression du modèle de cycle 68000)",

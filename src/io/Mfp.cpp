@@ -78,7 +78,50 @@ void Mfp::reset() {
         sched_->cancel(Scheduler::TIMER_C);
         sched_->cancel(Scheduler::TIMER_D);
         sched_->cancel(Scheduler::MFP_IRQ);
+        sched_->cancel(Scheduler::SERIAL_RX);
     }
+    hostRx_.clear();
+    serialRxArmed_ = false;
+}
+
+// -----------------------------------------------------------------------------
+//  Injection RX série côté hôte (modem Hayes, FujiNet RS-232…). Les octets sont
+//  mis en file puis livrés UN PAR UN au débit série configuré (~10 bits/octet),
+//  avec IRQ RxFull à chaque livraison — un pilote d'époque qui compte sur le
+//  rythme du fil (STiK/STinG en SLIP) ne perd ainsi aucun octet. La file est
+//  bornée : l'appelant re-pompe quand hostRxPending() redescend.
+// -----------------------------------------------------------------------------
+void Mfp::receiveByte(uint8_t b) {
+    if (hostRx_.size() >= kHostRxMax) return;    // pleine : l'octet attend côté hôte
+    hostRx_.push_back(b);
+    scheduleSerialRx();
+}
+
+void Mfp::scheduleSerialRx() {
+    if (!sched_ || serialRxArmed_ || hostRx_.empty()) return;
+    // 10 périodes bit (start + 8 données + stop) au débit courant. USART jamais
+    // configurée → 9600 bauds (défaut TOS). Plancher anti-débit absurde.
+    const int baud = serialBaud_ > 0 ? serialBaud_ : 9600;
+    int64_t cyc = int64_t(8021248) * 10 / baud;
+    if (cyc < 640) cyc = 640;
+    sched_->schedule(Scheduler::SERIAL_RX, sched_->liveNow() + cyc);
+    serialRxArmed_ = true;
+}
+
+void Mfp::onSerialRxEvent() {
+    serialRxArmed_ = false;
+    if (hostRx_.empty()) return;
+    const uint8_t b = hostRx_.front();
+    hostRx_.pop_front();
+    // Récepteur coupé (RSR bit0 = Receiver Enable) : l'octet se perd, comme sur
+    // le fil — même porte que le bouclage (cf. write8 case 0x2F).
+    if (timer_[0x2B] & 0x01) {
+        if (rxFull_) { rxOverrun_ = true; raise(SRC_RXERR); }
+        rxByte_ = b;
+        rxFull_ = true;
+        raise(SRC_RXFULL);
+    }
+    scheduleSerialRx();
 }
 
 // Les registres MFP sont sur les adresses IMPAIRES à partir de $FFFA00.
