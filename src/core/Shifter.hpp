@@ -306,7 +306,14 @@ private:
     // voit. Remplie par endVideoLine (commit de la ligne) ; consommée par
     // renderGlueFrame à la place d'une relecture RAM. Indexée par SCANLINE absolue ;
     // len 0 = pas de capture (repli : relecture RAM, comportement historique).
-    static constexpr int kLineSnapBytes = 256;   // ≥ 230 (LEFT+RIGHT_OFF) + marge décodage
+    static constexpr int kLineSnapBytes = 256;   // ≥ kSnapLead + 230 (LEFT+RIGHT_OFF) + marge décodage
+    // Marge de TÊTE de chaque slot de capture : les octets [base−kSnapLead, base)
+    // précèdent la base de ligne — nécessaires quand l'offset source d'une ligne
+    // est NÉGATIF (scroll hard 1 px / stab med, cf. renderGlueFrame : srcOff −2).
+    // Sans elle, le repli RAM fin-de-trame ré-introduisait l'artefact « dessin en
+    // course avec le faisceau » (logo d'intro de Closure : effacé en fin de trame
+    // → écran noir).
+    static constexpr int kSnapLead = 8;
     std::vector<uint8_t>  lineSnap_;             // [scanline * kLineSnapBytes]
     std::vector<uint16_t> lineSnapLen_;          // octets valides par scanline
     std::vector<uint8_t>  lineScrollSnap_;       // scroll fin STE ($FF8265) par scanline committée

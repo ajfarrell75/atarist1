@@ -123,6 +123,18 @@ Machine::Machine(std::size_t ramBytes, CpuCore cpuCore, MachineType machine)
     // Horloge LIVE dans la trame (delta intra-quantum CPU inclus) : date au cycle
     // près chaque écriture palette pour le re-rendu spec512 (cf. Shifter::finishFrame).
     shifter.setLiveFrameClock([this] { return sched.liveNow() - frameStart_; });
+    // DEBUG (NEOST_WATCH=hex) : trace datée [WATCH] des écritures RAM dans
+    // [base, base+0x300) — pendant NeoST du tracking Hatari
+    // « b ($addr).w ! ($addr).w :trace » (chantier Closure, remplisseur de listes).
+    if (const char* w = std::getenv("NEOST_WATCH")) {
+        bus.watchBase_ = static_cast<uint32_t>(std::strtoul(w, nullptr, 16));
+        bus.watchHook = [this](uint32_t addr, uint8_t v) {
+            const int64_t fc = sched.liveNow() - frameStart_;
+            std::fprintf(stderr, "[WATCH] fc=%lld line=%lld cyc=%lld addr=%06x val=%02x pc=%06x\n",
+                static_cast<long long>(fc), static_cast<long long>(fc / cpl_),
+                static_cast<long long>(fc % cpl_), addr, v, cpu.pc());
+        };
+    }
     // Horloge RTC : cycle CPU ABSOLU exact, même au milieu d'une lecture MMIO.
     // L'horloge maîtresse est désormais le cœur (busClockNow), conduit par sync().
     rtc.setClock([this] { return g_blockDispatch ? (sched.now() + cpu.cyclesRunInQuantum()) : cpu.busClockNow(); });
