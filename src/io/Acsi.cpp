@@ -16,6 +16,8 @@
 #include <filesystem>
 #include <cstdint>
 
+#include "io/FujiDevice.hpp"
+
 namespace {
 // Opcodes (hdc.h)
 constexpr uint8_t HD_TEST_UNIT_RDY = 0x00, HD_REQ_SENSE = 0x03, HD_FORMAT_DRIVE = 0x04,
@@ -86,14 +88,62 @@ bool Acsi::mount(int target, const std::string& path) {
 }
 
 void Acsi::unmountAll() {
-    for (auto& d : devs_) {
+    for (int i = 0; i < MAX_DEVS; ++i) {
+        Dev& d = devs_[i];
         if (d.fp) fclose(d.fp);
         d.fp = nullptr;
-        d.enabled = false;
+        d.enabled = (i == fujiTarget_ && fuji_);   // la cible FujiNet reste peuplée
     }
 }
 
-void Acsi::reset() { status_ = 0; byteCount_ = 0; }
+void Acsi::reset() { status_ = 0; byteCount_ = 0; fujiPending_ = false; }
+
+// -----------------------------------------------------------------------------
+//  FujiNet (extension NeoST — cf. docs/FUJINET.md)
+// -----------------------------------------------------------------------------
+void Acsi::attachFujiNet(int target, FujiDevice* dev) {
+    if (target < 0 || target >= MAX_DEVS || !dev) return;
+    fuji_ = dev;
+    fujiTarget_ = target;
+    devs_[target].enabled = true;      // cible peuplée → IRQ ACSI (le TOS la « voit »)
+    devs_[target].lastError = HD_REQSENS_OK;
+    std::fprintf(stderr, "[fuji] FujiNet attached on ACSI target %d\n", target);
+}
+
+void Acsi::detachFujiNet() {
+    if (fujiTarget_ >= 0)
+        devs_[fujiTarget_].enabled = (devs_[fujiTarget_].fp != nullptr);
+    fuji_ = nullptr;
+    fujiTarget_ = -1;
+    fujiPending_ = false;
+}
+
+// Un CDB FujiNet complet (10 octets, opcode $60) vient d'être reçu : délègue au
+// périphérique et rapatrie le résultat dans le contrat Acsi↔Fdc (status_/buf_/
+// dataLen_/dmaWrite_) que le DMA consomme tel quel.
+void Acsi::executeFuji() {
+    Dev& dev = devs_[target_];
+    dataLen_ = 0;
+    dmaWrite_ = false;
+    fujiPending_ = false;
+    const int st = fuji_->execute(command_);
+    if (st != 0) {                              // erreur à l'exécution → pas de phase données
+        status_ = HD_STATUS_ERROR;
+        dev.lastError = HD_REQSENS_INVARG;
+        return;
+    }
+    if (fuji_->isWrite()) {                     // dir=2 : payload ST→device attendu (DMA write)
+        dataLen_ = fuji_->dataLen();
+        prepRespBuf(dataLen_);
+        dmaWrite_ = true;
+        fujiPending_ = true;
+    } else if (fuji_->dataLen() > 0) {          // dir=1 : réponse device→ST (DMA read)
+        uint8_t* b = prepRespBuf(fuji_->dataLen());
+        memcpy(b, fuji_->readBuffer(), std::size_t(fuji_->dataLen()));
+    }
+    status_ = HD_STATUS_OK;
+    dev.lastError = HD_REQSENS_OK;
+}
 
 bool Acsi::anyEnabled() const {
     for (const auto& d : devs_) if (d.enabled) return true;
@@ -238,6 +288,10 @@ void Acsi::cmdReadCapacity() {
 void Acsi::cmdReadSector() {
     Dev& dev = devs_[target_];
     dev.lastBlockAddr = lba();
+    // Cible FujiNet sans image montée : dev.fp est nul (la cible n'est peuplée
+    // que pour l'opcode $60) → secteur introuvable, sans toucher au fichier.
+    if (!dev.fp) { status_ = HD_STATUS_ERROR; dev.lastError = HD_REQSENS_NOSECTOR;
+                   dev.setLastBlockAddr = true; return; }
     if (dev.lastBlockAddr >= dev.hdSize ||
         fseeko(dev.fp, (off_t)dev.lastBlockAddr * dev.blockSize, SEEK_SET) != 0) {
         status_ = HD_STATUS_ERROR; dev.lastError = HD_REQSENS_INVADDR;
@@ -254,6 +308,8 @@ void Acsi::cmdReadSector() {
 void Acsi::cmdWriteSector() {
     Dev& dev = devs_[target_];
     dev.lastBlockAddr = lba();
+    if (!dev.fp) { status_ = HD_STATUS_ERROR; dev.lastError = HD_REQSENS_WRITEERR;
+                   dev.setLastBlockAddr = true; return; }
     if (dev.lastBlockAddr >= dev.hdSize ||
         fseeko(dev.fp, (off_t)dev.lastBlockAddr * dev.blockSize, SEEK_SET) != 0) {
         status_ = HD_STATUS_ERROR; dev.lastError = HD_REQSENS_INVADDR;
@@ -272,6 +328,13 @@ void Acsi::cmdWriteSector() {
 
 void Acsi::writeToDisk(const uint8_t* src, int len) {
     Dev& dev = devs_[target_];
+    if (fujiPending_ && fuji_ && target_ == fujiTarget_) {   // payload d'une commande FujiNet
+        fujiPending_ = false;
+        const int st = fuji_->writeData(src, len);
+        status_ = st ? HD_STATUS_ERROR : HD_STATUS_OK;
+        dev.lastError = st ? HD_REQSENS_INVARG : HD_REQSENS_OK;
+        return;
+    }
     if (!dev.fp || dev.readOnly) { status_ = HD_STATUS_ERROR; dev.lastError = HD_REQSENS_WRITEERR; return; }
     fseeko(dev.fp, (off_t)dev.lastBlockAddr * dev.blockSize, SEEK_SET);
     int n = (int)fwrite(src, 1, len, dev.fp);
@@ -282,6 +345,8 @@ void Acsi::writeToDisk(const uint8_t* src, int len) {
 void Acsi::cmdSeek() {
     Dev& dev = devs_[target_];
     dev.lastBlockAddr = lba();
+    if (!dev.fp) { status_ = HD_STATUS_ERROR; dev.lastError = HD_REQSENS_INVADDR;
+                   dev.setLastBlockAddr = true; return; }
     if (dev.lastBlockAddr < dev.hdSize &&
         fseeko(dev.fp, (off_t)dev.lastBlockAddr * dev.blockSize, SEEK_SET) == 0) {
         status_ = HD_STATUS_OK; dev.lastError = HD_REQSENS_OK;
@@ -350,6 +415,10 @@ bool Acsi::feedByte(uint8_t b) {
     ++byteCount_;
 
     bool didCmd = false;
+    // Cible FujiNet : l'opcode vendeur $60 (10 octets, envoyé derrière le
+    // marqueur ICD) est routé vers le périphérique virtuel. Toute autre cible
+    // garde le rejet >= $60 STRICT — le comportement d'un vrai disque ne bouge pas.
+    const bool fujiCdb = fuji_ && target_ == fujiTarget_ && opcode_ == FujiDevice::kAcsiOpcode;
     if ((opcode_ < 0x20 && byteCount_ == 6) ||
         (opcode_ >= 0x20 && opcode_ < 0x60 && byteCount_ == 10) ||
         (opcode_ == HD_REPORT_LUNS && byteCount_ == 12)) {
@@ -361,6 +430,9 @@ bool Acsi::feedByte(uint8_t b) {
             if (opcode_ == HD_REQ_SENSE) { cmdRequestSense(); didCmd = true; }
             else status_ = HD_STATUS_ERROR;
         }
+    } else if (fujiCdb) {
+        if (byteCount_ == 10) { executeFuji(); didCmd = true; }
+        else status_ = HD_STATUS_OK;
     } else if (opcode_ >= 0x60 && opcode_ != HD_REPORT_LUNS) {
         status_ = HD_STATUS_ERROR; dev.lastError = HD_REQSENS_OPCODE; dev.setLastBlockAddr = false;
     } else {

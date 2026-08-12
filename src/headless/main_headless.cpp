@@ -18,10 +18,20 @@
 #include <cstdlib>
 #include <cstring>
 #include <cmath>
+#include <filesystem>
+#include <memory>
 #include <string>
 #include <fstream>
 
 #include "core/Machine.hpp"
+#include "net/FujiHost.hpp"
+#include "net/FujiHostReplay.hpp"
+#include "net/NetBackend.hpp"
+#ifdef NEOST_WITH_NET
+#include "net/FujiHostLive.hpp"
+#include "net/HayesModem.hpp"
+#include "net/MidiRing.hpp"
+#endif
 #include "core/Tracer.hpp"
 #include "core/Symbols.hpp"
 #include "core/AudioMix.hpp"   // chaîne de mixage partagée (--sound-dump)
@@ -68,16 +78,256 @@ void usage() {
         "  --printer FILE    Centronics printer: capture the printed bytes into FILE\n"
         "  --acsi IMG        ACSI hard disk image (target 0): TOS reads the partition\n"
         "                    table and mounts C:/D:… (alias --hd; port of hdc.c)\n"
+        "  --fujinet         attach the virtual FujiNet on the ACSI bus (target 6;\n"
+        "                    NeoST extension, see docs/FUJINET.md)\n"
+        "  --fujinet-target N  ACSI target of the FujiNet device (0-7, default 6)\n"
+        "  --fujinet-host URL  put URL in host slot 0; if it points to a disk image\n"
+        "                    (.st/.msa/.dim/.stx or raw HD), download and mount it\n"
+        "  --fujinet-replay DIR  deterministic backend: replay fixtures from DIR\n"
+        "                    (no network I/O — used by the test suite)\n"
+        "  --fujinet-offline no network backend (device present, WiFi down)\n"
+        "  --modem           Hayes modem on the MFP USART: AT commands bridge the\n"
+        "                    serial port to real TCP (ATDT host:port -> CONNECT)\n"
+        "  --ethernec        NE2000/EtherNEC on the cartridge port (loopback backend;\n"
+        "                    for STinG/MiNTnet drivers — exclusive with --cart)\n"
+        "  --midi-net H:P[:L]  MIDI ring over UDP (MIDI Maze online): send MIDI OUT to\n"
+        "                    peer H:P, receive MIDI IN on local port L (default 6820)\n"
         "  --glue-selftest   self-test of the Glue machine (borders) then exit\n"
         "  --spec512-selftest self-test of the Spectrum 512 re-render (palette/pixel) then exit\n"
         "  --bus-selftest    self-test of the bus error model (whitelist) then exit\n"
         "  --mfp-selftest    self-test of the MFP (GPIP/edges/Timer B) then exit\n"
         "  --msa-selftest    self-test of the .msa re-encoding (round-trip) then exit\n"
+        "  --fuji-selftest   self-test of the virtual FujiNet (ACSI wire protocol,\n"
+        "                    deterministic replay backend) then exit\n"
+        "  --enec-selftest   self-test of the NE2000/EtherNEC (cartridge-port wire\n"
+        "                    protocol, loopback backend) then exit\n"
         "  --serial-dump F   write the raw RS-232 serial bytes into F (NEOST-TEST verdicts)\n"
         "  --from-cfg F      replay the GUI config (neost.cfg); later options override it\n"
         "  --dump-at N A L F raw dump of L bytes of RAM from $A (hex) after frame N → F\n"
         "  --screenshot PPM  dump the final framebuffer in PPM format\n"
         "  rom               TOS image (default roms/etos192fr.img)\n");
+}
+
+// =============================================================================
+//  --fuji-selftest — auto-test DÉTERMINISTE du FujiNet virtuel, au niveau FIL :
+//  on pilote les registres DMA $FF8604/06 exactement comme le ferait un pilote
+//  ST (marqueur ICD, CDB $60 de 10 octets, phases DMA), à travers le VRAI plan
+//  mémoire (Bus → Fdc → Acsi → FujiDevice → backend de rejeu). Les fixtures
+//  sont auto-générées dans un dossier temporaire : aucune E/S réseau, aucun
+//  fichier du dépôt requis — rejouable par tools/run_all.py --tier fast.
+// =============================================================================
+int fujiSelfTest() {
+    namespace fs = std::filesystem;
+    int passed = 0, failed = 0;
+    auto check = [&](bool ok, const char* what) {
+        std::fprintf(stderr, "[fuji-selftest] %-34s %s\n", what, ok ? "OK" : "FAIL");
+        (ok ? passed : failed)++;
+    };
+
+    // --- Fixtures auto-générées ------------------------------------------------
+    std::error_code ec;
+    const fs::path dir = fs::temp_directory_path(ec) / "neost-fuji-selftest";
+    fs::create_directories(dir, ec);
+    const std::string hello = "Hello from NeoST FujiNet!\n";
+    const std::string json  = "{\"name\":\"neost\",\"values\":[10,20,30]}";
+    { std::ofstream f(dir / "HTTP___test_hello.txt", std::ios::binary); f << hello; }
+    { std::ofstream f(dir / "HTTP___test_data.json", std::ios::binary); f << json; }
+
+    Machine machine;                     // 512 Ko, STE — pas de TOS : on pilote le MMIO
+    FujiHostReplay host(dir.string());
+    machine.fuji.setHost(&host);
+    machine.enableFujiNet(6);
+
+    Bus& bus = machine.bus;
+    constexpr uint32_t kDmaBuf = 0x8000;                    // tampon DMA dans la ST-RAM
+    auto w16 = [&](uint32_t a, uint16_t v) { bus.write16(a, v); };
+    auto setDmaAddr = [&](uint32_t addr) {
+        w16(0xFF8608, uint16_t((addr >> 16) & 0xFF));
+        w16(0xFF860A, uint16_t((addr >> 8) & 0xFF));
+        w16(0xFF860C, uint16_t(addr & 0xFF));
+    };
+    auto acsiStatus = [&]() -> uint8_t {
+        w16(0xFF8606, 0x008A);                              // CSACSI | A0 (statut)
+        return uint8_t(bus.read16(0xFF8604) & 0xFF);
+    };
+    // Émet un CDB FujiNet complet (marqueur ICD cible 6 + 10 octets) puis déclenche
+    // la phase DMA (write=false : device→ST ; write=true : ST→device).
+    auto sendFujiCdb = [&](uint8_t dev, uint8_t cmd, uint8_t aux1, uint8_t aux2,
+                           uint8_t dirByte, uint16_t len, bool write) {
+        setDmaAddr(kDmaBuf);
+        w16(0xFF8606, 0x0088);                              // CSACSI, A1 bas → 1er octet
+        w16(0xFF8604, uint16_t(0x00C0 | 0x1F));             // (6<<5)|$1F : cible 6, marqueur ICD
+        w16(0xFF8606, 0x008A);                              // A1 haut → octets suivants
+        const uint8_t cdb[10] = {0x60, 0x00, dev, cmd, aux1, aux2, dirByte,
+                                 uint8_t(len >> 8), uint8_t(len & 0xFF), 0x00};
+        for (uint8_t b : cdb) w16(0xFF8604, b);
+        w16(0xFF8606, write ? 0x0100 : 0x0000);             // 0xC0 → 0 : transfert DMA
+    };
+    // Dépose un payload ST→device dans la RAM (lu par le DMA).
+    auto putPayload = [&](const std::string& s) {
+        for (std::size_t i = 0; i < s.size() && kDmaBuf + i < bus.ram.size(); ++i)
+            bus.ram[kDmaBuf + i] = uint8_t(s[i]);
+        bus.ram[kDmaBuf + s.size()] = 0;
+    };
+
+    // --- 1. Statut WiFi (device $70, $FA, dir=1) -------------------------------
+    sendFujiCdb(0x70, 0xFA, 0, 0, 1, 1, false);
+    check(acsiStatus() == 0 && bus.ram[kDmaBuf] == 3, "wifi status ($70/$FA)");
+
+    // --- 2. Horloge (device $70, $D2) — date FIXE du backend de rejeu ----------
+    sendFujiCdb(0x70, 0xD2, 0, 0, 1, 7, false);
+    check(acsiStatus() == 0 && bus.ram[kDmaBuf] == 0x07 && bus.ram[kDmaBuf + 1] == 0xC1
+          && bus.ram[kDmaBuf + 2] == 6, "clock ($70/$D2, deterministic)");
+
+    // --- 3. Open + Status + Read sur le canal N1: ------------------------------
+    putPayload("N1:HTTP://test/hello.txt");
+    sendFujiCdb(0x71, 'O', 4, 0, 2, 24, true);
+    check(acsiStatus() == 0, "N1: open (payload DMA write)");
+
+    sendFujiCdb(0x71, 'S', 0, 0, 1, 4, false);
+    const int avail = bus.ram[kDmaBuf] | (bus.ram[kDmaBuf + 1] << 8);
+    check(acsiStatus() == 0 && avail == (int)hello.size() && bus.ram[kDmaBuf + 2] == 1,
+          "N1: status (avail/connected)");
+
+    sendFujiCdb(0x71, 'R', 0, 0, 1, uint16_t(hello.size()), false);
+    bool same = acsiStatus() == 0;
+    for (std::size_t i = 0; same && i < hello.size(); ++i)
+        same = bus.ram[kDmaBuf + i] == uint8_t(hello[i]);
+    check(same, "N1: read (contents)");
+
+    // Relire alors que le canal est vide → erreur propre (contrat FujiNet).
+    sendFujiCdb(0x71, 'R', 0, 0, 1, 16, false);
+    check(acsiStatus() == 2, "N1: read past EOF fails cleanly");
+    sendFujiCdb(0x71, 'C', 0, 0, 0, 0, false);
+    check(acsiStatus() == 0, "N1: close");
+
+    // --- 4. JSON déporté (parse + query) sur N2: -------------------------------
+    putPayload("N2:HTTP://test/data.json");
+    sendFujiCdb(0x72, 'O', 4, 0, 2, 25, true);
+    sendFujiCdb(0x72, 'P', 0, 0, 0, 0, false);
+    check(acsiStatus() == 0, "N2: JSON parse");
+    putPayload("/values/2");
+    sendFujiCdb(0x72, 'Q', 0, 0, 2, 10, true);
+    sendFujiCdb(0x72, 'R', 0, 0, 1, 2, false);
+    check(acsiStatus() == 0 && bus.ram[kDmaBuf] == '3' && bus.ram[kDmaBuf + 1] == '0',
+          "N2: JSON query (/values/2 = 30)");
+
+    // --- 5. Les commandes SCSI standard marchent toujours sur la cible 6 -------
+    setDmaAddr(kDmaBuf);
+    w16(0xFF8606, 0x0088);
+    w16(0xFF8604, uint16_t((6u << 5) | 0x12));              // INQUIRY (classe 0)
+    w16(0xFF8606, 0x008A);
+    for (uint8_t b : {uint8_t(0), uint8_t(0), uint8_t(0), uint8_t(36), uint8_t(0)})
+        w16(0xFF8604, b);
+    w16(0xFF8606, 0x0000);
+    check(acsiStatus() == 0 && bus.ram[kDmaBuf + 8] == 'N' && bus.ram[kDmaBuf + 9] == 'e',
+          "target 6: standard INQUIRY intact");
+
+    // --- 6. L'opcode $60 reste REJETÉ sur une cible non-FujiNet ----------------
+    machine.fdc.mountAcsi("disks/etalons/selftest_hd.img", 0);   // peut échouer : absent
+    w16(0xFF8606, 0x0088);
+    w16(0xFF8604, uint16_t((0u << 5) | 0x1F));              // cible 0, marqueur ICD
+    w16(0xFF8606, 0x008A);
+    w16(0xFF8604, 0x0060);                                  // opcode vendeur…
+    // …cible vide (pas d'IRQ) ou peuplée : dans les deux cas, JAMAIS routé FujiNet.
+    check(machine.fuji.lastError() == fn_err::OK, "vendor opcode gated to Fuji target");
+
+    std::fprintf(stderr, "[fuji-selftest] %d passed, %d failed\n", passed, failed);
+    return failed == 0 ? 0 : 1;
+}
+
+// =============================================================================
+//  --enec-selftest — auto-test DÉTERMINISTE de la NE2000/EtherNEC au niveau FIL.
+//  On pilote la carte EXACTEMENT comme le pilote ST : écritures registre par
+//  fausses lectures ($FA0000 + reg*512 + data*2), lectures par $FB0000 + reg*512,
+//  le tout à travers le VRAI plan mémoire (Bus). Backend en boucle locale : une
+//  trame émise revient en réception → on la relit via Remote DMA. Aucune E/S
+//  réseau. Cf. docs/FUJINET.md § EtherNEC.
+// =============================================================================
+int enecSelfTest() {
+    int passed = 0, failed = 0;
+    auto check = [&](bool ok, const char* what) {
+        std::fprintf(stderr, "[enec-selftest] %-34s %s\n", what, ok ? "OK" : "FAIL");
+        (ok ? passed : failed)++;
+    };
+
+    Machine machine;                 // 512 Ko STE, pas de TOS : on pilote la carte au fil
+    NetBackendLoop loop;
+    machine.ne2000.setBackend(&loop);
+    if (!machine.enableEtherNec()) { std::fprintf(stderr, "[enec-selftest] enable failed\n"); return 1; }
+
+    Bus& bus = machine.bus;
+    // Accès EtherNEC : tout est une LECTURE dans la fenêtre cartouche.
+    auto wr = [&](uint8_t reg, uint8_t data) {
+        (void)bus.read8(Ne2000::WRITE_BASE + uint32_t(reg) * 512u + uint32_t(data) * 2u);
+    };
+    auto rd = [&](uint8_t reg) -> uint8_t {
+        return bus.read8(Ne2000::READ_BASE + uint32_t(reg) * 512u);
+    };
+
+    // Configuration standard de l'anneau : TX en pages 0x40-0x45, anneau RX
+    // 0x46-0x80. (PSTART/PSTOP sont WRITE-ONLY sur le DP8390 — on ne les relit
+    // pas ; le décodage registre est prouvé par le round-trip BNRY et la MAC.)
+    const uint8_t kTxPage = 0x40, kRxStart = 0x46, kRxStop = 0x80;
+    wr(0x00, 0x21);                  // CR : page 0, stop
+    wr(0x01, kRxStart);              // PSTART
+    wr(0x02, kRxStop);               // PSTOP
+    wr(0x03, kRxStart);              // BNRY (dernière page LUE)
+
+    // --- 1. Décodage registre : BNRY est lisible (round-trip) -----------------
+    check(rd(0x03) == kRxStart, "register decode (BNRY round-trip)");
+
+    // --- 2. MAC + CURR en page 1 ----------------------------------------------
+    const uint8_t mac[6] = {0x02, 0x4E, 0x53, 0x54, 0x12, 0x34};
+    wr(0x00, 0x61);                  // CR : page 1
+    for (int i = 0; i < 6; ++i) wr(uint8_t(0x01 + i), mac[i]);
+    wr(0x07, kRxStart);              // CURR = 1re page d'écriture de l'anneau
+    bool macOk = true;
+    for (int i = 0; i < 6; ++i) macOk = macOk && rd(uint8_t(0x01 + i)) == mac[i];
+    check(macOk && rd(0x07) == kRxStart, "MAC + CURR in page 1");
+    wr(0x00, 0x21);                  // retour page 0
+
+    // --- 3. Remote DMA : écrire une trame dans la RAM NIC, la relire ----------
+    // Trame Ethernet : dst=broadcast, src=MAC, type=0x0800, payload court.
+    uint8_t frame[32];
+    memset(frame, 0xFF, 6);          // dst broadcast
+    memcpy(frame + 6, mac, 6);       // src
+    frame[12] = 0x08; frame[13] = 0x00;
+    for (int i = 14; i < 32; ++i) frame[i] = uint8_t(0xA0 + i);
+    const uint16_t txaddr = uint16_t(kTxPage) * 256u;
+    wr(0x08, uint8_t(txaddr)); wr(0x09, uint8_t(txaddr >> 8));   // RSAR
+    wr(0x0A, uint8_t(sizeof frame)); wr(0x0B, 0);               // RBCR
+    wr(0x00, 0x12);                  // CR : Remote Write (RD1) + STA
+    for (uint8_t b : frame) wr(0x10, b);
+    // Relecture par Remote Read.
+    wr(0x08, uint8_t(txaddr)); wr(0x09, uint8_t(txaddr >> 8));
+    wr(0x0A, uint8_t(sizeof frame)); wr(0x0B, 0);
+    wr(0x00, 0x0A);                  // CR : Remote Read (RD0) + STA
+    bool dmaOk = true;
+    for (uint8_t b : frame) dmaOk = dmaOk && rd(0x10) == b;
+    check(dmaOk, "remote DMA read-back (RAM NIC)");
+
+    // --- 4. Transmission → backend boucle → réception dans l'anneau -----------
+    wr(0x04, kTxPage);                        // TPSR = page de départ TX
+    wr(0x05, uint8_t(sizeof frame)); wr(0x06, 0);   // TBCR
+    wr(0x0C, 0x04);                           // RCR : accepte broadcast (AB)
+    wr(0x00, 0x26);                           // CR : TXP + STA (page 0)
+    machine.ne2000.poll();                    // la trame émise revient en réception
+    const uint8_t isr = rd(0x07);
+    check((isr & 0x02) && (isr & 0x01), "TX done + RX into ring (ISR PTX|PRX)");
+
+    // --- 5. Lecture de l'en-tête de la trame reçue (page CURR init = kRxStart) -
+    const uint16_t hdrAddr = uint16_t(kRxStart) * 256u;
+    wr(0x08, uint8_t(hdrAddr)); wr(0x09, uint8_t(hdrAddr >> 8));
+    wr(0x0A, 4); wr(0x0B, 0);
+    wr(0x00, 0x0A);                           // Remote Read
+    const uint8_t rsr = rd(0x10), next = rd(0x10);
+    const uint16_t rlen = uint16_t(rd(0x10) | (rd(0x10) << 8));
+    (void)next;
+    check((rsr & 0x01) && rlen == sizeof frame + 4, "RX ring packet header (status/len)");
+
+    std::fprintf(stderr, "[enec-selftest] %d passed, %d failed\n", passed, failed);
+    return failed == 0 ? 0 : 1;
 }
 
 // Dump du framebuffer décodé en PPM binaire (P6) — comparable visuellement.
@@ -167,6 +417,15 @@ int main(int argc, char** argv) {
     std::string printerPath;                     // --printer FILE : capture Centronics (port parallèle)
     std::string gemdosDir;                       // --gemdos DIR : disque dur GEMDOS (dossier hôte)
     std::string acsiImg;                         // --acsi IMG : image disque dur ACSI (cible 0)
+    bool        fujinet       = false;           // --fujinet : FujiNet virtuel sur le bus ACSI
+    int         fujinetTarget = 6;               // --fujinet-target N (défaut 6)
+    std::string fujinetHost;                     // --fujinet-host URL (slot 0 + auto-montage)
+    std::string fujinetReplay;                   // --fujinet-replay DIR (backend déterministe)
+    bool        fujinetOffline = false;          // --fujinet-offline : backend nul
+    bool        modemFlag      = false;          // --modem : modem Hayes sur l'USART
+    bool        ethernecFlag   = false;          // --ethernec : NE2000 port cartouche
+    std::string midiNetPeer;                     // --midi-net host:port[:listen] : anneau MIDI UDP
+    int         midiNetListen  = 6820;           // port d'écoute par défaut
     std::string soundDumpPath;                   // --sound-dump F : WAV 48 kHz de la boucle --frames
     std::string serialDumpPath;                  // --serial-dump F : octets série RS-232 bruts (verdicts)
     bool        outFail    = false;   // une SORTIE fichier a échoué → exit ≠ 0 (jamais silencieux)
@@ -194,6 +453,8 @@ int main(int argc, char** argv) {
     bool        busSelfTest  = false;  // auto-test déterministe du modèle de bus error
     bool        mfpSelfTest  = false;  // auto-test déterministe du MFP (GPIP/fronts/Timer B)
     bool        msaSelfTest  = false;  // auto-test déterministe du ré-encodage .msa
+    bool        fujiSelfTestFlag = false; // auto-test déterministe du FujiNet (protocole fil)
+    bool        enecSelfTestFlag = false; // auto-test déterministe NE2000/EtherNEC (fil)
     int         shotEvery   = 0;      // --shot-every N : dump une capture toutes les N trames
     std::string shotPrefix;           // --shot-every PREFIX : préfixe des captures périodiques
     int         shotFrom    = 0;      // --shot-from N : ne capture qu'à partir de la trame N
@@ -264,6 +525,21 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(a, "--gemdos"))     gemdosDir = next(a);
         else if (!std::strcmp(a, "--printer"))    printerPath = next(a);
         else if (!std::strcmp(a, "--acsi") || !std::strcmp(a, "--hd")) acsiImg = next(a);
+        else if (!std::strcmp(a, "--fujinet"))         fujinet = true;
+        else if (!std::strcmp(a, "--fujinet-target"))  { fujinet = true; fujinetTarget = std::atoi(next(a)); }
+        else if (!std::strcmp(a, "--fujinet-host"))    { fujinet = true; fujinetHost = next(a); }
+        else if (!std::strcmp(a, "--fujinet-replay"))  { fujinet = true; fujinetReplay = next(a); }
+        else if (!std::strcmp(a, "--fujinet-offline")) { fujinet = true; fujinetOffline = true; }
+        else if (!std::strcmp(a, "--modem"))           modemFlag = true;
+        else if (!std::strcmp(a, "--ethernec"))        ethernecFlag = true;
+        else if (!std::strcmp(a, "--midi-net")) {
+            // "host:port" ou "host:port:listen" (le port d'écoute par défaut est 6820).
+            std::string s = next(a);
+            const auto p1 = s.find(':');
+            const auto p2 = (p1 == std::string::npos) ? std::string::npos : s.find(':', p1 + 1);
+            if (p2 != std::string::npos) { midiNetListen = std::atoi(s.c_str() + p2 + 1); s = s.substr(0, p2); }
+            midiNetPeer = s;
+        }
         else if (!std::strcmp(a, "--walk-mouse")) walkMouse = true;
         else if (!std::strcmp(a, "--keys"))       keys      = next(a);
         else if (!std::strcmp(a, "--joy")) {      // état joystick maintenu : "P1" ou "P1,P0"
@@ -280,6 +556,8 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(a, "--bus-selftest")) busSelfTest = true;
         else if (!std::strcmp(a, "--mfp-selftest")) mfpSelfTest = true;
         else if (!std::strcmp(a, "--msa-selftest")) msaSelfTest = true;
+        else if (!std::strcmp(a, "--fuji-selftest")) fujiSelfTestFlag = true;
+        else if (!std::strcmp(a, "--enec-selftest")) enecSelfTestFlag = true;
         else if (!std::strcmp(a, "--shot-every"))  { shotEvery = std::atoi(next(a)); shotPrefix = next(a); }
         else if (!std::strcmp(a, "--shot-from"))   shotFrom = std::atoi(next(a));
         else if (!std::strcmp(a, "--keys-at"))     { const int f = std::atoi(next(a)); keysAtList.emplace_back(f, next(a)); }
@@ -326,6 +604,9 @@ int main(int argc, char** argv) {
                 else if (ln.rfind("cart=", 0) == 0)    { if (ln.size() > 5) cartPath  = resolve(v(ln, 5)); }
                 else if (ln.rfind("gemdos=", 0) == 0)  { if (ln.size() > 7) gemdosDir = resolve(v(ln, 7)); }
                 else if (ln.rfind("acsi=", 0) == 0)    { if (ln.size() > 5) acsiImg   = resolve(v(ln, 5)); }
+                else if (ln.rfind("fujinet=", 0) == 0) fujinet = (v(ln, 8) == "1");
+                else if (ln.rfind("fujinet_target=", 0) == 0) fujinetTarget = std::atoi(v(ln, 15).c_str());
+                else if (ln.rfind("fujinet_host=", 0) == 0) { if (ln.size() > 13) fujinetHost = v(ln, 13); }
                 else if (ln.rfind("machine=", 0) == 0) machType   = parseMachine(v(ln, 8).c_str());
                 else if (ln.rfind("mem=", 0) == 0)     ramBytes   = parseRamBytes(v(ln, 4).c_str());
                 else if (ln.rfind("cpu=", 0) == 0)     cpuCore    = Cpu68k::parseCore(v(ln, 4).c_str());
@@ -368,6 +649,8 @@ int main(int argc, char** argv) {
     if (busSelfTest) return machine.bus.busSelfTest() ? 0 : 1;
     if (mfpSelfTest) return machine.mfp.mfpSelfTest() ? 0 : 1;
     if (msaSelfTest) return machine.fdc.msaSelfTest() ? 0 : 1;
+    if (fujiSelfTestFlag) return fujiSelfTest();
+    if (enecSelfTestFlag) return enecSelfTest();
     std::fprintf(stderr, "[headless] CPU core: %s | machine: %s | RAM: %s\n",
                  Cpu68k::coreName(machine.cpu.core()), machineName(machType), ramLabel(ramBytes));
     if (!machine.loadTos(romPath)) {
@@ -398,12 +681,93 @@ int main(int argc, char** argv) {
     if (!acsiImg.empty() && machine.fdc.mountAcsi(acsiImg))
         std::fprintf(stderr, "[headless] ACSI: %d partition(s) detected\n",
                      machine.fdc.acsiPartitionCount());
+    // FujiNet virtuel (--fujinet…) : cible ACSI dédiée + backend hôte. Le backend
+    // vit ici (frontend) — le cœur ne voit que l'interface FujiHost.
+    std::unique_ptr<FujiHost> fujiHost;
+    if (fujinet) {
+        if (fujinetTarget < 0 || fujinetTarget > 7) {
+            std::fprintf(stderr, "[headless] --fujinet-target must be 0-7\n");
+            return 2;
+        }
+        if (!fujinetReplay.empty())
+            fujiHost = std::make_unique<FujiHostReplay>(fujinetReplay);
+        else if (fujinetOffline)
+            fujiHost = std::make_unique<FujiHostNull>();
+        else {
+#ifdef NEOST_WITH_NET
+            fujiHost = std::make_unique<FujiHostLive>();
+#else
+            std::fprintf(stderr, "[headless] this build has no network backend "
+                                 "(NEOST_WITH_NET=OFF) — FujiNet is offline\n");
+            fujiHost = std::make_unique<FujiHostNull>();
+#endif
+        }
+        machine.fuji.setHost(fujiHost.get());
+        machine.enableFujiNet(fujinetTarget);
+        std::fprintf(stderr, "[headless] FujiNet backend: %s\n", fujiHost->name());
+        if (!fujinetHost.empty()) {
+            if (machine.fuji.mountRemote(fujinetHost))
+                std::fprintf(stderr, "[headless] FujiNet: %s mounted\n", fujinetHost.c_str());
+            else {
+                machine.fuji.setHostSlot(0, fujinetHost);
+                std::fprintf(stderr, "[headless] FujiNet: %s in host slot 0 (not a "
+                                     "mountable image)\n", fujinetHost.c_str());
+            }
+        }
+    }
     machine.mfp.setColorMonitor(!machineMono);   // --mono → moniteur mono (haute rés)
 
     // Capture du port série (RS-232) : les ROMs de diagnostic y impriment leur
     // rapport. On l'affiche sur stderr en fin d'exécution.
     std::string serialOut;
     machine.mfp.setSerialSink([&serialOut](uint8_t b) { serialOut.push_back(char(b)); });
+#ifdef NEOST_WITH_NET
+    // Modem Hayes (--modem) : commandes AT sur l'USART → pont TCP réel. Le sink
+    // série CHAÎNE la capture de verdicts (inchangée) et le modem.
+    std::unique_ptr<HayesModem> modem;
+    if (modemFlag) {
+        modem = std::make_unique<HayesModem>(machine.mfp);
+        HayesModem* m = modem.get();
+        machine.mfp.setSerialSink([&serialOut, m](uint8_t b) {
+            serialOut.push_back(char(b));
+            m->onTx(b);
+        });
+        std::fprintf(stderr, "[headless] Hayes modem on RS-232 (ATDT host:port)\n");
+    }
+#else
+    if (modemFlag)
+        std::fprintf(stderr, "[headless] --modem ignored: no network backend in this build\n");
+#endif
+    // EtherNEC (--ethernec) : NE2000 sur le port cartouche, backend boucle locale
+    // (aucune E/S réseau). Exclusif d'une cartouche montée.
+    NetBackendLoop enecLoop;
+    if (ethernecFlag) {
+        machine.ne2000.setBackend(&enecLoop);
+        if (machine.enableEtherNec())
+            std::fprintf(stderr, "[headless] EtherNEC (NE2000) on the cartridge port\n");
+        else
+            std::fprintf(stderr, "[headless] --ethernec refused: the cartridge port is in use\n");
+    }
+    // Anneau MIDI réseau (--midi-net) : MIDI OUT → UDP → pair aval ; datagrammes
+    // de l'amont → MIDI IN. Débranche le bouclage interne de l'ACIA MIDI.
+#ifdef NEOST_WITH_NET
+    std::unique_ptr<MidiRing> midiRing;
+    if (!midiNetPeer.empty()) {
+        midiRing = std::make_unique<MidiRing>();
+        if (midiRing->open(midiNetPeer, midiNetListen)) {
+            MidiRing* r = midiRing.get();
+            machine.midi.setMidiSink([r](uint8_t b) { r->sendByte(b); });
+            std::fprintf(stderr, "[headless] MIDI ring: OUT->%s, IN<-udp:%d\n",
+                         midiNetPeer.c_str(), midiNetListen);
+        } else {
+            std::fprintf(stderr, "[headless] --midi-net: cannot open the UDP ring\n");
+            midiRing.reset();
+        }
+    }
+#else
+    if (!midiNetPeer.empty())
+        std::fprintf(stderr, "[headless] --midi-net ignored: no network backend in this build\n");
+#endif
 
     Tracer tracer;
     if (!tracePath.empty()) {
@@ -560,6 +924,17 @@ int main(int argc, char** argv) {
         // Trace fenêtrée (--trace-from N) : branche le hook d'instruction à la trame N.
         if (traceFrom > 0 && frame == traceFrom && !tracePath.empty())
             machine.cpu.setTracer(&tracer);
+#ifdef NEOST_WITH_NET
+        if (modem) modem->poll();   // pompe le TCP entrant vers la file RX du MFP
+#endif
+        if (machine.ne2000.enabled()) machine.ne2000.poll();   // trames RX → anneau
+#ifdef NEOST_WITH_NET
+        if (midiRing) midiRing->poll([&](uint8_t b) {
+            if (!machine.midi.rxCanAccept()) return false;
+            machine.midi.receiveExternal(b);
+            return true;
+        });
+#endif
         // Injections datées (--keys-at / --joy-at) : pilotage d'un menu de démo en
         // PLEINE boucle (l'intro Cuddly attend espace ; le robot du menu, le stick),
         // sans perdre --shot-every. Une touche = make à +0, break à +2, 4 trames/char.
