@@ -515,7 +515,10 @@ void Shifter::liveGlueCatchUp(int targetLine) {
             if (wl <= liveGlueLine_) {
                 if (w.isRes) liveGlueRes_    = w.val & 0x03;
                 else         liveGlueFreq50_ = (w.val & 0x02) ? 1 : 0;
-                const int freqHz = (liveGlueRes_ == 2) ? 71 : (liveGlueFreq50_ ? 50 : 60);
+                // La GLUE ne décode que le bit 1 de $FF8260 : res 3 = haute
+                // résolution pour elle (Hatari Video_Update_Glue_State,
+                // « IoMem[0xff8260] & 2 » — trick « stop the shifter » Troed/Sync).
+                const int freqHz = (liveGlueRes_ & 0x02) ? 71 : (liveGlueFreq50_ ? 50 : 60);
                 // DIAG (NEOST_GLUE_DIAG) : chaque écriture appliquée à la Glue, avec
                 // sa datation ligne/cycle et le masque résultant — à diff'er contre
                 // Hatari `video_border_h` (les « detect ... » de Video_Update_Glue_State).
@@ -552,7 +555,7 @@ void Shifter::liveGlueCatchUp(int targetLine) {
                 glueLineStart_[liveGlueLine_] = (liveGlueLine_ == 0) ? 0 : prevStart + liveGlueLen_;
             liveGlueLen_ = cpl;
         }
-        const int freqHz = (liveGlueRes_ == 2) ? 71 : (liveGlueFreq50_ ? 50 : 60);
+        const int freqHz = (liveGlueRes_ & 0x02) ? 71 : (liveGlueFreq50_ ? 50 : 60);
         startHBL(liveGlueLine_, liveGlueRes_, freqHz);
     }
 }
@@ -687,11 +690,14 @@ void Shifter::renderLine(int y) {
     uint32_t* dst = frame_.data() + static_cast<std::size_t>(activeY_ + y) * curW_ + activeX_;
 
     // Émet W pixels à partir de l'offset `scroll`. En haute résolution = moniteur
-    // MONOCHROME : blanc (0) / noir (1), sans la palette couleur (sinon un
-    // palette[1] non noir — ex. rouge sous TOS 1.02 — colore l'écran à tort).
+    // MONOCHROME : seule la polarité vient du registre 0 de la palette — reg0
+    // sans bit couleur ($000) = vidéo INVERSE, blanc sur noir (Hatari conv_st.c,
+    // « HBLPalettes[0] & 0x777 »). palette[1] reste ignoré (sinon un palette[1]
+    // non noir — ex. rouge sous TOS 1.02 — colorerait l'écran à tort).
     if (hi) {
+        const uint8_t inv = (palette[0] & 0x777) ? 0 : 1;
         for (int c = 0; c < W; ++c)
-            dst[c] = (idx[c + scroll] & 1) ? 0xFF000000u : 0xFFFFFFFFu;
+            dst[c] = ((idx[c + scroll] ^ inv) & 1) ? 0xFF000000u : 0xFFFFFFFFu;
     } else {
         // Conversion $0RGB → ARGB8888 SORTIE de la boucle : elle était refaite pour
         // chacun des 320 à 640 pixels de chaque ligne, alors que `palette` ne peut
@@ -837,8 +843,12 @@ void Shifter::endVideoLine() {
         lineSnapLen_[sl] = static_cast<uint16_t>(n);
         // Scroll fin de CETTE ligne (capturé AVANT le latch différé newHwScrollCount_
         // quelques lignes plus bas) — consommé par renderGlueFrame (idx[s + scroll]).
+        // Bit 4 = mode prefetch ($FF8265 vs $FF8264) : le décodage (groupe 16 px
+        // en plus vs départ à idx[16]) doit suivre le mode de CETTE ligne, pas la
+        // valeur de fin de trame — un split $FF8264/65 à mi-trame déplaçait de
+        // 16 px les lignes re-rendues (spec512) de l'autre moitié.
         if (sl < static_cast<int>(lineScrollSnap_.size()))
-            lineScrollSnap_[sl] = hwScrollCount;
+            lineScrollSnap_[sl] = uint8_t(hwScrollCount | (hwScrollPrefetch ? 0x10 : 0));
     }
     vcLineBase_ += static_cast<uint32_t>(bpl);
     // Prefetch et line-offset STE ne s'appliquent QUE sur une ligne réellement
@@ -1657,7 +1667,7 @@ void Shifter::replayGlue() {
     const std::size_t nw = syncWrites_.size();
     int64_t lineCyc = 0;                                  // cycle-trame du début de la ligne (V2/LINELEN)
     for (int line = 0; line < lpf; ++line) {
-        int freqHz = (curRes == 2) ? 71 : (curFreq50 ? 50 : 60);
+        int freqHz = (curRes & 0x02) ? 71 : (curFreq50 ? 50 : 60);
         startHBL(line, curRes, freqHz);
         int len = cpl;
         if (v2 && !lineLen) {                            // ligne raccourcie ? (heuristique V2)
@@ -1677,7 +1687,7 @@ void Shifter::replayGlue() {
             const int prevRes = curRes;
             if (w.isRes) curRes    = w.val & 0x03;
             else         curFreq50 = (w.val & 0x02) ? 1 : 0;
-            freqHz = (curRes == 2) ? 71 : (curFreq50 ? 50 : 60);
+            freqHz = (curRes & 0x02) ? 71 : (curFreq50 ? 50 : 60);
             updateGlueState(line, lc, w.isRes, freqHz);
             // V2 : détections spécifiques aux bascules de résolution (med res
             // overscan, stab/scrolls hardware) — APRÈS la machine commune, comme
@@ -1753,7 +1763,7 @@ void Shifter::replayGlue() {
                 else                      f2 = (syncWrites_[j].val & 2) ? 1 : 0;
                 ++j;
             }
-            const int freqHz = (r2 == 2) ? 71 : (f2 ? 50 : 60);
+            const int freqHz = (r2 & 0x02) ? 71 : (f2 ? 50 : 60);
             const int len = (freqHz == 71) ? 224 : (freqHz == 60 ? 508 : 512);
             while (i < nw && syncWrites_[i].frameCycle < cyc + len) {
                 const SyncWrite& w = syncWrites_[i];
@@ -1786,12 +1796,11 @@ void Shifter::replayGlue() {
 //    idx[0..16+scroll) mis à 0.
 // scroll = 0 (ST/STF) → décodage historique strictement inchangé. Renvoie le
 // décalage scroll. `idx` doit tenir nPix arrondi au groupe + 16 + 16 octets.
-int Shifter::decodeWindowIndices(uint32_t base, int nPix, uint8_t* idx, bool medLine) const {
+int Shifter::decodeWindowIndices(uint32_t base, int nPix, uint8_t* idx, bool medLine,
+                                 int scroll, bool prefetch) const {
     const int planes = (frameMode_ == Mode::Medium || medLine) ? 2 : 4;   // low=4, med=2
     const int groupB = 2 * planes;                             // octets pour 16 px
     const int groups = (nPix + 15) / 16;
-    const int  scroll   = hwScrollCount;                       // 0 hors STE scrollé
-    const bool prefetch = hwScrollPrefetch;
     const int  decodeGroups = (scroll && prefetch) ? groups + 1 : groups;
     int px = (scroll && !prefetch) ? 16 : 0;
     for (int gI = 0; gI < decodeGroups; ++gI) {
@@ -1809,7 +1818,8 @@ int Shifter::decodeWindowIndices(uint32_t base, int nPix, uint8_t* idx, bool med
     return scroll;
 }
 
-int Shifter::decodeWindowIndicesFromBytes(const uint8_t* src, int srcLen, int nPix, uint8_t* idx, bool medLine) const {
+int Shifter::decodeWindowIndicesFromBytes(const uint8_t* src, int srcLen, int nPix, uint8_t* idx, bool medLine,
+                                          int scroll, bool prefetch) const {
     // Même décodage planaire (et même modèle de scroll fin STE) que
     // decodeWindowIndices, mais depuis la CAPTURE de la ligne (octets
     // échantillonnés au faisceau) au lieu du bus. Au-delà de srcLen (marge de
@@ -1817,8 +1827,6 @@ int Shifter::decodeWindowIndicesFromBytes(const uint8_t* src, int srcLen, int nP
     const int planes = (frameMode_ == Mode::Medium || medLine) ? 2 : 4;
     const int groupB = 2 * planes;
     const int groups = (nPix + 15) / 16;
-    const int  scroll   = hwScrollCount;
-    const bool prefetch = hwScrollPrefetch;
     const int  decodeGroups = (scroll && prefetch) ? groups + 1 : groups;
     auto rd16 = [&](int off) -> uint16_t {
         const uint8_t hiB = (off     < srcLen) ? src[off]     : 0;
@@ -1978,8 +1986,14 @@ void Shifter::renderGlueFrame() {
         // committées — même approximation que la relecture RAM ci-dessous).
         const bool snapHere = sl >= 0 && sl < static_cast<int>(lineSnapLen_.size())
                               && lineSnapLen_[sl] > 0;
-        const int  lineScroll = (snapHere && sl < static_cast<int>(lineScrollSnap_.size()))
-                              ? lineScrollSnap_[sl] : scroll;
+        const bool scrollSnapped = snapHere && sl < static_cast<int>(lineScrollSnap_.size());
+        // Compteur (bits 0-3) ET mode prefetch (bit 4) de CETTE ligne : le
+        // décodage (groupe en plus / départ à idx[16] / memset de tête) doit
+        // suivre la même paire que l'émission — les membres vivants portent la
+        // valeur de FIN de trame, fausse pour l'autre moitié d'un split.
+        const int  lineScroll = scrollSnapped ? (lineScrollSnap_[sl] & 0x0F) : scroll;
+        const bool linePref   = scrollSnapped ? (lineScrollSnap_[sl] & 0x10) != 0
+                                              : hwScrollPrefetch;
         // decodeWindowIndices décode des GROUPES de 16 px (+1 groupe si scroll avec
         // prefetch, ou offset 16 sans prefetch) : la plage valide de idx est
         // [0, nDec) — marge pour le DisplayPixelShift et le scroll.
@@ -2041,9 +2055,11 @@ void Shifter::renderGlueFrame() {
             if (haveSnap)
                 decodeWindowIndicesFromBytes(lineSnap_.data() + static_cast<std::size_t>(sl) * kLineSnapBytes
                                                  + kSnapLead + medSrcBytes,
-                                             lineSnapLen_[sl] - medSrcBytes, nPix, idx, lineMed);
+                                             lineSnapLen_[sl] - medSrcBytes, nPix, idx, lineMed,
+                                             lineScroll, linePref);
             else
-                decodeWindowIndices(addr + static_cast<uint32_t>(static_cast<int32_t>(medSrcBytes)), nPix, idx, lineMed);
+                decodeWindowIndices(addr + static_cast<uint32_t>(static_cast<int32_t>(medSrcBytes)), nPix, idx, lineMed,
+                                    lineScroll, linePref);
         }
 
         uint32_t* dst = frame_.data() + static_cast<std::size_t>(row) * W;

@@ -316,7 +316,8 @@ private:
     static constexpr int kSnapLead = 8;
     std::vector<uint8_t>  lineSnap_;             // [scanline * kLineSnapBytes]
     std::vector<uint16_t> lineSnapLen_;          // octets valides par scanline
-    std::vector<uint8_t>  lineScrollSnap_;       // scroll fin STE ($FF8265) par scanline committée
+    std::vector<uint8_t>  lineScrollSnap_;       // scroll fin STE par scanline committée
+                                                 // (bits 0-3 : compteur ; bit 4 : prefetch $FF8265)
     // Octets lus par le shifter sur une scanline (160 nominal, modulé par les
     // drapeaux de bordure glue — port BORDERBYTES_*). Hors line-offset/scroll STE.
     int  glueLineBytes(int scanline) const;
@@ -463,11 +464,16 @@ private:
     // fenêtré pour les bordures) dans `idx`. Comme decodeLineIndices mais largeur
     // explicite et base fournie (pas de stride interne). Applique le scroll fin STE
     // (même modèle prefetch/sans-prefetch que decodeLineIndices) et renvoie le
-    // décalage scroll (l'appelant lit idx[s + scroll]).
-    int decodeWindowIndices(uint32_t base, int nPix, uint8_t* idx, bool medLine = false) const;
+    // décalage scroll (l'appelant lit idx[s + scroll]). `scroll`/`prefetch` sont
+    // fournis PAR LIGNE par l'appelant (valeur snappée au commit, cf.
+    // lineScrollSnap_) — les membres vivants portent la valeur de fin de trame,
+    // fausse pour un split $FF8264/65 à mi-trame.
+    int decodeWindowIndices(uint32_t base, int nPix, uint8_t* idx, bool medLine,
+                            int scroll, bool prefetch) const;
     // Variante depuis une CAPTURE de ligne (octets déjà échantillonnés au faisceau,
     // cf. lineSnap_) : même décodage planaire, source tampon au lieu du bus.
-    int decodeWindowIndicesFromBytes(const uint8_t* src, int srcLen, int nPix, uint8_t* idx, bool medLine = false) const;
+    int decodeWindowIndicesFromBytes(const uint8_t* src, int srcLen, int nPix, uint8_t* idx, bool medLine,
+                                     int scroll, bool prefetch) const;
 
     // --- Spec512 : palette intra-ligne (port Hatari spec512.c) --------------
     // Une écriture palette dans la trame, datée au cycle (façon CyclePalettes[]).
@@ -539,7 +545,11 @@ public:
         ar(videoBase);
         ar(palette);
         ar(mode);
-        ar.check(static_cast<uint8_t>(mode) <= static_cast<uint8_t>(Mode::High));
+        // $FF8260 accepte les 2 bits : la valeur 3 (« stop the shifter », trick
+        // Troed/Sync) est un état légalement atteignable par MMIO — un .state
+        // pris dans cet état doit rester rechargeable. Seules les valeurs > 3
+        // (fichier forgé) sont rejetées.
+        ar.check(static_cast<uint8_t>(mode) <= 3);
         ar(sync);
         // Registres STE ($FF8264/65, $FF820F)
         ar(hwScrollCount);
@@ -572,14 +582,16 @@ public:
         // --- Captures par-ligne (échantillon faisceau) ---
         ar.vec(lineSnap_);          // std::vector<uint8_t>
         ar.podVec(lineSnapLen_);    // std::vector<uint16_t>
-        ar.vec(lineScrollSnap_);    // scroll fin STE par ligne (v9)
+        ar.vec(lineScrollSnap_);    // scroll fin STE par ligne (v9 ; bit 4 = prefetch)
         // Invariant : les tableaux sont indexés ENSEMBLE (lineSnap_ par tranches
         // de kLineSnapBytes, borné par lineSnapLen_.size()) — un fichier forgé
         // désynchronisé ferait écrire endLine() hors du tas ; lineScrollSnap_ est
-        // lu par renderGlueFrame sous la même borne, et un scroll est 4 bits.
+        // lu par renderGlueFrame sous la même borne : compteur 4 bits + bit 4 de
+        // mode prefetch (un fichier antérieur, bit 4 toujours à 0, reste lisible —
+        // au pire une trame re-rendue avec l'ancien comportement au chargement).
         ar.check(lineSnap_.size() == lineSnapLen_.size() * kLineSnapBytes);
         ar.check(lineScrollSnap_.size() == lineSnapLen_.size());
-        for (uint8_t s : lineScrollSnap_) ar.check(s <= 15);
+        for (uint8_t s : lineScrollSnap_) ar.check(s <= 0x1F);
 
         // --- Filtre Glue « même valeur ignorée » (persistant inter-trames) ---
         ar(lastGlueFreq_);
@@ -657,7 +669,7 @@ public:
         // qui grossit curW_/curH_ sans grossir frame_ ferait écrire hors du tas — et
         // resizeFor() ne rattrape rien, son court-circuit « même w/h » saute la
         // réallocation. On vérifie donc APRÈS relecture du vecteur.
-        ar.check(static_cast<uint8_t>(frameMode_) <= static_cast<uint8_t>(Mode::High));
+        ar.check(static_cast<uint8_t>(frameMode_) <= 3);   // 3 possible, cf. `mode` plus haut
         ar.check(curW_ > 0 && curH_ > 0 && curW_ <= 1024 && curH_ <= 512);
         ar.check(frame_.size() == static_cast<std::size_t>(curW_) * static_cast<std::size_t>(curH_));
         ar.check(curAH_ >= 0 && activeX_ >= 0 && activeY_ >= 0 &&

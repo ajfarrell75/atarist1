@@ -16,10 +16,15 @@
 namespace minijson {
 namespace {
 
+// Profondeur d'imbrication maximale : borne la récursion value→object/array
+// sur un document hostile (des mégaoctets de « [ » feraient déborder la pile).
+constexpr int kMaxDepth = 128;
+
 struct P {
     const char* s;
     const char* end;
     bool ok = true;
+    int depth = 0;
 
     bool eof() const { return s >= end; }
     char peek() const { return eof() ? '\0' : *s; }
@@ -98,6 +103,13 @@ struct P {
     // Objet : si `key` non nul, s'arrête sur cette clé et remplit `found` avec
     // la position de sa valeur (s pointe alors sur la valeur). Sinon, saute tout.
     bool object(const char* key, bool* found) {
+        if (++depth > kMaxDepth) { --depth; return false; }
+        const bool r = objectBody(key, found);
+        --depth;
+        return r;
+    }
+
+    bool objectBody(const char* key, bool* found) {
         if (peek() != '{') return false;
         ++s;
         ws();
@@ -122,6 +134,13 @@ struct P {
     // Tableau : si `idx` >= 0, s'arrête sur l'élément idx (s pointe dessus, via
     // le retour true + *foundAt true). Sinon, saute tout.
     bool array(int idx, bool* found) {
+        if (++depth > kMaxDepth) { --depth; return false; }
+        const bool r = arrayBody(idx, found);
+        --depth;
+        return r;
+    }
+
+    bool arrayBody(int idx, bool* found) {
         if (peek() != '[') return false;
         ++s;
         ws();
