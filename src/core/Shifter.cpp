@@ -843,8 +843,12 @@ void Shifter::endVideoLine() {
         lineSnapLen_[sl] = static_cast<uint16_t>(n);
         // Scroll fin de CETTE ligne (capturé AVANT le latch différé newHwScrollCount_
         // quelques lignes plus bas) — consommé par renderGlueFrame (idx[s + scroll]).
+        // Bit 4 = mode prefetch ($FF8265 vs $FF8264) : le décodage (groupe 16 px
+        // en plus vs départ à idx[16]) doit suivre le mode de CETTE ligne, pas la
+        // valeur de fin de trame — un split $FF8264/65 à mi-trame déplaçait de
+        // 16 px les lignes re-rendues (spec512) de l'autre moitié.
         if (sl < static_cast<int>(lineScrollSnap_.size()))
-            lineScrollSnap_[sl] = hwScrollCount;
+            lineScrollSnap_[sl] = uint8_t(hwScrollCount | (hwScrollPrefetch ? 0x10 : 0));
     }
     vcLineBase_ += static_cast<uint32_t>(bpl);
     // Prefetch et line-offset STE ne s'appliquent QUE sur une ligne réellement
@@ -1792,12 +1796,11 @@ void Shifter::replayGlue() {
 //    idx[0..16+scroll) mis à 0.
 // scroll = 0 (ST/STF) → décodage historique strictement inchangé. Renvoie le
 // décalage scroll. `idx` doit tenir nPix arrondi au groupe + 16 + 16 octets.
-int Shifter::decodeWindowIndices(uint32_t base, int nPix, uint8_t* idx, bool medLine) const {
+int Shifter::decodeWindowIndices(uint32_t base, int nPix, uint8_t* idx, bool medLine,
+                                 int scroll, bool prefetch) const {
     const int planes = (frameMode_ == Mode::Medium || medLine) ? 2 : 4;   // low=4, med=2
     const int groupB = 2 * planes;                             // octets pour 16 px
     const int groups = (nPix + 15) / 16;
-    const int  scroll   = hwScrollCount;                       // 0 hors STE scrollé
-    const bool prefetch = hwScrollPrefetch;
     const int  decodeGroups = (scroll && prefetch) ? groups + 1 : groups;
     int px = (scroll && !prefetch) ? 16 : 0;
     for (int gI = 0; gI < decodeGroups; ++gI) {
@@ -1815,7 +1818,8 @@ int Shifter::decodeWindowIndices(uint32_t base, int nPix, uint8_t* idx, bool med
     return scroll;
 }
 
-int Shifter::decodeWindowIndicesFromBytes(const uint8_t* src, int srcLen, int nPix, uint8_t* idx, bool medLine) const {
+int Shifter::decodeWindowIndicesFromBytes(const uint8_t* src, int srcLen, int nPix, uint8_t* idx, bool medLine,
+                                          int scroll, bool prefetch) const {
     // Même décodage planaire (et même modèle de scroll fin STE) que
     // decodeWindowIndices, mais depuis la CAPTURE de la ligne (octets
     // échantillonnés au faisceau) au lieu du bus. Au-delà de srcLen (marge de
@@ -1823,8 +1827,6 @@ int Shifter::decodeWindowIndicesFromBytes(const uint8_t* src, int srcLen, int nP
     const int planes = (frameMode_ == Mode::Medium || medLine) ? 2 : 4;
     const int groupB = 2 * planes;
     const int groups = (nPix + 15) / 16;
-    const int  scroll   = hwScrollCount;
-    const bool prefetch = hwScrollPrefetch;
     const int  decodeGroups = (scroll && prefetch) ? groups + 1 : groups;
     auto rd16 = [&](int off) -> uint16_t {
         const uint8_t hiB = (off     < srcLen) ? src[off]     : 0;
@@ -1984,8 +1986,14 @@ void Shifter::renderGlueFrame() {
         // committées — même approximation que la relecture RAM ci-dessous).
         const bool snapHere = sl >= 0 && sl < static_cast<int>(lineSnapLen_.size())
                               && lineSnapLen_[sl] > 0;
-        const int  lineScroll = (snapHere && sl < static_cast<int>(lineScrollSnap_.size()))
-                              ? lineScrollSnap_[sl] : scroll;
+        const bool scrollSnapped = snapHere && sl < static_cast<int>(lineScrollSnap_.size());
+        // Compteur (bits 0-3) ET mode prefetch (bit 4) de CETTE ligne : le
+        // décodage (groupe en plus / départ à idx[16] / memset de tête) doit
+        // suivre la même paire que l'émission — les membres vivants portent la
+        // valeur de FIN de trame, fausse pour l'autre moitié d'un split.
+        const int  lineScroll = scrollSnapped ? (lineScrollSnap_[sl] & 0x0F) : scroll;
+        const bool linePref   = scrollSnapped ? (lineScrollSnap_[sl] & 0x10) != 0
+                                              : hwScrollPrefetch;
         // decodeWindowIndices décode des GROUPES de 16 px (+1 groupe si scroll avec
         // prefetch, ou offset 16 sans prefetch) : la plage valide de idx est
         // [0, nDec) — marge pour le DisplayPixelShift et le scroll.
@@ -2047,9 +2055,11 @@ void Shifter::renderGlueFrame() {
             if (haveSnap)
                 decodeWindowIndicesFromBytes(lineSnap_.data() + static_cast<std::size_t>(sl) * kLineSnapBytes
                                                  + kSnapLead + medSrcBytes,
-                                             lineSnapLen_[sl] - medSrcBytes, nPix, idx, lineMed);
+                                             lineSnapLen_[sl] - medSrcBytes, nPix, idx, lineMed,
+                                             lineScroll, linePref);
             else
-                decodeWindowIndices(addr + static_cast<uint32_t>(static_cast<int32_t>(medSrcBytes)), nPix, idx, lineMed);
+                decodeWindowIndices(addr + static_cast<uint32_t>(static_cast<int32_t>(medSrcBytes)), nPix, idx, lineMed,
+                                    lineScroll, linePref);
         }
 
         uint32_t* dst = frame_.data() + static_cast<std::size_t>(row) * W;
