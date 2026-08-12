@@ -82,6 +82,10 @@ public:
     void unmountAcsi() { acsi_.unmountAll(); }   // le TOS ne le verra qu'au prochain boot
     bool acsiActive() const { return acsi_.anyEnabled(); }
     int  acsiPartitionCount() const { return acsi_.partitionCount(); }
+    // FujiNet virtuel sur le bus ACSI (extension NeoST, cf. docs/FUJINET.md).
+    void attachFujiNet(FujiDevice* dev, int target) { acsi_.attachFujiNet(target, dev); }
+    void detachFujiNet() { acsi_.detachFujiNet(); }
+    int  fujiTarget() const { return acsi_.fujiTarget(); }
     bool inserted(int drive = 0) const { return drive_[drive & 1].present(); }
     const std::string& mountedPath(int drive = 0) const { return drive_[drive & 1].path; }
 

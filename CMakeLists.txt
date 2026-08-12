@@ -35,6 +35,13 @@ set(NEOST_VERSION_STR "${PROJECT_VERSION}" CACHE STRING "Version affichée par l
 
 option(NEOST_WITH_IMGUI  "Greffe Dear ImGui (visualiseur hexa + registres)" ON)
 option(NEOST_WARN_STRICT "Compilation stricte (-Wall -Wextra -Wpedantic)"   ON)
+# FujiNet / réseau : backend hôte à sockets (FujiHostLive). OFF → seuls les
+# backends déterministes (Null/Replay) sont compilés — c'est le cas forcé des
+# cibles WASM et Android, qui n'ont ni threads POSIX complets ni intérêt v1.
+option(NEOST_WITH_NET "FujiNet : backend réseau hôte (sockets)" ON)
+if(EMSCRIPTEN OR ANDROID)
+    set(NEOST_WITH_NET OFF)
+endif()
 
 set(NEOST_STRICT_OPTS "")
 if(NEOST_WARN_STRICT)
@@ -67,6 +74,8 @@ add_library(neost_core STATIC
     src/io/Acsi.cpp
     src/io/Scc.cpp
     src/io/MediaScan.cpp
+    src/io/FujiDevice.cpp
+    src/io/Ne2000.cpp
     src/core/Framing.cpp)
 
 target_include_directories(neost_core PUBLIC "${CMAKE_SOURCE_DIR}/src")
@@ -75,7 +84,34 @@ target_include_directories(neost_core PUBLIC "${CMAKE_SOURCE_DIR}/src")
 set_source_files_properties(
     src/core/Bus.cpp src/core/Shifter.cpp src/core/YM2149.cpp src/core/DmaSound.cpp
     src/core/Blitter.cpp
-    src/core/Machine.cpp src/core/Tracer.cpp src/core/Symbols.cpp src/io/Mfp.cpp src/io/Ikbd.cpp src/io/Fdc.cpp src/io/StxImage.cpp src/io/Rtc.cpp src/io/MidiAcia.cpp src/io/Fpu.cpp src/io/GemdosHd.cpp src/io/Acsi.cpp src/io/Scc.cpp src/io/MediaScan.cpp src/core/Framing.cpp
+    src/core/Machine.cpp src/core/Tracer.cpp src/core/Symbols.cpp src/io/Mfp.cpp src/io/Ikbd.cpp src/io/Fdc.cpp src/io/StxImage.cpp src/io/Rtc.cpp src/io/MidiAcia.cpp src/io/Fpu.cpp src/io/GemdosHd.cpp src/io/Acsi.cpp src/io/Scc.cpp src/io/MediaScan.cpp src/io/FujiDevice.cpp src/io/Ne2000.cpp src/core/Framing.cpp
+    PROPERTIES COMPILE_OPTIONS "${NEOST_STRICT_OPTS}")
+
+# =============================================================================
+#  neost_net — backends hôte du FujiNet virtuel (HORS cœur : c'est ici que
+#  vivent sockets et threads). Toujours bâtie (Replay/MiniJson sont sans
+#  dépendance) ; FujiHostLive n'entre que si NEOST_WITH_NET.
+# =============================================================================
+add_library(neost_net STATIC
+    src/net/FujiHostReplay.cpp
+    src/net/MiniJson.cpp)
+target_link_libraries(neost_net PUBLIC neost_core)
+set(NEOST_NET_SRC src/net/FujiHostReplay.cpp src/net/MiniJson.cpp)
+if(NEOST_WITH_NET)
+    target_sources(neost_net PRIVATE src/net/FujiHostLive.cpp src/net/HttpClient.cpp
+                                     src/net/HayesModem.cpp src/net/MidiRing.cpp)
+    list(APPEND NEOST_NET_SRC src/net/FujiHostLive.cpp src/net/HttpClient.cpp
+                              src/net/HayesModem.cpp src/net/MidiRing.cpp)
+    target_compile_definitions(neost_net PUBLIC NEOST_WITH_NET=1)
+    find_package(Threads QUIET)
+    if(Threads_FOUND)
+        target_link_libraries(neost_net PUBLIC Threads::Threads)
+    endif()
+    if(WIN32)
+        target_link_libraries(neost_net PUBLIC ws2_32)
+    endif()
+endif()
+set_source_files_properties(${NEOST_NET_SRC}
     PROPERTIES COMPILE_OPTIONS "${NEOST_STRICT_OPTS}")
 
 # --- Moira (cœur 68000 cycle-exact, MIT) — SEUL cœur CPU de NeoST ------------
@@ -139,7 +175,7 @@ endif()
 #  neost-headless — sans interface, pour les traces comparables à MAME.
 # =============================================================================
 add_executable(neost-headless src/headless/main_headless.cpp)
-target_link_libraries(neost-headless PRIVATE neost_core)
+target_link_libraries(neost-headless PRIVATE neost_core neost_net)
 target_compile_definitions(neost-headless PRIVATE NEOST_VERSION="${NEOST_VERSION_STR}")
 set_source_files_properties(src/headless/main_headless.cpp
     PROPERTIES COMPILE_OPTIONS "${NEOST_STRICT_OPTS}")
@@ -319,7 +355,7 @@ if(WIN32 AND NEOST_WIN_GLFW_LIBS)
 else()
     set(NEOST_GLFW_LINK glfw)
 endif()
-target_link_libraries(neost PRIVATE neost_core ${NEOST_GLFW_LINK} OpenGL::GL Threads::Threads ${CMAKE_DL_LIBS})
+target_link_libraries(neost PRIVATE neost_core neost_net ${NEOST_GLFW_LINK} OpenGL::GL Threads::Threads ${CMAKE_DL_LIBS})
 if(WIN32)
     # miniaudio (WASAPI) n'auto-lie ses dépendances COM que sous MSVC (#pragma
     # comment), jamais sous MinGW : sans elles, l'édition de liens échoue sur
