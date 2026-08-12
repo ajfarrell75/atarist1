@@ -207,6 +207,18 @@ public:
         return de + kOffset;
     }
 
+    // Position du tic Timer B pour UNE ligne donnée, DE réel de la ligne compris —
+    // port de `Video_TimerB_GetPosFromDE` appliqué à `ShifterLines[n]` : sur une
+    // trame à tricks, le DE de la ligne vient de la machine Glue (retrait droit →
+    // DE_end 462 → tic à ~488, etc.). Hatari REPROGRAMME l'interruption TB à chaque
+    // écriture qui change le DE (video.c:2880-2891) ; côté NeoST, Machine::onTimerB
+    // re-vérifie cette position au callback et se replanifie si elle a reculé.
+    // Chantier Closure (docs/CLOSURE_CHANTIER.md) : la démo CHRONOMÈTRE les tics TB
+    // de lignes sondées une à une — position globale seule = mesure hors barème.
+    // Hors trame à écritures freq/res : le défaut global historique (zéro régression).
+    int timerBPosForLine(int line, bool startOfLine);   // implémentation : Shifter.cpp
+    int64_t timerBFrameCycleForLine(int line, bool startOfLine);   // grille RÉELLE ; -1 = indispo
+
     // Horloge faisceau : renvoie le nombre de cycles écoulés DANS la trame courante
     // (0 au début de trame). Posée par Machine ; sert à reconstruire le compteur
     // d'adresse vidéo $FF8205/07/09 (position courante du balayage). Cf. Hatari
