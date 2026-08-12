@@ -681,6 +681,12 @@ bool Bus::megaSteCacheUpdate(uint32_t addr, int size, uint16_t val, bool write, 
 uint8_t Bus::dmaRead8(uint32_t addr) {
     addr &= stmap::ADDR_MASK;
     if (busFault(addr)) return 0x00;         // DMA_READ_BYTE_BUS_ERR
+    // Jamais de dispatch MMIO : certains registres whitelistés (pads STE
+    // $FF9200, FDC $FF8604-07) déclenchent une bus error périphérique en accès
+    // octet — levée ici hors du try/catch de Moira, elle terminerait le
+    // processus. Chez Hatari le pointeur DMA masqué n'atteint jamais l'espace
+    // IO ; on lit 0 comme pour une zone fautive (et sans effet de bord puce).
+    if (addr >= stmap::MMIO_BASE) return 0x00;
     return read8(addr);
 }
 
@@ -693,6 +699,7 @@ void Bus::dmaWrite8(uint32_t addr, uint8_t v) {
     // l'idiome de reboot à chaud « move.l $4.w,a0 ; jmp (a0) ». Chez Hatari l'écriture
     // est simplement perdue (cpu/memory.c:775, SysMem_bput : « if (addr < 0x8) »).
     if (addr < 0x8 || busFault(addr)) return;   // écriture en zone protégée/fautive perdue
+    if (addr >= stmap::MMIO_BASE) return;       // pas de dispatch MMIO (cf. dmaRead8)
     write8(addr, v);
 }
 
@@ -793,7 +800,12 @@ uint8_t Bus::mmioRead8(uint32_t addr) {
         // $FFFA31-$FFFA3F (impairs) : VOID chez Hatari (ioMemTabST.c:143-150,
         // IoMem_VoidRead) — lecture 0xFF, AUCUN wait-state (pas de handler). Le
         // dernier registre câblé est l'UDR USART à $FFFA2F.
-        if ((addr & 0x3F) >= 0x31) return 0xFF;
+        // Octets PAIRS : non décodés par le 68901 (registres sur adresses
+        // impaires). Atteignables seulement par un accès MOT (la whitelist
+        // faute l'accès octet) : chez Hatari l'octet pair passe alors par
+        // IoMem_BusErrorEvenReadAccess → 0xFF, jamais par la puce. Sans ce
+        // filtre, les default du MFP en faisaient des cellules RAM fantômes.
+        if (!(addr & 1) || (addr & 0x3F) >= 0x31) return 0xFF;
         // Wait state MFP (4 cyc) facturé UNE fois par accès : seul l'octet IMPAIR
         // porte un registre câblé (Hatari : M68000_WaitState(4) dans le handler du
         // registre ; l'octet pair d'un accès mot n'ajoute rien).
@@ -905,7 +917,9 @@ void Bus::mmioWrite8(uint32_t addr, uint8_t v) {
     if (addr >= stmap::MFP_BASE && addr < stmap::MFP_BASE + 0x40 && mfp) {
         // $FFFA31-$FFFA3F : void — écriture ABSORBÉE sans wait-state (cf. mmioRead8) ;
         // l'ancien chemin en faisait 8 octets de RAM relisible cachés dans le MFP.
-        if ((addr & 0x3F) >= 0x31) return;
+        // Octets PAIRS : non décodés, écriture jetée (IoMem_BusErrorEvenWriteAccess),
+        // cf. mmioRead8.
+        if (!(addr & 1) || (addr & 0x3F) >= 0x31) return;
         // Wait state MFP facturé UNE fois par accès : octet impair seulement (cf. mmioRead8).
         if (cpu && (addr & 1)) cpu->addMfpWaitCycles();
         mfp->write8(addr, v);

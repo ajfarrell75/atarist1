@@ -257,7 +257,11 @@ HttpResult httpFetch(const std::string& url, const std::string* postBody,
         const std::string head(raw.begin(), it);
         std::vector<uint8_t> body(it + 4, raw.end());
 
-        r.status = std::atoi(head.c_str() + head.find(' '));
+        // Ligne de statut sans espace (serveur cassé/hostile) : find() == npos
+        // ferait déborder le pointeur passé à atoi.
+        const auto sp = head.find(' ');
+        if (sp == std::string::npos) { r.error = "malformed HTTP status line"; return r; }
+        r.status = std::atoi(head.c_str() + sp + 1);
         if (r.status >= 301 && r.status <= 308 && r.status != 304) {
             const std::string loc = headerValue(head, "Location");
             if (!loc.empty()) {
