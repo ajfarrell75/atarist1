@@ -340,6 +340,30 @@ reset HW/canal, IRQ niveau 5 gatée par le SCU).
 
 ---
 
+### CPU (Moira + intégration) — suivi (audit vendor 2026-08-13)
+
+Audit complet des patches vendorisés (`extern/moira/NEOST_VENDOR.md`) : diff intégral
+contre l'upstream — 5 fichiers modifiés, tous les hunks documentés, aucun écart
+accidentel. Le crash « BusError hors execute() via GEMDOS HD » a été **corrigé le jour
+même** (primitives non-fautives + filet au site d'appel). Restent trois points bas :
+
+- **[CPU1 — basse]** Le fast-forward du STOP (`Cpu68k.cpp`, garde `isStopped() &&
+  !irqDeliverable()`) saute par-dessus une exception trace ou privilège en attente
+  (`stop` sous bit T armé ; `stop #imm` effaçant S) : l'exception part avec jusqu'à un
+  écart d'événement de retard (vs immédiat sur 68000 réel). Timing seul, motifs
+  exotiques (moniteurs pas-à-pas) — NE PAS toucher sans re-valider Closure (le
+  fast-forward est sur son chemin critique).
+- **[CPU2 — basse]** `chipWait16` (Mega STE 16 MHz) n'a pas reçu la correction de
+  phase mi-accès `(c − 2)` appliquée à `chipWait8` le 2026-07-02 — skew structurel
+  probable de l'alignement slot RAM en 16 MHz. À trancher par A/B contre l'oracle
+  Hatari, pas à corriger à l'aveugle (mode peu validé).
+- **[CPU3 — basse]** `iplDeferred` (NEOST_IPLFETCH=1, opt-in expérimental) n'est pas
+  sérialisé : un échantillon IPL différé armé au save est perdu au load (IRQ reconnue
+  une frontière trop tard). Sérialiser = bump de version .state — différé tant que le
+  mode reste expérimental.
+
+---
+
 ## Documents internes périmés — ✅ SUPPRIMÉS
 
 Deux docs décrivaient un état du code **antérieur** et listaient comme « absents » des

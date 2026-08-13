@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 
 // Modèle de dispatch BLOC = DÉFAUT (le sync-driven mid-instruction est RÉFUTÉ : il
@@ -870,7 +871,11 @@ bool Machine::saveStateFile(const std::string& path) {
         f.write(reinterpret_cast<const char*>(buf.data()), std::streamsize(buf.size()));
         if (!f) { std::remove(tmp.c_str()); return false; }
     }
-    if (std::rename(tmp.c_str(), path.c_str()) != 0) { std::remove(tmp.c_str()); return false; }
+    // fs::rename et non std::rename : la CRT Windows refuse d'écraser une
+    // destination existante — le slot unique neost.state ne se réécrivait jamais.
+    std::error_code rnec;
+    std::filesystem::rename(tmp, path, rnec);
+    if (rnec) { std::remove(tmp.c_str()); return false; }
     return true;
 }
 

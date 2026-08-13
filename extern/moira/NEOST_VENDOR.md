@@ -68,7 +68,8 @@ WinUAE/Hatari). Fix : `Moira::reset<C>()` (Moira.cpp) enveloppe les
 ## Patch local : watchpoints masqués au bus 24 bits (2026-07-11)
 
 Le débogueur NeoST pose des watchpoints mémoire via `debugger.watchpoints`. Moira
-teste l'accès dans `peekM`/`pokeM` (`MoiraDataflow_cpp.h`) avec l'adresse EA **non
+teste l'accès dans `Moira::read<>`/`write<>` (`MoiraDataflow_cpp.h` — nommés
+`peekM`/`pokeM` dans d'anciennes versions) avec l'adresse EA **non
 masquée**, alors que l'accès réel juste en dessous utilise `addr & addrMask<C>()`
 (24 bits). Un accès I/O en adressage court absolu (`$8001.w` → EA `$FFFF8001`) ne
 matchait donc jamais un watchpoint posé sur `$FF8001`. Fix : masquer l'`addr` par
