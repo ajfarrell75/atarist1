@@ -16,6 +16,12 @@
 #include <OpenGL/gl.h>
 #else
 #include <GL/gl.h>
+// glext.h est REQUIS hors macOS : le <GL/gl.h> livré par Windows est figé en
+// OpenGL 1.1 et ignore GL_BGRA / GL_UNSIGNED_INT_8_8_8_8_REV (GL 1.2), dont le
+// téléversement du framebuffer ARGB du Shifter a besoin. Seul l'EN-TÊTE est
+// ancien : tout pilote réel expose ces formats depuis vingt ans. Même schéma
+// que gui/CrtEffectStack.cpp et gui/OpenGLShader.cpp.
+#include <GL/glext.h>
 #endif
 #include "gui/CrtEffectStack.h"   // passe d'effets CRT (opt-in, façade moniteur)
 #include "core/Symbols.hpp"       // table de symboles du débogueur (noms ↔ adresses)
@@ -34,21 +40,41 @@
 #include <cmath>
 #include <map>
 #include <vector>
-#include <sys/stat.h>
 #if defined(__APPLE__)
 #include <mach-o/dyld.h>       // _NSGetExecutablePath (résolution du chemin exécutable)
+#elif defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX               // sinon windows.h définit min()/max() en MACROS et
+#endif                         // casse tous les std::min / std::max du fichier
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN    // pas de winsock/ole : rien d'utile ici, des conflits sûrs
+#endif
+#include <windows.h>           // GetModuleFileNameW (résolution du chemin exécutable)
 #endif
 
 #include "core/Machine.hpp"
+#include "net/FujiHost.hpp"
+#include "net/NetBackend.hpp"
+#ifdef NEOST_WITH_NET
+#include "net/FujiHostLive.hpp"
+#include "net/HayesModem.hpp"
+#endif
 #include "audio/Audio.hpp"
 #include "audio/DriveSound.hpp"
 #include "io/JoystickInput.hpp"
+#include "io/MediaScan.hpp"
+#include "core/Framing.hpp"
 
 namespace fs = std::filesystem;
 
 // Résout un chemin de données indépendamment du répertoire courant : tel quel,
 // puis relatif au répertoire de l'exécutable (utile quand on lance depuis build/).
-static bool fileExists(const std::string& p) { struct stat s; return ::stat(p.c_str(), &s) == 0; }
+// std::filesystem et non stat() : <sys/stat.h> n'existe pas partout, et la
+// surcharge à error_code ne LANCE jamais (un chemin illisible = « absent »).
+static bool fileExists(const std::string& p) {
+    std::error_code ec;
+    return std::filesystem::exists(p, ec) && !ec;
+}
 static std::string resolveData(const std::string& given, const std::string& exeDir) {
     const std::string cands[] = { given, exeDir + "/" + given, exeDir + "/../" + given, "../" + given };
     for (const auto& c : cands) if (fileExists(c)) return c;
@@ -93,6 +119,11 @@ static std::string pickTosForMachine(const std::string& machine,
 struct Config { std::string rom; std::string disk; std::string diskb; std::string cart; bool mono = false;
                 std::string gemdos;   // HD GEMDOS : dossier hôte monté en C: (vide = off)
                 std::string acsi;     // image disque dur ACSI cible 0 (vide = off)
+                bool fujinet = false; // FujiNet virtuel sur le bus ACSI (extension NeoST)
+                int  fujinetTarget = 6;      // cible ACSI du FujiNet (0-7)
+                std::string fujinetHosts;    // host slots, séparés par '|' (slot 0 en tête)
+                bool modem = false;   // modem Hayes sur l'USART (pont AT → TCP)
+                bool ethernec = false; // NE2000/EtherNEC sur le port cartouche
                 std::string cpu = "moira"; std::string machine = "st";
                 std::string mem = "512k"; bool fpu = false;   // MC68881 Mega STE (cf. Fpu.hpp)
                 int joyport = 1;
@@ -103,6 +134,7 @@ struct Config { std::string rom; std::string disk; std::string diskb; std::strin
                 float joydeadzone = 0.30f; bool fastfdc = false;
                 float volume = 1.0f;   // volume maître de la sortie audio (0..1, barre de menu)
                 int audioLatencyMs = 85; // coussin audio visé (cf. Audio::setLatencyMs, --audio-latency)
+                bool driveSound = true;  // bruits mécaniques du lecteur (roms/drivesound/, cf. DriveSound)
                 bool showHex = true, showCpu = true;
                 bool showJoy = false;
                 bool showCfg = true;           // fenêtre « Configuration » (tout se règle là)
@@ -142,71 +174,83 @@ static void snapshotRtc(Machine& m, Config& c) {
     c.rtc = buf;
     c.rtcSaved = std::time(nullptr);
 }
+// Applique UNE ligne « clé=valeur » à `c`. Extrait de loadConfig pour être partagé
+// avec les PROFILS nommés (profiles/*.cfg, même format) : un profil n'écrit qu'un
+// sous-ensemble des clés, et tout ce qu'il omet garde donc la valeur déjà présente
+// dans `c`. C'est ce qui permet de charger un profil PAR-DESSUS la configuration
+// courante sans tenir à jour une liste de recopie champ par champ.
+static void parseConfigLine(Config& c, std::string line) {
+    // Fin de ligne CRLF (fichier passé par Windows, un éditeur, un partage réseau) :
+    // getline ne retire que le \n, et TOUTES les valeurs sont comparées EXACTEMENT
+    // (parseMachine, parseRamBytes, == "1"). Un \r collé faisait donc tomber chaque
+    // clé sur son défaut SILENCIEUX — machine ST demandée, STE démarrée ; 4 Mo
+    // demandés, 512 Ko alloués — et rendait tout chemin introuvable. Pire : saveConfig
+    // réécrivait ensuite le fichier avec les \r intacts, donc la panne était définitive.
+    // Même rognage que SymbolTable (Symbols.cpp). On retire aussi les espaces de fin.
+    while (!line.empty() && (line.back() == '\r' || line.back() == ' ' || line.back() == '\t'))
+        line.pop_back();
+    if      (line.rfind("rom=", 0)  == 0) c.rom  = line.substr(4);
+    else if (line.rfind("disk=", 0) == 0) c.disk = line.substr(5);
+    else if (line.rfind("cart=", 0) == 0) c.cart = line.substr(5);
+    else if (line.rfind("gemdos=", 0) == 0) c.gemdos = line.substr(7);
+    else if (line.rfind("acsi=", 0) == 0) c.acsi = line.substr(5);
+    else if (line.rfind("fujinet=", 0) == 0) c.fujinet = (line.substr(8) == "1");
+    else if (line.rfind("fujinet_target=", 0) == 0) c.fujinetTarget = std::atoi(line.substr(15).c_str());
+    else if (line.rfind("fujinet_hosts=", 0) == 0) c.fujinetHosts = line.substr(14);
+    else if (line.rfind("modem=", 0) == 0) c.modem = (line.substr(6) == "1");
+    else if (line.rfind("ethernec=", 0) == 0) c.ethernec = (line.substr(9) == "1");
+    else if (line.rfind("mono=", 0) == 0) c.mono = (line.substr(5) == "1");
+    else if (line.rfind("cpu=", 0)  == 0) c.cpu  = line.substr(4);
+    else if (line.rfind("machine=", 0) == 0) c.machine = line.substr(8);
+    else if (line.rfind("mem=", 0)  == 0) c.mem  = line.substr(4);
+    else if (line.rfind("fpu=", 0)  == 0) c.fpu  = (line.substr(4) == "1");
+    else if (line.rfind("joyport=", 0) == 0) c.joyport = (line.substr(8) == "0") ? 0 : 1;
+    else if (line.rfind("joymap=", 0) == 0) c.joymap = line.substr(7);
+    else if (line.rfind("joydeadzone=", 0) == 0) c.joydeadzone = std::strtof(line.substr(12).c_str(), nullptr);
+    else if (line.rfind("fastfdc=", 0) == 0) c.fastfdc = (line.substr(8) == "1");
+    else if (line.rfind("volume=", 0) == 0) {
+        c.volume = std::strtof(line.substr(7).c_str(), nullptr);
+        if (c.volume < 0.0f) c.volume = 0.0f;
+        if (c.volume > 1.0f) c.volume = 1.0f;
+    }
+    else if (line.rfind("audio_latency_ms=", 0) == 0) c.audioLatencyMs = std::atoi(line.substr(17).c_str());
+    else if (line.rfind("drivesound=", 0) == 0) c.driveSound = (line.substr(11) == "1");
+    // showDisk=/showCart=/showHd= : clés d'anciennes fenêtres (bibliothèques),
+    // devenues des pages de la Configuration. Ignorées silencieusement.
+    else if (line.rfind("showHex=", 0) == 0) c.showHex = (line.substr(8) == "1");
+    else if (line.rfind("showCpu=", 0) == 0) c.showCpu = (line.substr(8) == "1");
+    else if (line.rfind("showJoy=", 0) == 0) c.showJoy = (line.substr(8) == "1");
+    else if (line.rfind("showCfg=", 0) == 0) c.showCfg = (line.substr(8) == "1");
+    else if (line.rfind("uiVersion=", 0) == 0) c.uiVersion = std::atoi(line.c_str() + 10);
+    else if (line.rfind("diskb=", 0)  == 0) c.diskb   = line.substr(6);
+    else if (line.rfind("dock=", 0) == 0) c.dock = (line.substr(5) == "1");
+    else if (line.rfind("autozoom=", 0) == 0) c.autoZoom = (line.substr(9) == "1");
+    else if (line.rfind("rtc_saved=", 0) == 0) c.rtcSaved = std::strtoll(line.substr(10).c_str(), nullptr, 10);
+    else if (line.rfind("rtc=", 0) == 0) c.rtc = line.substr(4);
+    else if (line.rfind("kiosk_romdir=", 0) == 0) { const std::string d = line.substr(13); if (!d.empty()) c.romDirs.push_back(d); }
+    // Effets CRT (cf. gui/CrtParams.h). Un preset (--crt-preset / applyCrtPreset)
+    // n'est qu'un raccourci qui écrit ces mêmes clés numériques.
+    else if (line.rfind("crt=", 0) == 0) c.crt = (line.substr(4) == "1");
+    else if (line.rfind("crt_bright=", 0)  == 0) c.crtParams.brightness  = std::strtof(line.substr(11).c_str(), nullptr);
+    else if (line.rfind("crt_contrast=", 0) == 0) c.crtParams.contrast   = std::strtof(line.substr(13).c_str(), nullptr);
+    else if (line.rfind("crt_sat=", 0)     == 0) c.crtParams.saturation  = std::strtof(line.substr(8).c_str(), nullptr);
+    else if (line.rfind("crt_hue=", 0)     == 0) c.crtParams.hue         = std::strtof(line.substr(8).c_str(), nullptr);
+    else if (line.rfind("crt_sharp=", 0)   == 0) c.crtParams.sharpness   = std::strtof(line.substr(10).c_str(), nullptr);
+    else if (line.rfind("crt_persist=", 0) == 0) c.crtParams.persistence = std::strtof(line.substr(12).c_str(), nullptr);
+    else if (line.rfind("crt_scanlines=", 0) == 0) c.crtParams.scanlines = std::strtof(line.substr(14).c_str(), nullptr);
+    else if (line.rfind("crt_barrel=", 0)  == 0) c.crtParams.barrel      = std::strtof(line.substr(11).c_str(), nullptr);
+    else if (line.rfind("crt_mask=", 0)    == 0) c.crtParams.shadowMask  = static_cast<neost::CrtParams::ShadowMask>(std::atoi(line.substr(9).c_str()));
+    else if (line.rfind("crt_maskstr=", 0) == 0) c.crtParams.shadowMaskStrength = std::strtof(line.substr(12).c_str(), nullptr);
+    else if (line.rfind("crt_lumgain=", 0) == 0) c.crtParams.luminanceGain = std::strtof(line.substr(12).c_str(), nullptr);
+    else if (line.rfind("crt_center=", 0)  == 0) c.crtParams.centerLighting = std::strtof(line.substr(11).c_str(), nullptr);
+    else if (line.rfind("crt_gamma=", 0)   == 0) c.crtParams.phosphorGamma  = std::strtof(line.substr(10).c_str(), nullptr);
+}
 static Config loadConfig(const std::string& exeDir) {
     Config c;
     std::ifstream f(cfgPath(exeDir));
     if (!f) f.open("neost.cfg");
     std::string line;
-    while (std::getline(f, line)) {
-        // Fin de ligne CRLF (fichier passé par Windows, un éditeur, un partage réseau) :
-        // getline ne retire que le \n, et TOUTES les valeurs sont comparées EXACTEMENT
-        // (parseMachine, parseRamBytes, == "1"). Un \r collé faisait donc tomber chaque
-        // clé sur son défaut SILENCIEUX — machine ST demandée, STE démarrée ; 4 Mo
-        // demandés, 512 Ko alloués — et rendait tout chemin introuvable. Pire : saveConfig
-        // réécrivait ensuite le fichier avec les \r intacts, donc la panne était définitive.
-        // Même rognage que SymbolTable (Symbols.cpp). On retire aussi les espaces de fin.
-        while (!line.empty() && (line.back() == '\r' || line.back() == ' ' || line.back() == '\t'))
-            line.pop_back();
-        if      (line.rfind("rom=", 0)  == 0) c.rom  = line.substr(4);
-        else if (line.rfind("disk=", 0) == 0) c.disk = line.substr(5);
-        else if (line.rfind("cart=", 0) == 0) c.cart = line.substr(5);
-        else if (line.rfind("gemdos=", 0) == 0) c.gemdos = line.substr(7);
-        else if (line.rfind("acsi=", 0) == 0) c.acsi = line.substr(5);
-        else if (line.rfind("mono=", 0) == 0) c.mono = (line.substr(5) == "1");
-        else if (line.rfind("cpu=", 0)  == 0) c.cpu  = line.substr(4);
-        else if (line.rfind("machine=", 0) == 0) c.machine = line.substr(8);
-        else if (line.rfind("mem=", 0)  == 0) c.mem  = line.substr(4);
-        else if (line.rfind("fpu=", 0)  == 0) c.fpu  = (line.substr(4) == "1");
-        else if (line.rfind("joyport=", 0) == 0) c.joyport = (line.substr(8) == "0") ? 0 : 1;
-        else if (line.rfind("joymap=", 0) == 0) c.joymap = line.substr(7);
-        else if (line.rfind("joydeadzone=", 0) == 0) c.joydeadzone = std::strtof(line.substr(12).c_str(), nullptr);
-        else if (line.rfind("fastfdc=", 0) == 0) c.fastfdc = (line.substr(8) == "1");
-        else if (line.rfind("volume=", 0) == 0) {
-            c.volume = std::strtof(line.substr(7).c_str(), nullptr);
-            if (c.volume < 0.0f) c.volume = 0.0f;
-            if (c.volume > 1.0f) c.volume = 1.0f;
-        }
-        else if (line.rfind("audio_latency_ms=", 0) == 0) c.audioLatencyMs = std::atoi(line.substr(17).c_str());
-        // showDisk=/showCart=/showHd= : clés d'anciennes fenêtres (bibliothèques),
-        // devenues des pages de la Configuration. Ignorées silencieusement.
-        else if (line.rfind("showHex=", 0) == 0) c.showHex = (line.substr(8) == "1");
-        else if (line.rfind("showCpu=", 0) == 0) c.showCpu = (line.substr(8) == "1");
-        else if (line.rfind("showJoy=", 0) == 0) c.showJoy = (line.substr(8) == "1");
-        else if (line.rfind("showCfg=", 0) == 0) c.showCfg = (line.substr(8) == "1");
-        else if (line.rfind("uiVersion=", 0) == 0) c.uiVersion = std::atoi(line.c_str() + 10);
-        else if (line.rfind("diskb=", 0)  == 0) c.diskb   = line.substr(6);
-        else if (line.rfind("dock=", 0) == 0) c.dock = (line.substr(5) == "1");
-        else if (line.rfind("autozoom=", 0) == 0) c.autoZoom = (line.substr(9) == "1");
-        else if (line.rfind("rtc_saved=", 0) == 0) c.rtcSaved = std::strtoll(line.substr(10).c_str(), nullptr, 10);
-        else if (line.rfind("rtc=", 0) == 0) c.rtc = line.substr(4);
-        else if (line.rfind("kiosk_romdir=", 0) == 0) { const std::string d = line.substr(13); if (!d.empty()) c.romDirs.push_back(d); }
-        // Effets CRT (cf. gui/CrtParams.h). Un preset (--crt-preset / applyCrtPreset)
-        // n'est qu'un raccourci qui écrit ces mêmes clés numériques.
-        else if (line.rfind("crt=", 0) == 0) c.crt = (line.substr(4) == "1");
-        else if (line.rfind("crt_bright=", 0)  == 0) c.crtParams.brightness  = std::strtof(line.substr(11).c_str(), nullptr);
-        else if (line.rfind("crt_contrast=", 0) == 0) c.crtParams.contrast   = std::strtof(line.substr(13).c_str(), nullptr);
-        else if (line.rfind("crt_sat=", 0)     == 0) c.crtParams.saturation  = std::strtof(line.substr(8).c_str(), nullptr);
-        else if (line.rfind("crt_hue=", 0)     == 0) c.crtParams.hue         = std::strtof(line.substr(8).c_str(), nullptr);
-        else if (line.rfind("crt_sharp=", 0)   == 0) c.crtParams.sharpness   = std::strtof(line.substr(10).c_str(), nullptr);
-        else if (line.rfind("crt_persist=", 0) == 0) c.crtParams.persistence = std::strtof(line.substr(12).c_str(), nullptr);
-        else if (line.rfind("crt_scanlines=", 0) == 0) c.crtParams.scanlines = std::strtof(line.substr(14).c_str(), nullptr);
-        else if (line.rfind("crt_barrel=", 0)  == 0) c.crtParams.barrel      = std::strtof(line.substr(11).c_str(), nullptr);
-        else if (line.rfind("crt_mask=", 0)    == 0) c.crtParams.shadowMask  = static_cast<neost::CrtParams::ShadowMask>(std::atoi(line.substr(9).c_str()));
-        else if (line.rfind("crt_maskstr=", 0) == 0) c.crtParams.shadowMaskStrength = std::strtof(line.substr(12).c_str(), nullptr);
-        else if (line.rfind("crt_lumgain=", 0) == 0) c.crtParams.luminanceGain = std::strtof(line.substr(12).c_str(), nullptr);
-        else if (line.rfind("crt_center=", 0)  == 0) c.crtParams.centerLighting = std::strtof(line.substr(11).c_str(), nullptr);
-        else if (line.rfind("crt_gamma=", 0)   == 0) c.crtParams.phosphorGamma  = std::strtof(line.substr(10).c_str(), nullptr);
-    }
+    while (std::getline(f, line)) parseConfigLine(c, line);
     return c;
 }
 // Mode kiosk (borne/expo) : plein écran sans chrome, config figée, sortie par chord.
@@ -282,6 +326,104 @@ static int g_browseSel = 0;
 // Image PRISTINE de la configuration, telle que lue au démarrage : c'est elle que le
 // mode borne réécrit (cf. saveConfig), et non la structure de travail salie en séance.
 static Config g_cfgPristine;
+
+// Sérialise `w` en « clé=valeur ». `full` = le neost.cfg complet ; false = un PROFIL
+// nommé, qui laisse dehors ce qui n'appartient pas à un jeu de réglages :
+//   · rtc= / rtc_saved=  → état de la machine, pas un réglage ;
+//   · kiosk_romdir=      → déploiement de la borne, propre à l'installation ;
+//   · showXxx= / dock= / uiVersion= → disposition de l'interface (cousins d'imgui.ini) :
+//     charger un profil ne doit pas déplacer les fenêtres de l'utilisateur.
+// Tout ce qui n'est PAS écrit ici reste donc inchangé au chargement d'un profil
+// (cf. parseConfigLine) — les deux fonctions se répondent, ne toucher qu'ensemble.
+static void writeConfigKeys(std::ostream& f, const Config& w, bool full) {
+    f << "rom=" << w.rom << "\ndisk=" << w.disk << "\ndiskb=" << w.diskb
+      << "\ncart=" << w.cart
+      << "\ngemdos=" << w.gemdos << "\nacsi=" << w.acsi
+      << "\nfujinet=" << (w.fujinet ? 1 : 0)
+      << "\nfujinet_target=" << w.fujinetTarget
+      << "\nfujinet_hosts=" << w.fujinetHosts
+      << "\nmodem=" << (w.modem ? 1 : 0)
+      << "\nethernec=" << (w.ethernec ? 1 : 0)
+      << "\nmono=" << (w.mono ? 1 : 0)
+      << "\ncpu=" << w.cpu << "\nmachine=" << w.machine << "\nmem=" << w.mem
+      << "\nfpu=" << (w.fpu ? 1 : 0)
+      << "\njoyport=" << w.joyport
+      << "\njoymap=" << w.joymap
+      << "\njoydeadzone=" << w.joydeadzone << "\nfastfdc=" << (w.fastfdc ? 1 : 0)
+      << "\nvolume=" << w.volume
+      << "\naudio_latency_ms=" << w.audioLatencyMs
+      << "\ndrivesound=" << (w.driveSound ? 1 : 0) << "\n";
+    if (full)
+        f << "showHex=" << (w.showHex ? 1 : 0)
+          << "\nshowCpu=" << (w.showCpu ? 1 : 0)
+          << "\nshowJoy=" << (w.showJoy ? 1 : 0)
+          << "\nshowCfg=" << (w.showCfg ? 1 : 0)
+          << "\nuiVersion=" << w.uiVersion
+          << "\ndock=" << (w.dock ? 1 : 0) << "\n";
+    f << "autozoom=" << (w.autoZoom ? 1 : 0)
+      << "\ncrt=" << (w.crt ? 1 : 0)
+      << "\ncrt_bright=" << w.crtParams.brightness
+      << "\ncrt_contrast=" << w.crtParams.contrast
+      << "\ncrt_sat=" << w.crtParams.saturation
+      << "\ncrt_hue=" << w.crtParams.hue
+      << "\ncrt_sharp=" << w.crtParams.sharpness
+      << "\ncrt_persist=" << w.crtParams.persistence
+      << "\ncrt_scanlines=" << w.crtParams.scanlines
+      << "\ncrt_barrel=" << w.crtParams.barrel
+      << "\ncrt_mask=" << static_cast<int>(w.crtParams.shadowMask)
+      << "\ncrt_maskstr=" << w.crtParams.shadowMaskStrength
+      << "\ncrt_lumgain=" << w.crtParams.luminanceGain
+      << "\ncrt_center=" << w.crtParams.centerLighting
+      << "\ncrt_gamma=" << w.crtParams.phosphorGamma << "\n";
+    if (full) {
+        f << "rtc=" << w.rtc << "\nrtc_saved=" << w.rtcSaved << "\n";
+        // Dossiers ROM additionnels (0..N) : une ligne kiosk_romdir= par dossier.
+        for (const auto& d : w.romDirs) f << "kiosk_romdir=" << d << "\n";
+    }
+}
+
+// Écriture ATOMIQUE : on rédige un fichier temporaire à côté, on vérifie que tout
+// s'est bien écrit, PUIS on renomme par-dessus. Auparavant, ouvrir le flux tronquait
+// (O_TRUNC) le fichier AVANT de savoir si on saurait le réécrire, et aucun retour
+// n'était testé : disque plein, quota atteint ou coupure au mauvais moment laissaient
+// un neost.cfg amputé — réglages CRT, horloge, joymap et TOUS les kiosk_romdir perdus,
+// sans le moindre message. L'échec survenait dans le destructeur du flux, hors de
+// portée de tout point de contrôle.
+// `cwdFallback` autorise le repli historique du neost.cfg vers le répertoire courant
+// quand le dossier du dépôt n'est pas inscriptible ; un profil, lui, échoue franchement
+// (le message remonte dans l'interface). false ⇒ RIEN n'a été écrit, l'ancien fichier
+// est intact, et `err` porte le motif.
+static bool writeConfigAtomic(const std::string& finalPath, const Config& w, bool full,
+                              bool cwdFallback, std::string& err) {
+    std::string tmpPath = finalPath + ".tmp";
+    std::ofstream f(tmpPath);
+    if (!f && cwdFallback) { tmpPath = "neost.cfg.tmp"; f.open(tmpPath); }
+    if (!f) {
+        err = "cannot write (" + tmpPath + ")";
+        f.close(); std::error_code rmec; fs::remove(tmpPath, rmec);
+        return false;
+    }
+    writeConfigKeys(f, w, full);
+    f.flush();
+    const bool ok = f.good();
+    f.close();
+    if (!ok) {   // le flush a échoué : on garde l'ANCIEN fichier intact
+        err = "incomplete write (" + tmpPath + ") — previous file kept";
+        std::error_code rmec; fs::remove(tmpPath, rmec);
+        return false;
+    }
+    // Le nom de destination est celui du .tmp amputé de son suffixe : si l'ouverture est
+    // retombée sur le dossier courant, le rename doit y rester aussi.
+    const std::string dest = tmpPath.substr(0, tmpPath.size() - 4);
+    std::error_code mvec;
+    fs::rename(tmpPath, dest, mvec);
+    if (mvec) {
+        err = "cannot replace (" + tmpPath + " → " + dest + "): " + mvec.message();
+        std::error_code rmec; fs::remove(tmpPath, rmec);
+        return false;
+    }
+    return true;
+}
 // force=true : écrit la config MÊME en kiosk (normalement figé). Utilisé pour le seul
 // réglage que la borne a le droit de persister : le dossier ROM additionnel choisi via
 // le menu in-game (le reste de la config kiosk reste identique à ce qui a été chargé).
@@ -308,77 +450,101 @@ static void saveConfig(const std::string& exeDir, Config& c, Machine* machine = 
         src = &kioskOut;
     }
     const Config& w = *src;
-    // Écriture ATOMIQUE : on rédige un fichier temporaire à côté, on vérifie que tout
-    // s'est bien écrit, PUIS on renomme par-dessus. Auparavant, ouvrir le flux tronquait
-    // (O_TRUNC) le fichier AVANT de savoir si on saurait le réécrire, et aucun retour
-    // n'était testé : disque plein, quota atteint ou coupure au mauvais moment laissaient
-    // un neost.cfg amputé — réglages CRT, horloge, joymap et TOUS les kiosk_romdir perdus,
-    // sans le moindre message. L'échec survenait dans le destructeur du flux, hors de
-    // portée de tout point de contrôle.
-    const std::string finalPath = cfgPath(exeDir);
-    std::string tmpPath = finalPath + ".tmp";
-    std::ofstream f(tmpPath);
-    if (!f) { tmpPath = "neost.cfg.tmp"; f.open(tmpPath); }
-    if (f) f << "rom=" << w.rom << "\ndisk=" << w.disk << "\ndiskb=" << w.diskb
-             << "\ncart=" << w.cart
-             << "\ngemdos=" << w.gemdos << "\nacsi=" << w.acsi
-             << "\nmono=" << (w.mono ? 1 : 0)
-             << "\ncpu=" << w.cpu << "\nmachine=" << w.machine << "\nmem=" << w.mem
-             << "\nfpu=" << (w.fpu ? 1 : 0)
-             << "\njoyport=" << w.joyport
-             << "\njoymap=" << w.joymap
-             << "\njoydeadzone=" << w.joydeadzone << "\nfastfdc=" << (w.fastfdc ? 1 : 0)
-             << "\nvolume=" << w.volume
-             << "\naudio_latency_ms=" << w.audioLatencyMs
-             << "\nshowHex=" << (w.showHex ? 1 : 0)
-             << "\nshowCpu=" << (w.showCpu ? 1 : 0)
-             << "\nshowJoy=" << (w.showJoy ? 1 : 0)
-             << "\nshowCfg=" << (w.showCfg ? 1 : 0)
-             << "\nuiVersion=" << w.uiVersion
-             << "\ndock=" << (w.dock ? 1 : 0)
-             << "\nautozoom=" << (w.autoZoom ? 1 : 0)
-             << "\ncrt=" << (w.crt ? 1 : 0)
-             << "\ncrt_bright=" << w.crtParams.brightness
-             << "\ncrt_contrast=" << w.crtParams.contrast
-             << "\ncrt_sat=" << w.crtParams.saturation
-             << "\ncrt_hue=" << w.crtParams.hue
-             << "\ncrt_sharp=" << w.crtParams.sharpness
-             << "\ncrt_persist=" << w.crtParams.persistence
-             << "\ncrt_scanlines=" << w.crtParams.scanlines
-             << "\ncrt_barrel=" << w.crtParams.barrel
-             << "\ncrt_mask=" << static_cast<int>(w.crtParams.shadowMask)
-             << "\ncrt_maskstr=" << w.crtParams.shadowMaskStrength
-             << "\ncrt_lumgain=" << w.crtParams.luminanceGain
-             << "\ncrt_center=" << w.crtParams.centerLighting
-             << "\ncrt_gamma=" << w.crtParams.phosphorGamma
-             << "\nrtc=" << w.rtc << "\nrtc_saved=" << w.rtcSaved << "\n";
-    // Dossiers ROM additionnels (0..N) : une ligne kiosk_romdir= par dossier.
-    if (f) for (const auto& d : w.romDirs) f << "kiosk_romdir=" << d << "\n";
-    if (!f) { std::fprintf(stderr, "[cfg] écriture impossible (%s) — configuration NON enregistrée\n",
-                           tmpPath.c_str());
-              f.close(); std::error_code rmec; fs::remove(tmpPath, rmec); return; }
-    f.flush();
-    const bool ok = f.good();
-    f.close();
-    if (!ok) {   // le flush a échoué : on garde l'ANCIEN fichier intact
-        std::fprintf(stderr, "[cfg] écriture incomplète (%s) — ancienne configuration conservée\n",
-                     tmpPath.c_str());
-        std::error_code rmec; fs::remove(tmpPath, rmec);
-        return;
-    }
-    // Le nom de destination est celui du .tmp amputé de son suffixe : si l'ouverture est
-    // retombée sur le dossier courant, le rename doit y rester aussi.
-    const std::string dest = tmpPath.substr(0, tmpPath.size() - 4);
-    std::error_code mvec;
-    fs::rename(tmpPath, dest, mvec);
-    if (mvec) {
-        std::fprintf(stderr, "[cfg] remplacement impossible (%s → %s) : %s\n",
-                     tmpPath.c_str(), dest.c_str(), mvec.message().c_str());
-        std::error_code rmec; fs::remove(tmpPath, rmec);
-    }
+    std::string err;
+    if (!writeConfigAtomic(cfgPath(exeDir), w, /*full=*/true, /*cwdFallback=*/true, err))
+        std::fprintf(stderr, "[cfg] %s — configuration NOT saved\n", err.c_str());
 }
 
 #if defined(NEOST_WITH_IMGUI)
+// ─────────────────────────────────────────────────────────────────────────────
+// PROFILS DE RÉGLAGES NOMMÉS — dossier profiles/, un fichier .cfg par profil, au
+// MÊME format que neost.cfg (cf. writeConfigKeys/parseConfigLine). neost.cfg reste
+// la configuration COURANTE, écrite automatiquement à chaque changement ; un profil
+// est une photo nommée qu'on rappelle plus tard (« 520 ST + TOS 1.02 + ma démo »).
+// Charger un profil = repartir de la config courante et lui appliquer les lignes du
+// fichier : ce qu'un profil ne dit pas ne change pas. Réservé à l'interface (le
+// headless n'a pas de notion de profil) → sous garde ImGui pour ne pas laisser de
+// fonctions inutilisées dans une compilation sans GUI.
+// ─────────────────────────────────────────────────────────────────────────────
+// Dossier des profils : à côté de neost.cfg. Quand ce dossier-là n'est pas inscriptible
+// (installation en lecture seule), writeConfigAtomic replie neost.cfg sur le répertoire
+// COURANT — on suit le même repli, sinon les profils seraient la seule chose cassée là où
+// la configuration, elle, fonctionne. Résolu UNE fois, après la première écriture de
+// neost.cfg (c'est elle qui tranche l'emplacement) : cf. l'appelant. Ne CRÉE rien ; seul
+// l'enregistrement d'un profil crée le dossier.
+static std::string profilesDir(const std::string& exeDir) {
+    const std::string primary = exeDir + "/../profiles";
+    std::error_code ec;
+    if (fs::is_directory(primary, ec)) return primary;      // déjà utilisé : on y reste
+    if (fs::exists(cfgPath(exeDir), ec)) return primary;    // neost.cfg est là → les profils aussi
+    return "profiles";
+}
+
+// Nom saisi → nom de FICHIER sûr. Le champ est libre : sans ce filtre, « ../neost.cfg »
+// ou un nom contenant « / » écrirait HORS du dossier des profils. On ne garde donc pas
+// une liste blanche de lettres (elle mangerait les accents, « Démos » → « Dmos ») : on
+// retire les séparateurs de chemin, les caractères de contrôle et les réservés Windows,
+// puis les points et espaces de bord (« .. », fichiers cachés, noms refusés par Windows).
+// Renvoie "" si rien d'utilisable ne reste — l'appelant refuse alors d'écrire.
+static std::string profileFileName(const std::string& in) {
+    static const std::string kBanned = "/\\:*?\"<>|";
+    std::string out;
+    for (unsigned char ch : in) {
+        if (ch < 0x20 || ch == 0x7f) continue;
+        if (kBanned.find(char(ch)) != std::string::npos) continue;
+        out += char(ch);
+    }
+    while (!out.empty() && (out.front() == ' ' || out.front() == '.')) out.erase(out.begin());
+    while (!out.empty() && (out.back()  == ' ' || out.back()  == '.')) out.pop_back();
+    if (out.size() > 64) out.resize(64);
+    return out;
+}
+
+// Profils présents, triés sans tenir compte de la casse. Itération MANUELLE comme les
+// pages Disquettes/Cartouche : l'incrément d'un range-for LANCE filesystem_error si le
+// dossier devient illisible en cours de parcours, et rien ne l'attrape ici.
+static std::vector<std::string> listProfiles(const std::string& dir) {
+    std::vector<std::string> names;
+    std::error_code ec;
+    fs::directory_iterator it(dir, fs::directory_options::skip_permission_denied, ec), end;
+    while (!ec && it != end) {
+        std::error_code ec2;
+        if (it->is_regular_file(ec2) && it->path().extension() == ".cfg")
+            names.push_back(it->path().stem().string());
+        it.increment(ec);
+    }
+    std::sort(names.begin(), names.end(), [](const std::string& a, const std::string& b) {
+        return std::lexicographical_compare(a.begin(), a.end(), b.begin(), b.end(),
+                                            [](unsigned char x, unsigned char y) {
+                                                return std::tolower(x) < std::tolower(y);
+                                            });
+    });
+    return names;
+}
+
+static bool saveProfile(const std::string& dir, const std::string& name,
+                        const Config& c, std::string& err) {
+    std::error_code ec;
+    fs::create_directories(dir, ec);
+    if (!fs::is_directory(dir, ec)) { err = "cannot create " + dir; return false; }
+    return writeConfigAtomic(dir + "/" + name + ".cfg", c, /*full=*/false, /*cwdFallback=*/false, err);
+}
+
+// Applique le profil PAR-DESSUS `c` (déjà rempli avec la config courante) : les clés
+// qu'un profil n'écrit pas (horloge, disposition de l'interface) restent telles quelles.
+static bool loadProfileInto(const std::string& dir, const std::string& name, Config& c) {
+    std::ifstream f(dir + "/" + name + ".cfg");
+    if (!f) return false;
+    std::string line;
+    while (std::getline(f, line)) parseConfigLine(c, line);
+    return true;
+}
+
+static bool deleteProfile(const std::string& dir, const std::string& name) {
+    std::error_code ec;
+    return fs::remove(fs::path(dir) / (name + ".cfg"), ec) && !ec;
+}
+
 #include "imgui.h"
 #include "imgui_internal.h"   // gestionnaire de réglages personnalisé (ImGuiSettingsHandler)
 #include "imgui_impl_glfw.h"
@@ -418,6 +584,8 @@ static void saveConfig(const std::string& exeDir, Config& c, Machine* machine = 
 #define ICON_FA_EXPAND        "\xef\x81\xa5"
 // Engrenage U+F013 : la plage 0xf000-0xf8ff chargée dans la police le couvre déjà.
 #define ICON_FA_COG           "\xef\x80\x93"
+// WiFi U+F1EB (page Network / FujiNet) : même plage de police.
+#define ICON_FA_WIFI          "\xef\x87\xab"
 
 // Bouton à ICÔNE SEULE (le texte est superflu quand le pictogramme est explicite) :
 // l'infobulle au survol rappelle l'action. Renvoie true au clic.
@@ -579,7 +747,7 @@ bool  g_joyCfgDirty = false;           // un réglage joystick a changé → res
 char g_gdBuf[512] = {0}, g_hdBuf[512] = {0};
 
 void onGlfwError(int code, const char* desc) {
-    std::fprintf(stderr, "GLFW erreur %d : %s\n", code, desc);
+    std::fprintf(stderr, "GLFW error %d: %s\n", code, desc);
 }
 
 // Callback bouton souris : ÉVÉNEMENTIEL (capte chaque transition, même un
@@ -589,7 +757,7 @@ void onMouseButton(GLFWwindow* w, int /*button*/, int /*action*/, int /*mods*/) 
     if (!g_ikbd || !g_mouseCaptured) return;
     const bool l = glfwGetMouseButton(w, GLFW_MOUSE_BUTTON_LEFT)  == GLFW_PRESS;
     const bool r = glfwGetMouseButton(w, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
-    if (g_dbgMouse) std::fprintf(stderr, "[souris] bouton  L=%d R=%d\n", l, r);
+    if (g_dbgMouse) std::fprintf(stderr, "[mouse] button  L=%d R=%d\n", l, r);
     g_ikbd->mouseEvent(0, 0, l, r);
 }
 
@@ -676,50 +844,11 @@ static bool applyCrtPreset(const std::string& name, neost::CrtParams& p, bool& o
     return true;
 }
 
-// Région de CONTENU de la trame courante, en lignes du buffer ST — le cœur du zoom
-// adaptatif, PARTAGÉ par le kiosk (qui la cale en viewport GL) et par la fenêtre
-// « Atari ST Screen » du bureau (qui la cale en UV d'image). Deux cadrages francs,
-// jamais au pixel (→ zéro saccade) :
-//  · Défaut (99 % des jeux) : cadre FIXE sur la ZONE ACTIVE (rectangle net donné par
-//    le matériel — activeTop/activeHeight), qui ne bouge JAMAIS. Un champ d'étoiles,
-//    un fond noir : rien ne fait « respirer » le zoom.
-//  · Overscan (démos, ouvertures de bordures — Enchanted Land, Lethal Xcess) : quand
-//    la Glue signale une bordure retirée, on montre le BUFFER ENTIER. Hystérésis
-//    (latch) pour ne pas basculer sur un retrait d'une seule trame.
-// Les latches sont des statiques de fonction : un seul jeu pour toute l'application,
-// donc un aller-retour bureau ⇄ kiosk ne réinitialise pas l'hystérésis en cours.
-static void stContentRegion(Machine& machine, int& cTop, int& cH) {
-    static int overscanLatch     = 0;   // bordure ouverte (haut ou bas)
-    static int fullOverscanLatch = 0;   // bordure BASSE retirée (démos full-overscan)
-    // snapBordersOpen/snapLiveTop/snapLiveHeight : snapshot capturé à finishFrame(),
-    // stable au rendu (les champs live glueStartHBL_/glueEndHBL_ sont remis à zéro
-    // par beginFrame_() du cycle suivant AVANT que le rendu GL ne s'exécute).
-    if (machine.shifter.snapBordersOpen()) overscanLatch = 30;   // ~0,6 s de maintien
-    else if (overscanLatch > 0)             --overscanLatch;
-    if (overscanLatch == 0) {
-        fullOverscanLatch = 0;              // plus de trick : reset du second latch
-        cTop = machine.shifter.activeTop();
-        cH   = machine.shifter.activeHeight();
-        return;
-    }
-    // Second latch : détecte une bordure BASSE retirée (LX, Cuddly…) et latche ce
-    // constat pour éviter les basculements frame-à-frame.
-    if (machine.shifter.snapLiveHeight() + machine.shifter.snapLiveTop()
-            > machine.shifter.activeHeight() + machine.shifter.activeTop())
-        fullOverscanLatch = 30;
-    else if (fullOverscanLatch > 0)
-        --fullOverscanLatch;
-
-    if (fullOverscanLatch > 0) {
-        // Bordure BASSE retirée (démos full-overscan : Cuddly, LX…) : buffer entier.
-        cTop = 0;
-        cH   = machine.shifter.height();
-    } else {
-        // Bordure HAUTE seule (ex. Enchanted Land en jeu) : même zoom que la zone
-        // active, légèrement remontée pour montrer 2 lignes overscan en haut.
-        cTop = std::max(0, machine.shifter.activeTop() - 2);
-        cH   = machine.shifter.activeHeight();
-    }
+// Région de CONTENU (zoom adaptatif) : le calcul vit dans core/Framing.cpp,
+// PARTAGÉ avec le plein écran WASM — même règle, mêmes latches d'hystérésis.
+// Ici on ne garde que l'adaptation de signature (Machine& → Shifter&).
+static void stContentRegion(Machine& machine, int& cTop, int& cH, int& cW) {
+    neost::stContentRegion(machine.shifter, cTop, cH, cW);
 }
 
 // Rendu kiosk ADAPTATIF : on cale la région de contenu [cTop, cTop+cH) sur la
@@ -978,9 +1107,9 @@ void updateKbdCountry(const std::vector<uint8_t>& rom) {
     if (rom.size() < 0x1E) { g_kbdCountry = -1; return; }
     g_kbdCountry = ((rom[0x1C] << 8) | rom[0x1D]) >> 1;
     static const char* names[] = {"US", "DE", "FR", "UK"};
-    std::fprintf(stderr, "[kbd] disposition TOS : %s (mapping symbolique)\n",
+    std::fprintf(stderr, "[kbd] TOS layout: %s (symbolic mapping)\n",
                  g_kbdCountry >= 0 && g_kbdCountry <= 3 ? names[g_kbdCountry]
-                 : g_kbdCountry == 127 ? "multilangue (défaut)" : "autre (défaut)");
+                 : g_kbdCountry == 127 ? "multilingual (default)" : "other (default)");
 }
 
 // Callback clavier GLFW → IKBD. La touche Suppr (DEL) est réservée à l'hôte (elle
@@ -1042,8 +1171,8 @@ void onKey(GLFWwindow*, int key, int scancode, int action, int /*mods*/) {
 #if defined(NEOST_WITH_IMGUI)
 void drawHexViewer(Bus& bus) {
     static int base = 0;
-    ImGui::Begin("Mémoire (hex)");
-    ImGui::InputInt("Adresse base", &base, 16, 256,
+    ImGui::Begin("Memory (hex)");
+    ImGui::InputInt("Base address", &base, 16, 256,
                     ImGuiInputTextFlags_CharsHexadecimal | ImGuiInputTextFlags_EnterReturnsTrue);
     // Le champ ne doit pas confisquer durablement le clavier du ST : dès qu'il
     // perd l'édition (Entrée/Échap/clic ailleurs), on relâche le focus fenêtre
@@ -1071,7 +1200,7 @@ void drawHexViewer(Bus& bus) {
 // reqReset passe à true si le bouton RESET est cliqué.
 void drawCpuState(Cpu68k& cpu, bool& reqReset) {
     ImGui::Begin("CPU 68000");
-    if (IconButton(ICON_FA_POWER_OFF, "Reset (RESET physique)")) reqReset = true;
+    if (IconButton(ICON_FA_POWER_OFF, "Reset (hardware RESET)")) reqReset = true;
     ImGui::Separator();
     ImGui::Text("PC = %08X    SR = %04X", cpu.pc(), cpu.sr());
     ImGui::Separator();
@@ -1107,14 +1236,14 @@ void drawJoystickWindow(GLFWwindow* win, uint8_t lastJoy0, uint8_t lastJoy1) {
     ImGui::Begin("Joystick", &g_showJoy);
 
     // --- Réglages (modifient les globals ; resauve via g_joyCfgDirty) -----------
-    if (ImGui::Checkbox("Émulation clavier (flèches + Ctrl droit)", &g_kbdJoy)) g_joyCfgDirty = true;
+    if (ImGui::Checkbox("Keyboard emulation (arrows + right Ctrl)", &g_kbdJoy)) g_joyCfgDirty = true;
     ImGui::SameLine(); ImGui::TextDisabled("(F11)");
-    ImGui::Text("Port émulé :"); ImGui::SameLine();
-    if (ImGui::RadioButton("1 (jeux)", g_kbdJoyPort == 1)) { g_kbdJoyPort = 1; g_joyCfgDirty = true; }
+    ImGui::Text("Emulated port:"); ImGui::SameLine();
+    if (ImGui::RadioButton("1 (games)", g_kbdJoyPort == 1)) { g_kbdJoyPort = 1; g_joyCfgDirty = true; }
     ImGui::SameLine();
-    if (ImGui::RadioButton("0 (souris)", g_kbdJoyPort == 0)) { g_kbdJoyPort = 0; g_joyCfgDirty = true; }
+    if (ImGui::RadioButton("0 (mouse)", g_kbdJoyPort == 0)) { g_kbdJoyPort = 0; g_joyCfgDirty = true; }
     ImGui::SetNextItemWidth(160.0f);
-    if (ImGui::SliderFloat("Zone morte", &g_joyDeadzone, 0.0f, 0.95f, "%.2f")) {
+    if (ImGui::SliderFloat("Dead zone", &g_joyDeadzone, 0.0f, 0.95f, "%.2f")) {
         if (g_joyDeadzone < 0.0f) g_joyDeadzone = 0.0f;
         if (g_joyDeadzone > 0.95f) g_joyDeadzone = 0.95f;
     }
@@ -1125,14 +1254,14 @@ void drawJoystickWindow(GLFWwindow* win, uint8_t lastJoy0, uint8_t lastJoy1) {
     // --- Sortie réellement envoyée au ST (le plus important) --------------------
     auto decodeRow = [](const char* who, uint8_t v) {
         ImGui::Text("%s  $%02X :", who, v); ImGui::SameLine();
-        drawJoyDirLed("HAUT",   v & stjoy::UP);
-        drawJoyDirLed("BAS",    v & stjoy::DOWN);
-        drawJoyDirLed("GAUCHE", v & stjoy::LEFT);
-        drawJoyDirLed("DROITE", v & stjoy::RIGHT);
-        drawJoyDirLed("FEU",    v & stjoy::FIRE);
+        drawJoyDirLed("UP",    v & stjoy::UP);
+        drawJoyDirLed("DOWN",  v & stjoy::DOWN);
+        drawJoyDirLed("LEFT",  v & stjoy::LEFT);
+        drawJoyDirLed("RIGHT", v & stjoy::RIGHT);
+        drawJoyDirLed("FIRE",  v & stjoy::FIRE);
         ImGui::NewLine();
     };
-    ImGui::TextDisabled("→ Envoyé à l'IKBD (ST) :");
+    ImGui::TextDisabled("→ Sent to the IKBD (ST):");
     decodeRow("Port 0", lastJoy0);
     decodeRow("Port 1", lastJoy1);
 
@@ -1145,12 +1274,12 @@ void drawJoystickWindow(GLFWwindow* win, uint8_t lastJoy0, uint8_t lastJoy1) {
         ++nPresent;
         const char* nm = glfwGetJoystickName(jid);
         const int stPort = (nPresent == 1) ? 1 : (nPresent == 2 ? 0 : -1);
-        ImGui::Text("Manette %d : %s", jid, nm ? nm : "?");
-        if (stPort >= 0) { ImGui::SameLine(); ImGui::TextDisabled("→ port ST %d", stPort); }
+        ImGui::Text("Pad %d: %s", jid, nm ? nm : "?");
+        if (stPort >= 0) { ImGui::SameLine(); ImGui::TextDisabled("→ ST port %d", stPort); }
 
         GLFWgamepadstate gs;
         if (glfwGetGamepadState(jid, &gs)) {
-            ImGui::TextColored(ImVec4(0.4f,0.8f,1.0f,1.0f), "  reconnue gamepad (mapping SDL)");
+            ImGui::TextColored(ImVec4(0.4f,0.8f,1.0f,1.0f), "  recognized as a gamepad (SDL mapping)");
             ImGui::Indent(8.0f);
             drawJoystickAxisBar("LX", gs.axes[GLFW_GAMEPAD_AXIS_LEFT_X],  g_joyDeadzone);
             drawJoystickAxisBar("LY", gs.axes[GLFW_GAMEPAD_AXIS_LEFT_Y],  g_joyDeadzone);
@@ -1158,7 +1287,7 @@ void drawJoystickWindow(GLFWwindow* win, uint8_t lastJoy0, uint8_t lastJoy1) {
             drawJoystickAxisBar("RY", gs.axes[GLFW_GAMEPAD_AXIS_RIGHT_Y], g_joyDeadzone);
             ImGui::Unindent(8.0f);
         } else {
-            ImGui::TextColored(ImVec4(1.0f,0.7f,0.3f,1.0f), "  NON reconnue gamepad → lecture brute");
+            ImGui::TextColored(ImVec4(1.0f,0.7f,0.3f,1.0f), "  NOT recognized as a gamepad → raw read");
         }
 
         // Axes bruts (toujours affichés : révèlent un axe non centré au repos).
@@ -1166,31 +1295,31 @@ void drawJoystickWindow(GLFWwindow* win, uint8_t lastJoy0, uint8_t lastJoy1) {
         const float*         ax  = glfwGetJoystickAxes(jid, &axN);
         const unsigned char* bt  = glfwGetJoystickButtons(jid, &btN);
         const unsigned char* hat = glfwGetJoystickHats(jid, &hatN);
-        ImGui::Text("  Axes bruts (%d) :", axN);
+        ImGui::Text("  Raw axes (%d):", axN);
         for (int i = 0; i < axN && ax; ++i) {
             char lbl[24]; std::snprintf(lbl, sizeof lbl, "a%d%s", i,
                                         (i == 0 ? " (X?)" : i == 1 ? " (Y?)" : ""));
             ImGui::Indent(8.0f); drawJoystickAxisBar(lbl, ax[i], g_joyDeadzone); ImGui::Unindent(8.0f);
         }
-        ImGui::Text("  Boutons (%d) :", btN); ImGui::SameLine();
+        ImGui::Text("  Buttons (%d):", btN); ImGui::SameLine();
         for (int i = 0; i < btN && bt; ++i)
             if (bt[i]) { ImGui::SameLine(); ImGui::Text("%d", i); }
         if (hat && hatN >= 1)
-            ImGui::Text("  Hat0 : %s%s%s%s", (hat[0]&GLFW_HAT_UP)?"H":"", (hat[0]&GLFW_HAT_DOWN)?"B":"",
-                        (hat[0]&GLFW_HAT_LEFT)?"G":"", (hat[0]&GLFW_HAT_RIGHT)?"D":"");
+            ImGui::Text("  Hat0 : %s%s%s%s", (hat[0]&GLFW_HAT_UP)?"U":"", (hat[0]&GLFW_HAT_DOWN)?"D":"",
+                        (hat[0]&GLFW_HAT_LEFT)?"L":"", (hat[0]&GLFW_HAT_RIGHT)?"R":"");
         // Décomposition analogique / numérique + effet du filtre anti-bloqué.
         const float thr = (g_joyDeadzone < 0.0f) ? 0.0f : (g_joyDeadzone > 0.95f ? 0.95f : g_joyDeadzone);
         uint8_t an = 0, dg = 0; stjoy::readStickRaw(jid, thr, an, dg);
         const uint8_t fin = stjoy::readStick(jid, g_joyDeadzone);
-        ImGui::Text("  analogique $%02X | numérique brut $%02X", an, dg);
+        ImGui::Text("  analog $%02X | raw digital $%02X", an, dg);
         if ((dg & ~fin) & ~an)
             ImGui::TextColored(ImVec4(1.0f,0.7f,0.3f,1.0f),
-                               "  filtre anti-bloqué : bits numériques collés ignorés ($%02X)",
+                               "  stuck-input filter: jammed digital bits ignored ($%02X)",
                                uint8_t((dg & ~fin) & ~an));
-        ImGui::Text("  → octet ST envoyé : $%02X", fin);
+        ImGui::Text("  → ST byte sent: $%02X", fin);
         ImGui::Separator();
     }
-    if (nPresent == 0) ImGui::TextDisabled("Aucune manette détectée. (Clavier : active l'émulation ci-dessus.)");
+    if (nPresent == 0) ImGui::TextDisabled("No pad detected. (Keyboard: enable the emulation above.)");
     (void)win;
     ImGui::End();
 }
@@ -1203,43 +1332,43 @@ void drawJoystickWindow(GLFWwindow* win, uint8_t lastJoy0, uint8_t lastJoy1) {
 // et par la page Écran de la fenêtre Configuration (proposition B) — une seule
 // définition des réglages, deux endroits où les afficher.
 void drawCrtControls(bool& changed) {
-    if (ImGui::Checkbox("Activer les effets CRT", &g_crtOn)) {
+    if (ImGui::Checkbox("Enable CRT effects", &g_crtOn)) {
         changed = true;
         if (g_crtOn && !g_crt.available() && !g_crtInit) { g_crtInit = true; g_crt.initialize(); }
     }
     // Diagnostic : shader indisponible (ex. contexte GL 2.1 sur macOS legacy).
     if (g_crtOn && g_crtInit && !g_crt.available()) {
-        ImGui::TextColored(ImVec4(1, 0.5f, 0.3f, 1), "Shader indisponible :");
+        ImGui::TextColored(ImVec4(1, 0.5f, 0.3f, 1), "Shader unavailable:");
         ImGui::TextWrapped("%s", g_crt.lastError().c_str());
-        ImGui::TextDisabled("→ écran ST présenté brut (passthrough).");
+        ImGui::TextDisabled("→ ST screen shown raw (passthrough).");
     }
 
-    ImGui::TextDisabled("Presets :");
+    ImGui::TextDisabled("Presets:");
     ImGui::SameLine();
-    if (ImGui::SmallButton("Léger"))    { applyCrtPreset("leger",    g_crtParams, g_crtOn); changed = true; }
+    if (ImGui::SmallButton("Light"))    { applyCrtPreset("light",    g_crtParams, g_crtOn); changed = true; }
     ImGui::SameLine();
     if (ImGui::SmallButton("Arcade"))   { applyCrtPreset("arcade",   g_crtParams, g_crtOn); changed = true; }
     ImGui::SameLine();
-    if (ImGui::SmallButton("Phosphore")){ applyCrtPreset("phosphor", g_crtParams, g_crtOn); changed = true; }
+    if (ImGui::SmallButton("Phosphor")) { applyCrtPreset("phosphor", g_crtParams, g_crtOn); changed = true; }
 
     ImGui::Separator();
     ImGui::BeginDisabled(!g_crtOn);
     neost::CrtParams& p = g_crtParams;
     bool ch = false;
-    ch |= ImGui::SliderFloat("Luminosité",  &p.brightness, -0.5f, 0.5f);
-    ch |= ImGui::SliderFloat("Contraste",   &p.contrast,    0.5f, 1.5f);
+    ch |= ImGui::SliderFloat("Brightness",  &p.brightness, -0.5f, 0.5f);
+    ch |= ImGui::SliderFloat("Contrast",    &p.contrast,    0.5f, 1.5f);
     ch |= ImGui::SliderFloat("Saturation",  &p.saturation,  0.0f, 2.0f);
-    ch |= ImGui::SliderFloat("Teinte",      &p.hue,        -0.5f, 0.5f);
+    ch |= ImGui::SliderFloat("Hue",         &p.hue,        -0.5f, 0.5f);
     ImGui::Separator();
-    ch |= ImGui::SliderFloat("Netteté",     &p.sharpness,   0.0f, 1.0f);
-    ch |= ImGui::SliderFloat("Rémanence",   &p.persistence, 0.0f, 0.98f);
+    ch |= ImGui::SliderFloat("Sharpness",   &p.sharpness,   0.0f, 1.0f);
+    ch |= ImGui::SliderFloat("Persistence", &p.persistence, 0.0f, 0.98f);
     ImGui::Separator();
     ch |= ImGui::SliderFloat("Scanlines",   &p.scanlines,   0.0f, 1.0f);
-    ch |= ImGui::SliderFloat("Baril",       &p.barrel,      0.0f, 0.30f);
+    ch |= ImGui::SliderFloat("Barrel",      &p.barrel,      0.0f, 0.30f);
 
     ImGui::Separator();
     static const char* kMaskNames[] = {
-        "Off", "Triade (3 bandes)", "Grille d'ouverture (Trinitron)", "Points (triades décalées)"
+        "Off", "Triad (3 stripes)", "Aperture grille (Trinitron)", "Dots (offset triads)"
     };
     int maskIdx = static_cast<int>(p.shadowMask);
     if (ImGui::Combo("Shadow mask", &maskIdx, kMaskNames, IM_ARRAYSIZE(kMaskNames))) {
@@ -1247,11 +1376,11 @@ void drawCrtControls(bool& changed) {
         ch = true;
     }
     ImGui::BeginDisabled(p.shadowMask == neost::CrtParams::ShadowMask::Off);
-    ch |= ImGui::SliderFloat("Force du masque", &p.shadowMaskStrength, 0.0f, 1.0f);
+    ch |= ImGui::SliderFloat("Mask strength", &p.shadowMaskStrength, 0.0f, 1.0f);
     ImGui::EndDisabled();
-    ch |= ImGui::SliderFloat("Gain de luminance", &p.luminanceGain, 1.0f, 2.0f);
+    ch |= ImGui::SliderFloat("Luminance gain",    &p.luminanceGain, 1.0f, 2.0f);
     ch |= ImGui::SliderFloat("Vignette",          &p.centerLighting, 0.5f, 1.0f);
-    ch |= ImGui::SliderFloat("Gamma phosphore",   &p.phosphorGamma, 0.6f, 2.6f);
+    ch |= ImGui::SliderFloat("Phosphor gamma",    &p.phosphorGamma, 0.6f, 2.6f);
     ImGui::EndDisabled();
 
     if (ch) changed = true;
@@ -1261,7 +1390,7 @@ void drawCrtControls(bool& changed) {
 // donc à côté de l'écran ST, pas dans une page de configuration).
 void drawCrtSettings(bool& changed) {
     ImGui::SetNextWindowSize(ImVec2(360, 0), ImGuiCond_FirstUseEver);
-    ImGui::Begin("Effets CRT", &g_showCrt);
+    ImGui::Begin("CRT Effects", &g_showCrt);
     drawCrtControls(changed);
     ImGui::End();
 }
@@ -1282,52 +1411,52 @@ void drawDebugger(Machine& machine) {
         return b;
     };
     ImGui::SetNextWindowSize(ImVec2(480, 560), ImGuiCond_FirstUseEver);
-    ImGui::Begin(ICON_FA_BUG " Débogueur", &g_showDbg);
+    ImGui::Begin(ICON_FA_BUG " Debugger", &g_showDbg);
 
     // --- État + transport -----------------------------------------------------
     if (g_dbgPaused) {
         ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f),
-                           ICON_FA_PAUSE " EN PAUSE  \xe2\x80\x94  PC=$%06X%s",
+                           ICON_FA_PAUSE " PAUSED  \xe2\x80\x94  PC=$%06X%s",
                            cpu.pc(), symLabel(cpu.pc()).c_str());
         if (cpu.breakpointHit() && cpu.breakpointHitIsWatch())
-            ImGui::TextColored(ImVec4(0.55f, 0.85f, 1.0f, 1.0f), "  watchpoint : accès $%06X%s",
+            ImGui::TextColored(ImVec4(0.55f, 0.85f, 1.0f, 1.0f), "  watchpoint: access $%06X%s",
                                cpu.breakpointHitAddr(), symLabel(cpu.breakpointHitAddr()).c_str());
-        if (ImGui::Button(ICON_FA_PLAY " Continuer")) {
+        if (ImGui::Button(ICON_FA_PLAY " Continue")) {
             cpu.clearBreakpointHit();   // arme le skip-once de l'adresse courante
             g_dbgPaused = false;
         }
         ImGui::SameLine();
-        if (ImGui::Button(ICON_FA_STEP_FORWARD " Pas (1 instr)")) g_dbgStepInstr = true;
+        if (ImGui::Button(ICON_FA_STEP_FORWARD " Step (1 instr)")) g_dbgStepInstr = true;
         ImGui::SameLine();
-        if (ImGui::Button(ICON_FA_STEP_FORWARD " Pas (1 trame)")) g_dbgStepFrame = true;
+        if (ImGui::Button(ICON_FA_STEP_FORWARD " Step (1 frame)")) g_dbgStepFrame = true;
     } else {
-        ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.5f, 1.0f), ICON_FA_PLAY " En cours");
+        ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.5f, 1.0f), ICON_FA_PLAY " Running");
         if (ImGui::Button(ICON_FA_PAUSE " Pause")) g_dbgPaused = true;
     }
     ImGui::Separator();
 
     // --- Symboles : chargement (.sym nm-style ou exécutable TOS) + bp par nom --
-    ImGui::Text("Symboles (%zu)", g_symbols.count());
+    ImGui::Text("Symbols (%zu)", g_symbols.count());
     static char symPath[512] = "";
     static char symBaseBuf[16] = "";
     ImGui::SetNextItemWidth(220.0f);
-    ImGui::InputTextWithHint("##sympath", "chemin .sym ou .TOS", symPath, sizeof symPath);
+    ImGui::InputTextWithHint("##sympath", ".sym or .TOS path", symPath, sizeof symPath);
     ImGui::SameLine();
     ImGui::SetNextItemWidth(80.0f);
-    ImGui::InputTextWithHint("##symbase", "base hex", symBaseBuf, sizeof symBaseBuf,
+    ImGui::InputTextWithHint("##symbase", "hex base", symBaseBuf, sizeof symBaseBuf,
                              ImGuiInputTextFlags_CharsHexadecimal);
     ImGui::SameLine();
-    if (ImGui::Button("Charger") && symPath[0]) {
+    if (ImGui::Button("Load") && symPath[0]) {
         const uint32_t base = (uint32_t)std::strtoul(symBaseBuf, nullptr, 16);
         g_symbols.load(symPath, base);   // auto-détecte nm-style vs exécutable TOS
     }
     // Breakpoint par symbole (nom → adresse via la table).
     static char symBp[64] = "";
     ImGui::SetNextItemWidth(220.0f);
-    const bool symEnter = ImGui::InputTextWithHint("##symbp", "nom de symbole", symBp, sizeof symBp,
+    const bool symEnter = ImGui::InputTextWithHint("##symbp", "symbol name", symBp, sizeof symBp,
                                                    ImGuiInputTextFlags_EnterReturnsTrue);
     ImGui::SameLine();
-    if ((ImGui::Button("BP symbole") || symEnter) && symBp[0]) {
+    if ((ImGui::Button("Symbol BP") || symEnter) && symBp[0]) {
         uint32_t a = 0;
         if (g_symbols.lookup(symBp, a)) { cpu.setBreakpoint(a); symBp[0] = '\0'; }
     }
@@ -1341,12 +1470,12 @@ void drawDebugger(Machine& machine) {
                                           ImGuiInputTextFlags_CharsHexadecimal |
                                           ImGuiInputTextFlags_EnterReturnsTrue);
     ImGui::SameLine();
-    if ((ImGui::Button("Ajouter") || entered) && bpBuf[0]) {
+    if ((ImGui::Button("Add") || entered) && bpBuf[0]) {
         cpu.setBreakpoint((uint32_t)std::strtoul(bpBuf, nullptr, 16));
         bpBuf[0] = '\0';
     }
     ImGui::SameLine();
-    if (ImGui::Button("Tout effacer")) cpu.clearAllBreakpoints();
+    if (ImGui::Button("Clear all")) cpu.clearAllBreakpoints();
 
     if (ImGui::BeginChild("##bplist", ImVec2(0, 120), true)) {
         for (int i = 0; i < cpu.breakpointCount(); ++i) {
@@ -1371,16 +1500,16 @@ void drawDebugger(Machine& machine) {
     ImGui::Text("Watchpoints (%d)", cpu.watchpointCount());
     static char wpBuf[16] = "";
     ImGui::SetNextItemWidth(120.0f);
-    const bool wpEnter = ImGui::InputTextWithHint("##wpaddr", "adresse hex", wpBuf, sizeof wpBuf,
+    const bool wpEnter = ImGui::InputTextWithHint("##wpaddr", "hex address", wpBuf, sizeof wpBuf,
                                                   ImGuiInputTextFlags_CharsHexadecimal |
                                                   ImGuiInputTextFlags_EnterReturnsTrue);
     ImGui::SameLine();
-    if ((ImGui::Button("Ajouter##wp") || wpEnter) && wpBuf[0]) {
+    if ((ImGui::Button("Add##wp") || wpEnter) && wpBuf[0]) {
         cpu.setWatchpoint((uint32_t)std::strtoul(wpBuf, nullptr, 16));
         wpBuf[0] = '\0';
     }
     ImGui::SameLine();
-    if (ImGui::Button("Tout effacer##wp")) cpu.clearAllWatchpoints();
+    if (ImGui::Button("Clear all##wp")) cpu.clearAllWatchpoints();
     if (ImGui::BeginChild("##wplist", ImVec2(0, 80), true)) {
         for (int i = 0; i < cpu.watchpointCount(); ++i) {
             uint32_t a = 0;
@@ -1396,7 +1525,7 @@ void drawDebugger(Machine& machine) {
     ImGui::Separator();
 
     // --- Désassemblage autour du PC (clic sur une ligne = toggle breakpoint) ---
-    ImGui::TextDisabled("Désassemblage (clic = poser/retirer un breakpoint)");
+    ImGui::TextDisabled("Disassembly (click = toggle a breakpoint)");
     if (ImGui::BeginChild("##disasm", ImVec2(0, 0), true)) {
         const uint32_t pc = cpu.pc();
         uint32_t addr = pc;
@@ -1426,92 +1555,15 @@ void drawDebugger(Machine& machine) {
 // Longueur du préfixe commun (insensible à la casse) entre deux noms de fichier.
 // Sert à mesurer la « proximité » : les disquettes d'un même jeu (« Jeu (Disk A) »,
 // « Jeu (Disk B) »…) partagent un long préfixe et ne diffèrent qu'au marqueur B/C/D.
-static size_t commonPrefixLenCI(const std::string& a, const std::string& b) {
-    const size_t n = std::min(a.size(), b.size());
-    size_t i = 0;
-    while (i < n && std::tolower((unsigned char)a[i]) == std::tolower((unsigned char)b[i])) ++i;
-    return i;
-}
 
-// Deux noms de fichier sont-ils des SUITES du même jeu (face A/B, partie 1/2/3,
-// Disk 1 of 2 / Disk 2 of 2…) ? Vrai si les noms sont identiques SAUF un court
-// jeton central : long préfixe commun + long suffixe commun, écart au milieu
-// borné. Rejette « Space Harrier » / « Space Crusade » (préfixe commun mais
-// suffixes/milieux tout différents). `a`, `b` supposés déjà en minuscules.
-static bool kioskAreSiblings(const std::string& a, const std::string& b) {
-    if (a == b) return true;
-    const size_t p = commonPrefixLenCI(a, b);
-    if (p < 3) return false;
-    size_t s = 0;
-    const size_t maxS = std::min(a.size(), b.size()) - p;   // ne pas empiéter sur le préfixe
-    while (s < maxS && a[a.size() - 1 - s] == b[b.size() - 1 - s]) ++s;
-    const size_t gapA = a.size() - p - s, gapB = b.size() - p - s;
-    if (gapA > 12 || gapB > 12) return false;               // le morceau qui diffère doit être court
-    return (p + s) * 2 >= std::min(a.size(), b.size());      // préfixe+suffixe couvrent l'essentiel
-}
-
-// Recense les images montables (.st/.msa/.dim/.stx) sous disks/ (récursif) →
-// g_kioskDisks, TRIÉES par proximité au disque courant `mounted` (préfixe commun
-// décroissant, puis alphabétique). Les « suites » du jeu en cours (phases B/C/D)
-// remontent ainsi en tête. Appelé à l'ouverture de l'overlay kiosk.
+// Recense les images montables sous disks/ (+ dossiers ROM additionnels) →
+// g_kioskDisks, TRIÉES par proximité au disque courant. Le MODÈLE (scan borné,
+// détection des suites, ordre de tri) vit dans io/MediaScan.cpp : il est partagé
+// avec le frontend Android, dont le menu reprend cette ludothèque.
 static void kioskScanDisks(const std::string& disksDir, const std::string& mounted) {
-    g_kioskDisks.clear();
-    // Scanne récursivement un dossier → images montables, avec dédup (le dossier ROM
-    // additionnel peut recouvrir disks/). Appelé pour disks/ PUIS pour g_kioskRomDir.
-    auto scanInto = [&](const std::string& dir) {
-        std::error_code e2;
-        if (dir.empty() || !fs::is_directory(dir, e2)) return;
-        // ⚠ Le range-for incrémente via operator++() qui LANCE filesystem_error sur
-        // un dossier illisible (EACCES — le raccourci « / » du kiosk traverse /root,
-        // /proc…) : itération manuelle avec increment(ec) + skip_permission_denied.
-        fs::recursive_directory_iterator it(dir, fs::directory_options::skip_permission_denied, e2), end;
-        // BORNES DURES. Ce scan tourne dans le THREAD GUI, à chaque ouverture du menu
-        // borne : sans limite, un dossier vaste fige l'interface (mesuré : /home =
-        // 2,7 M d'entrées, 4,6 s cache chaud, et c'est à une touche du raccourci
-        // « Home »). Refuser la racine et $HOME ne suffit pas — il faut borner le
-        // parcours lui-même : profondeur, nombre d'entrées, et budget de temps.
-        constexpr int  kMaxDepth   = 6;
-        constexpr long kMaxEntries = 40000;
-        const auto     tStart      = std::chrono::steady_clock::now();
-        long seen = 0;
-        while (!e2 && it != end) {
-            if (++seen > kMaxEntries) break;
-            if ((seen & 0x3FF) == 0 &&
-                std::chrono::steady_clock::now() - tStart > std::chrono::milliseconds(800)) break;
-            if (it.depth() >= kMaxDepth) it.disable_recursion_pending();
-            const fs::directory_entry& e = *it;
-            std::error_code e3;
-            if (e.is_regular_file(e3)) {
-                std::string ext = e.path().extension().string();
-                for (auto& c : ext) c = (char)std::tolower((unsigned char)c);
-                if (ext == ".st" || ext == ".msa" || ext == ".dim" || ext == ".stx") {
-                    const std::string p = e.path().string();
-                    if (std::find(g_kioskDisks.begin(), g_kioskDisks.end(), p) == g_kioskDisks.end())
-                        g_kioskDisks.push_back(p);
-                }
-            }
-            it.increment(e2);
-        }
-    };
-    scanInto(disksDir);
-    for (const auto& d : g_kioskRomDirs) scanInto(d);
-    auto lower = [](std::string s) { for (auto& c : s) c = (char)std::tolower((unsigned char)c); return s; };
-    const std::string mref = lower(fs::path(mounted).filename().string());
-    std::sort(g_kioskDisks.begin(), g_kioskDisks.end(),
-              [&](const std::string& a, const std::string& b) {
-                  const std::string an = lower(fs::path(a).filename().string());
-                  const std::string bn = lower(fs::path(b).filename().string());
-                  // 1) les VRAIES suites du jeu monté (face A/B, partie 1/2/3) en tête
-                  if (!mref.empty()) {
-                      const bool sa = kioskAreSiblings(an, mref), sb = kioskAreSiblings(bn, mref);
-                      if (sa != sb) return sa;
-                  }
-                  // 2) puis par proximité de nom (préfixe commun), 3) alphabétique
-                  const size_t pa = commonPrefixLenCI(an, mref);
-                  const size_t pb = commonPrefixLenCI(bn, mref);
-                  if (pa != pb) return pa > pb;
-                  return an < bn;
-              });
+    std::vector<std::string> dirs{ disksDir };
+    for (const auto& d : g_kioskRomDirs) dirs.push_back(d);
+    g_kioskDisks = neost::scanDiskImages(dirs, mounted);
 }
 
 // Recense les SOUS-DOSSIERS immédiats de `dir` (triés, insensible à la casse) →
@@ -1562,7 +1614,11 @@ static void kioskComputeShortcuts() {
         g_browseShortcutLabels.push_back(label);
     };
     add("/", std::string(ICON_FA_SERVER) + " / (filesystem root)");
-    if (const char* home = std::getenv("HOME"))
+    // USERPROFILE en repli : Windows ne définit pas HOME, et sans lui le
+    // raccourci « Home » du navigateur borne disparaissait purement et simplement.
+    const char* home = std::getenv("HOME");
+    if (!home || !*home) home = std::getenv("USERPROFILE");
+    if (home && *home)
         add(home, std::string(ICON_FA_FOLDER_OPEN) + " Home  (" + home + ")");
     // Emplacements de montage (portable : le garde is_directory ci-dessous fait que
     // chaque OS n'expose que ceux qui existent, pas besoin de #ifdef) :
@@ -1691,7 +1747,7 @@ void drawKioskDiskMenu(const std::string& disksDir, const std::string& mounted) 
             const bool sel = (i == g_kioskDiskSel);
             const bool cur = (g_kioskDisks[i] == mounted);
             const std::string fn = fs::path(g_kioskDisks[i]).filename().string();
-            const bool sibling = !mrefL.empty() && !cur && kioskAreSiblings(lower(fn), mrefL);
+            const bool sibling = !mrefL.empty() && !cur && neost::areSiblingImages(lower(fn), mrefL);
             // Cursor vert seulement si le menu JEUX a le focus ; sinon item courant estompé.
             if (sel)          ImGui::PushStyleColor(ImGuiCol_Text, zList ? kGreen : kDim);
             else if (sibling) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.95f, 0.6f, 1.0f));
@@ -1923,10 +1979,10 @@ static void applyDockLayout() {
     // onglet du bon groupe plus tard, au lieu de flotter par-dessus l'écran.
     ImGui::DockBuilderDockWindow(ICON_FA_COG " Configuration", right);
     ImGui::DockBuilderDockWindow("CPU 68000",     rlow);
-    ImGui::DockBuilderDockWindow("Mémoire (hex)", rlow);
+    ImGui::DockBuilderDockWindow("Memory (hex)", rlow);
     ImGui::DockBuilderDockWindow("Joystick",      rlow);
-    ImGui::DockBuilderDockWindow("Effets CRT",    rlow);
-    ImGui::DockBuilderDockWindow(ICON_FA_BUG " Débogueur",      bottom);
+    ImGui::DockBuilderDockWindow("CRT Effects",    rlow);
+    ImGui::DockBuilderDockWindow(ICON_FA_BUG " Debugger",      bottom);
     ImGui::DockBuilderFinish(g_dockId);
 #endif
 }
@@ -1973,7 +2029,7 @@ static void renderDockSpace(bool visible) {
 // non en viewport GL — les bordures inutilisées sortent du cadre au lieu d'ajouter
 // des bandes noires. Zoom auto OFF → cTop=0, cH=hauteur du buffer (cadre entier).
 void drawStScreen(const GlScreen& s, bool captured, bool& reqCapture, float topOffset,
-                  int cTop, int cH) {
+                  int cTop, int cH, int cW) {
     // ANCRÉE : c'est le nœud qui donne position ET taille. On ne pose donc ni pos, ni
     // taille, ni contrainte de ratio (elles se battraient avec le nœud — la fenêtre
     // « pomperait » à chaque trame). L'image, elle, garde son ratio en letterbox.
@@ -2022,14 +2078,22 @@ void drawStScreen(const GlScreen& s, bool captured, bool& reqCapture, float topO
 #ifdef IMGUI_HAS_DOCK
     s_docked = ImGui::IsWindowDocked();   // pour la trame SUIVANTE (cf. plus haut)
 #endif
-    ImGui::TextDisabled(captured ? "Souris capturée — Suppr (DEL) pour la libérer"
-                                 : "Clic dans l'écran pour capturer la souris (curseur GEM)");
+    ImGui::TextDisabled(captured ? "Mouse captured — press DEL to release it"
+                                 : "Click inside the screen to capture the mouse (GEM cursor)");
     // Cadrage de l'image dans la zone dispo. Deux régimes :
     //  · Zoom auto (défaut) — RÈGLE DU KIOSK : l'échelle est pilotée par la HAUTEUR,
     //    la région de contenu cale dessus, et la largeur en excès (bordures latérales)
     //    est ROGNÉE aux UV au lieu d'ajouter des bandes. Si le cadre entier tient en
     //    largeur à cette échelle, on retombe sur un pillarbox latéral — exactement les
     //    deux cas de drawStKiosk, transposés du viewport GL aux UV.
+    //    PLANCHER DE LARGEUR (bureau uniquement) : la hauteur seule pilotant le zoom,
+    //    un panneau plus étroit que haut (docking : l'écran ST partage la fenêtre avec
+    //    la Configuration) rognait jusque DANS l'image — bureau GEM amputé de ses menus
+    //    « Bureau »/« Options », jeu coupé aux deux bords. L'échelle est donc bornée
+    //    pour que `cW` (zone active, ou buffer entier si une bordure est ouverte) tienne
+    //    toujours en largeur : on préfère une bande haut/bas à une image amputée. Le
+    //    kiosk garde la règle pure — son écran est plus large que haut, le cas ne s'y
+    //    présente pas.
     //  · Zoom auto OFF : ancien comportement, cadre entier en letterbox, jamais rogné.
     // Dans les deux cas le ratio pixel ST est respecté : l'image ne se déforme jamais.
     const ImVec2 avail = ImGui::GetContentRegionAvail();
@@ -2037,8 +2101,13 @@ void drawStScreen(const GlScreen& s, bool captured, bool& reqCapture, float topO
     float dw, dh;
     float u0 = 0.f, u1 = 1.f;
     if (g_autoZoom) {
-        dh = availH;
-        const float scale = dh / (visH * sy);              // px écran par px ST (vertical)
+        // Bornage défensif : cW vient du Glue LIVE comme cTop/cH (une trame de
+        // transition peut le donner hors du buffer courant).
+        const float keepW = (float)std::max(1, std::min(cW, s.w));
+        float scale = availH / (visH * sy);                // px écran par px ST (vertical)
+        const float maxScale = availW / (keepW * sx);      // au-delà, on rognerait l'image
+        if (scale > maxScale) scale = maxScale;
+        dh = visH * sy * scale;                            // ≤ availH (bandes si borné)
         const float fullW = s.w * sx * scale;              // cadre ENTIER à cette échelle
         if (fullW > availW) {                              // déborde → on rogne les côtés
             const float visW = availW / (sx * scale);      // largeur ST réellement montrée
@@ -2089,23 +2158,23 @@ void drawFloppyPage(const std::string& disksDir,
     auto driveRow = [](const char* letter, const std::string& mounted, bool& reqEject) {
         if (!mounted.empty()) {
             ImGui::PushID(letter);
-            if (IconButton(ICON_FA_EJECT, "Éjecter")) reqEject = true;
+            if (IconButton(ICON_FA_EJECT, "Eject")) reqEject = true;
             ImGui::PopID();
             ImGui::SameLine();
             ImGui::Text("%s: %s", letter, fs::path(mounted).filename().string().c_str());
         } else {
             ImGui::Text("%s: ", letter); ImGui::SameLine();
-            ImGui::TextDisabled("(vide)");
+            ImGui::TextDisabled("(empty)");
         }
     };
     driveRow("A", mountedA, reqEjectA);
     driveRow("B", mountedB, reqEjectB);
     ImGui::Separator();
-    ImGui::TextDisabled("Images dans %s/", disksDir.c_str());
+    ImGui::TextDisabled("Images in %s/", disksDir.c_str());
 
     std::error_code ec;
     if (!fs::is_directory(disksDir, ec)) {
-        ImGui::TextDisabled("(dossier disks/ introuvable)");
+        ImGui::TextDisabled("(disks/ folder not found)");
         return;
     }
     const fs::path base(disksDir);
@@ -2125,7 +2194,7 @@ void drawFloppyPage(const std::string& disksDir,
     static double       cacheTime = -1.0;
     const double now = ImGui::GetTime();
     bool refresh = (cacheDir != disksDir) || cacheTime < 0.0 || (now - cacheTime) > 2.0;
-    if (ImGui::SmallButton("Rafraîchir")) refresh = true;
+    if (ImGui::SmallButton("Refresh")) refresh = true;
     ImGui::SameLine();
     ImGui::TextDisabled("(%zu images)", cache.size());
     if (refresh) {
@@ -2181,14 +2250,14 @@ void drawFloppyPage(const std::string& disksDir,
 void drawCartPage(const std::string& cartsDir, const std::string& mounted,
                   std::string& reqMount, bool& reqEject) {
     if (!mounted.empty()) {
-        if (IconButton(ICON_FA_EJECT, "Éjecter")) reqEject = true;
+        if (IconButton(ICON_FA_EJECT, "Eject")) reqEject = true;
         ImGui::SameLine();
-        ImGui::Text("branchée : %s", fs::path(mounted).filename().string().c_str());
+        ImGui::Text("plugged: %s", fs::path(mounted).filename().string().c_str());
     } else {
-        ImGui::TextDisabled("(port cartouche vide)");
+        ImGui::TextDisabled("(cartridge port empty)");
     }
     ImGui::Separator();
-    ImGui::TextDisabled("Images dans %s/", cartsDir.c_str());
+    ImGui::TextDisabled("Images in %s/", cartsDir.c_str());
 
     std::error_code ec;
     if (fs::is_directory(cartsDir, ec)) {
@@ -2211,7 +2280,7 @@ void drawCartPage(const std::string& cartsDir, const std::string& mounted,
                     ImGui::PushID(name.c_str());
                     if (name == mountedName) {
                         ImGui::TextDisabled("●");          // branchée
-                    } else if (ImGui::SmallButton("Brancher")) {
+                    } else if (ImGui::SmallButton("Plug in")) {
                         reqMount = e.path().string();
                     }
                     ImGui::SameLine();
@@ -2222,11 +2291,11 @@ void drawCartPage(const std::string& cartsDir, const std::string& mounted,
             it.increment(ec);
         }
     } else {
-        ImGui::TextDisabled("(dossier carts/ introuvable)");
+        ImGui::TextDisabled("(carts/ folder not found)");
     }
     ImGui::Separator();
-    ImGui::TextDisabled("Brancher/éjecter relance la machine pour re-détecter la cartouche.");
-    ImGui::TextDisabled("Exclusif avec le lecteur GEMDOS : les deux occupent $FA0000.");
+    ImGui::TextDisabled("Plugging in / ejecting restarts the machine to re-detect the cart.");
+    ImGui::TextDisabled("Exclusive with the GEMDOS drive: both occupy $FA0000.");
 }
 
 // Page « Disques durs » : les deux chemins d'accès (HD GEMDOS = dossier hôte monté en
@@ -2299,64 +2368,168 @@ void drawHardDiskPage(const std::string& hdDir, const std::string& gemdosDefault
     };
 
     // ── GEMDOS ────────────────────────────────────────────────────────────
-    ImGui::TextDisabled(ICON_FA_FOLDER_OPEN " GEMDOS — dossier hôte monté en C:");
+    ImGui::TextDisabled(ICON_FA_FOLDER_OPEN " GEMDOS — host folder mounted as C:");
     if (gemdosActive) {
-        if (IconButton(ICON_FA_EJECT, "Éjecter le lecteur GEMDOS")) reqEjectGemdos = true;
+        if (IconButton(ICON_FA_EJECT, "Eject the GEMDOS drive")) reqEjectGemdos = true;
         ImGui::SameLine();
-        ImGui::Text("monté : %s", curGemdos.c_str());
-        ImGui::TextDisabled("(occupe le port cartouche $FA0000 — exclusif avec une cartouche)");
+        ImGui::Text("mounted: %s", curGemdos.c_str());
+        ImGui::TextDisabled("(occupies cartridge port $FA0000 — exclusive with a cartridge)");
     } else {
-        ImGui::TextDisabled("(aucun lecteur GEMDOS monté)");
+        ImGui::TextDisabled("(no GEMDOS drive mounted)");
     }
     for (const auto& c : gemCands) {
         ImGui::PushID(c.path.c_str());
         if (gemdosActive && samePath(c.path, curGemdos)) ImGui::TextDisabled("●");
-        else if (ImGui::SmallButton("Monter")) reqMountGemdos = c.path;
+        else if (ImGui::SmallButton("Mount")) reqMountGemdos = c.path;
         ImGui::SameLine();
         ImGui::TextUnformatted(c.label.c_str());
         ImGui::PopID();
     }
     ImGui::SetNextItemWidth(-70.0f);
-    ImGui::InputTextWithHint("##gdPath", "chemin d'un dossier hôte…", g_gdBuf, sizeof g_gdBuf);
+    ImGui::InputTextWithHint("##gdPath", "path to a host folder…", g_gdBuf, sizeof g_gdBuf);
     ImGui::SameLine();
-    if (ImGui::Button("Monter##gdFree") && g_gdBuf[0]) reqMountGemdos = g_gdBuf;
+    if (ImGui::Button("Mount##gdFree") && g_gdBuf[0]) reqMountGemdos = g_gdBuf;
 
     ImGui::Separator();
 
     // ── ACSI ──────────────────────────────────────────────────────────────
-    ImGui::TextDisabled(ICON_FA_HDD " ACSI — image de disque dur (cible 0)");
+    ImGui::TextDisabled(ICON_FA_HDD " ACSI — hard disk image (target 0)");
     if (acsiActive) {
-        if (IconButton(ICON_FA_EJECT, "Éjecter l'image ACSI")) reqEjectAcsi = true;
+        if (IconButton(ICON_FA_EJECT, "Eject the ACSI image")) reqEjectAcsi = true;
         ImGui::SameLine();
-        ImGui::Text("monté : %s — %d partition(s)",
+        ImGui::Text("mounted: %s — %d partition(s)",
                     fs::path(curAcsi).filename().string().c_str(), acsiParts);
     } else {
-        ImGui::TextDisabled("(aucune image ACSI montée)");
+        ImGui::TextDisabled("(no ACSI image mounted)");
     }
     for (const auto& c : acsiCands) {
         ImGui::PushID(c.path.c_str());
         if (acsiActive && samePath(c.path, curAcsi)) ImGui::TextDisabled("●");
-        else if (ImGui::SmallButton("Monter")) reqMountAcsi = c.path;
+        else if (ImGui::SmallButton("Mount")) reqMountAcsi = c.path;
         ImGui::SameLine();
         ImGui::TextUnformatted(c.label.c_str());
         ImGui::PopID();
     }
     ImGui::SetNextItemWidth(-70.0f);
-    ImGui::InputTextWithHint("##hdPath", "chemin d'une image disque dur…", g_hdBuf, sizeof g_hdBuf);
+    ImGui::InputTextWithHint("##hdPath", "path to a hard disk image…", g_hdBuf, sizeof g_hdBuf);
     ImGui::SameLine();
-    if (ImGui::Button("Monter##hdFree") && g_hdBuf[0]) reqMountAcsi = g_hdBuf;
+    if (ImGui::Button("Mount##hdFree") && g_hdBuf[0]) reqMountAcsi = g_hdBuf;
 
     if (gemCands.empty() && acsiCands.empty())
-        ImGui::TextDisabled("(rien dans %s/ — y déposer un dossier ou une image)", hdDir.c_str());
+        ImGui::TextDisabled("(nothing in %s/ — drop a folder or an image there)", hdDir.c_str());
 
     // Les deux montés : NeoST ne décale pas le lecteur GEMDOS derrière les partitions
     // ACSI (contrairement à Hatari) → les deux revendiquent C:.
     if (gemdosActive && acsiActive)
         ImGui::TextColored(ImVec4(1.f, .6f, .2f, 1.f),
-                           "GEMDOS et ACSI revendiquent C: tous les deux !");
+                           "GEMDOS and ACSI both claim C:!");
     ImGui::Separator();
-    ImGui::TextDisabled("Dossier = lecteur GEMDOS, fichier = image ACSI. Monter relance");
-    ImGui::TextDisabled("la machine (le TOS ne sonde les disques qu'au boot).");
+    ImGui::TextDisabled("Folder = GEMDOS drive, file = ACSI image. Mounting restarts");
+    ImGui::TextDisabled("the machine (TOS only probes disks at boot).");
+}
+
+// Page « Network » : le FujiNet virtuel (extension NeoST — cf. docs/FUJINET.md).
+// Discipline habituelle : données en entrée, requêtes en sortie, AUCUNE E/S ici.
+void drawNetworkPage(bool fujiOn, int fujiTarget, const char* backendName,
+                     const FujiDevice& fuji, FujiHost* host, bool modemOn, bool etherOn,
+                     bool cartMounted,
+                     int& reqFujinet, int& reqFujinetTarget,
+                     std::string& reqFujinetMount,
+                     std::string& reqFujinetHosts, bool& reqFujinetHostsSet,
+                     int& reqModem, int& reqEther) {
+    ImGui::TextDisabled("FujiNet — virtual network device (NeoST extension)");
+    ImGui::TextWrapped("Protocol offloading for the ST: mount disk images from URLs, "
+                       "give 68000 programs HTTP/TCP/JSON without a TCP/IP stack. "
+                       "Attached to the ACSI bus (vendor opcode $60 — docs/FUJINET.md).");
+    ImGui::Separator();
+
+    // Modem Hayes : indépendant du FujiNet (le logiciel d'époque — terminaux,
+    // BBS, STinG/STiK en SLIP — parle à « un modem sur le port série »).
+    bool mdm = modemOn;
+    if (ImGui::Checkbox("Hayes modem on RS-232 (AT commands \xe2\x86\x92 TCP bridge)", &mdm))
+        reqModem = mdm ? 1 : 0;
+
+    // EtherNEC : NE2000 sur le port cartouche → pilotes STinG/MiNTnet historiques.
+    bool eth = etherOn;
+    if (cartMounted && !etherOn) {
+        ImGui::TextDisabled("EtherNEC (NE2000): free the cartridge port to enable");
+    } else if (ImGui::Checkbox("EtherNEC (NE2000 on the cartridge port)", &eth)) {
+        reqEther = eth ? 1 : 0;
+    }
+    ImGui::Separator();
+
+    bool on = fujiOn;
+    if (ImGui::Checkbox("Enable FujiNet (restarts the machine)", &on))
+        reqFujinet = on ? 1 : 0;
+
+    if (!fujiOn) {
+        ImGui::TextDisabled("(disabled — no network access from the emulated machine)");
+        return;
+    }
+
+    ImGui::Text("Backend: %s", backendName);
+    int tgt = fujiTarget;
+    ImGui::SetNextItemWidth(120.0f);
+    if (ImGui::InputInt("ACSI target (0-7)", &tgt))
+        reqFujinetTarget = (tgt < 0) ? 0 : (tgt > 7 ? 7 : tgt);
+
+    // ── Montage direct d'une image distante ─────────────────────────────────
+    ImGui::Separator();
+    ImGui::TextDisabled("Mount a remote disk image (http://…/file.st or a raw HD image)");
+    static char g_fujiUrlBuf[512] = "";
+    ImGui::SetNextItemWidth(-110.0f);
+    ImGui::InputTextWithHint("##fujiUrl", "http://host/path/disk.st…",
+                             g_fujiUrlBuf, sizeof g_fujiUrlBuf);
+    ImGui::SameLine();
+    if (ImGui::Button("Download##fuji") && g_fujiUrlBuf[0]) reqFujinetMount = g_fujiUrlBuf;
+
+    // ── Slots d'hôtes (préfixes d'URL pour les programmes ST) ───────────────
+    ImGui::Separator();
+    ImGui::TextDisabled("Host slots (URL prefixes offered to ST-side programs)");
+    static char g_fujiHostBuf[4][256];
+    static bool g_fujiHostSeeded = false;
+    if (!g_fujiHostSeeded) {
+        for (int i = 0; i < 4; ++i)
+            std::snprintf(g_fujiHostBuf[i], sizeof g_fujiHostBuf[i], "%s",
+                          fuji.hostSlot(i).c_str());
+        g_fujiHostSeeded = true;
+    }
+    for (int i = 0; i < 4; ++i) {
+        ImGui::PushID(i);
+        ImGui::SetNextItemWidth(-60.0f);
+        char label[16];
+        std::snprintf(label, sizeof label, "slot %d", i);
+        ImGui::InputText(label, g_fujiHostBuf[i], sizeof g_fujiHostBuf[i]);
+        ImGui::PopID();
+    }
+    if (ImGui::Button("Apply host slots")) {
+        std::string joined;
+        for (int i = 0; i < 4; ++i) {
+            if (i) joined += '|';
+            joined += g_fujiHostBuf[i];
+        }
+        // Rogne les '|' de queue (slots vides) pour un neost.cfg propre.
+        while (!joined.empty() && joined.back() == '|') joined.pop_back();
+        reqFujinetHosts = joined;
+        reqFujinetHostsSet = true;
+    }
+
+    // ── État des canaux N: ──────────────────────────────────────────────────
+    if (host) {
+        ImGui::Separator();
+        ImGui::TextDisabled("N: channels");
+        bool any = false;
+        for (int i = 0; i < FujiHost::MAX_CHANNELS; ++i) {
+            const FujiChanStatus st = host->status(i);
+            if (st.connected == 0 && st.avail == 0 && st.error == fn_err::OFFLINE) continue;
+            ImGui::Text("N%d:  %u byte(s) ready, %s (err %u)", i + 1, st.avail,
+                        st.connected ? "connected" : "closed", st.error);
+            any = true;
+        }
+        if (!any) ImGui::TextDisabled("(no channel open)");
+    }
+    ImGui::Separator();
+    ImGui::TextDisabled("Last device error: %u", fuji.lastError());
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2379,12 +2552,14 @@ void drawHardDiskPage(const std::string& hdDir, const std::string& gemdosDefault
 struct ConfigUi {
     // Dossiers scannés (résolus une fois au démarrage).
     std::string disksDir, cartsDir, romsDir, hdDir, gemdosDir;
+    std::string profDir;          // dossier des profils nommés (profiles/)
     // Lecture de l'état courant.
     const Config* cfg = nullptr;
     Machine* machine  = nullptr;
     float volume = 1.0f;          // volume maître courant (0..1)
     bool  color  = true;          // moniteur courant : couleur (vs mono)
     bool  driveSound = false;     // son du lecteur de disquettes
+    bool  driveSoundAvail = false;    // échantillons roms/drivesound/ chargés (sinon : réglage sans effet)
     std::string curGemdos, curAcsi;   // chemins RÉSOLUS des disques durs montés
 
     // Réglages matériels EN ATTENTE (cf. « Appliquer et redémarrer »).
@@ -2396,6 +2571,14 @@ struct ConfigUi {
     std::string reqMountA, reqMountB, reqMountCart, reqMountGemdos, reqMountAcsi;
     bool reqEjectA = false, reqEjectB = false, reqEjectCart = false;
     bool reqEjectGemdos = false, reqEjectAcsi = false;
+    // FujiNet (page Network) : bascule, cible ACSI, montage d'URL, slots d'hôtes.
+    int  reqFujinet = -1, reqFujinetTarget = -1;
+    std::string reqFujinetMount, reqFujinetHosts;
+    bool reqFujinetHostsSet = false;
+    int  reqModem = -1;                   // modem Hayes RS-232 (0/1)
+    int  reqEther = -1;                   // EtherNEC NE2000 (0/1)
+    const char* fujiBackendName = "";     // lecture : nom du backend actif
+    FujiHost* fujiHost = nullptr;         // lecture : statut des canaux N:
     bool reqApply  = false;       // appliquer les réglages matériels en attente
     bool reqKiosk  = false;
     int  reqMonitor = -1;         // 1 = couleur, 0 = mono
@@ -2404,14 +2587,17 @@ struct ConfigUi {
     int   reqFastFdc = -1;        // 0/1 → nouvelle valeur du FDC rapide
     bool  cfgDirty = false;       // un réglage à effet immédiat a changé → saveConfig
     bool  reqSaveState = false, reqLoadState = false;
+    // Profils nommés (page « Profiles ») : le nom demandé, consommé par la boucle.
+    std::string reqSaveProfile, reqLoadProfile, reqDeleteProfile;
 };
 
 // Page ouverte. Statique : on revient là où on était en rouvrant la fenêtre.
 enum ConfigPage {
-    kCfgMachine = 0, kCfgMem, kCfgRom, kCfgFloppy, kCfgHd, kCfgCart,
-    kCfgScreen, kCfgSound, kCfgInput, kCfgEmul, kCfgKiosk, kCfgCount
+    kCfgMachine = 0, kCfgMem, kCfgRom, kCfgFloppy, kCfgHd, kCfgCart, kCfgNet,
+    kCfgScreen, kCfgSound, kCfgInput, kCfgEmul, kCfgProfiles, kCfgKiosk, kCfgCount
 };
 int g_cfgPage = kCfgFloppy;   // au premier lancement : ce qu'on cherche le plus souvent
+bool g_profilesDirty = false; // un profil vient d'être écrit/supprimé → relire le dossier
 
 // Suffixe pays d'une ROM → fréquence de balayage. C'est LA cause d'écran « déchiré »
 // la plus fréquente sur les démos européennes (images Spectrum 512 calculées pour le
@@ -2434,7 +2620,9 @@ void drawConfigWindow(ConfigUi& ui) {
         ui.pendInit = true;
     }
 
-    // ── Profils : la config matérielle complète en un clic ────────────────
+    // ── Préréglages : la config matérielle complète en un clic. Codés en dur et
+    // limités au MATÉRIEL (ils ne font que garnir les champs « en attente »). Les
+    // configurations de l'utilisateur, elles, vivent dans la page « Profiles ».
     struct Profil { const char* label; const char* machine; const char* mem;
                     const char* rom; };
     static const Profil kProfils[] = {
@@ -2442,7 +2630,7 @@ void drawConfigWindow(ConfigUi& ui) {
         { "1040 STE", "ste",     "1m",   "roms/tos162uk.img" },
         { "Mega STE", "megaste", "4m",   "roms/tos206fr.img" },
     };
-    ImGui::TextDisabled("Profils :");
+    ImGui::TextDisabled("Presets:");
     for (const auto& p : kProfils) {
         ImGui::SameLine();
         const bool cur = ui.pendMachine == p.machine && ui.pendMem == p.mem
@@ -2458,12 +2646,13 @@ void drawConfigWindow(ConfigUi& ui) {
 
     // ── Colonne de navigation + page ──────────────────────────────────────
     static const char* kPageNames[kCfgCount] = {
-        ICON_FA_MICROCHIP " Machine",  ICON_FA_MEMORY " Mémoire",
-        ICON_FA_SAVE " ROM / TOS",     ICON_FA_SAVE " Disquettes",
-        ICON_FA_HDD " Disques durs",   ICON_FA_COMPACT_DISC " Cartouche",
-        ICON_FA_DESKTOP " Écran",      ICON_FA_VOLUME_UP " Son",
-        ICON_FA_GAMEPAD " Entrées",    ICON_FA_BOLT " Émulation",
-        ICON_FA_DESKTOP " Borne (kiosk)",
+        ICON_FA_MICROCHIP " Machine",  ICON_FA_MEMORY " Memory",
+        ICON_FA_SAVE " ROM / TOS",     ICON_FA_SAVE " Floppies",
+        ICON_FA_HDD " Hard disks",     ICON_FA_COMPACT_DISC " Cartridge",
+        ICON_FA_WIFI " Network",
+        ICON_FA_DESKTOP " Screen",     ICON_FA_VOLUME_UP " Sound",
+        ICON_FA_GAMEPAD " Input",      ICON_FA_BOLT " Emulation",
+        ICON_FA_STAR " Profiles",      ICON_FA_DESKTOP " Kiosk",
     };
     // Hauteur réservée au pied de page : le message « à jour » tient sur deux lignes
     // dans une fenêtre étroite — sans la deuxième, il déborde sous le bord.
@@ -2481,7 +2670,7 @@ void drawConfigWindow(ConfigUi& ui) {
 
     switch (g_cfgPage) {
     case kCfgMachine: {
-        ImGui::TextDisabled("Modèle de machine");
+        ImGui::TextDisabled("Machine model");
         static const char* labels[] = { "ST", "Mega ST", "STE", "Mega STE" };
         static const char* ids[]    = { "st", "megast", "ste", "megaste" };
         for (int i = 0; i < 4; ++i)
@@ -2490,31 +2679,31 @@ void drawConfigWindow(ConfigUi& ui) {
         // Le socket MC68881 n'existe QUE sur Mega STE (cf. Fpu.hpp) ; ailleurs il n'y a
         // rien à peupler et « not found » est le comportement fidèle.
         ImGui::BeginDisabled(ui.pendMachine != "megaste");
-        ImGui::Checkbox("Peupler le socket FPU MC68881", &ui.pendFpu);
+        ImGui::Checkbox("Populate the MC68881 FPU socket", &ui.pendFpu);
         ImGui::EndDisabled();
         if (ui.pendMachine != "megaste")
-            ImGui::TextDisabled("(socket FPU : Mega STE uniquement)");
+            ImGui::TextDisabled("(FPU socket: Mega STE only)");
         ImGui::Separator();
-        ImGui::TextWrapped("Un TOS ≤ 1.04 lancé sur STE/Mega STE fait basculer NeoST en "
-                           "mode ST (comme Hatari) : ces TOS ne connaissent pas le "
-                           "matériel additionnel.");
+        ImGui::TextWrapped("A TOS ≤ 1.04 booted on an STE/Mega STE switches NeoST to ST "
+                           "mode (like Hatari): those TOS versions know nothing of the "
+                           "extra hardware.");
         break;
     }
     case kCfgMem: {
         ImGui::TextDisabled("ST-RAM");
-        static const char* mlabels[] = { "256 Ko", "512 Ko", "1 Mo", "2 Mo", "4 Mo" };
+        static const char* mlabels[] = { "256 KB", "512 KB", "1 MB", "2 MB", "4 MB" };
         static const char* mids[]    = { "256k", "512k", "1m", "2m", "4m" };
         for (int i = 0; i < 5; ++i)
             if (ImGui::RadioButton(mlabels[i], ui.pendMem == mids[i])) ui.pendMem = mids[i];
         ImGui::Separator();
-        ImGui::TextWrapped("512 Ko = la machine de 1985. Beaucoup de jeux à partir de 1989 "
-                           "et la plupart des cracks/dépaqueteurs exigent 1 Mo : en 512 Ko "
-                           "ils ne préviennent pas, ils partent en vrille (écran noir figé "
-                           "après l'intro).");
+        ImGui::TextWrapped("512 KB = the 1985 machine. Many games from 1989 on, and most "
+                           "cracks/depackers, require 1 MB: with 512 KB they give no "
+                           "warning, they just go haywire (black screen frozen after "
+                           "the intro).");
         break;
     }
     case kCfgRom: {
-        ImGui::TextDisabled("Images TOS dans %s/", ui.romsDir.c_str());
+        ImGui::TextDisabled("TOS images in %s/", ui.romsDir.c_str());
         std::error_code ec;
         if (fs::is_directory(ui.romsDir, ec)) {
             const std::string curName = fs::path(ui.pendRom).filename().string();
@@ -2544,13 +2733,13 @@ void drawConfigWindow(ConfigUi& ui) {
                 else                 ImGui::TextDisabled("50 Hz PAL");
             }
         } else {
-            ImGui::TextDisabled("(dossier roms/ introuvable)");
+            ImGui::TextDisabled("(roms/ folder not found)");
         }
         ImGui::Separator();
-        ImGui::TextWrapped("La ROM fixe la fréquence de balayage : suffixe « us » = 60 Hz "
-                           "NTSC, « uk/fr/de/es » = 50 Hz PAL. Les démos européennes "
-                           "sortent DÉCHIRÉES en 60 Hz — fidèlement, c'est aussi le cas "
-                           "sur le vrai matériel.");
+        ImGui::TextWrapped("The ROM sets the scan rate: an \"us\" suffix = 60 Hz NTSC, "
+                           "\"uk/fr/de/es\" = 50 Hz PAL. European demos come out TORN "
+                           "at 60 Hz — faithfully so, that also happens on real "
+                           "hardware.");
         break;
     }
     case kCfgFloppy:
@@ -2570,55 +2759,71 @@ void drawConfigWindow(ConfigUi& ui) {
         drawCartPage(ui.cartsDir, ui.machine->bus.mountedCartPath(),
                      ui.reqMountCart, ui.reqEjectCart);
         break;
+    case kCfgNet:
+        drawNetworkPage(ui.machine->fuji.enabled(),
+                        ui.cfg ? ui.cfg->fujinetTarget : 6,
+                        ui.fujiBackendName, ui.machine->fuji, ui.fujiHost,
+                        ui.cfg && ui.cfg->modem, ui.machine->ne2000.enabled(),
+                        !ui.machine->bus.mountedCartPath().empty(),
+                        ui.reqFujinet, ui.reqFujinetTarget,
+                        ui.reqFujinetMount, ui.reqFujinetHosts, ui.reqFujinetHostsSet,
+                        ui.reqModem, ui.reqEther);
+        break;
     case kCfgScreen: {
-        ImGui::TextDisabled("Moniteur Atari");
-        if (ImGui::RadioButton("Couleur (basse/moyenne rés)", ui.color))  ui.reqMonitor = 1;
-        if (ImGui::RadioButton("Mono (haute rés)",           !ui.color))  ui.reqMonitor = 0;
+        ImGui::TextDisabled("Atari monitor");
+        if (ImGui::RadioButton("Color (low/medium res)", ui.color))  ui.reqMonitor = 1;
+        if (ImGui::RadioButton("Mono (high res)",        !ui.color))  ui.reqMonitor = 0;
         ImGui::Separator();
         // Même cadrage adaptatif que la borne : l'écran cale sa zone de contenu sur la
         // hauteur disponible, les bordures inutilisées sortent du cadre, et une
         // ouverture de bordure (démo overscan) rend le cadre entier.
-        if (ImGui::Checkbox("Zoom auto (cadre adaptatif)", &g_autoZoom)) ui.cfgDirty = true;
+        if (ImGui::Checkbox("Auto zoom (adaptive framing)", &g_autoZoom)) ui.cfgDirty = true;
         ImGui::Separator();
-        ImGui::TextDisabled("Façade CRT");
+        ImGui::TextDisabled("CRT look");
         bool crtChanged = false;
         drawCrtControls(crtChanged);
         if (crtChanged) ui.cfgDirty = true;
         break;
     }
     case kCfgSound: {
-        ImGui::TextDisabled("Volume maître (sortie hôte, indépendant du LMC1992 émulé)");
+        ImGui::TextDisabled("Master volume (host output, independent of the emulated LMC1992)");
         int pct = int(ui.volume * 100.0f + 0.5f);
         ImGui::SetNextItemWidth(220.0f);
         if (ImGui::SliderInt("##vol", &pct, 0, 100, "%d %%")) ui.reqVolume = float(pct) / 100.0f;
         if (ImGui::IsItemDeactivatedAfterEdit()) ui.volumeDone = true;
         ImGui::SameLine();
-        if (ImGui::SmallButton(ui.volume <= 0.0f ? "Rétablir" : "Muet")) {
+        if (ImGui::SmallButton(ui.volume <= 0.0f ? "Unmute" : "Mute")) {
             ui.reqVolume = (ui.volume <= 0.0f) ? 1.0f : 0.0f;
             ui.volumeDone = true;
         }
         ImGui::Separator();
-        if (ImGui::Checkbox("Son du lecteur de disquettes", &ui.driveSound)) ui.cfgDirty = true;
+        // Réglage MÉMORISÉ (drivesound=) — il ne l'était pas : la case se cochait, se
+        // décochait, et repartait à « on » au lancement suivant.
+        ImGui::BeginDisabled(!ui.driveSoundAvail);
+        if (ImGui::Checkbox("Floppy drive sound", &ui.driveSound)) ui.cfgDirty = true;
+        ImGui::EndDisabled();
+        if (!ui.driveSoundAvail)
+            ImGui::TextDisabled("(samples not found in roms/drivesound/)");
         ImGui::Separator();
-        ImGui::TextDisabled("La latence audio se règle au lancement (--audio-latency MS,");
-        ImGui::TextDisabled("mémorisée dans neost.cfg) : la changer à chaud recréerait");
-        ImGui::TextDisabled("l'anneau audio en pleine lecture.");
-        ImGui::Text("Coussin visé : %d ms", cfg.audioLatencyMs);
+        ImGui::TextDisabled("Audio latency is set at launch (--audio-latency MS, stored");
+        ImGui::TextDisabled("in neost.cfg): changing it live would rebuild the audio");
+        ImGui::TextDisabled("ring mid-playback.");
+        ImGui::Text("Target cushion: %d ms", cfg.audioLatencyMs);
         break;
     }
     case kCfgInput: {
         // Émulation au clavier : réglage de SESSION, jamais persisté (elle avale les
         // flèches, ce qui « casse » le clavier des jeux qui s'en servent).
-        ImGui::Checkbox("Émulation joystick au clavier (flèches + Ctrl droit)", &g_kbdJoy);
-        ImGui::SameLine(); ImGui::TextDisabled("(F11 — non mémorisé)");
-        ImGui::TextDisabled("Port ST émulé au clavier :");
-        if (ImGui::RadioButton("Port 1 (jeux)", g_kbdJoyPort == 1))  { g_kbdJoyPort = 1; g_joyCfgDirty = true; }
+        ImGui::Checkbox("Keyboard joystick emulation (arrows + right Ctrl)", &g_kbdJoy);
+        ImGui::SameLine(); ImGui::TextDisabled("(F11 — not remembered)");
+        ImGui::TextDisabled("ST port driven by the keyboard:");
+        if (ImGui::RadioButton("Port 1 (games)", g_kbdJoyPort == 1))  { g_kbdJoyPort = 1; g_joyCfgDirty = true; }
         ImGui::SameLine();
-        if (ImGui::RadioButton("Port 0 (souris)", g_kbdJoyPort == 0)) { g_kbdJoyPort = 0; g_joyCfgDirty = true; }
+        if (ImGui::RadioButton("Port 0 (mouse)", g_kbdJoyPort == 0)) { g_kbdJoyPort = 0; g_joyCfgDirty = true; }
         ImGui::Separator();
         // Zone morte centrale des sticks analogiques (anti-drift). Le D-pad numérique
         // n'est pas concerné. Mémorisée à la validation du slider.
-        ImGui::TextDisabled("Zone morte des sticks analogiques");
+        ImGui::TextDisabled("Analog stick dead zone");
         ImGui::SetNextItemWidth(220.0f);
         ImGui::SliderFloat("##deadzone", &g_joyDeadzone, 0.0f, 0.95f, "%.2f");
         if (ImGui::IsItemDeactivatedAfterEdit()) {
@@ -2626,40 +2831,111 @@ void drawConfigWindow(ConfigUi& ui) {
             g_joyCfgDirty = true;
         }
         ImGui::Separator();
-        ImGui::TextDisabled("Manettes USB détectées (la 1re → port 1, la 2e → port 0) :");
+        ImGui::TextDisabled("USB pads detected (1st → port 1, 2nd → port 0):");
         int nPad = 0;
         for (int jid = GLFW_JOYSTICK_1; jid <= GLFW_JOYSTICK_LAST; ++jid) {
             if (!glfwJoystickPresent(jid)) continue;
             const char* nm = glfwGetGamepadName(jid);
             if (!nm) nm = glfwGetJoystickName(jid);
-            ImGui::BulletText("Port %d : %s", (nPad == 0) ? 1 : 0, nm ? nm : "?");
+            ImGui::BulletText("Port %d: %s", (nPad == 0) ? 1 : 0, nm ? nm : "?");
             ++nPad;
         }
-        if (nPad == 0) ImGui::BulletText("(aucune)");
+        if (nPad == 0) ImGui::BulletText("(none)");
         break;
     }
     case kCfgEmul: {
-        ImGui::TextDisabled("Vitesse d'accès disquette");
+        ImGui::TextDisabled("Floppy access speed");
         bool fast = cfg.fastfdc;
-        if (ImGui::Checkbox("FDC rapide (délais ÷10)", &fast)) ui.reqFastFdc = fast ? 1 : 0;
-        ImGui::TextDisabled("Équivalent de --fastfdc : les chargements passent en accéléré.");
-        ImGui::TextDisabled("À COUPER pour comparer une trace à l'oracle Hatari : les");
-        ImGui::TextDisabled("numéros de trame ne correspondent plus entre les deux.");
+        if (ImGui::Checkbox("Fast FDC (delays ÷10)", &fast)) ui.reqFastFdc = fast ? 1 : 0;
+        ImGui::TextDisabled("Same as --fastfdc: loading runs at accelerated speed.");
+        ImGui::TextDisabled("TURN IT OFF to compare a trace with the Hatari oracle: the");
+        ImGui::TextDisabled("frame numbers no longer match between the two.");
         ImGui::Separator();
-        ImGui::TextDisabled("État de la machine (save-state)");
-        if (ImGui::Button(ICON_FA_SAVE " Sauver l'état (F5)"))   ui.reqSaveState = true;
+        ImGui::TextDisabled("Machine state (save-state)");
+        if (ImGui::Button(ICON_FA_SAVE " Save state (F5)"))   ui.reqSaveState = true;
         ImGui::SameLine();
-        if (ImGui::Button(ICON_FA_FOLDER_OPEN " Charger (F7)"))  ui.reqLoadState = true;
-        ImGui::TextDisabled("L'état embarque une empreinte de la config : un état pris");
-        ImGui::TextDisabled("sur une autre machine/ROM est refusé plutôt qu'appliqué.");
+        if (ImGui::Button(ICON_FA_FOLDER_OPEN " Load (F7)"))  ui.reqLoadState = true;
+        ImGui::TextDisabled("A state carries a fingerprint of the config: one taken on");
+        ImGui::TextDisabled("another machine/ROM is refused rather than applied.");
+        break;
+    }
+    case kCfgProfiles: {
+        // Un profil = une PHOTO NOMMÉE des réglages en vigueur. neost.cfg reste la
+        // configuration courante (écrite toute seule à chaque changement) ; les profils
+        // servent à revenir en un clic sur un attelage machine + ROM + support connu.
+        // Lignes COURTES pré-découpées et boutons sur leur propre ligne, comme les
+        // autres pages : ancrée sur le côté, la fenêtre est étroite — un TextWrapped y
+        // débordait (le défilement horizontal de la page repousse le point de coupure)
+        // et un bouton mis en SameLine sortait tout simplement du cadre.
+        ImGui::TextDisabled("A named snapshot of the settings in effect:");
+        ImGui::TextDisabled("machine, RAM, FPU, ROM, media, monitor, CRT,");
+        ImGui::TextDisabled("sound, input. Loading one restarts the machine");
+        ImGui::TextDisabled("(same single restart as \"Apply and restart\").");
+        ImGui::Separator();
+        // Le mode borne n'écrit RIEN sur le disque (« la borne repart identique ») :
+        // les profils y sont consultables mais ni créés ni supprimés.
+        const bool frozen = g_kiosk || g_kioskLaunched;
+        static char nameBuf[80] = "";
+        ImGui::SetNextItemWidth(220.0f);
+        ImGui::InputTextWithHint("##profname", "profile name", nameBuf, sizeof nameBuf);
+        const std::string clean = profileFileName(nameBuf);
+        ImGui::BeginDisabled(clean.empty() || frozen);
+        if (ImGui::Button(ICON_FA_SAVE " Save current settings")) {
+            ui.reqSaveProfile = clean;
+            nameBuf[0] = '\0';
+        }
+        ImGui::EndDisabled();
+        if (frozen) ImGui::TextDisabled("(kiosk: frozen configuration, nothing is written)");
+        ImGui::Separator();
+
+        // Scan du dossier MIS EN CACHE : la fenêtre est redessinée à chaque trame, et
+        // la page Disquettes a déjà payé le prix d'un parcours de dossier par trame
+        // (21 ms, le budget PAL entier). Rafraîchi toutes les 2 s, et immédiatement
+        // après une écriture ou une suppression (g_profilesDirty).
+        struct ProfCache { std::vector<std::string> names; std::string dir; double t = -1.0; };
+        static ProfCache pc;
+        const double nowP = ImGui::GetTime();
+        if (g_profilesDirty || pc.dir != ui.profDir || pc.t < 0.0 || (nowP - pc.t) > 2.0) {
+            pc.names = listProfiles(ui.profDir);
+            pc.dir   = ui.profDir;
+            pc.t     = nowP;
+            g_profilesDirty = false;
+        }
+        if (pc.names.empty()) ImGui::TextDisabled("(no profile saved yet)");
+        // Suppression en DEUX temps : un profil est le fruit d'un réglage patient, et
+        // les boutons sont côte à côte dans une fenêtre étroite.
+        static std::string confirmDel;
+        for (const std::string& n : pc.names) {
+            ImGui::PushID(n.c_str());
+            if (ImGui::SmallButton("Load")) ui.reqLoadProfile = n;
+            ImGui::SameLine(0.0f, 4.0f);
+            ImGui::BeginDisabled(frozen);
+            if (confirmDel == n) {
+                if (ImGui::SmallButton("Delete?")) { ui.reqDeleteProfile = n; confirmDel.clear(); }
+                ImGui::SameLine(0.0f, 4.0f);
+                if (ImGui::SmallButton("Cancel")) confirmDel.clear();
+            } else {
+                if (ImGui::SmallButton("Overwrite")) ui.reqSaveProfile = n;
+                ImGui::SameLine(0.0f, 4.0f);
+                if (ImGui::SmallButton("Delete")) confirmDel = n;
+            }
+            ImGui::EndDisabled();
+            ImGui::SameLine();
+            ImGui::TextUnformatted(n.c_str());
+            ImGui::PopID();
+        }
+        ImGui::Separator();
+        ImGui::TextDisabled("Files: profiles/*.cfg, next to neost.cfg.");
+        ImGui::TextDisabled("Debug windows / docking layout are NOT saved.");
+        ImGui::TextDisabled("Audio latency only applies at the next launch.");
         break;
     }
     case kCfgKiosk: {
-        ImGui::TextWrapped("Le mode borne passe en plein écran sans chrome, fige la "
-                           "configuration (rien n'est plus écrit dans neost.cfg) et "
-                           "active l'émulation joystick au clavier. Sortie par F8.");
+        ImGui::TextWrapped("Kiosk mode goes full screen with no chrome, freezes the "
+                           "configuration (nothing more is written to neost.cfg) and "
+                           "enables keyboard joystick emulation. Leave it with F8.");
         ImGui::Separator();
-        if (ImGui::Button(ICON_FA_DESKTOP " Passer en mode borne (F8)")) ui.reqKiosk = true;
+        if (ImGui::Button(ICON_FA_DESKTOP " Switch to kiosk mode (F8)")) ui.reqKiosk = true;
         break;
     }
     default: break;
@@ -2675,14 +2951,14 @@ void drawConfigWindow(ConfigUi& ui) {
     if (pending > 0) {
         // Texte PUIS boutons sur leur propre ligne : ancrée sur le côté, la fenêtre
         // est étroite et « Appliquer et redémarrer » sortait du cadre.
-        ImGui::TextColored(ImVec4(1.f, .6f, .2f, 1.f), ICON_FA_REDO " %d réglage%s matériel%s en attente",
-                           pending, pending > 1 ? "s" : "", pending > 1 ? "s" : "");
-        if (ImGui::Button("Annuler")) ui.pendInit = false;      // resème depuis cfg
+        ImGui::TextColored(ImVec4(1.f, .6f, .2f, 1.f), ICON_FA_REDO " %d pending hardware setting%s",
+                           pending, pending > 1 ? "s" : "");
+        if (ImGui::Button("Cancel")) ui.pendInit = false;       // resème depuis cfg
         ImGui::SameLine();
-        if (ImGui::Button(ICON_FA_POWER_OFF " Appliquer et redémarrer")) ui.reqApply = true;
+        if (ImGui::Button(ICON_FA_POWER_OFF " Apply and restart")) ui.reqApply = true;
     } else {
-        ImGui::TextDisabled("Machine à jour. Modèle, RAM, FPU et ROM sont appliqués");
-        ImGui::TextDisabled("ensemble, par un seul redémarrage.");
+        ImGui::TextDisabled("Machine up to date. Model, RAM, FPU and ROM are applied");
+        ImGui::TextDisabled("together, by a single restart.");
     }
     ImGui::End();
 }
@@ -2705,6 +2981,26 @@ int main(int argc, char** argv) {
             const auto self = std::filesystem::canonical(buf, ec);
             if (!ec && self.has_parent_path()) return self.parent_path().string();
         }
+#elif defined(_WIN32)
+        // GetModuleFileNameW et non argv[0] : lancé depuis le menu Démarrer ou par
+        // association de fichier, argv[0] peut être nu, et le cwd est alors celui de
+        // l'explorateur — roms/ et neost.cfg seraient cherchés n'importe où.
+        // La version W (et non A) : un chemin contenant des accents — « C:\\Users\\Frédéric »
+        // — ressort en mojibake avec la version ANSI et aucun fichier n'est trouvé.
+        {
+            std::wstring buf(MAX_PATH, L'\0');
+            for (;;) {
+                const DWORD n = GetModuleFileNameW(nullptr, buf.data(), (DWORD)buf.size());
+                if (n == 0) break;                       // échec : on tombera sur argv[0]
+                if (n < buf.size()) { buf.resize(n); break; }
+                if (buf.size() >= 32768) break;          // borne NT : on abandonne
+                buf.resize(buf.size() * 2);              // tronqué : on réessaie plus grand
+            }
+            if (!buf.empty()) {
+                const auto self = std::filesystem::path(buf).lexically_normal();
+                if (self.has_parent_path()) return self.parent_path().string();
+            }
+        }
 #endif
         const std::string a0 = argv[0] ? argv[0] : "";
         const auto i = a0.find_last_of('/');
@@ -2719,7 +3015,7 @@ int main(int argc, char** argv) {
     // nœuds pour des fenêtres qui n'existent plus (Disk/Cart Library) et ne connaît
     // pas la fenêtre Configuration — qui flotterait alors au-dessus de l'écran ST.
     // On resème la disposition UNE fois, puis on note la version dans neost.cfg.
-    static constexpr int kUiVersion = 2;
+    static constexpr int kUiVersion = 3;
     const bool uiLayoutOutdated = (cfg.uiVersion < kUiVersion);
     cfg.uiVersion = kUiVersion;
     g_dockOn   = cfg.dock;     // mode ancré mémorisé (cf. renderDockSpace)
@@ -2740,7 +3036,7 @@ int main(int argc, char** argv) {
 #ifdef NEOST_VERSION
             std::printf("NeoST %s\n", NEOST_VERSION);
 #else
-            std::printf("NeoST (version inconnue)\n");
+            std::printf("NeoST (unknown version)\n");
 #endif
             return 0;
         }
@@ -2756,8 +3052,8 @@ int main(int argc, char** argv) {
         else if (a == "--crt-preset" && i + 1 < argc) {
             const std::string name = argv[++i];
             if (!applyCrtPreset(name, g_crtParams, g_crtOn))
-                std::fprintf(stderr, "[main] preset CRT inconnu : '%s' "
-                             "(off|leger|arcade|phosphor)\n", name.c_str());
+                std::fprintf(stderr, "[main] unknown CRT preset: '%s' "
+                             "(off|light|arcade|phosphor)\n", name.c_str());
         }
         else if (!a.empty() && a[0] != '-') pos.push_back(a);
     }
@@ -2836,22 +3132,22 @@ int main(int argc, char** argv) {
     const MachineType machType0 = Machine::adjustMachineForTos(parseMachine(cfg.machine), tosPath);
     Machine machine(parseRamBytes(cfg.mem), Cpu68k::parseCore(cfg.cpu),
                     machType0);                   // RAM + cœur + modèle (cfg, ajusté au TOS)
-    std::fprintf(stderr, "[main] cœur CPU : %s | machine : %s | RAM : %s\n",
+    std::fprintf(stderr, "[main] CPU core: %s | machine: %s | RAM: %s\n",
                  Cpu68k::coreName(machine.cpu.core()),
                  machineName(machType0), cfg.mem.c_str());
     if (!machine.loadTos(tosPath))
-        std::fprintf(stderr, "[main] Démarrage sans TOS (le CPU tournera à vide).\n");
+        std::fprintf(stderr, "[main] Starting without a TOS (the CPU will run on nothing).\n");
     updateKbdCountry(machine.bus.rom);    // pays du TOS → surcharges keymap (FR/DE/UK…)
     if (!machine.loadDisk(diskPath))
-        std::fprintf(stderr, "[main] Aucune disquette montée (%s).\n", diskPath.c_str());
+        std::fprintf(stderr, "[main] No floppy mounted (%s).\n", diskPath.c_str());
     // Lecteur B mémorisé (diskb=) : remonté au démarrage comme le A. Silencieux si
     // l'image a disparu — un second lecteur vide est un état parfaitement normal.
     if (!cfg.diskb.empty() && !machine.fdc.loadImage(resolveData(cfg.diskb, exeDir), 1)) {
-        std::fprintf(stderr, "[main] Lecteur B : image introuvable (%s).\n", cfg.diskb.c_str());
+        std::fprintf(stderr, "[main] Drive B: image not found (%s).\n", cfg.diskb.c_str());
         cfg.diskb.clear();
     }
     if (!cartPath.empty() && !machine.loadCart(cartPath))
-        std::fprintf(stderr, "[main] Aucune cartouche montée (%s).\n", cartPath.c_str());
+        std::fprintf(stderr, "[main] No cartridge mounted (%s).\n", cartPath.c_str());
     // Résolution de chemin façon resolveData mais tolérante aux DOSSIERS (le HD
     // GEMDOS monte un répertoire ; fs::exists accepte fichiers et dossiers).
     auto resolvePath = [&exeDir](const std::string& given) -> std::string {
@@ -2869,7 +3165,7 @@ int main(int argc, char** argv) {
     if (const char* hd = std::getenv("NEOST_ACSI_IMG"))   cfg.acsi  = hd;
     if (!cfg.gemdos.empty()) {
         if (!cartPath.empty())
-            std::fprintf(stderr, "[main] cartouche ignorée : incompatible avec GEMDOS HD\n");
+            std::fprintf(stderr, "[main] cartridge ignored: incompatible with GEMDOS HD\n");
         if (!machine.gemdos.setDirectory(resolvePath(cfg.gemdos)))
             cfg.gemdos.clear();                // dossier invalide → on ne le mémorise pas
     }
@@ -2881,6 +3177,70 @@ int main(int argc, char** argv) {
             std::fprintf(stderr, "[main] ACSI : %d partition(s)\n", machine.fdc.acsiPartitionCount());
         else cfg.acsi.clear();                 // image invalide → idem
     }
+    // FujiNet virtuel (fujinet= dans neost.cfg) : cible ACSI dédiée + backend hôte
+    // (sockets si le build les a — cf. NEOST_WITH_NET). Extension NeoST, OFF par défaut.
+    std::unique_ptr<FujiHost> fujiHost;
+    auto fujiApply = [&](bool on) {
+        if (on) {
+            if (!fujiHost) {
+#ifdef NEOST_WITH_NET
+                fujiHost = std::make_unique<FujiHostLive>();
+#else
+                fujiHost = std::make_unique<FujiHostNull>();
+#endif
+            }
+            machine.fuji.setHost(fujiHost.get());
+            const int tgt = (cfg.fujinetTarget >= 0 && cfg.fujinetTarget <= 7)
+                                ? cfg.fujinetTarget : 6;
+            machine.enableFujiNet(tgt);
+            // Slots d'hôtes mémorisés : « url|url|… », slot 0 en tête.
+            std::size_t pos = 0;
+            for (int slot = 0; slot < FujiDevice::kHostSlots
+                               && pos <= cfg.fujinetHosts.size(); ++slot) {
+                std::size_t bar = cfg.fujinetHosts.find('|', pos);
+                if (bar == std::string::npos) bar = cfg.fujinetHosts.size();
+                if (bar > pos) machine.fuji.setHostSlot(slot, cfg.fujinetHosts.substr(pos, bar - pos));
+                pos = bar + 1;
+            }
+        } else {
+            machine.disableFujiNet();
+        }
+    };
+    if (cfg.fujinet) fujiApply(true);
+#ifdef NEOST_WITH_NET
+    // Modem Hayes (modem= dans neost.cfg) : commandes AT sur l'USART → pont TCP.
+    std::unique_ptr<HayesModem> hayesModem;
+    auto modemApply = [&](bool on) {
+        if (on && !hayesModem) {
+            hayesModem = std::make_unique<HayesModem>(machine.mfp);
+            HayesModem* m = hayesModem.get();
+            machine.mfp.setSerialSink([m](uint8_t b) { m->onTx(b); });
+        } else if (!on && hayesModem) {
+            machine.mfp.setSerialSink({});
+            hayesModem.reset();
+        }
+    };
+    if (cfg.modem) modemApply(true);
+#endif
+    // EtherNEC (ethernec= dans neost.cfg) : NE2000 sur le port cartouche. Backend
+    // par défaut = boucle locale (NetBackendNull une fois un pont SLIRP/pcap
+    // absent) : la carte est DÉTECTÉE par le pilote, sans trafic hôte v1.
+    NetBackendNull etherNull;
+    auto etherApply = [&](bool on) {
+        if (on) {
+            if (!machine.bus.cart.empty()) {
+                g_stateMsg = "EtherNEC needs the cartridge port free";
+                g_stateMsgFrames = 150;
+                cfg.ethernec = false;
+                return;
+            }
+            machine.ne2000.setBackend(&etherNull);
+            machine.enableEtherNec();
+        } else {
+            machine.disableEtherNec();
+        }
+    };
+    if (cfg.ethernec) etherApply(true);
     machine.mfp.setColorMonitor(!cfg.mono);   // moniteur mémorisé (avant le reset)
     machine.fdc.setFastFdc(cfg.fastfdc);      // FDC rapide mémorisé (accès disque ÷10)
     // Socket MC68881 (Mega STE uniquement, cf. Fpu.hpp) : sonde + trapping.
@@ -2894,14 +3254,22 @@ int main(int argc, char** argv) {
     // roms/drivesound/ (jeu « epson_smd480l » = vrai lecteur) et Audio les
     // additionne au flux PSG (cf. Audio::render).
     DriveSound drive;
-    bool driveSoundOn = drive.init(resolveData("roms/drivesound/epson_smd480l", exeDir), 48000);
-    Audio audio(machine.psg, driveSoundOn ? &drive : nullptr, &machine.dmasnd);
+    // DISPONIBILITÉ (échantillons chargés) et ACTIVATION (réglage drivesound=) sont deux
+    // choses : c'est la disponibilité qui décide du câblage — brancher DriveSound sur
+    // l'Audio et armer le sink FdcSound — car ce câblage se fait UNE fois, ici. Le
+    // réglage, lui, se rebascule à chaud (case de la page Son, chargement d'un profil) ;
+    // s'il avait décidé du câblage, démarrer son coupé aurait rendu la case sans effet
+    // pour toute la session.
+    const bool driveSoundAvail = drive.init(resolveData("roms/drivesound/epson_smd480l", exeDir), 48000);
+    bool driveSoundOn = driveSoundAvail && cfg.driveSound;
+    drive.setEnabled(driveSoundOn);
+    Audio audio(machine.psg, driveSoundAvail ? &drive : nullptr, &machine.dmasnd);
     audio.setLatencyMs(uint32_t(cfg.audioLatencyMs < 0 ? 0 : cfg.audioLatencyMs));  // AVANT start (borné dans Audio)
     audio.start();   // échec silencieux possible (CI / pas de carte son)
     // Sink FdcSound armé SEULEMENT si la sortie audio existe : sans elle, produceFrame ne
     // draine jamais DriveSound et chaque Step/Seek/Index allouait un son miniaudio jamais
     // recyclé (croissance mémoire non bornée sur une longue session).
-    if (driveSoundOn && audio.ok())
+    if (driveSoundAvail && audio.ok())
         machine.fdc.setSoundSink([&drive](FdcSound e) { drive.onEvent(e); });
     audio.setMasterVolume(cfg.volume);   // volume maître mémorisé (menu Son, neost.cfg)
     // La chaîne DMA/LMC1992 ne s'applique QUE si la machine courante a le son DMA :
@@ -2934,7 +3302,7 @@ int main(int argc, char** argv) {
         if (!machine.loadTos(romP))
             // ROM absente/illisible (profil pointant un TOS non installé) : l'ANCIENNE
             // ROM reste chargée — on le dit au lieu de laisser croire au nouveau profil.
-            std::fprintf(stderr, "[main] ⚠ ROM introuvable : %s — l'ancienne ROM reste active\n",
+            std::fprintf(stderr, "[main] WARNING ROM not found: %s — the previous ROM stays active\n",
                          romP.c_str());
         updateKbdCountry(machine.bus.rom);   // la nouvelle ROM peut changer de pays clavier
         if (cfg.cart.empty()) machine.ejectCart();
@@ -2952,7 +3320,7 @@ int main(int argc, char** argv) {
         machine.fdc.setFastFdc(cfg.fastfdc);   // ré-applique le FDC rapide après reconfig
         machine.bus.setFpuPresent(cfg.fpu && machTypeR == MachineType::MegaSte);
         machine.reset();
-        std::fprintf(stderr, "[main] reconfig à chaud : cœur %s | machine %s | RAM %s\n",
+        std::fprintf(stderr, "[main] live reconfigure: core %s | machine %s | RAM %s\n",
                      Cpu68k::coreName(machine.cpu.core()),
                      machineName(machTypeR), cfg.mem.c_str());
     };
@@ -3017,7 +3385,7 @@ int main(int argc, char** argv) {
             io.Fonts->AddFontFromFileTTF(fontPath.c_str(), 15.0f);
         } else {
             io.Fonts->AddFontDefault();   // base toujours présente (requis avant la fusion FA)
-            std::fprintf(stderr, "[main] police %s introuvable — police ImGui par défaut.\n",
+            std::fprintf(stderr, "[main] font %s not found — falling back to the default ImGui font.\n",
                          fontPath.c_str());
         }
         // Fusionne les pictogrammes Font Awesome dans la police courante (menus/boutons).
@@ -3031,7 +3399,7 @@ int main(int argc, char** argv) {
             fcfg.GlyphOffset.y = 1.0f;        // léger recentrage vertical sur la ligne de texte
             io.Fonts->AddFontFromFileTTF(faPath.c_str(), 13.0f, &fcfg, fa_ranges);
         } else {
-            std::fprintf(stderr, "[main] police d'icônes %s introuvable — pas de pictogrammes.\n",
+            std::fprintf(stderr, "[main] icon font %s not found — no pictograms.\n",
                          faPath.c_str());
         }
     }
@@ -3042,10 +3410,10 @@ int main(int argc, char** argv) {
     ImGui_ImplOpenGL2_Init();
 #endif
 
-    std::printf("[main] Clic dans l'écran : capture souris | Suppr (DEL) : libère | "
-                "bouton Reset dans la fenêtre CPU | fermer la fenêtre : quitter\n");
-    std::printf("[main] Joystick : manette USB auto (port 1) | F11 = émulation "
-                "clavier (flèches + Ctrl droit) | menu « Joystick »\n");
+    std::printf("[main] Click inside the screen: capture mouse | DEL: release | "
+                "Reset button in the CPU window | close the window: quit\n");
+    std::printf("[main] Joystick: USB pad auto-detected (port 1) | F11 = keyboard "
+                "emulation (arrows + right Ctrl) | \"Joystick\" menu\n");
 
     // Bridage à la durée ÉMULÉE de chaque trame : indispensable pour que le temps
     // émulé colle au temps réel — sinon le compteur 200 Hz d'EmuTOS s'emballe et les
@@ -3178,17 +3546,17 @@ int main(int argc, char** argv) {
 
         // (3) Restaure l'instantané : le ST reprend EXACTEMENT où il en était.
         if (!snap.empty() && !machine.loadState(snap.data(), snap.size()))
-            std::fprintf(stderr, "[kiosk] ⚠ restauration de l'état échouée — "
-                                 "la machine continue telle quelle\n");
+            std::fprintf(stderr, "[kiosk] WARNING state restore failed — "
+                                 "the machine carries on as is\n");
         // Recale l'horloge et le delta souris : la bascule a pris du temps réel et
         // déplacé le curseur (changement de mode). Sans ça : rafale de rattrapage
         // de trames + saut de souris d'un demi-écran à la reprise.
         emuNext = clock::now();
         glfwGetCursorPos(window, &lastMx, &lastMy);
-        g_stateMsg = g_kiosk ? "\xef\x84\x88 Mode borne (F8 pour revenir)"
-                             : "\xef\x84\x88 Mode bureau (F8 pour la borne)";
+        g_stateMsg = g_kiosk ? "\xef\x84\x88 Kiosk mode (F8 to go back)"
+                             : "\xef\x84\x88 Desktop mode (F8 for the kiosk)";
         g_stateMsgFrames = 120;
-        std::fprintf(stderr, "[kiosk] bascule → %s\n", g_kiosk ? "BORNE" : "BUREAU");
+        std::fprintf(stderr, "[kiosk] switched → %s\n", g_kiosk ? "KIOSK" : "DESKTOP");
     };
 
     while (!glfwWindowShouldClose(window)) {
@@ -3219,7 +3587,7 @@ int main(int argc, char** argv) {
                                                 // fractionnaire s'accumule (drags lents)
                 const bool l = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT)  == GLFW_PRESS;
                 const bool r = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
-                if (g_dbgMouse) std::fprintf(stderr, "[souris] mvt dx=%d dy=%d L=%d R=%d\n", dx, dy, l, r);
+                if (g_dbgMouse) std::fprintf(stderr, "[mouse] move dx=%d dy=%d L=%d R=%d\n", dx, dy, l, r);
                 machine.ikbd.mouseEvent(dx * MOUSE_X_SIGN, dy * MOUSE_Y_SIGN, l, r);
             }
         }
@@ -3252,7 +3620,7 @@ int main(int argc, char** argv) {
             if (f10 && !f10Prev) {
                 g_autoZoom = !g_autoZoom;
                 cfg.autoZoom = g_autoZoom;   // sinon un retour au bureau resauverait l'ANCIENNE valeur
-                std::fprintf(stderr, "[kiosk] zoom adaptatif %s\n", g_autoZoom ? "ON" : "OFF");
+                std::fprintf(stderr, "[kiosk] adaptive zoom %s\n", g_autoZoom ? "ON" : "OFF");
             }
             f10Prev = f10;
         }
@@ -3264,7 +3632,7 @@ int main(int argc, char** argv) {
             const bool f11 = glfwGetKey(window, GLFW_KEY_F11) == GLFW_PRESS;
             if (f11 && !f11Prev) {
                 g_kbdJoy = !g_kbdJoy;   // bascule de session (jamais persistée)
-                std::fprintf(stderr, "[joystick] émulation clavier %s (port %d)\n",
+                std::fprintf(stderr, "[joystick] keyboard emulation %s (port %d)\n",
                              g_kbdJoy ? "ON" : "OFF", g_kbdJoyPort);
             }
             f11Prev = f11;
@@ -3371,6 +3739,10 @@ int main(int argc, char** argv) {
             // SANS trou audible (le coussin de l'anneau fait ~85 ms).
             int ran = 0;
             while (clock::now() >= emuNext && ran < 6) {
+#ifdef NEOST_WITH_NET
+                if (hayesModem) hayesModem->poll();   // TCP entrant → file RX du MFP
+#endif
+                if (machine.ne2000.enabled()) machine.ne2000.poll();   // trames RX → anneau
                 machine.runFrame();                          // une trame (timing + décodage)
                 audio.produceFrame(machine.frameCycles());   // son de la trame → anneau (push)
                 emuNext += std::chrono::nanoseconds(
@@ -3391,15 +3763,15 @@ int main(int argc, char** argv) {
             const bool f7 = glfwGetKey(window, GLFW_KEY_F7) == GLFW_PRESS;
             if (f5 && !f5Prev) {
                 const bool ok = machine.saveStateFile(statePath);
-                g_stateMsg = ok ? "\xef\x83\x87 État sauvegardé (F5)" : "Échec sauvegarde";
+                g_stateMsg = ok ? "\xef\x83\x87 State saved (F5)" : "Save failed";
                 g_stateMsgFrames = 120;
-                std::fprintf(stderr, "[state] save %s → %s\n", ok ? "OK" : "ÉCHEC", statePath.c_str());
+                std::fprintf(stderr, "[state] save %s → %s\n", ok ? "OK" : "FAILED", statePath.c_str());
             }
             if (f7 && !f7Prev) {
                 const bool ok = machine.loadStateFile(statePath);
-                g_stateMsg = ok ? "\xef\x80\x9e État restauré (F7)" : "Aucun état / échec";
+                g_stateMsg = ok ? "\xef\x80\x9e State restored (F7)" : "No state / failed";
                 g_stateMsgFrames = 120;
-                std::fprintf(stderr, "[state] load %s ← %s\n", ok ? "OK" : "ÉCHEC", statePath.c_str());
+                std::fprintf(stderr, "[state] load %s ← %s\n", ok ? "OK" : "FAILED", statePath.c_str());
             }
             f5Prev = f5; f7Prev = f7;
         }
@@ -3417,9 +3789,9 @@ int main(int argc, char** argv) {
         // statiques de fonction, et les sauter les GÈLERAIT à leur dernière valeur —
         // à la réactivation, un latch resté armé sur une démo overscan afficherait le
         // buffer entier pendant ~30 trames avant de retomber d'un coup.
-        int cTop, cH; stContentRegion(machine, cTop, cH);
-        int kTop = 0, kH = machine.shifter.height();
-        if (g_autoZoom) { kTop = cTop; kH = cH; }
+        int cTop, cH, cW; stContentRegion(machine, cTop, cH, cW);
+        int kTop = 0, kH = machine.shifter.height(), kW = machine.shifter.width();
+        if (g_autoZoom) { kTop = cTop; kH = cH; kW = cW; }
 
         bool reqReset = false, reqHardReset = false, reqRebuild = false, reqCapture = false;
         int  reqMonitor = -1;
@@ -3429,6 +3801,12 @@ int main(int argc, char** argv) {
         static ConfigUi cfgUi;
         cfgUi.disksDir = disksDir; cfgUi.cartsDir = cartsDir; cfgUi.romsDir = romsDir;
         cfgUi.hdDir    = hdDir;    cfgUi.gemdosDir = gemdosDir;
+        cfgUi.fujiBackendName = fujiHost ? fujiHost->name() : "none";
+        cfgUi.fujiHost = machine.fuji.enabled() ? fujiHost.get() : nullptr;
+        // Résolu à la PREMIÈRE trame, donc après le saveConfig de démarrage : c'est lui
+        // qui a tranché où vit neost.cfg, et les profils le suivent (cf. profilesDir).
+        static const std::string profDirResolved = profilesDir(exeDir);
+        cfgUi.profDir = profDirResolved;        // créé à la 1re sauvegarde de profil
 #endif
 #if defined(NEOST_WITH_IMGUI)
         ImGui_ImplOpenGL2_NewFrame();
@@ -3451,86 +3829,91 @@ int main(int argc, char** argv) {
                 if (ImGui::MenuItem(ICON_FA_POWER_OFF " Hard Reset"))  reqHardReset = true;
                 ImGui::Separator();
                 ImGui::MenuItem(ICON_FA_COG " Configuration…", nullptr, &g_showCfg);
+                // Raccourci vers la page des profils : sans lui, « enregistrer mes
+                // réglages » n'était visible qu'en descendant la colonne de la fenêtre.
+                if (ImGui::MenuItem(ICON_FA_STAR " Settings profiles…")) {
+                    g_showCfg = true; g_cfgPage = kCfgProfiles;
+                }
                 ImGui::Separator();
-                if (ImGui::MenuItem(ICON_FA_SAVE " Sauver l'état", "F5")) {
+                if (ImGui::MenuItem(ICON_FA_SAVE " Save state", "F5")) {
                     const bool ok = machine.saveStateFile(exeDir + "/../neost.state");
-                    g_stateMsg = ok ? "\xef\x83\x87 État sauvegardé" : "Échec sauvegarde";
+                    g_stateMsg = ok ? "\xef\x83\x87 State saved" : "Save failed";
                     g_stateMsgFrames = 120;
                 }
-                if (ImGui::MenuItem(ICON_FA_FOLDER_OPEN " Charger l'état", "F7")) {
+                if (ImGui::MenuItem(ICON_FA_FOLDER_OPEN " Load state", "F7")) {
                     const bool ok = machine.loadStateFile(exeDir + "/../neost.state");
-                    g_stateMsg = ok ? "\xef\x80\x9e État restauré" : "Aucun état / échec";
+                    g_stateMsg = ok ? "\xef\x80\x9e State restored" : "No state / failed";
                     g_stateMsgFrames = 120;
                 }
                 ImGui::Separator();
                 // Bascule borne : plein écran sans chrome, config figée, navigation à
                 // la manette. La machine traverse la bascule par instantané → le jeu
                 // en cours continue. F8 revient au bureau.
-                if (ImGui::MenuItem(ICON_FA_DESKTOP " Mode borne (kiosk)", "F8"))
+                if (ImGui::MenuItem(ICON_FA_DESKTOP " Kiosk mode", "F8"))
                     g_kioskSwitchReq = 1;
                 ImGui::Separator();
-                if (ImGui::MenuItem(ICON_FA_SIGN_OUT_ALT " Quitter")) glfwSetWindowShouldClose(window, 1);
+                if (ImGui::MenuItem(ICON_FA_SIGN_OUT_ALT " Quit")) glfwSetWindowShouldClose(window, 1);
                 ImGui::EndMenu();
             }
             // Affichage : ce qui change la façon de REGARDER, pas la machine émulée.
-            if (ImGui::BeginMenu(ICON_FA_DESKTOP " Affichage")) {
-                if (ImGui::MenuItem(ICON_FA_PALETTE " Couleur (basse rés)", nullptr,  color)) reqMonitor = 1;
-                if (ImGui::MenuItem(ICON_FA_ADJUST " Mono (haute rés)",    nullptr, !color)) reqMonitor = 0;
+            if (ImGui::BeginMenu(ICON_FA_DESKTOP " Display")) {
+                if (ImGui::MenuItem(ICON_FA_PALETTE " Color (low res)", nullptr,  color)) reqMonitor = 1;
+                if (ImGui::MenuItem(ICON_FA_ADJUST " Mono (high res)",     nullptr, !color)) reqMonitor = 0;
                 ImGui::Separator();
                 // Même cadrage adaptatif que la borne : l'écran cale sa zone de contenu
                 // sur la hauteur disponible, les bordures inutilisées sortent du cadre,
                 // et une ouverture de bordure (démo overscan) rend le cadre entier.
                 // Décoché = cadre complet fixe. En kiosk, F10 bascule la même chose.
-                if (ImGui::MenuItem(ICON_FA_EXPAND " Zoom auto (cadre adaptatif)",
+                if (ImGui::MenuItem(ICON_FA_EXPAND " Auto zoom (adaptive framing)",
                                     nullptr, &g_autoZoom)) {
                     cfg.autoZoom = g_autoZoom; saveConfig(exeDir, cfg, &machine);
                 }
-                ImGui::MenuItem(ICON_FA_DESKTOP " Effets CRT (fenêtre)", nullptr, &g_showCrt);
+                ImGui::MenuItem(ICON_FA_DESKTOP " CRT effects (window)", nullptr, &g_showCrt);
 #ifdef IMGUI_HAS_DOCK
                 ImGui::Separator();
                 // Mode ancré : les fenêtres deviennent des onglets d'une disposition
                 // persistante (imgui.ini). Décoché → ImGui DÉTRUIT ses nœuds (elles
                 // redeviennent flottantes) ; recoché → on resème la disposition par
                 // défaut, la personnalisation précédente est perdue.
-                if (ImGui::MenuItem(ICON_FA_CLONE " Mode ancré (dock)", nullptr, &g_dockOn)) {
+                if (ImGui::MenuItem(ICON_FA_CLONE " Docked mode", nullptr, &g_dockOn)) {
                     ImGuiIO& dio = ImGui::GetIO();
                     if (g_dockOn) { dio.ConfigFlags |=  ImGuiConfigFlags_DockingEnable; g_dockReset = true; }
                     else            dio.ConfigFlags &= ~ImGuiConfigFlags_DockingEnable;
                     cfg.dock = g_dockOn; saveConfig(exeDir, cfg, &machine);
                 }
-                if (ImGui::MenuItem(ICON_FA_REDO " Disposition par défaut", nullptr, false, g_dockOn))
+                if (ImGui::MenuItem(ICON_FA_REDO " Default layout", nullptr, false, g_dockOn))
                     g_dockReset = true;
 #endif
                 ImGui::EndMenu();
             }
             // Fenêtres : rien que les outils d'INSPECTION. Les bibliothèques de supports
             // n'y sont plus — elles sont devenues des pages de la Configuration.
-            if (ImGui::BeginMenu(ICON_FA_CLONE " Fenêtres")) {
-                ImGui::MenuItem(ICON_FA_MEMORY " Mémoire (hex)", nullptr, &g_showHex);
+            if (ImGui::BeginMenu(ICON_FA_CLONE " Windows")) {
+                ImGui::MenuItem(ICON_FA_MEMORY " Memory (hex)", nullptr, &g_showHex);
                 ImGui::MenuItem(ICON_FA_MICROCHIP " CPU 68000",  nullptr, &g_showCpu);
                 ImGui::MenuItem(ICON_FA_GAMEPAD " Joystick",     nullptr, &g_showJoy);
-                ImGui::MenuItem(ICON_FA_BUG " Débogueur",        nullptr, &g_showDbg);
+                ImGui::MenuItem(ICON_FA_BUG " Debugger",        nullptr, &g_showDbg);
                 ImGui::EndMenu();
             }
-            if (ImGui::BeginMenu("Aide")) {
+            if (ImGui::BeginMenu("Help")) {
                 // Les raccourcis étaient jusqu'ici invisibles (F5/F7/F8/F11/F12 ne
                 // figuraient nulle part sauf dans le code).
-                ImGui::TextDisabled("Raccourcis clavier");
+                ImGui::TextDisabled("Keyboard shortcuts");
                 ImGui::Separator();
                 struct Key { const char* k; const char* w; };
                 static const Key keys[] = {
-                    { "F5",  "sauver l'état de la machine" },
-                    { "F7",  "recharger l'état" },
-                    { "F8",  "mode borne (aller-retour)" },
-                    { "F11", "émulation joystick au clavier" },
-                    { "F12", "capture souris (ou clic dans l'écran)" },
-                    { "Suppr", "libérer la souris capturée" },
+                    { "F5",  "save the machine state" },
+                    { "F7",  "reload the state" },
+                    { "F8",  "kiosk mode (toggle)" },
+                    { "F11", "keyboard joystick emulation" },
+                    { "F12", "mouse capture (or click inside the screen)" },
+                    { "DEL", "release the captured mouse" },
                 };
                 for (const auto& k : keys) ImGui::BulletText("%-6s %s", k.k, k.w);
                 ImGui::Separator();
-                ImGui::TextDisabled("NeoST " NEOST_VERSION " — émulateur Atari ST");
-                ImGui::TextDisabled("Glisser-déposer : dossier → C:, image → lecteur A,");
-                ImGui::TextDisabled("image disque dur → ACSI, TOS → ROM.");
+                ImGui::TextDisabled("NeoST " NEOST_VERSION " — Atari ST emulator");
+                ImGui::TextDisabled("Drag and drop: folder → C:, image → drive A,");
+                ImGui::TextDisabled("hard disk image → ACSI, TOS → ROM.");
                 ImGui::EndMenu();
             }
             ImGui::EndMainMenuBar();
@@ -3557,7 +3940,7 @@ int main(int argc, char** argv) {
         // Reset à froid : efface la ST-RAM → EmuTOS/TOS refait un boot complet.
         if (IconButton(ICON_FA_POWER_OFF, "Hard Reset")) reqHardReset = true;
         ImGui::SameLine(); ImGui::TextDisabled("|"); ImGui::SameLine();
-        if (IconButton(color ? ICON_FA_ADJUST : ICON_FA_PALETTE, color ? "Passer en Mono" : "Passer en Couleur"))
+        if (IconButton(color ? ICON_FA_ADJUST : ICON_FA_PALETTE, color ? "Switch to Mono" : "Switch to Color"))
             reqMonitor = color ? 0 : 1;
         // Volume : le seul réglage qu'on touche EN JOUANT, donc il reste ici (le
         // reste du son est dans la page Son).
@@ -3568,7 +3951,7 @@ int main(int argc, char** argv) {
             const bool   muted = vol <= 0.0f;
             const char*  vicon = muted      ? ICON_FA_VOLUME_MUTE
                                : vol < 0.5f ? ICON_FA_VOLUME_DOWN : ICON_FA_VOLUME_UP;
-            if (IconButton(vicon, muted ? "Rétablir le son" : "Muet")) {
+            if (IconButton(vicon, muted ? "Unmute" : "Mute")) {
                 if (muted) audio.setMasterVolume(volBeforeMute > 0.0f ? volBeforeMute : 1.0f);
                 else     { volBeforeMute = vol; audio.setMasterVolume(0.0f); }
                 cfg.volume = audio.masterVolume(); saveConfig(exeDir, cfg, &machine);
@@ -3604,7 +3987,7 @@ int main(int argc, char** argv) {
                 if (warn) ImGui::TextColored(ImVec4(1.f, .6f, .2f, 1.f), "%s", text.c_str());
                 else      ImGui::TextUnformatted(text.c_str());
                 if (ImGui::IsItemHovered()) {
-                    ImGui::SetTooltip("%s\n(clic : ouvrir la configuration)", tip);
+                    ImGui::SetTooltip("%s\n(click: open the configuration)", tip);
                     if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
                         g_showCfg = true; g_cfgPage = page;
                     }
@@ -3617,26 +4000,26 @@ int main(int argc, char** argv) {
             const std::string mdl = cfg.machine == "megaste" ? "Mega STE"
                                   : cfg.machine == "ste"     ? "STE"
                                   : cfg.machine == "megast"  ? "Mega ST" : "ST";
-            const std::string ram = cfg.mem == "256k" ? "256 Ko" : cfg.mem == "512k" ? "512 Ko"
-                                  : cfg.mem == "1m" ? "1 Mo" : cfg.mem == "2m" ? "2 Mo" : "4 Mo";
-            seg(mdl, kCfgMachine, "Modèle de machine émulé");
-            seg(ram, kCfgMem,     "ST-RAM installée");
-            seg(fs::path(cfg.rom).stem().string(), kCfgRom, "Image TOS en ROM");
+            const std::string ram = cfg.mem == "256k" ? "256 KB" : cfg.mem == "512k" ? "512 KB"
+                                  : cfg.mem == "1m" ? "1 MB" : cfg.mem == "2m" ? "2 MB" : "4 MB";
+            seg(mdl, kCfgMachine, "Emulated machine model");
+            seg(ram, kCfgMem,     "Installed ST-RAM");
+            seg(fs::path(cfg.rom).stem().string(), kCfgRom, "TOS image in ROM");
             // Le balayage est DÉDUIT de la ROM ; on le signale en orange en 60 Hz, la
             // configuration qui déchire les démos européennes.
             const int hz = machine.shifter.refreshHz();
             char hzbuf[32];
             std::snprintf(hzbuf, sizeof hzbuf, "%d Hz %s", hz, hz >= 55 ? "NTSC" : "PAL");
-            seg(hzbuf, kCfgRom, "Fréquence de balayage (fixée par la ROM)", hz >= 55);
-            seg("A: " + shortName(machine.fdc.mountedPath(0)), kCfgFloppy, "Lecteur de disquettes A");
-            seg("B: " + shortName(machine.fdc.mountedPath(1)), kCfgFloppy, "Lecteur de disquettes B");
+            seg(hzbuf, kCfgRom, "Scan rate (set by the ROM)", hz >= 55);
+            seg("A: " + shortName(machine.fdc.mountedPath(0)), kCfgFloppy, "Floppy drive A");
+            seg("B: " + shortName(machine.fdc.mountedPath(1)), kCfgFloppy, "Floppy drive B");
             const std::string c = machine.gemdos.active() ? shortName(cfg.gemdos) + "/"
                                 : machine.fdc.acsiActive() ? shortName(cfg.acsi)
                                 : std::string("—");
-            seg("C: " + c, kCfgHd, "Disque dur (GEMDOS ou ACSI)");
+            seg("C: " + c, kCfgHd, "Hard disk (GEMDOS or ACSI)");
             char fps[32];
             std::snprintf(fps, sizeof fps, "%.1f fps", double(ImGui::GetIO().Framerate));
-            seg(fps, kCfgEmul, "Cadence de la boucle hôte");
+            seg(fps, kCfgEmul, "Host loop frame rate");
         }
         ImGui::End();
 
@@ -3644,7 +4027,7 @@ int main(int argc, char** argv) {
         renderDockSpace(g_dockOn);
 
         // --- Fenêtre écran (base) + fenêtres masquables ----------------------
-        drawStScreen(screen, g_mouseCaptured, reqCapture, menuH + toolH, kTop, kH);
+        drawStScreen(screen, g_mouseCaptured, reqCapture, menuH + toolH, kTop, kH, kW);
         if (g_showCfg) {
             // La fenêtre ne monte/démonte/redémarre rien : elle remplit `cfgUi`, qu'on
             // déverse dans les requêtes de la boucle juste après. Les chemins de disque
@@ -3655,6 +4038,7 @@ int main(int argc, char** argv) {
             cfgUi.color   = color;
             cfgUi.volume  = audio.masterVolume();
             cfgUi.driveSound = driveSoundOn;
+            cfgUi.driveSoundAvail = driveSoundAvail;
             cfgUi.curGemdos = cfg.gemdos.empty() ? std::string() : resolvePath(cfg.gemdos);
             cfgUi.curAcsi   = cfg.acsi.empty()   ? std::string() : resolvePath(cfg.acsi);
             drawConfigWindow(cfgUi);
@@ -3685,17 +4069,74 @@ int main(int argc, char** argv) {
                 saveConfig(exeDir, cfg, &machine);
                 cfgUi.reqFastFdc = -1;
             }
+            // FujiNet (page Network) : bascule / cible / montage d'URL / slots.
+            if (cfgUi.reqFujinet >= 0) {
+                cfg.fujinet = (cfgUi.reqFujinet == 1);
+                fujiApply(cfg.fujinet);
+                saveConfig(exeDir, cfg, &machine);
+                reqHardReset = true;          // le TOS ne sonde l'ACSI qu'au boot
+                cfgUi.reqFujinet = -1;
+            }
+            if (cfgUi.reqFujinetTarget >= 0) {
+                cfg.fujinetTarget = cfgUi.reqFujinetTarget;
+                if (cfg.fujinet) { fujiApply(true); reqHardReset = true; }
+                saveConfig(exeDir, cfg, &machine);
+                cfgUi.reqFujinetTarget = -1;
+            }
+            if (!cfgUi.reqFujinetMount.empty()) {
+                const std::string url = cfgUi.reqFujinetMount;
+                cfgUi.reqFujinetMount.clear();
+                if (machine.fuji.mountRemote(url)) {
+                    g_stateMsg = "\xef\x87\xab Remote image mounted";
+                    // Une image DISQUE DUR ne sera vue qu'au prochain boot.
+                    const auto dot = url.find_last_of('.');
+                    std::string ext = dot == std::string::npos ? "" : url.substr(dot + 1);
+                    for (char& ch : ext) ch = char(tolower(uint8_t(ch)));
+                    if (ext != "st" && ext != "msa" && ext != "dim" && ext != "stx")
+                        reqHardReset = true;
+                } else {
+                    g_stateMsg = "Download/mount failed (see console)";
+                }
+                g_stateMsgFrames = 120;
+            }
+            if (cfgUi.reqFujinetHostsSet) {
+                cfg.fujinetHosts = cfgUi.reqFujinetHosts;
+                if (cfg.fujinet) fujiApply(true);   // re-sème les slots
+                saveConfig(exeDir, cfg, &machine);
+                cfgUi.reqFujinetHostsSet = false;
+                cfgUi.reqFujinetHosts.clear();
+            }
+            if (cfgUi.reqModem >= 0) {
+                cfg.modem = (cfgUi.reqModem == 1);
+#ifdef NEOST_WITH_NET
+                modemApply(cfg.modem);
+#else
+                g_stateMsg = "This build has no network backend";
+                g_stateMsgFrames = 120;
+                cfg.modem = false;
+#endif
+                saveConfig(exeDir, cfg, &machine);
+                cfgUi.reqModem = -1;
+            }
+            if (cfgUi.reqEther >= 0) {
+                cfg.ethernec = (cfgUi.reqEther == 1);
+                etherApply(cfg.ethernec);        // etherApply peut refuser (cartouche)
+                saveConfig(exeDir, cfg, &machine);
+                reqHardReset = true;             // le pilote sonde la carte au boot
+                cfgUi.reqEther = -1;
+            }
             if (cfgUi.driveSound != driveSoundOn) {
                 driveSoundOn = cfgUi.driveSound; drive.setEnabled(driveSoundOn);
+                cfg.driveSound = driveSoundOn;   // persisté par cfgDirty (la case l'a levé)
             }
             if (cfgUi.reqSaveState) {
                 const bool ok = machine.saveStateFile(exeDir + "/../neost.state");
-                g_stateMsg = ok ? "\xef\x83\x87 État sauvegardé" : "Échec sauvegarde";
+                g_stateMsg = ok ? "\xef\x83\x87 State saved" : "Save failed";
                 g_stateMsgFrames = 120; cfgUi.reqSaveState = false;
             }
             if (cfgUi.reqLoadState) {
                 const bool ok = machine.loadStateFile(exeDir + "/../neost.state");
-                g_stateMsg = ok ? "\xef\x80\x9e État restauré" : "Aucun état / échec";
+                g_stateMsg = ok ? "\xef\x80\x9e State restored" : "No state / failed";
                 g_stateMsgFrames = 120; cfgUi.reqLoadState = false;
             }
             // « Appliquer et redémarrer » : les quatre réglages matériels d'un coup,
@@ -3718,6 +4159,94 @@ int main(int argc, char** argv) {
                 cfg.crt = g_crtOn; cfg.crtParams = g_crtParams;
                 saveConfig(exeDir, cfg, &machine);
                 cfgUi.cfgDirty = false;
+            }
+            // ── Profils nommés (page « Profiles ») ─────────────────────────────
+            // Borne : rien ne s'écrit sur le disque (invariant « la borne repart
+            // identique »). La page grise déjà les boutons ; on double la garde ici,
+            // seul endroit qui touche réellement au système de fichiers.
+            if ((g_kiosk || g_kioskLaunched)
+                && (!cfgUi.reqSaveProfile.empty() || !cfgUi.reqDeleteProfile.empty())) {
+                cfgUi.reqSaveProfile.clear(); cfgUi.reqDeleteProfile.clear();
+                g_stateMsg = "Kiosk mode: configuration frozen"; g_stateMsgFrames = 150;
+            }
+            if (!cfgUi.reqSaveProfile.empty()) {
+                // On fige les réglages EN VIGUEUR, pas les champs « en attente » : un
+                // profil décrit une machine qui tourne, pas un formulaire à moitié rempli.
+                // Realignement préalable sur les globals d'interface — plusieurs chemins
+                // les changent sans repasser par saveConfig (F10 en borne, panneau CRT,
+                // fenêtre Joysticks), et le profil hériterait sinon de valeurs périmées.
+                cfg.autoZoom = g_autoZoom;
+                cfg.crt      = g_crtOn; cfg.crtParams = g_crtParams;
+                cfg.volume   = audio.masterVolume();
+                cfg.joyport  = g_kbdJoyPort; cfg.joydeadzone = g_joyDeadzone;
+                cfg.joymap   = joymapSerialize();
+                cfg.driveSound = driveSoundOn;
+                std::string err;
+                if (saveProfile(cfgUi.profDir, cfgUi.reqSaveProfile, cfg, err)) {
+                    g_stateMsg = "\xef\x83\x87 Profile saved: " + cfgUi.reqSaveProfile;
+                } else {
+                    g_stateMsg = "Profile NOT saved";
+                    std::fprintf(stderr, "[cfg] profile: %s\n", err.c_str());
+                }
+                g_stateMsgFrames = 150; g_profilesDirty = true;
+                cfgUi.reqSaveProfile.clear();
+            }
+            if (!cfgUi.reqLoadProfile.empty()) {
+                // On part de la config COURANTE : un profil n'écrit qu'un sous-ensemble
+                // de clés, et tout ce qu'il tait (horloge, disposition, dossiers ROM de
+                // la borne) doit rester en place.
+                Config p = cfg;
+                if (loadProfileInto(cfgUi.profDir, cfgUi.reqLoadProfile, p)) {
+                    const std::string prevA = cfg.disk, prevB = cfg.diskb;
+                    cfg = p;
+                    // Réglages à effet immédiat (le matériel, lui, part au rebuild ci-dessous).
+                    g_autoZoom = cfg.autoZoom;
+                    g_crtOn    = cfg.crt; g_crtParams = cfg.crtParams;
+                    g_kbdJoyPort  = cfg.joyport;
+                    g_joyDeadzone = cfg.joydeadzone;
+                    joymapParse(cfg.joymap);
+                    audio.setMasterVolume(cfg.volume);
+                    driveSoundOn = driveSoundAvail && cfg.driveSound;
+                    drive.setEnabled(driveSoundOn);
+                    // Disquettes : applyConfig() ne touche PAS aux lecteurs (« le disque
+                    // monté est conservé ») → on monte/éjecte explicitement ce que dit le
+                    // profil, par les requêtes normales de montage.
+                    // Une image DISPARUE depuis l'enregistrement du profil ne doit pas
+                    // s'inscrire dans neost.cfg : l'invariant des montages est qu'on ne
+                    // persiste QU'un montage réussi, sinon le fantôme est retenté à chaque
+                    // démarrage. Le lecteur garde alors ce qu'il avait, et on le dit.
+                    std::string missing;
+                    auto wantDisk = [&](std::string& want, const std::string& prev,
+                                        std::string& reqMountSlot, bool& reqEjectSlot) {
+                        if (want == prev) return;
+                        if (want.empty()) { reqEjectSlot = true; return; }
+                        const std::string img = resolveData(want, exeDir);
+                        if (fileExists(img)) { reqMountSlot = img; return; }
+                        if (missing.empty()) missing = want;
+                        want = prev;
+                    };
+                    wantDisk(cfg.disk,  prevA, reqMount,  reqEject);
+                    wantDisk(cfg.diskb, prevB, reqMountB, reqEjectB);
+                    saveConfig(exeDir, cfg, &machine);
+                    reqRebuild = true;        // modèle/RAM/FPU/ROM/cartouche/HD/moniteur/FDC
+                    cfgUi.pendInit = false;   // resème les champs « en attente »
+                    g_stateMsg = missing.empty()
+                        ? "\xef\x80\x9e Profile loaded: " + cfgUi.reqLoadProfile
+                        : "Profile loaded — missing floppy: "
+                              + fs::path(missing).filename().string();
+                } else {
+                    g_stateMsg = "Profile not readable";
+                    g_profilesDirty = true;   // disparu du dossier ? on relit la liste
+                }
+                g_stateMsgFrames = 150;
+                cfgUi.reqLoadProfile.clear();
+            }
+            if (!cfgUi.reqDeleteProfile.empty()) {
+                const bool okDel = deleteProfile(cfgUi.profDir, cfgUi.reqDeleteProfile);
+                g_stateMsg = okDel ? "Profile deleted: " + cfgUi.reqDeleteProfile
+                                   : "Delete failed";
+                g_stateMsgFrames = 150; g_profilesDirty = true;
+                cfgUi.reqDeleteProfile.clear();
             }
         }
         if (g_showHex)  drawHexViewer(machine.bus);
@@ -3942,6 +4471,7 @@ int main(int argc, char** argv) {
                             fs::path bp = fs::weakly_canonical(fs::path(g_browseDir), cec);
                             if (cec) bp = fs::path(g_browseDir).lexically_normal();
                             const char* home = std::getenv("HOME");
+                            if (!home || !*home) home = std::getenv("USERPROFILE");
                             bool tooBroad = (bp == bp.root_path());
                             if (!tooBroad && home && *home) {
                                 std::error_code hec;
@@ -3953,7 +4483,7 @@ int main(int argc, char** argv) {
                                         || (!relToHome.empty() && relToHome.rfind("..", 0) != 0);
                             }
                             if (tooBroad) {
-                                g_stateMsg = "Dossier trop vaste (racine / maison) — refusé";
+                                g_stateMsg = "Folder too broad (root / home) — refused";
                                 g_stateMsgFrames = 180;
                             } else {
                             if (std::find(g_kioskRomDirs.begin(), g_kioskRomDirs.end(), g_browseDir)
@@ -4172,7 +4702,7 @@ int main(int argc, char** argv) {
                         reqMountAcsi = d;
                     }
                 } else {
-                    g_stateMsg = "Déposé : type inconnu (" +
+                    g_stateMsg = "Dropped: unknown type (" +
                                  fs::path(d).filename().string() + ")";
                     g_stateMsgFrames = 150;
                 }
@@ -4193,7 +4723,7 @@ int main(int argc, char** argv) {
                     cfg.disk = reqMount; saveConfig(exeDir, cfg, &machine);
                 }
             } else {
-                g_stateMsg = "Image disquette illisible"; g_stateMsgFrames = 120;
+                g_stateMsg = "Unreadable floppy image"; g_stateMsgFrames = 120;
             }
         }
         if (reqEject) {
@@ -4210,7 +4740,7 @@ int main(int argc, char** argv) {
                     cfg.diskb = reqMountB; saveConfig(exeDir, cfg, &machine);
                 }
             } else {
-                g_stateMsg = "Image disquette illisible (B)"; g_stateMsgFrames = 120;
+                g_stateMsg = "Unreadable floppy image (B)"; g_stateMsgFrames = 120;
             }
         }
         if (reqEjectB) {
@@ -4232,7 +4762,7 @@ int main(int argc, char** argv) {
                 cfg.cart = reqMountCart; saveConfig(exeDir, cfg, &machine);
                 reqHardReset = true;       // le TOS sonde le port cartouche au boot
             } else {
-                g_stateMsg = "Cartouche illisible (max 128 Ko)"; g_stateMsgFrames = 120;
+                g_stateMsg = "Unreadable cartridge (max 128 KB)"; g_stateMsgFrames = 120;
             }
         }
         if (reqEjectCart) {
@@ -4257,7 +4787,7 @@ int main(int argc, char** argv) {
                 cfg.gemdos = reqMountGemdos; saveConfig(exeDir, cfg, &machine);
                 reqHardReset = true;
             } else {
-                g_stateMsg = "Dossier GEMDOS introuvable"; g_stateMsgFrames = 120;
+                g_stateMsg = "GEMDOS folder not found"; g_stateMsgFrames = 120;
             }
         }
         if (reqEjectGemdos) {
@@ -4272,7 +4802,7 @@ int main(int argc, char** argv) {
                 cfg.acsi = reqMountAcsi; saveConfig(exeDir, cfg, &machine);
                 reqHardReset = true;
             } else {
-                g_stateMsg = "Image ACSI illisible"; g_stateMsgFrames = 120;
+                g_stateMsg = "Unreadable ACSI image"; g_stateMsgFrames = 120;
             }
         }
         if (reqEjectAcsi) {

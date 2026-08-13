@@ -37,6 +37,20 @@
    "max_diff_px": 0
   },
   {
+   "id": "fuji_selftest",
+   "name": "FujiNet virtuel — protocole fil ACSI (auto-test déterministe, backend rejeu)",
+   "subsystem": "acsi/fujinet",
+   "type": "fuji_selftest",
+   "max_diff_px": 0
+  },
+  {
+   "id": "enec_selftest",
+   "name": "NE2000/EtherNEC — protocole fil port cartouche (auto-test déterministe, boucle)",
+   "subsystem": "cart/ethernec",
+   "type": "enec_selftest",
+   "max_diff_px": 0
+  },
+  {
    "id": "etos_ste_boot",
    "name": "Boot EmuTOS STE (bureau)",
    "subsystem": "integration",
@@ -139,7 +153,7 @@
   },
   {
    "id": "cuddly_demos",
-   "disabled": "Référence à CALIBRER : le titre s'affiche bien des deux côtés, mais l'animation centrale (zoom pyramide) est à une PHASE différente. Balayage des trames oracle 3380-3460 par pas de 5 contre la capture NeoST : minimum 16023 px à 3410, jamais 0 — ce n'est donc pas un simple décalage de trame, il faut trouver le point de divergence de l'animation. Tant que ce n'est pas fait, cet étalon ne valide RIEN : il est DÉSACTIVÉ plutôt que laissé vert à tort (2026-08-01).",
+   "disabled": "RÉFÉRENCE MANQUANTE, pas un défaut d'émulation. La démo TOURNE correctement dans la config décrite ici (512 Ko ST + TOS 1.02 UK) : écran-titre complet et conforme, revérifié le 2026-08-10. Ce qui manque est l'image de référence pour la trame 3400 (animation centrale, zoom pyramide) — aucun fichier dans tests/reference/, donc rien à comparer. Historique : le balayage des trames oracle 3380-3460 par pas de 5 donnait au mieux 16023 px d'écart à 3410, jamais 0 — l'animation est à une PHASE différente, ce n'est pas un simple décalage de trame. Tant que ce point de divergence n'est pas trouvé, l'étalon ne garde RIEN : DÉSACTIVÉ plutôt que laissé vert à tort (2026-08-01). Pour vérifier la démo à l'œil : neost-headless roms/tos102uk.img --machine st --mem 512k --fastfdc --frames 3500 --disk disks/etalons/cuddly_demos.msa --screenshot cuddly.ppm",
    "name": "The Cuddly Demos (boot menu)",
    "subsystem": "shifter/borders",
    "rom": "roms/tos102uk.img",

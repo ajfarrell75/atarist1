@@ -11,6 +11,7 @@
 
 #include "audio/Audio.hpp"
 #include "audio/DriveSound.hpp"
+#include "core/AudioMix.hpp"
 #include "core/YM2149.hpp"
 #include "core/DmaSound.hpp"
 
@@ -42,7 +43,7 @@ void Audio::render(float* out, uint32_t frames, uint32_t /*sampleRate*/) {
     // callbacks). Un bloc PLUS GRAND que le coussin (primeSamples_) rendrait
     // l'underrun STRUCTUREL : chaque callback viderait l'anneau tout juste amorcé.
     static int dbg = 0;
-    if (dbg < 3) { std::fprintf(stderr, "[Audio] callback: %u frames (anneau %zu floats, coussin %u frames)\n",
+    if (dbg < 3) { std::fprintf(stderr, "[Audio] callback: %u frames (ring %zu floats, cushion %u frames)\n",
                                 frames, ring_.available(), primeSamples_); ++dbg; }
     if (!primed_) {
         if (ring_.available() < size_t(primeSamples_) * 2) { std::fill(out, out + need, 0.0f); return; }
@@ -71,9 +72,9 @@ void Audio::produceFrame(int64_t frameCycles) {
         auto* dev = static_cast<ma_device*>(device_);
         if (ma_device_get_state(dev) == ma_device_state_stopped) {
             if (devLostFrames_++ == 0)
-                std::fprintf(stderr, "[Audio] périphérique audio arrêté — reprise auto…\n");
+                std::fprintf(stderr, "[Audio] audio device stopped — auto-resuming…\n");
             if (devLostFrames_ % 50 == 0 && ma_device_start(dev) == MA_SUCCESS) {
-                std::fprintf(stderr, "[Audio] périphérique audio repris\n");
+                std::fprintf(stderr, "[Audio] audio device resumed\n");
                 devLostFrames_ = 0;
             }
         } else devLostFrames_ = 0;
@@ -96,30 +97,18 @@ void Audio::produceFrame(int64_t frameCycles) {
     n += adj;
     if (n <= 0) { psg_.clearEvents(); if (dma_) dma_->clearEvents(); return; }   // anneau saturé : on draine
 
-    // Tampons : YM mono (n), bruits lecteur mono (n), sortie stéréo entrelacée (2n).
-    if (int(ymScratch_.size())    < n)     ymScratch_.assign(n, 0.0f);
-    if (int(scratch_.size())      < 2 * n) scratch_.assign(2 * n, 0.0f);
-    float* ym = ymScratch_.data();
-    float* st = scratch_.data();
-
-    psg_.synthesizeFrame(ym, uint32_t(n), rate_, frameCycles);   // (1) PSG horodaté → ym mono (écrase)
-    // Branche DMA/LMC1992 gatée par le MODÈLE COURANT (cf. setDmaGate) : sur ST/Mega ST
-    // le gain de rattrapage LMC ×2 (compensation du ½-YM STE, outScale_ 0.5) doublerait
+    // Chaîne YM horodaté + DMA STE + LMC1992 : PARTAGÉE avec le headless et le
+    // frontend web (core/AudioMix.cpp). Elle vivait ici en clair, recopiée dans les
+    // deux autres — et la copie web avait dérivé sur l'ancienne API mono non
+    // horodatée (samples inaudibles dans le navigateur).
+    // Branche DMA gatée par le MODÈLE COURANT (cf. setDmaGate) : sur ST/Mega ST le
+    // gain de rattrapage LMC ×2 (compensation du ½-YM STE, outScale_ 0.5) doublerait
     // un YM à pleine échelle (outScale_ 1.0) → clipping ; et l'état microwire d'une
-    // session STE (reconfigure à chaud) colorerait le ST. Le headless a la même garde
-    // (machineHasDmaSound). Les événements DMA sont drainés même gatés.
+    // session STE (reconfigure à chaud) colorerait le ST.
     const bool dmaOn = dma_ && (!dmaGate_ || dmaGate_());
-    if (dmaOn) {
-        dma_->mixStereo(st, ym, uint32_t(n), rate_, frameCycles);   // (2) DMA STE horodaté → stéréo L/R
-        dma_->applyHpfStereo(st, uint32_t(n));             // (2b) HPF sous-sonique du MIX (≙ dmaSnd.c:699,706)
-        const float gL = dma_->gainLeft(), gR = dma_->gainRight();   // (3) volume maître × G/D (panoramique)
-        if (gL != 1.0f || gR != 1.0f)
-            for (int i = 0; i < n; ++i) { st[2 * i] *= gL; st[2 * i + 1] *= gR; }
-        dma_->applyToneStereo(st, uint32_t(n), rate_);     // (4) basses/aigus LMC1992 (L/R indépendants)
-    } else {
-        if (dma_) dma_->clearEvents();                     // machine sans DMA : drainer quand même
-        for (int i = 0; i < n; ++i) { st[2 * i] = ym[i]; st[2 * i + 1] = ym[i]; }   // YM centré
-    }
+    float* st = neost::mixEmulatedFrame(psg_, dma_, dmaOn,
+                                        uint32_t(n), rate_, frameCycles, mixBuf_);
+    if (!st) return;
     if (drive_) {                                          // (5) bruits lecteur (mono, hors LMC1992) → centrés
         if (int(driveScratch_.size()) < n) driveScratch_.assign(n, 0.0f);
         float* dv = driveScratch_.data();
@@ -155,8 +144,8 @@ void Audio::produceFrame(int64_t frameCycles) {
     const uint32_t u = underruns_.load(std::memory_order_relaxed);
     if (u != underrunsSeen_ && underrunMuteFrames_ <= 0) {
         const double secs = std::chrono::duration<double>(dclock::now() - t0).count();
-        std::fprintf(stderr, "[Audio] underrun anneau (total %u) — boucle émulation : %.1f trames/s "
-                             "réelles (attendu ~50/60), anneau %zu\n",
+        std::fprintf(stderr, "[Audio] ring underrun (total %u) — emulation loop: %.1f real frames/s "
+                             "(expected ~50/60), ring %zu\n",
                      u, secs > 0 ? calls / secs : 0.0, ring_.available());
         underrunsSeen_ = u;
         underrunMuteFrames_ = 250;                        // ≈ 5 s à 50 trames/s
@@ -174,7 +163,7 @@ bool Audio::start() {
     cfg.pUserData         = this;            // le callback reçoit l'instance Audio
 
     if (ma_device_init(nullptr, &cfg, dev) != MA_SUCCESS) {
-        std::fprintf(stderr, "[Audio] ma_device_init a échoué\n");
+        std::fprintf(stderr, "[Audio] ma_device_init failed\n");
         delete dev;
         return false;
     }
@@ -189,14 +178,14 @@ bool Audio::start() {
     primed_      = false;                     // ré-amorçage propre
     sampleCarry_ = 0.0;
     if (ma_device_start(dev) != MA_SUCCESS) {
-        std::fprintf(stderr, "[Audio] ma_device_start a échoué\n");
+        std::fprintf(stderr, "[Audio] ma_device_start failed\n");
         ma_device_uninit(dev);
         delete dev;
         return false;
     }
     device_  = dev;
     started_ = true;
-    std::printf("[Audio] miniaudio démarré : %u Hz STÉRÉO, latence ~%u ms (modèle push : PSG horodaté + DMA L/R + lecteur)\n",
+    std::printf("[Audio] miniaudio started: %u Hz STEREO, latency ~%u ms (push model: timestamped PSG + DMA L/R + drive)\n",
                 rate_, primeSamples_ * 1000 / rate_);
     std::fflush(stdout);   // visible même si l'appli est tuée (diagnostic)
     return true;

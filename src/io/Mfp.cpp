@@ -28,7 +28,14 @@ namespace { const int g_mfpExact = []{ const char* s = std::getenv("NEOST_MFP_EX
 // AVANT le reset) et les lignes d'ENTRÉE des autres puces (FDC/ACIA/RS232), reforcées
 // à la lecture du GPIP et resynchronisées par leurs puces respectives.
 void Mfp::resetChip() {
-    gpip = 0xFF; aer = 0; ddr = 0;        // GPIP au repos (entrées non assertées), AER/DDR neutres
+    // GPIP au reset : **0x00, comme Hatari** (mfp.c:523 `pMFP->GPIP = 0`) — les
+    // lignes démarrent BASSES et ce sont les périphériques qui les assertent
+    // (moniteur bit7, FDC bit5, ACIA bit4 : forcés en lecture par readGpip).
+    // L'ancien 0xFF (« entrées non assertées = 1 ») rendait bits 6 (RI) et 3 à 1 :
+    // l'inventaire matériel de CLOSURE (Sync) lit $FA01 dans sa table d'identité
+    // ($2E22F) et la machine générée divergeait de l'oracle dès cet octet
+    // (NeoST $F9 vs Hatari $B1, cf. docs/CLOSURE_CHANTIER.md).
+    gpip = 0x00; aer = 0; ddr = 0;
     iera = ierb = 0;                      // enable
     ipra = iprb = 0;                      // pending
     imra = imrb = 0;                      // mask
@@ -62,6 +69,10 @@ void Mfp::reset() {
     // (RS232_Get_DCD_CTS) et ne peuvent donc pas rester coincées ; ici, sans cette
     // remise, une désassertion sous --loopback survivait à tous les resets.
     ctsLine_ = dcdLine_ = true;
+    // Même logique pour Centronics BUSY (GPIP0) : entrée recalculée seulement quand
+    // le sink PSG tire — psg.reset() (R15=0) ne le fait pas, un BUSY asserté par le
+    // bouclage ou la capture imprimante restait donc coincé après reset.
+    busyLine_ = false;
     rxByte_ = 0; rxFull_ = false; rxOverrun_ = false;   // USART : tampon vidé (pas de RXFULL fantôme)
     serialBaud_ = 0; serialUcr_ = 0;      // suivi débit série remis (sinon serialBaud() rapporte l'avant-reset)
     if (sched_) {   // reset MACHINE : Hatari appelle CycInt_Reset() (reset.c:76) avant MFP_Reset_All
@@ -71,7 +82,50 @@ void Mfp::reset() {
         sched_->cancel(Scheduler::TIMER_C);
         sched_->cancel(Scheduler::TIMER_D);
         sched_->cancel(Scheduler::MFP_IRQ);
+        sched_->cancel(Scheduler::SERIAL_RX);
     }
+    hostRx_.clear();
+    serialRxArmed_ = false;
+}
+
+// -----------------------------------------------------------------------------
+//  Injection RX série côté hôte (modem Hayes, FujiNet RS-232…). Les octets sont
+//  mis en file puis livrés UN PAR UN au débit série configuré (~10 bits/octet),
+//  avec IRQ RxFull à chaque livraison — un pilote d'époque qui compte sur le
+//  rythme du fil (STiK/STinG en SLIP) ne perd ainsi aucun octet. La file est
+//  bornée : l'appelant re-pompe quand hostRxPending() redescend.
+// -----------------------------------------------------------------------------
+void Mfp::receiveByte(uint8_t b) {
+    if (hostRx_.size() >= kHostRxMax) return;    // pleine : l'octet attend côté hôte
+    hostRx_.push_back(b);
+    scheduleSerialRx();
+}
+
+void Mfp::scheduleSerialRx() {
+    if (!sched_ || serialRxArmed_ || hostRx_.empty()) return;
+    // 10 périodes bit (start + 8 données + stop) au débit courant. USART jamais
+    // configurée → 9600 bauds (défaut TOS). Plancher anti-débit absurde.
+    const int baud = serialBaud_ > 0 ? serialBaud_ : 9600;
+    int64_t cyc = int64_t(8021248) * 10 / baud;
+    if (cyc < 640) cyc = 640;
+    sched_->schedule(Scheduler::SERIAL_RX, sched_->liveNow() + cyc);
+    serialRxArmed_ = true;
+}
+
+void Mfp::onSerialRxEvent() {
+    serialRxArmed_ = false;
+    if (hostRx_.empty()) return;
+    const uint8_t b = hostRx_.front();
+    hostRx_.pop_front();
+    // Récepteur coupé (RSR bit0 = Receiver Enable) : l'octet se perd, comme sur
+    // le fil — même porte que le bouclage (cf. write8 case 0x2F).
+    if (timer_[0x2B] & 0x01) {
+        if (rxFull_) { rxOverrun_ = true; raise(SRC_RXERR); }
+        rxByte_ = b;
+        rxFull_ = true;
+        raise(SRC_RXFULL);
+    }
+    scheduleSerialRx();
 }
 
 // Les registres MFP sont sur les adresses IMPAIRES à partir de $FFFA00.
@@ -97,10 +151,24 @@ uint8_t Mfp::read8(uint32_t addr) {
         case 0x11: return isrb;
         case 0x13: return imra;
         case 0x15: return imrb;
+        // (diag lectures TBDR : cf. case 0x21 ci-dessous)
         case 0x17: return vr;
         case 0x1B: return tbcr_;     // Timer B control
-        case 0x1F: return readTimerData(0);  // TADR : compteur VIVANT de Timer A
-        case 0x21: return readTimerData(1);  // TBDR : compteur VIVANT de Timer B
+        case 0x1F: {                          // TADR : compteur VIVANT de Timer A
+            const uint8_t r = readTimerData(0);
+            // DIAG (NEOST_MFPRD_DIAG=1) : lectures TADR/TBDR datées — à diff'er
+            // contre Hatari --trace mfp_read (chantier Closure : la démo mesure
+            // par les compteurs de timers, cf. docs/CLOSURE_CHANTIER.md).
+            static const bool d = std::getenv("NEOST_MFPRD_DIAG") != nullptr;
+            if (d) std::fprintf(stderr, "[MFPRD] TADR=%02X\n", r);
+            return r;
+        }
+        case 0x21: {                          // TBDR : compteur VIVANT de Timer B
+            const uint8_t r = readTimerData(1);
+            static const bool d = std::getenv("NEOST_MFPRD_DIAG") != nullptr;
+            if (d) std::fprintf(stderr, "[MFPRD] TBDR=%02X\n", r);
+            return r;
+        }
         case 0x23: return readTimerData(2);  // TCDR : compteur VIVANT de Timer C
         case 0x25: return readTimerData(3);  // TDDR : compteur VIVANT de Timer D
         case 0x2B: {                 // RSR : bit7 = Buffer Full ; bit6 = Overrun Error
@@ -244,13 +312,13 @@ void Mfp::updateSerialConfig() {
     if (!traceAll && nLogs > kMaxLogs) return;
     if (!traceAll && nLogs == kMaxLogs) {
         ++nLogs;
-        std::fprintf(stderr, "[mfp] USART : reconfigurations suivantes silencieuses "
-                             "(Timer D détourné par le programme ; NEOST_MFP_TRACE=1 pour tout voir)\n");
+        std::fprintf(stderr, "[mfp] USART: further reconfigurations are silent "
+                             "(Timer D repurposed by the program; NEOST_MFP_TRACE=1 to see them all)\n");
         return;
     }
     ++nLogs;
     static const char* kStops[4] = {"sync", "1", "1.5", "2"};   // UCR bits 3-4
-    std::fprintf(stderr, "[mfp] USART : %d bauds, %d%c%s (UCR=$%02X, TDDR=%d, prescaler /%d)\n",
+    std::fprintf(stderr, "[mfp] USART: %d baud, %d%c%s (UCR=$%02X, TDDR=%d, prescaler /%d)\n",
                  baud, 8 - ((ucr >> 5) & 3),                    // taille du mot (bits 5-6)
                  (ucr & 4) ? ((ucr & 2) ? 'E' : 'O') : 'N',     // parité (bits 1-2)
                  kStops[(ucr >> 3) & 3], ucr, data, kDiv[ctrl]);
@@ -568,7 +636,15 @@ bool Mfp::mfpSelfTest() {
 }
 
 uint8_t Mfp::gpipInput() const {
-    uint8_t v = 0xFF;                            // bits au repos (haut)
+    // Repos des lignes : bits 6 (RS232 RI) et 3 (blitter GPU_DONE) au repos BAS —
+    // comme Hatari, dont MFP_GPIP_ReadByte_Main recalcule 7/4/2/1/0 mais ne pose
+    // JAMAIS 6 ni 3 : ils restent au registre, à 0 depuis le reset (mfp.c:523).
+    // L'ancien repos « haut » rendait $F9 là où l'oracle rend $B1 — l'inventaire
+    // matériel de CLOSURE (Sync) stocke cet octet dans sa table d'identité et
+    // toute sa génération de code divergeait ensuite (docs/CLOSURE_CHANTIER.md).
+    // Les FRONTS d'IRQ des lignes (loopback RI, blitter) restent portés par les
+    // transitions via gpipSetLine/gpipUpdateInterrupt — seule la valeur LUE change.
+    uint8_t v = 0xFF & ~0x48;                    // bits au repos (haut, sauf 6 et 3)
     bool bit7 = colorMonitor_;                   // moniteur : couleur=1, mono=0
     if (hasDmaSound_) bit7 ^= xsint_;            // STE/Mega STE : XOR ligne XSINT son DMA
     if (!bit7)          v &= ~0x80;              // bit7 = moniteur^XSINT

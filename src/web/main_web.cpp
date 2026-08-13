@@ -20,16 +20,21 @@
 #include <emscripten.h>
 #include <emscripten/html5.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <string>
+#include <vector>
 
+#include "core/AudioMix.hpp"
+#include "core/Framing.hpp"
 #include "core/Machine.hpp"
 #include "io/JoystickInput.hpp"
 
 namespace {
 
 Machine* g_machine = nullptr;            // carte mère (allouée dans main)
+MachineType g_reqMachine = MachineType::St;  // machine DEMANDÉE (?machine=…) — cf. neost_load_tos
 GLFWwindow* g_window = nullptr;
 bool   g_kbdJoy = false;                 // émulation joystick clavier (flèches + Ctrl droit)
 int    g_kbdJoyPort = 1;                 // port ST visé par l'émulation clavier
@@ -39,6 +44,33 @@ float  g_joyDeadzone = 0.30f;            // zone morte centrale des sticks analo
 GLuint g_tex = 0, g_prog = 0, g_vbo = 0;
 GLint  g_locPos = -1, g_locUV = -1, g_locTex = -1;
 int    g_texW = 0, g_texH = 0;
+
+// --- Sortie audio : modèle « push », comme le frontend natif ------------------
+// AVANT : la page tirait des échantillons quand son ScriptProcessorNode le
+// demandait (~toutes les 43 ms) et le cœur synthétisait alors en lisant les
+// registres du YM EN DIRECT. Tout ce qui module le son SOUS la trame — digidrums
+// (volume écrit à plusieurs kHz), sync-buzzer, bruitages DMA courts — était donc
+// échantillonné une seule fois par bloc : les samples devenaient inaudibles.
+//
+// MAINTENANT : le son est produit PAR TRAME ÉMULÉE, juste après runFrame, par la
+// chaîne partagée du cœur (core/AudioMix.cpp) qui REJOUE les écritures horodatées
+// à leur cycle. La page ne fait plus que mettre en file et sortir — elle nous
+// renvoie la profondeur de sa file, dont on asservit le débit.
+neost::FrameMixBuffers g_mixBuf;
+uint32_t g_audioRate     = 0;      // 0 = sortie fermée (rien n'est produit)
+double   g_sampleCarry   = 0.0;    // report fractionnaire : débit moyen EXACT
+int      g_queuedFrames  = 0;      // profondeur de la file de la page (frames)
+int      g_cushionFrames = 0;      // coussin visé (frames) — cf. neost_audio_open
+float    g_masterVol     = 1.0f;   // volume maître utilisateur (0..1)
+float    g_volSmooth     = 1.0f;   // volume effectif du bloc précédent (rampe anti-clic)
+uint32_t g_audioUnderruns = 0;     // signalés par la page (diagnostic)
+
+// Plein écran (posé par le shell sur fullscreenchange) : l'image passe alors en
+// ZOOM ADAPTATIF — cadrée sur la région de contenu (règle du kiosk, calcul
+// partagé core/Framing), buffer entier dès qu'une démo ouvre les bordures. En
+// fenêtré on garde le cadre complet : le « moniteur » de la page montre les
+// bordures, c'est son charme.
+bool   g_fullscreen = false;
 
 // --- État souris -------------------------------------------------------------
 bool   g_mouseCaptured = false;
@@ -108,7 +140,7 @@ void initGl() {
     GLuint vs = compileShader(GL_VERTEX_SHADER, kVert);
     GLuint fs = compileShader(GL_FRAGMENT_SHADER, kFrag);
     if (!vs || !fs) {
-        std::fprintf(stderr, "[web] shaders non compilés — rendu désactivé\n");
+        std::fprintf(stderr, "[web] shaders did not compile — rendering disabled\n");
         if (vs) glDeleteShader(vs);
         if (fs) glDeleteShader(fs);
         g_prog = 0; g_locPos = g_locUV = -1;
@@ -125,7 +157,7 @@ void initGl() {
     if (!linked) {
         char log[512];
         glGetProgramInfoLog(g_prog, sizeof log, nullptr, log);
-        std::fprintf(stderr, "[web] link programme: %s\n", log);
+        std::fprintf(stderr, "[web] program link: %s\n", log);
         glDeleteProgram(g_prog); g_prog = 0;
     }
     // Les shaders sont référencés par le programme : plus besoin des objets.
@@ -144,6 +176,17 @@ void initGl() {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 }
 
+// Taille d'AFFICHAGE d'un buffer ST, aspect pixel compris — même règle que le
+// frontend bureau (cf. drawStScreen/drawStKiosk dans main.cpp) : les pixels de
+// basse résolution sont deux fois plus larges ET deux fois plus hauts que ceux
+// de la mono, si bien que 320×200, 640×200 et 640×400 couvrent la MÊME surface
+// à l'écran. On classe donc par dimension : ≤ 480 px de large = classe basse
+// rés (×2), ≤ 300 lignes = classe 200 lignes (×2).
+void displaySize(int w, int h, int& dw, int& dh) {
+    dw = w * ((w <= 480) ? 2 : 1);
+    dh = h * ((h <= 300) ? 2 : 1);
+}
+
 void uploadFrame(const uint32_t* px, int w, int h) {
     glBindTexture(GL_TEXTURE_2D, g_tex);
     if (w != g_texW || h != g_texH) {     // la résolution ST a changé → réalloue
@@ -156,18 +199,68 @@ void uploadFrame(const uint32_t* px, int w, int h) {
     }
 }
 
-void drawScreen() {
+// Taille INTRINSÈQUE du canvas : c'est elle qui fixe le RATIO — la page met
+// `width:100%; height:auto` en fenêtré et `object-fit:contain` en plein écran.
+// Elle suit donc ce qu'on DESSINE (la VUE), pas la résolution du Shifter : le
+// buffer entier en fenêtré, la seule région de contenu en plein écran adaptatif.
+// Sans ça, une trame overscan 416×276 (affichage correct 832×552, ratio 1.507)
+// était étirée de 6 % dans le cadre 1.6 initial — et le recadrage plein écran
+// serait pareillement déformé si le canvas gardait le ratio du cadre complet.
+void syncCanvasSize(int viewW, int viewH) {
+    int dw = 0, dh = 0;
+    displaySize(viewW, viewH, dw, dh);
+    // Comparer à la taille RÉELLE du canvas, pas à la dernière posée : à la
+    // sortie du plein écran, le port GLFW d'Emscripten laisse le canvas à la
+    // taille de l'ÉCRAN — un cache « dernière valeur » croirait n'avoir rien à
+    // faire et la page garderait un ratio faux.
+    int cw = 0, ch = 0;
+    glfwGetWindowSize(g_window, &cw, &ch);
+    if (cw == dw && ch == dh) return;
+    glfwSetWindowSize(g_window, dw, dh);   // port GLFW Emscripten → taille du canvas
+    std::fprintf(stderr, "[web] view %dx%d → canvas %dx%d\n", viewW, viewH, dw, dh);
+}
+
+// [u0,v0]–[u1,v1] = portion du buffer ST affichée ; viewAspect = ratio
+// d'AFFICHAGE de cette portion (aspect pixel ST compris).
+//
+// LETTERBOX AU VIEWPORT, et non « le canvas fait déjà le bon ratio » : en plein
+// écran, le port GLFW d'Emscripten redimensionne LUI-MÊME le canvas à la taille
+// de l'écran (mesuré : 640×400 demandés, 800×600 imposés) — dessiner plein cadre
+// y étirerait l'image au ratio de l'écran. On centre donc un viewport au ratio
+// de la vue ; en fenêtré, le canvas suit la vue (syncCanvasSize) et le letterbox
+// est neutre. Même recette que drawStKiosk et que le frontend Android.
+void drawScreen(float u0, float v0, float u1, float v1, float viewAspect) {
     int fbw = 0, fbh = 0;
     glfwGetFramebufferSize(g_window, &fbw, &fbh);
-    glViewport(0, 0, fbw, fbh);
+    glViewport(0, 0, fbw, fbh);            // effacement : tout le canvas
     glClearColor(0.10f, 0.10f, 0.12f, 1.f);
     glClear(GL_COLOR_BUFFER_BIT);
     // Programme absent (compilation/link en échec, cf. initGl) : on s'arrête après
     // l'effacement plutôt que d'émettre des appels GL avec des locations à -1.
     if (!g_prog || g_locPos < 0 || g_locUV < 0) return;
 
+    int vpW = fbw, vpH = fbh;
+    const float fbAspect = (fbh > 0) ? float(fbw) / float(fbh) : viewAspect;
+    if (fbAspect > viewAspect) vpW = int(float(fbh) * viewAspect + 0.5f);   // pillarbox
+    else                       vpH = int(float(fbw) / viewAspect + 0.5f);   // letterbox
+    glViewport((fbw - vpW) / 2, (fbh - vpH) / 2, std::max(1, vpW), std::max(1, vpH));
+
     glUseProgram(g_prog);
     glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
+    // Le quad ne change que si le CADRAGE change (entrée/sortie de plein écran,
+    // latch overscan) : on ne réécrit pas 16 floats par trame pour rien.
+    static float lu0 = 0.f, lv0 = 0.f, lu1 = 1.f, lv1 = 1.f;
+    if (u0 != lu0 || v0 != lv0 || u1 != lu1 || v1 != lv1) {
+        const float quad[] = {
+            //  x,    y,    u,  v
+            -1.f,  1.f,  u0, v0,   // haut-gauche
+            -1.f, -1.f,  u0, v1,   // bas-gauche
+             1.f,  1.f,  u1, v0,   // haut-droite
+             1.f, -1.f,  u1, v1,   // bas-droite
+        };
+        glBufferData(GL_ARRAY_BUFFER, sizeof quad, quad, GL_DYNAMIC_DRAW);
+        lu0 = u0; lv0 = v0; lu1 = u1; lv1 = v1;
+    }
     glEnableVertexAttribArray(g_locPos);
     glVertexAttribPointer(g_locPos, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)0);
     glEnableVertexAttribArray(g_locUV);
@@ -249,6 +342,58 @@ void onMouseButton(GLFWwindow* w, int /*button*/, int /*action*/, int /*mods*/) 
     g_machine->ikbd.mouseEvent(0, 0, l, r);
 }
 
+// Produit le son d'UNE trame émulée et le remet à la page. À appeler APRÈS
+// Machine::runFrame, et à CHAQUE trame : les écritures horodatées du YM et les
+// événements DMA appartiennent à la trame qui vient de s'exécuter, et doivent être
+// consommés là — sinon ils s'accumulent sans fin (fuite mémoire) et le son se
+// désaligne. Sortie fermée (avant le geste utilisateur, onglet muet) : on appelle
+// quand même la chaîne avec 0 échantillon, ce qui ne fait que DRAINER.
+void produceAudioFrame() {
+    Machine& m = *g_machine;
+    const int64_t fc = m.frameCycles();
+    if (g_audioRate == 0) { neost::mixEmulatedFrame(m.psg, &m.dmasnd, false, 0, 0, fc, g_mixBuf); return; }
+
+    // Débit : durée émulée × fréquence de sortie, avec report fractionnaire (la
+    // moyenne colle EXACTEMENT au temps émulé). Puis asservissement proportionnel
+    // vers le coussin, comme le natif : ±8 échantillons sur ~960, soit ≤ 0,8 % de
+    // hauteur — inaudible, mais suffisant pour absorber la dérive entre l'horloge
+    // de l'AudioContext et celle de la machine (elles ne sont PAS les mêmes).
+    static constexpr double kCpuHz = 8021248.0;
+    g_sampleCarry += double(fc) * g_audioRate / kCpuHz;
+    int n = int(g_sampleCarry);
+    g_sampleCarry -= n;
+    int adj = (g_cushionFrames - g_queuedFrames) / 256;
+    if      (adj >  8) adj =  8;
+    else if (adj < -8) adj = -8;
+    n += adj;
+    if (n <= 0) { neost::mixEmulatedFrame(m.psg, &m.dmasnd, false, 0, 0, fc, g_mixBuf); return; }
+
+    // Chaîne PARTAGÉE avec le GUI et le headless (core/AudioMix.cpp) : YM horodaté,
+    // DMA STE horodaté, HPF, gains et tonalité LMC1992. La branche DMA est gatée par
+    // le modèle courant — sur ST/Mega ST il n'y a pas de LMC, et son gain de
+    // rattrapage ×2 doublerait un YM déjà à pleine échelle.
+    float* st = neost::mixEmulatedFrame(m.psg, &m.dmasnd, machineHasDmaSound(m.bus.machine),
+                                        uint32_t(n), g_audioRate, fc, g_mixBuf);
+    if (!st) return;
+
+    // Volume maître en RAMPE sur le bloc (un saut poserait une marche par bloc :
+    // clic audible au mute et « zipper » en glissant le curseur), puis clamp.
+    if (g_masterVol != g_volSmooth || g_masterVol != 1.0f) {
+        const float v0 = g_volSmooth, vt = g_masterVol;
+        for (int i = 0; i < n; ++i) {
+            const float v = v0 + (vt - v0) * (float(i + 1) / float(n));
+            st[2 * i] *= v; st[2 * i + 1] *= v;
+        }
+        g_volSmooth = vt;
+    }
+    for (int i = 0; i < 2 * n; ++i) st[i] = std::max(-1.0f, std::min(1.0f, st[i]));
+
+    // Estimation locale entre deux rapports de la page : sans elle, l'asservissement
+    // verrait une file figée pendant plusieurs trames et sur-corrigerait.
+    g_queuedFrames += n;
+    EM_ASM({ if (window.neostAudioPush) window.neostAudioPush($0, $1); }, st, n);
+}
+
 // Boucle principale appelée par requestAnimationFrame. Une trame émulée par
 // rappel (≈ 60 Hz ici, contre 50 Hz réels : la machine tourne légèrement vite,
 // acceptable pour un test navigateur).
@@ -291,10 +436,68 @@ void mainLoop() {
     }
 
     g_machine->cpu.updateIpl();
-    g_machine->runFrame();
-    uploadFrame(g_machine->shifter.pixels(),
-                g_machine->shifter.width(), g_machine->shifter.height());
-    drawScreen();
+
+    // CADENCE : sur le TEMPS ÉMULÉ, pas sur requestAnimationFrame.
+    //
+    // La boucle exécutait UNE trame par tick rAF, c'est-à-dire à la fréquence de
+    // rafraîchissement de l'ÉCRAN. Sur un moniteur 60 Hz, une machine PAL (50 Hz)
+    // tournait donc à 120 % : musique et bruitages trop rapides, et pire encore
+    // sur un écran 120/144 Hz. Le son sortait « bizarre » sans que rien ne soit
+    // faux dans la synthèse — c'est l'horloge de la machine qui était fausse.
+    //
+    // Même modèle que le frontend natif : `g_emuNextMs` est l'échéance réelle de
+    // la PROCHAINE trame émulée, et chaque trame la repousse de SA durée (la
+    // géométrie vidéo décide : 50, 60 ou 71 Hz). Un tour rAF exécute donc 0, 1 ou
+    // 2 trames selon ce que le temps réel réclame. Plafond à 4 pour ne pas
+    // spiraler après un onglet mis en arrière-plan (rAF y est suspendu).
+    static constexpr double kCpuHz = 8021248.0;      // horloge CPU/bus
+    static double g_emuNextMs = 0.0;
+    const double nowMs = emscripten_get_now();
+    if (g_emuNextMs == 0.0) g_emuNextMs = nowMs;     // 1re trame : on part d'ici
+
+    int ran = 0;
+    while (nowMs >= g_emuNextMs && ran < 4) {
+        g_machine->runFrame();
+        produceAudioFrame();          // le son suit la trame, pas le rythme de l'écran
+        g_emuNextMs += double(g_machine->frameCycles()) * 1000.0 / kCpuHz;
+        ++ran;
+    }
+    if (ran == 4 && nowMs > g_emuNextMs) g_emuNextMs = nowMs;   // longue pause : resync
+
+    // Aucune trame due (écran plus rapide que la machine) : rien de neuf à
+    // montrer, on garde l'image précédente plutôt que de re-téléverser la même.
+    if (ran == 0) return;
+
+    const int w = g_machine->shifter.width(), h = g_machine->shifter.height();
+    uploadFrame(g_machine->shifter.pixels(), w, h);
+
+    // Région de contenu calculée à CHAQUE trame rendue, plein écran ou non :
+    // l'hystérésis se compte en trames, et le passage en plein écran hérite
+    // ainsi d'un latch déjà à jour au lieu de partir à froid.
+    int cTop = 0, cH = h, cW = w;
+    neost::stContentRegion(g_machine->shifter, cTop, cH, cW);
+
+    float u0 = 0.f, v0 = 0.f, u1 = 1.f, v1 = 1.f;
+    int viewW = w, viewH = h;
+    if (g_fullscreen) {
+        // Bornage défensif, comme le bureau : la région vient du Glue LIVE, une
+        // trame de transition (changement de résolution) peut la donner hors du
+        // buffer courant.
+        const int visTop = std::max(0, std::min(cTop, std::max(0, h - 1)));
+        const int visH   = std::max(1, std::min(cH, h - visTop));
+        const int visW   = std::max(1, std::min(cW, w));
+        const int visX   = (w - visW) / 2;             // zone active centrée
+        u0 = float(visX) / float(w);   u1 = float(visX + visW) / float(w);
+        v0 = float(visTop) / float(h); v1 = float(visTop + visH) / float(h);
+        viewW = visW; viewH = visH;
+    }
+    // En plein écran, le canvas appartient à Emscripten (taille écran) : le poser
+    // nous-mêmes déclencherait un bras de fer à chaque trame. Le ratio est garanti
+    // par le viewport de drawScreen, pas par le canvas.
+    if (!g_fullscreen) syncCanvasSize(viewW, viewH);
+    int dispW = 0, dispH = 0;
+    displaySize(viewW, viewH, dispW, dispH);
+    drawScreen(u0, v0, u1, v1, (dispH > 0) ? float(dispW) / float(dispH) : 4.f / 3.f);
     glfwSwapBuffers(g_window);
 }
 
@@ -316,7 +519,10 @@ EMSCRIPTEN_KEEPALIVE void neost_load_tos(const char* path) {
     // Garde machine/TOS comme le GUI et le headless (adjustMachineForTos) : un
     // TOS ≤ 1.04 chargé sur STE/Mega STE (menu ROM du shell) haltait le CPU —
     // écran figé sans message. On bascule le profil comme les autres frontends.
-    const MachineType adj = Machine::adjustMachineForTos(g_machine->bus.machine, path);
+    // Ajuster depuis la machine DEMANDÉE (pas la courante) : sinon la bascule
+    // STE→ST d'un vieux TOS était définitive — recharger ensuite un TOS moderne
+    // laissait la session en ST jusqu'au rechargement de la page.
+    const MachineType adj = Machine::adjustMachineForTos(g_reqMachine, path);
     if (adj != g_machine->bus.machine)
         g_machine->reconfigure(g_machine->bus.ram.size(), CpuCore::Moira, adj);
     g_machine->loadTos(path);
@@ -359,26 +565,48 @@ EMSCRIPTEN_KEEPALIVE void neost_set_joy_deadzone(float dz) {
     g_joyDeadzone = (dz < 0.0f) ? 0.0f : (dz > 0.95f ? 0.95f : dz);
 }
 
-// Synthèse audio du YM2149 : remplit `buf` (heap WASM) de `frames` échantillons
-// mono float à la fréquence `rate`. Appelé par le ScriptProcessorNode de la page
-// (Web Audio) ; les bruits de lecteur, eux, passent par leurs propres nœuds —
-// le navigateur mixe tous les nœuds connectés à la destination.
-EMSCRIPTEN_KEEPALIVE void neost_audio_render(float* buf, int frames, int rate) {
-    if (!g_machine || !buf || frames <= 0) return;
-    const uint32_t n = static_cast<uint32_t>(frames), r = static_cast<uint32_t>(rate);
-    g_machine->psg.synthesize(buf, n, r);          // YM2149 (écrase ; BRUT sur STE)
-    g_machine->dmasnd.mix(buf, n, r);              // + son DMA STE (additionné)
-    // Chaîne LMC1992 gatée par la machine, comme le GUI (Audio.cpp setDmaGate) et
-    // le headless : sur ST/Mega ST il n'y a PAS de LMC — le gain ×2 (kLmcMakeup,
-    // compensation du ½-YM STE) doublait un YM déjà à pleine échelle (écrêtage,
-    // +6 dB vs natif), et l'état microwire d'une session STE colorait le ST.
-    if (machineHasDmaSound(g_machine->bus.machine)) {
-        g_machine->dmasnd.applyHpfMono(buf, n);    // HPF sous-sonique du MIX (STE)
-        const float g = g_machine->dmasnd.masterGain();   // volume maître LMC1992
-        if (g != 1.0f) for (uint32_t i = 0; i < n; ++i) buf[i] *= g;
-        g_machine->dmasnd.applyTone(buf, n, r);           // basses/aigus LMC1992
+// --- Sortie audio pilotée par la page ---------------------------------------
+// La page ouvre la sortie une fois son AudioContext créé (elle seule connaît la
+// fréquence réelle : 48 000 chez les uns, 44 100 chez les autres) et annonce le
+// coussin qu'elle tient. Tant que ce n'est pas fait, rien n'est produit — mais les
+// horodatages sont drainés à chaque trame (cf. produceAudioFrame).
+// Le shell nous signale l'état plein écran (fullscreenchange) : c'est LUI qui
+// sait, le port GLFW d'Emscripten ne voit pas un requestFullscreen fait en JS.
+EMSCRIPTEN_KEEPALIVE void neost_set_fullscreen(int on) { g_fullscreen = (on != 0); }
+
+EMSCRIPTEN_KEEPALIVE void neost_audio_open(int rate, int cushionMs) {
+    if (rate <= 0) return;
+    if (cushionMs < 20)  cushionMs = 20;
+    if (cushionMs > 250) cushionMs = 250;
+    g_audioRate     = static_cast<uint32_t>(rate);
+    g_cushionFrames = rate * cushionMs / 1000;
+    g_sampleCarry   = 0.0;
+    g_queuedFrames  = 0;
+    std::fprintf(stderr, "[web] audio out: %d Hz stereo, cushion %d ms (%d frames)\n",
+                 rate, cushionMs, g_cushionFrames);
+}
+
+// Ferme la sortie (onglet muet, échec Web Audio) : la production s'arrête, le cœur
+// continue de tourner. Rouvrir avec neost_audio_open repart d'un coussin neuf.
+EMSCRIPTEN_KEEPALIVE void neost_audio_close() { g_audioRate = 0; g_queuedFrames = 0; }
+
+// La page annonce ce qu'il lui reste en file (frames par canal) : c'est l'entrée de
+// l'asservissement de débit. `underruns` = compteur cumulé, pour le diagnostic.
+EMSCRIPTEN_KEEPALIVE void neost_audio_set_queued(int frames, int underruns) {
+    g_queuedFrames = frames < 0 ? 0 : frames;
+    if (uint32_t(underruns) != g_audioUnderruns) {
+        g_audioUnderruns = uint32_t(underruns);
+        std::fprintf(stderr, "[web] audio underrun (total %u) — the emulation loop is "
+                             "not keeping up with real time\n", g_audioUnderruns);
     }
 }
+
+// Volume maître utilisateur (0..1), appliqué en rampe au mix final. Indépendant du
+// LMC1992 ÉMULÉ, qui appartient à la machine.
+EMSCRIPTEN_KEEPALIVE void neost_set_volume(float v) {
+    g_masterVol = v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
+}
+EMSCRIPTEN_KEEPALIVE float neost_get_volume() { return g_masterVol; }
 
 } // extern "C"
 
@@ -395,10 +623,13 @@ int main(int argc, char** argv) {
     }, cpuBuf);
     const CpuCore cpuCore = Cpu68k::parseCore(cpuBuf);
 
-    // Profil machine choisi par ?machine=st|megast|ste|megaste (défaut Mega STE).
-    char machBuf[16] = "megaste";
+    // Profil machine choisi par ?machine=st|megast|ste|megaste (défaut ST).
+    // ST et non Mega STE : c'est la machine de référence des jeux et démos de
+    // l'époque, et celle qu'attend un visiteur qui découvre la démo sans lire
+    // la doc. Le Mega STE reste à un paramètre d'URL.
+    char machBuf[16] = "st";
     EM_ASM({
-        var m = new URLSearchParams(location.search).get('machine') || 'megaste';
+        var m = new URLSearchParams(location.search).get('machine') || 'st';
         stringToUTF8(m, $0, 16);
     }, machBuf);
     const MachineType machType = parseMachine(machBuf);
@@ -411,40 +642,56 @@ int main(int argc, char** argv) {
     }, memBuf);
     const std::size_t ramBytes = parseRamBytes(memBuf);
 
-    // ROM par défaut adaptée à la machine : TOS 1.02 UK (profil 520 ST) pour
-    // ST/Mega ST, TOS 1.62 UK (profil 1040 STE) pour STE, EmuTOS 256 Ko pour
-    // Mega STE. Repli EmuTOS si la ROM cible n'est pas embarquée.
+    // ROM par défaut adaptée à la machine. Sur ST/Mega ST : **EmuTOS 192 Ko**
+    // (libre) plutôt qu'un TOS Atari — la démo publique démarre ainsi sur du
+    // 100 % libre, et EmuTOS 192 Ko est justement le build « Atari ST » (pas
+    // d'autodétection du matériel additionnel). STE → TOS 1.62 UK, Mega STE →
+    // EmuTOS 256 Ko (le seul EmuTOS qui programme le SCU).
     const bool wantsSte     = (machType == MachineType::Ste);
     const bool wantsMegaSte = (machType == MachineType::MegaSte);
     const std::string romPath = (argc > 1) ? argv[1]
         : (wantsSte     ? "/roms/tos162uk.img"
          : wantsMegaSte ? "/roms/etos256us.img"
-                        : "/roms/tos102uk.img");
+                        : "/roms/etos192us.img");
 
-    if (!glfwInit()) { std::fprintf(stderr, "[web] glfwInit a échoué\n"); return 1; }
+    if (!glfwInit()) { std::fprintf(stderr, "[web] glfwInit failed\n"); return 1; }
 
     // L'écran ST le plus grand est 640×400 (mono) ; le canvas est dimensionné par
     // la page. Pas de hint de profil : le port GLFW d'Emscripten crée un contexte
     // WebGL (GLES2) compatible avec nos shaders.
+    // 640×400 n'est qu'une amorce : uploadFrame() redimensionne le canvas à la
+    // taille d'affichage réelle dès la première trame, puis à chaque changement
+    // de résolution.
     g_window = glfwCreateWindow(640, 400, "NeoST — Atari ST (WASM)", nullptr, nullptr);
-    if (!g_window) { std::fprintf(stderr, "[web] création fenêtre échouée\n"); glfwTerminate(); return 1; }
+    if (!g_window) { std::fprintf(stderr, "[web] window creation failed\n"); glfwTerminate(); return 1; }
     glfwMakeContextCurrent(g_window);
 
     // Garde machine/TOS au boot, comme le headless (main_headless.cpp) : un
     // ?machine=ste|megaste avec un vieux TOS en argv figeait le CPU sans message.
+    g_reqMachine = machType;               // mémorisé pour neost_load_tos (menu ROM)
     const MachineType machTypeAdj = Machine::adjustMachineForTos(machType, romPath);
     static Machine machine(ramBytes, cpuCore, machTypeAdj); // RAM+cœur+machine (statique)
     g_machine = &machine;
-    std::fprintf(stderr, "[web] cœur CPU : %s | machine : %s | RAM : %s\n",
+    std::fprintf(stderr, "[web] CPU core: %s | machine: %s | RAM: %s\n",
                  Cpu68k::coreName(machine.cpu.core()), machineName(machTypeAdj), ramLabel(ramBytes));
     if (!machine.loadTos(romPath)) {
-        std::fprintf(stderr, "[web] TOS introuvable (%s) — repli EmuTOS 192 Ko.\n", romPath.c_str());
+        std::fprintf(stderr, "[web] TOS not found (%s) — falling back to EmuTOS 192 KB.\n", romPath.c_str());
         if (romPath != "/roms/etos192us.img" && !machine.loadTos("/roms/etos192us.img"))
-            std::fprintf(stderr, "[web] aucun TOS chargeable — CPU à vide.\n");
+            std::fprintf(stderr, "[web] no loadable TOS — CPU running on nothing.\n");
     }
     if (!machine.loadDisk(diskPath))
-        std::fprintf(stderr, "[web] disquette introuvable (%s).\n", diskPath.c_str());
+        std::fprintf(stderr, "[web] floppy not found (%s).\n", diskPath.c_str());
     machine.mfp.setColorMonitor(true);  // couleur (basse rés) par défaut
+
+    // MODÈLE « PUSH » (comme le GUI et le headless) : on ARME l'horodatage des
+    // écritures du PSG et des transitions PLAY/STOP du son DMA. Dès lors chaque
+    // écriture porte son cycle DANS la trame, et produceAudioFrame les REJOUE à
+    // leur instant — c'est ce qui rend les digidrums, le sync-buzzer et les
+    // bruitages courts. Ces deux lignes ne sont pas un réglage : sans elles,
+    // synthesizeFrame rend le jeu de registres « audio » que plus rien ne met à
+    // jour, et la machine devient MUETTE.
+    machine.psg.setCycleClock([] { return g_machine->frameRelCycle(); });
+    machine.dmasnd.setCycleClock([] { return g_machine->frameRelCycle(); });
 
     // Bruits mécaniques du lecteur : le cœur émet des FdcSound, la page les joue
     // via Web Audio (cf. shell.html, window.neostDriveSound). Codes : 0 = moteur,
@@ -460,7 +707,7 @@ int main(int argc, char** argv) {
     glfwSetKeyCallback(g_window, onKey);
     glfwSetMouseButtonCallback(g_window, onMouseButton);
 
-    std::printf("[web] NeoST démarré. Clic = capture souris, Suppr (DEL) = libère.\n");
+    std::printf("[web] NeoST started. Click = capture mouse, DEL = release.\n");
 
     // fps=0 → requestAnimationFrame ; simulate_infinite_loop=1 → main() ne rend
     // pas la main (le cœur reste vivant via la Machine statique).

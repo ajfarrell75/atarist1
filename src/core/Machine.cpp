@@ -34,14 +34,15 @@ MachineType Machine::adjustMachineForTos(MachineType requested, const std::strin
     uint8_t b[2] = {0, 0};
     f.seekg(2);                               // version TOS : mot big-endian à l'offset 2
     f.read(reinterpret_cast<char*>(b), 2);
+    if (f.gcount() != 2) return requested;    // fichier tronqué/illisible → loadTos signalera
     const uint16_t tosVer = uint16_t((b[0] << 8) | b[1]);
     // TOS <= 1.04 (TOS 1.0x ; EmuTOS 192 Ko se présente en « Atari ST » 1.4) ne gère ni
     // le STE ni le Mega STE → Hatari bascule en mode ST. machineIsSte() = STE || Mega STE
     // (le Mega ST tourne nativement sous TOS 1.0x, donc PAS de bascule).
     if (tosVer <= 0x0104 && machineIsSte(requested)) {
         std::fprintf(stderr,
-            "[NeoST] TOS %X.%02X ne fonctionne qu'en mode ST (68000) — bascule %s -> ST.\n"
-            "        Pour le STE/Mega STE, utiliser EmuTOS 256 Ko (etos256*) ou TOS 1.62/2.06.\n",
+            "[NeoST] TOS %X.%02X only runs in ST mode (68000) — switching %s -> ST.\n"
+            "        For STE/Mega STE, use EmuTOS 256 KB (etos256*) or TOS 1.62/2.06.\n",
             tosVer >> 8, tosVer & 0xFF, machineName(requested));
         return MachineType::St;
     }
@@ -53,8 +54,8 @@ MachineType Machine::adjustMachineForTos(MachineType requested, const std::strin
     // aucun moyen de comprendre. Hatari bascule en STE et boote ; on fait pareil.
     if ((tosVer == 0x0106 || tosVer == 0x0162) && requested != MachineType::Ste) {
         std::fprintf(stderr,
-            "[NeoST] TOS %X.%02X est une ROM STE exclusivement — bascule %s -> STE.\n"
-            "        (sur ST, son nettoyage RAM déborde et halte le CPU : écran figé)\n",
+            "[NeoST] TOS %X.%02X is an STE-only ROM — switching %s -> STE.\n"
+            "        (on ST its RAM clear overruns and halts the CPU: frozen screen)\n",
             tosVer >> 8, tosVer & 0xFF, machineName(requested));
         return MachineType::Ste;
     }
@@ -65,8 +66,8 @@ MachineType Machine::adjustMachineForTos(MachineType requested, const std::strin
     // = écran vide, alors que STE + 1.62 fonctionne).
     if (tosVer < 0x0200 && requested == MachineType::MegaSte) {
         std::fprintf(stderr,
-            "[NeoST] TOS %X.%02X ne gère pas le Mega STE (cache/SCU/16 MHz) — bascule Mega STE -> STE.\n"
-            "        Pour un vrai Mega STE, utiliser TOS 2.06 (tos206*) ou EmuTOS 256 Ko (etos256*).\n",
+            "[NeoST] TOS %X.%02X does not support the Mega STE (cache/SCU/16 MHz) — switching Mega STE -> STE.\n"
+            "        For a real Mega STE, use TOS 2.06 (tos206*) or EmuTOS 256 KB (etos256*).\n",
             tosVer >> 8, tosVer & 0xFF);
         return MachineType::Ste;
     }
@@ -123,6 +124,18 @@ Machine::Machine(std::size_t ramBytes, CpuCore cpuCore, MachineType machine)
     // Horloge LIVE dans la trame (delta intra-quantum CPU inclus) : date au cycle
     // près chaque écriture palette pour le re-rendu spec512 (cf. Shifter::finishFrame).
     shifter.setLiveFrameClock([this] { return sched.liveNow() - frameStart_; });
+    // DEBUG (NEOST_WATCH=hex) : trace datée [WATCH] des écritures RAM dans
+    // [base, base+0x300) — pendant NeoST du tracking Hatari
+    // « b ($addr).w ! ($addr).w :trace » (chantier Closure, remplisseur de listes).
+    if (const char* w = std::getenv("NEOST_WATCH")) {
+        bus.watchBase_ = static_cast<uint32_t>(std::strtoul(w, nullptr, 16));
+        bus.watchHook = [this](uint32_t addr, uint8_t v) {
+            const int64_t fc = sched.liveNow() - frameStart_;
+            std::fprintf(stderr, "[WATCH] fc=%lld line=%lld cyc=%lld addr=%06x val=%02x pc=%06x\n",
+                static_cast<long long>(fc), static_cast<long long>(fc / cpl_),
+                static_cast<long long>(fc % cpl_), addr, v, cpu.pc());
+        };
+    }
     // Horloge RTC : cycle CPU ABSOLU exact, même au milieu d'une lecture MMIO.
     // L'horloge maîtresse est désormais le cœur (busClockNow), conduit par sync().
     rtc.setClock([this] { return g_blockDispatch ? (sched.now() + cpu.cyclesRunInQuantum()) : cpu.busClockNow(); });
@@ -291,6 +304,9 @@ void Machine::installSchedulerCallbacks() {
     // Idem pour l'ACIA MIDI (~1 octet à 31250 bauds = 2560 cycles) : cadence l'IRQ
     // d'émission des séquenceurs MIDI (cf. MidiAcia::onTxEmpty).
     sched.setCallback(Scheduler::MIDI_TX, [this] { midi.onTxEmpty(); cpu.updateIpl(); });
+    // Livraison cadencée d'un octet RX à l'USART MFP (injection hôte : modem
+    // Hayes, FujiNet RS-232) : RxFull (canal 12) par octet, au débit configuré.
+    sched.setCallback(Scheduler::SERIAL_RX, [this] { mfp.onSerialRxEvent(); cpu.updateIpl(); });
     // Étape de shift série Microwire ($FF8922 → 0) du son STE.
     sched.setCallback(Scheduler::MICROWIRE, [this] { dmasnd.onMicrowireShift(); });
     // Tranche non-hog du blitter (64 accès bus / 64 accès CPU) : la fin de blit
@@ -336,7 +352,8 @@ void Machine::scheduleFrameEvents() {
     // Timer B : événement à CHAQUE scanline (comme le HBL) ; le tic n'est compté que
     // si la ligne est réellement AFFICHÉE d'après la machine Glue LIVE (cf. onTimerB) —
     // un retrait de bordure haut/bas en cours de trame déplace les tics, comme Hatari.
-    sched.schedule(Scheduler::TIMER_B, frameStart_ + timerBPos());
+    tbScheduledAt_ = frameStart_ + timerBPos();
+    sched.schedule(Scheduler::TIMER_B, tbScheduledAt_);
     // Position de l'IRQ HBL dans la ligne : Hatari HBL_VIDEO_CYCLE_OFFSET = 0 →
     // l'interruption tombe à la FRONTIÈRE de ligne (cycle 512 = 0 de la suivante).
     // L'ancien −4 était une calibration d'avant la refonte IACK (2026-07-02) ;
@@ -388,19 +405,63 @@ void Machine::onRender() {
 }
 
 void Machine::onTimerB() {
+    // DIAG (NEOST_TB_TRACE=1) : chaque tic Timer B avec sa ligne, sa position DANS
+    // la ligne et s'il a réellement pulsé (ligne affichée) — à diff'er contre les
+    // « EndLine TB » de Hatari --trace video_hbl (chantier Closure : la démo
+    // chronomètre les événements TB, cf. docs/CLOSURE_CHANTIER.md).
     // Timer B en event-count : décompte une fois par ligne AFFICHÉE (sur DE). La
     // fenêtre verticale est LIVE (machine Glue) : un retrait de bordure haut (60 Hz
     // vers la ligne 33 → VDE_On 34) ou bas en COURS de trame ajoute ses tics, comme
     // Hatari (Video_AddInterruptTimerB par ligne) — Enchanted Land VÉRIFIE l'effet
     // de ses impulsions en comptant les événements DE. tbLine_ = scanline ABSOLUE.
+    // Position CIBLE au moment du callback : le DE de la ligne a pu être élargi par
+    // une écriture POSTÉRIEURE à la planification (retrait de bordure droite : 60 Hz
+    // à ~cyc 374 → DE_end 462 → tic à ~488). Hatari REPROGRAMME l'IRQ TB à chaque
+    // écriture qui change le DE (Video_AddInterruptTimerB, video.c:2880-2891) ; ici
+    // on re-vérifie à l'arrivée : cible plus loin → on se replanifie SANS tirer.
+    // (Un DE raccourci après coup laisse le tic à l'ancienne position — même
+    // approximation que la reprogrammation tardive d'Hatari quand le tic est passé.)
+    {
+        const int64_t real = shifter.timerBFrameCycleForLine(tbLine_, mfp.timerBStartOfLine());
+        const int64_t target = (real >= 0)
+            ? frameStart_ + real
+            : frameStart_ + static_cast<int64_t>(tbLine_) * cpl_ + timerBPosLine(tbLine_) - lineCarry_;
+        // Comparer à l'ÉCHÉANCE PLANIFIÉE, pas à l'heure de service : pendant un
+        // STOP (la mesure de Closure vit sous stop #$2100), le réveil est
+        // quantifié et le callback peut être servi des dizaines de cycles APRÈS
+        // son échéance — « now ≥ target » concluait alors à tort que la cible
+        // était passée, et le tic partait à la position par défaut (400) alors
+        // que la Glue affichait 487 (mesuré : 310 tics sur 1344 chez Closure).
+        if (tbScheduledAt_ < target) {
+            tbScheduledAt_ = target;
+            sched.schedule(Scheduler::TIMER_B, target);
+            return;
+        }
+    }
+    static const bool tbTrace = std::getenv("NEOST_TB_TRACE") != nullptr;
+    if (tbTrace) {
+        const int64_t pos = sched.now() - frameStart_
+                          - static_cast<int64_t>(tbLine_) * cpl_ + lineCarry_;
+        // posLine = ce que voit la Glue MAINTENANT (déclenche le catch-up) ; le
+        // delta pos↔posLine au tir révèle les tics partis avant leur re-cible.
+        const int pl = timerBPosLine(tbLine_);
+        std::fprintf(stderr, "[TB] line=%d pos=%lld posLine=%d fired=%d\n",
+                     tbLine_, (long long)pos, pl, shifter.liveLineDisplayed(tbLine_) ? 1 : 0);
+    }
     if (shifter.liveLineDisplayed(tbLine_)) {
         mfp.hblank();
         cpu.updateIpl();                           // un underflow Timer B → IPL 6
     }
     ++tbLine_;
-    if (tbLine_ < lpf_)
-        sched.schedule(Scheduler::TIMER_B,                         // position recalculée → suit
-                       frameStart_ + static_cast<int64_t>(tbLine_) * cpl_ + timerBPos() - lineCarry_);
+    if (tbLine_ < lpf_) {
+        // Grille RÉELLE si disponible (cf. timerBFrameCycleForLine) ; sinon nominale.
+        // La position sera de toute façon RE-VÉRIFIÉE au callback (bloc ci-dessus).
+        const int64_t real = shifter.timerBFrameCycleForLine(tbLine_, mfp.timerBStartOfLine());
+        tbScheduledAt_ = (real >= 0)
+            ? frameStart_ + real
+            : frameStart_ + static_cast<int64_t>(tbLine_) * cpl_ + timerBPosLine(tbLine_) - lineCarry_;
+        sched.schedule(Scheduler::TIMER_B, tbScheduledAt_);
+    }
 }
 
 void Machine::onHbl() {
@@ -589,11 +650,12 @@ static uint32_t cartFingerprint(const std::vector<uint8_t>& cart) {
 static uint32_t stateCrc32(const uint8_t* p, std::size_t n);   // défini plus bas
 void Machine::serializeState(StateArchive& ar) {
     uint32_t magic   = 0x4E535453u;   // 'NSTS'
-    uint16_t version = 9;             // v9 : + lineScrollSnap_ (scroll fin STE par ligne,
-                                      // renderGlueFrame per-line) ; v8 : empreinte cartouche
-                                      // INSENSIBLE aux octets mutés par le HD GEMDOS + CTS/DCD
-                                      // actives au repos ; v7 : + empreinte GEMDOS/cartouche et
-                                      // cart sérialisée ; v6 : + commitAnchor_
+    uint16_t version = 10;            // v10 : + FujiDevice + Acsi::fujiPending_ + flag bit1
+                                      // FujiNet ; v9 : + lineScrollSnap_ (scroll fin STE par
+                                      // ligne, renderGlueFrame per-line) ; v8 : empreinte
+                                      // cartouche INSENSIBLE aux octets mutés par le HD GEMDOS
+                                      // + CTS/DCD actives au repos ; v7 : + empreinte GEMDOS/
+                                      // cartouche et cart sérialisée ; v6 : + commitAnchor_
     ar(magic); ar(version);
     // Empreinte de configuration : un état n'est rechargeable QUE dans la même
     // config (loadState la vérifie AVANT de restaurer — sinon machine hybride :
@@ -612,7 +674,13 @@ void Machine::serializeState(StateArchive& ar) {
     //    dans le décor. Tant que ce composant n'est pas sérialisable, on REFUSE.
     //  · empreinte de la cartouche : le port $FA0000 n'est peuplé que si une cartouche
     //    est montée, et la RAM restaurée peut y pointer.
-    uint8_t flags = uint8_t(gemdos.active() ? 1u : 0u);
+    //  · bit1 = FujiNet attaché (v10). L'état du protocole EST sérialisé (FujiDevice),
+    //    mais les canaux réseau du backend ne survivent pas — recharger entre une
+    //    session avec et une session sans laisserait la cible ACSI muette/bavarde.
+    //  · bit2 = EtherNEC attaché (v10). Idem : le pointeur bus.ne2000 est réétabli
+    //    par enableEtherNec avant un load, pas par la sérialisation.
+    uint8_t flags = uint8_t((gemdos.active() ? 1u : 0u) | (fuji.enabled() ? 2u : 0u)
+                            | (ne2000.enabled() ? 4u : 0u));
     uint32_t cartFp = cartFingerprint(bus.cart);
     ar(flags); ar(cartFp);
     // CRC32 du payload (tout ce qui suit ce champ) : écrit par saveState (patch à
@@ -679,7 +747,18 @@ void Machine::serializeState(StateArchive& ar) {
     midi.serialize(ar);     mapAt("rtc",     ar.saveSize());
     rtc.serialize(ar);      mapAt("fdc",     ar.saveSize());
     fdc.serialize(ar);      mapAt("scc",     ar.saveSize());   // inclut l'ACSI
-    scc.serialize(ar);      mapAt("fin",     ar.saveSize());   // SCC Z85C30 (Mega STE)
+    scc.serialize(ar);      mapAt("fuji",    ar.saveSize());   // SCC Z85C30 (Mega STE)
+    fuji.serialize(ar);     mapAt("ne2000",  ar.saveSize());   // FujiNet virtuel (v10)
+    ne2000.serialize(ar);   mapAt("fin",     ar.saveSize());   // NE2000/EtherNEC (v10)
+    if (ar.loading()) {
+        // tbScheduledAt_ n'est pas dans le flux : chaque schedule(TIMER_B) lui est
+        // apparié, donc il se re-dérive de l'échéance restaurée. Le laisser à la
+        // valeur de la SESSION COURANTE faussait le test « tbScheduledAt_ < target »
+        // d'onTimerB après chargement d'un état pris en cours de trame (tic Timer B
+        // parti à la mauvaise position → une ligne raster décalée).
+        const int64_t rem = sched.rawCyclesUntil(Scheduler::TIMER_B);
+        tbScheduledAt_ = (rem == INT64_MIN) ? 0 : sched.now() + rem;
+    }
 }
 
 // En-tête d'un .state v7 : magic(4) version(2) machine(1) ram(4) tos(2) flags(1)
@@ -719,9 +798,9 @@ bool Machine::loadState(const uint8_t* data, std::size_t n) {
     uint32_t magic;   std::memcpy(&magic, data, 4);
     uint16_t version; std::memcpy(&version, data + 4, 2);
     if (magic != 0x4E535453u) return false;
-    if (version != 9) {
-        std::fprintf(stderr, "[state] refusé : format v%u non supporté (cette version "
-                     "de NeoST écrit du v9) — re-sauver l'état avec F5\n", version);
+    if (version != 10) {
+        std::fprintf(stderr, "[state] rejected: unsupported format v%u (this build of "
+                     "NeoST writes v10) — re-save the state with F5\n", version);
         return false;
     }
     uint8_t  mt    = data[6];
@@ -729,30 +808,33 @@ bool Machine::loadState(const uint8_t* data, std::size_t n) {
     uint16_t tosV;  std::memcpy(&tosV, data + 11, 2);
     if (mt != static_cast<uint8_t>(machineType_) || ramSz != bus.ram.size()
         || tosV != bus.tosVersion) {
-        std::fprintf(stderr, "[state] refusé : l'état a été sauvé sur une autre config "
-                     "(machine %u/RAM %u Ko/TOS %03x vs session %u/%zu Ko/%03x)\n",
+        std::fprintf(stderr, "[state] rejected: the state was saved on a different config "
+                     "(machine %u/RAM %u KB/TOS %03x vs session %u/%zu KB/%03x)\n",
                      mt, ramSz / 1024u, tosV, unsigned(machineType_),
                      bus.ram.size() / 1024u, bus.tosVersion);
         return false;
     }
     const uint8_t  flags  = data[13];
     uint32_t cartFp; std::memcpy(&cartFp, data + 14, 4);
-    const uint8_t  curFlags  = uint8_t(gemdos.active() ? 1u : 0u);
+    const uint8_t  curFlags  = uint8_t((gemdos.active() ? 1u : 0u) | (fuji.enabled() ? 2u : 0u)
+                                       | (ne2000.enabled() ? 4u : 0u));
     const uint32_t curCartFp = cartFingerprint(bus.cart);
     if (flags != curFlags) {
-        std::fprintf(stderr, "[state] refusé : HD GEMDOS %s à la sauvegarde et %s "
-                     "maintenant (l'état du HD n'est pas sérialisable)\n",
-                     (flags & 1) ? "actif" : "inactif", curFlags ? "actif" : "inactif");
+        std::fprintf(stderr, "[state] rejected: peripheral config mismatch — GEMDOS HD "
+                     "%s->%s, FujiNet %s->%s, EtherNEC %s->%s (these must match the save)\n",
+                     (flags & 1) ? "active" : "inactive", (curFlags & 1) ? "active" : "inactive",
+                     (flags & 2) ? "active" : "inactive", (curFlags & 2) ? "active" : "inactive",
+                     (flags & 4) ? "active" : "inactive", (curFlags & 4) ? "active" : "inactive");
         return false;
     }
     if (cartFp != curCartFp) {
-        std::fprintf(stderr, "[state] refusé : la cartouche montée n'est pas celle de "
-                     "la sauvegarde (empreinte %08x vs %08x)\n", cartFp, curCartFp);
+        std::fprintf(stderr, "[state] rejected: the mounted cartridge is not the one from "
+                     "the save (fingerprint %08x vs %08x)\n", cartFp, curCartFp);
         return false;
     }
     uint32_t crc; std::memcpy(&crc, data + kStateCrcOffset, 4);
     if (crc != stateCrc32(data + kStateHeaderSize, n - kStateHeaderSize)) {
-        std::fprintf(stderr, "[state] refusé : CRC du payload invalide (fichier corrompu)\n");
+        std::fprintf(stderr, "[state] rejected: invalid payload CRC (corrupt file)\n");
         return false;
     }
     // Filet de sécurité : un load qui échoue à MI-restauration (ok_=false — champ
@@ -770,7 +852,7 @@ bool Machine::loadState(const uint8_t* data, std::size_t n) {
     if (!ok) {
         StateArchive rb = StateArchive::loader(backup.data(), backup.size());
         serializeState(rb);
-        std::fprintf(stderr, "[state] fichier tronqué/incohérent — état de la session restauré\n");
+        std::fprintf(stderr, "[state] truncated/inconsistent file — session state restored\n");
         return false;
     }
     return true;

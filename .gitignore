@@ -20,12 +20,18 @@ compile_commands.json
 *.dll
 *.exe
 *.dSYM/
-neost
-neost-headless
+# Ancrés à la RACINE : la règle nue « neost » ignorait AUSSI tout chemin contenant
+# un composant de ce nom — dont packaging/android/.../java/net/gistlabs/neost/,
+# le paquet Java d'Android (piège trouvé au dry-run d'un commit).
+/neost
+/neost-headless
 
 # Fichiers locaux de l'emulateur / GUI
 imgui.ini
 neost.cfg
+# Profils de réglages nommés (Configuration → Profiles) : configurations de
+# l'utilisateur, au même format que neost.cfg — donc pas plus suivies que lui.
+profiles/
 *.state
 *.ppm
 !tests/reference/*.ppm
@@ -57,3 +63,14 @@ extern/spsdeclib_*/
 
 # capsimg (licence SPS non-commerciale — non redistribuable, non compilé)
 extern/capsimg/
+
+# SDL2 (couche plateforme Android, cf. packaging/android/fetch_sdl.sh)
+extern/SDL2/
+
+# Assets du paquet Android : copiés depuis roms/ et disks/ par stage_assets.sh
+packaging/android/app/src/main/assets/
+packaging/android/local.properties
+packaging/android/.gradle/
+packaging/android/app/build/
+packaging/android/app/.cxx/
+packaging/android/build/

@@ -23,7 +23,7 @@
 #include <fstream>
 #include <functional>
 
-#include <sys/stat.h>
+#include <filesystem>
 
 // --- Bits DMA control ($FF8606), cf. EmuTOS bios/dma.h -----------------------
 enum : uint16_t {
@@ -294,7 +294,7 @@ static bool decodeMsa(const std::vector<uint8_t>& raw, std::vector<uint8_t>& out
                         // Sans lui, out dépasse target et TOUTE l'image est rejetée →
                         // repli en .st brut INSCRIPTIBLE, qui écrase le fichier source.
                         if (out.size() + cnt > target) {
-                            std::fprintf(stderr, "[FDC] .msa : run RLE trop long → tronqué (image douteuse)\n");
+                            std::fprintf(stderr, "[FDC] .msa: RLE run too long → truncated (dubious image)\n");
                             cnt = target - out.size();
                         }
                         out.insert(out.end(), cnt, val);
@@ -461,18 +461,18 @@ bool Fdc::msaSelfTest() {
             for (std::size_t i = 0; i < n; ++i) src[i] = m.f(i);
             std::vector<uint8_t> enc, dec;
             if (!encodeMsa(src, g.spt, g.sides, enc)) {
-                std::fprintf(stderr, "[msa-selftest] FAIL encode %d spt/%d faces/%d pistes « %s »\n",
+                std::fprintf(stderr, "[msa-selftest] FAIL encode %d spt/%d sides/%d tracks \"%s\"\n",
                              g.spt, g.sides, g.tracks, m.nom); ++fail; continue;
             }
             if (!decodeMsa(enc, dec)) {
-                std::fprintf(stderr, "[msa-selftest] FAIL decode %d spt/%d faces/%d pistes « %s » "
-                                     "(%zu o encodés)\n", g.spt, g.sides, g.tracks, m.nom, enc.size());
+                std::fprintf(stderr, "[msa-selftest] FAIL decode %d spt/%d sides/%d tracks \"%s\" "
+                                     "(%zu B encoded)\n", g.spt, g.sides, g.tracks, m.nom, enc.size());
                 ++fail; continue;
             }
             if (dec != src) {
                 std::size_t at = 0; while (at < dec.size() && at < src.size() && dec[at] == src[at]) ++at;
-                std::fprintf(stderr, "[msa-selftest] FAIL aller-retour %d spt/%d faces/%d pistes "
-                                     "« %s » : %zu o != %zu o, 1er écart à %zu\n",
+                std::fprintf(stderr, "[msa-selftest] FAIL round-trip %d spt/%d sides/%d tracks "
+                                     "\"%s\": %zu B != %zu B, first mismatch at %zu\n",
                              g.spt, g.sides, g.tracks, m.nom, dec.size(), src.size(), at);
                 ++fail; continue;
             }
@@ -497,7 +497,7 @@ bool Fdc::msaSelfTest() {
             std::vector<uint8_t> file;
             if (c.format == FloppyDisk::FMT_MSA) {
                 if (!encodeMsa(src, spt, sides, file)) {
-                    std::fprintf(stderr, "[msa-selftest] FAIL fichier %s : encodage\n", c.nom);
+                    std::fprintf(stderr, "[msa-selftest] FAIL file %s: encoding\n", c.nom);
                     ++fail; continue;
                 }
             } else {                                   // .dim : en-tête 32 o + secteurs bruts
@@ -511,16 +511,16 @@ bool Fdc::msaSelfTest() {
 
             // Sur le lecteur B, pour ne pas déranger un éventuel disque en A.
             if (!loadImage(path, 1)) {
-                std::fprintf(stderr, "[msa-selftest] FAIL %s : montage refusé\n", c.nom);
+                std::fprintf(stderr, "[msa-selftest] FAIL %s: mount refused\n", c.nom);
                 ++fail; std::remove(path.c_str()); continue;
             }
             FloppyDisk& dk = drive_[1];
             if (dk.writeProtect) {                     // LE bug d'origine
-                std::fprintf(stderr, "[msa-selftest] FAIL %s : monté PROTÉGÉ EN ÉCRITURE "
-                                     "(le format ne doit plus forcer WPRT)\n", c.nom);
+                std::fprintf(stderr, "[msa-selftest] FAIL %s: mounted WRITE-PROTECTED "
+                                     "(the format must no longer force WPRT)\n", c.nom);
                 ++fail;
             } else if (dk.image != src) {
-                std::fprintf(stderr, "[msa-selftest] FAIL %s : contenu monté != source\n", c.nom);
+                std::fprintf(stderr, "[msa-selftest] FAIL %s: mounted content != source\n", c.nom);
                 ++fail;
             } else {
                 // Écriture d'un secteur au milieu de l'image, puis recopie hôte.
@@ -530,19 +530,19 @@ bool Fdc::msaSelfTest() {
                 std::vector<uint8_t> attendu = dk.image;
                 eject(1);
                 if (!loadImage(path, 1)) {
-                    std::fprintf(stderr, "[msa-selftest] FAIL %s : remontage refusé\n", c.nom);
+                    std::fprintf(stderr, "[msa-selftest] FAIL %s: remount refused\n", c.nom);
                     ++fail;
                 } else if (drive_[1].image != attendu) {
                     std::size_t at = 0; const auto& g = drive_[1].image;
                     while (at < g.size() && at < attendu.size() && g[at] == attendu[at]) ++at;
-                    std::fprintf(stderr, "[msa-selftest] FAIL %s : écriture non persistée "
-                                         "(1er écart à %zu, attendu %02x lu %02x)\n", c.nom, at,
+                    std::fprintf(stderr, "[msa-selftest] FAIL %s: write not persisted "
+                                         "(first mismatch at %zu, expected %02x got %02x)\n", c.nom, at,
                                  at < attendu.size() ? attendu[at] : 0,
                                  at < g.size() ? g[at] : 0);
                     ++fail;
                 } else {
-                    std::fprintf(stderr, "[msa-selftest] fichier %s : montage inscriptible + "
-                                         "écriture persistée OK\n", c.nom);
+                    std::fprintf(stderr, "[msa-selftest] file %s: writable mount + "
+                                         "persisted write OK\n", c.nom);
                     ++ok;
                 }
             }
@@ -559,14 +559,14 @@ bool Fdc::loadImage(const std::string& path, int drive) {
     FloppyDisk& dk = drive_[drive & 1];
     const bool wasPresent = dk.present();   // disque déjà monté → échange à chaud
     std::ifstream f(path, std::ios::binary | std::ios::ate);
-    if (!f) { std::fprintf(stderr, "[FDC] image introuvable : %s\n", path.c_str()); return false; }
+    if (!f) { std::fprintf(stderr, "[FDC] image not found: %s\n", path.c_str()); return false; }
     const std::streamsize n = f.tellg();
     // tellg() peut renvoyer -1 (taille indéterminable) OU 2^63-1 (répertoire sous
     // Linux, qui N'EST PAS -1) → allocation géante. Borne haute large : les plus
     // grosses images légitimes (STX multi-révolutions) font ~3 Mo.
     constexpr std::streamsize kMaxImage = 8 * 1024 * 1024;
     if (n <= 0 || n > kMaxImage) {
-        std::fprintf(stderr, "[FDC] image invalide (%lld o, max %lld o) : %s\n",
+        std::fprintf(stderr, "[FDC] invalid image (%lld B, max %lld B): %s\n",
                      static_cast<long long>(n), static_cast<long long>(kMaxImage), path.c_str());
         return false;
     }
@@ -578,7 +578,7 @@ bool Fdc::loadImage(const std::string& path, int drive) {
     // silence et montée comme valide — le joueur voyait une disquette illisible sans
     // savoir pourquoi. StxImage::loadWd1772 fait déjà ce contrôle.
     if (f.gcount() != n) {
-        std::fprintf(stderr, "[FDC] lecture incomplète (%lld/%lld o) : %s\n",
+        std::fprintf(stderr, "[FDC] incomplete read (%lld/%lld B): %s\n",
                      static_cast<long long>(f.gcount()), static_cast<long long>(n), path.c_str());
         return false;
     }
@@ -590,7 +590,7 @@ bool Fdc::loadImage(const std::string& path, int drive) {
     if (raw.size() > 4 && raw[0] == 'R' && raw[1] == 'S' && raw[2] == 'Y' && raw[3] == 0) {
         auto stx = std::make_unique<StxImage>();
         if (!stx->parse(std::move(raw))) {
-            std::fprintf(stderr, "[FDC] image STX illisible : %s — non montée.\n", path.c_str());
+            std::fprintf(stderr, "[FDC] unreadable STX image: %s — not mounted.\n", path.c_str());
             return false;
         }
         dk.image.clear();
@@ -617,9 +617,9 @@ bool Fdc::loadImage(const std::string& path, int drive) {
         }
         dk.wd1772Path += ".wd1772";
         if (dk.stx->loadWd1772(dk.wd1772Path))
-            std::fprintf(stderr, "[FDC] écritures restaurées : %s (%zu secteur(s), %zu piste(s))\n",
+            std::fprintf(stderr, "[FDC] writes restored: %s (%zu sector(s), %zu track(s))\n",
                          dk.wd1772Path.c_str(), dk.stx->saveSectors.size(), dk.stx->saveTracks.size());
-        std::fprintf(stderr, "[FDC] lecteur %c : %s (STX, %d pistes, %d face(s))\n",
+        std::fprintf(stderr, "[FDC] drive %c: %s (STX, %d tracks, %d side(s))\n",
                      drive & 1 ? 'B' : 'A', path.c_str(), tps, dk.sides);
         return true;
     }
@@ -641,11 +641,11 @@ bool Fdc::loadImage(const std::string& path, int drive) {
     if (decodeMsa(raw, conv)) {
         dk.image = std::move(conv);
         dk.imgFormat = FloppyDisk::FMT_MSA;
-        std::fprintf(stderr, "[FDC] image .msa décompressée : %s\n", path.c_str());
+        std::fprintf(stderr, "[FDC] .msa image decompressed: %s\n", path.c_str());
     } else if (decodeDim(raw, conv)) {
         dk.image = std::move(conv);
         dk.imgFormat = FloppyDisk::FMT_DIM;
-        std::fprintf(stderr, "[FDC] image .dim (en-tête 32 o retiré) : %s\n", path.c_str());
+        std::fprintf(stderr, "[FDC] .dim image (32 B header stripped): %s\n", path.c_str());
     } else {
         // Un en-tête .msa PLAUSIBLE (mêmes contrôles que decodeMsa) qui ne se décode
         // pas ne doit surtout pas repartir en « .st brut inscriptible » : dk.raw
@@ -668,11 +668,11 @@ bool Fdc::loadImage(const std::string& path, int drive) {
         dk.image = std::move(raw);               // .st brut
         dk.raw   = !msaLike && !dimLike;
         if (msaLike)
-            std::fprintf(stderr, "[FDC] %s : en-tête .msa mais décompression impossible — "
-                                 "monté BRUT en LECTURE SEULE (image douteuse)\n", path.c_str());
+            std::fprintf(stderr, "[FDC] %s: .msa header but decompression failed — "
+                                 "mounted RAW and READ-ONLY (dubious image)\n", path.c_str());
         else if (dimLike)
-            std::fprintf(stderr, "[FDC] %s : en-tête .dim mais géométrie incohérente — "
-                                 "monté BRUT en LECTURE SEULE (image douteuse)\n", path.c_str());
+            std::fprintf(stderr, "[FDC] %s: .dim header but inconsistent geometry — "
+                                 "mounted RAW and READ-ONLY (dubious image)\n", path.c_str());
     }
 
     // Géométrie : BPB recoupé avec la taille réelle de l'image (cf. Hatari
@@ -704,17 +704,22 @@ bool Fdc::loadImage(const std::string& path, int drive) {
     // alors que la même disquette en .st fonctionnait.
     // `!dk.raw` subsiste pour le seul cas où l'on ne SAIT PAS ré-encoder : STX, ou
     // en-tête .msa/.dim reconnu mais indécodable. Y écrire détruirait le fichier.
-    struct stat st;
-    const bool writable = (::stat(path.c_str(), &st) == 0) && (st.st_mode & S_IWUSR);
+    // Permission d'écriture du PROPRIÉTAIRE, via std::filesystem : <sys/stat.h>
+    // manque hors POSIX, et sous Windows l'implémentation reflète l'attribut
+    // « lecture seule » dans owner_write — même sémantique qu'Hatari.
+    std::error_code stec;
+    const std::filesystem::perms pm = std::filesystem::status(path, stec).permissions();
+    const bool writable = !stec &&
+        (pm & std::filesystem::perms::owner_write) != std::filesystem::perms::none;
     dk.writeProtect = !dk.raw || !writable;
 
     // Densité déduite de la géométrie (18 spt → HD 1,44 Mo, 36 spt → ED) — sur
     // Mega STE, TOS doit accorder $FF860E à cette densité pour lire le disque.
     updateFloppyDensity(drive & 1);
-    std::fprintf(stderr, "[FDC] lecteur %c : %s (%zu Ko, %d secteurs/piste, %d faces%s%s)\n",
+    std::fprintf(stderr, "[FDC] drive %c: %s (%zu KB, %d sectors/track, %d sides%s%s)\n",
                  drive & 1 ? 'B' : 'A', path.c_str(), dk.image.size() / 1024, dk.spt, dk.sides,
                  dk.density == 4 ? ", ED" : dk.density == 2 ? ", HD" : "",
-                 dk.writeProtect ? ", protégé en écriture" : "");
+                 dk.writeProtect ? ", write-protected" : "");
     return true;
 }
 
@@ -731,7 +736,7 @@ void Fdc::eject(int drive) {
         dk.transitionPhase    = FloppyDisk::TRANS_EJECT;
         dk.transitionDeadline = sched_->now() + 4 * 160256;
     }
-    std::fprintf(stderr, "[FDC] lecteur %c éjecté\n", drive & 1 ? 'B' : 'A');
+    std::fprintf(stderr, "[FDC] drive %c ejected\n", drive & 1 ? 'B' : 'A');
 }
 
 // =============================================================================
@@ -1001,8 +1006,8 @@ int Fdc::applyFastFdc(int fdcCycles) const {
             static bool warned = false;
             if (!warned) {
                 warned = true;
-                std::fprintf(stderr, "[FDC] image STX (protections à mesure de temps) : "
-                                     "FDC rapide neutralisé pour ce lecteur\n");
+                std::fprintf(stderr, "[FDC] STX image (timing-based protections): "
+                                     "fast FDC disabled for this drive\n");
             }
             return fdcCycles;
         }
@@ -1250,9 +1255,9 @@ void Fdc::writeBack(FloppyDisk& dk, uint64_t off, uint64_t len) {
         // qu'à l'éjection — une coupure y perd la partie sauvegardée).
         std::vector<uint8_t> enc;
         if (!encodeMsa(dk.image, dk.spt, dk.sides, enc)) {
-            std::fprintf(stderr, "[FDC] %s : ré-encodage .msa impossible (géométrie "
-                                 "%d spt × %d faces incompatible avec %zu o) — "
-                                 "écriture NON persistée\n",
+            std::fprintf(stderr, "[FDC] %s: cannot re-encode .msa (geometry "
+                                 "%d spt x %d sides incompatible with %zu B) — "
+                                 "write NOT persisted\n",
                          dk.path.c_str(), dk.spt, dk.sides, dk.image.size());
             return;
         }
@@ -1281,8 +1286,8 @@ void Fdc::writeBack(FloppyDisk& dk, uint64_t off, uint64_t len) {
     const uint64_t fileOff = off + (dk.imgFormat == FloppyDisk::FMT_DIM ? 32u : 0u);
     std::fstream f(dk.path, std::ios::binary | std::ios::in | std::ios::out);
     if (!f) {                        // image en lecture seule / FS virtuel non inscriptible
-        std::fprintf(stderr, "[FDC] %s : ouverture en écriture impossible — "
-                             "secteur NON persisté\n", dk.path.c_str());
+        std::fprintf(stderr, "[FDC] %s: cannot open for writing — "
+                             "sector NOT persisted\n", dk.path.c_str());
         return;
     }
     f.seekp(static_cast<std::streamoff>(fileOff));
@@ -1292,8 +1297,8 @@ void Fdc::writeBack(FloppyDisk& dk, uint64_t off, uint64_t len) {
     // silence — un disque plein laissait sinon une sauvegarde à moitié écrite sans
     // aucun signe (le .msa, lui, est atomique tmp+rename ci-dessus).
     if (!f.good())
-        std::fprintf(stderr, "[FDC] %s : écriture secteur incomplète à l'offset %llu "
-                             "(disque plein ?) — image possiblement corrompue\n",
+        std::fprintf(stderr, "[FDC] %s: incomplete sector write at offset %llu "
+                             "(disk full?) — image possibly corrupt\n",
                      dk.path.c_str(), static_cast<unsigned long long>(fileOff));
 }
 
@@ -1492,7 +1497,7 @@ void Fdc::stxPersist(FloppyDisk& dk) {
         static bool warned = false;
         if (!warned) {
             warned = true;
-            std::fprintf(stderr, "[FDC] écritures STX NON persistées (%s inaccessible)\n",
+            std::fprintf(stderr, "[FDC] STX writes NOT persisted (%s unreachable)\n",
                          dk.wd1772Path.c_str());
         }
     }
@@ -2511,7 +2516,11 @@ void Fdc::write8(uint32_t addr, uint8_t v) {
 
 // Réception d'un octet de commande ACSI (port de Acsi_WriteCommandByte).
 void Fdc::writeAcsi(uint32_t /*addr*/, uint8_t v) {
-    setIntrqLine(false);                   // efface l'IRQ HDC (réarmée si l'octet est accepté)
+    // Port de FDC_ClearHdcIRQ (fdc.c) : n'efface QUE la source HDC — la ligne
+    // INTRQ est partagée avec le FDC, la rabaisser inconditionnellement perdrait
+    // une IRQ disquette encore pendante (elle est réarmée si l'octet est accepté).
+    irqSignal_ &= ~IRQ_HDC;
+    if (irqSignal_ == 0) setIntrqLine(false);
     // La broche A1 de l'ACSI est câblée sur le bit de contrôle DMA_A0 (0x02) : 0 pour le
     // 1er octet du paquet (sélection cible + opcode), 1 pour les octets suivants. On
     // ignore A1 pour le 2e octet (byteCount==1), comme le vrai matériel (pilotes bogués).
@@ -2534,7 +2543,7 @@ void Fdc::writeAcsi(uint32_t /*addr*/, uint8_t v) {
         // acsiDmaTransfer) rapportait « erreur » au bit0 de $FF8606 après chaque
         // octet de commande accepté, y compris juste APRÈS un transfert réussi.
         dmaError_ = acsi_.dmaError();
-        setIntrqLine(true);
+        fdcSetIrq(IRQ_HDC);                // FDC_SetIRQ(FDC_IRQ_SOURCE_HDC) : source datée
     }
 }
 
@@ -2550,7 +2559,7 @@ void Fdc::acsiDmaTransfer() {
     // STMemory_CheckAreaType/SafeCopy en échec → bDmaError = true).
     const bool rangeOk = uint64_t(dmaAddr_) + uint64_t(len) <= bus_.ram.size();
     if (!rangeOk) {
-        std::fprintf(stderr, "[ACSI] DMA hors RAM : $%06x+%d — transfert sauté\n", dmaAddr_, len);
+        std::fprintf(stderr, "[ACSI] DMA outside RAM: $%06x+%d — transfer skipped\n", dmaAddr_, len);
     } else if (acsi_.isWrite()) {                                    // RAM → image
         std::vector<uint8_t> tmp(len);
         for (int i = 0; i < len; ++i) tmp[i] = bus_.dmaRead8(dmaAddr_ + uint32_t(i));
@@ -2565,5 +2574,5 @@ void Fdc::acsiDmaTransfer() {
     // dmaError_ (« erreur ») = l'erreur ACSI telle quelle. L'ancien `!` inversé
     // rapportait une erreur DMA après chaque transfert RÉUSSI.
     dmaError_ = acsi_.dmaError() || !rangeOk;
-    setIntrqLine(true);                  // IRQ HDC de fin de transfert
+    fdcSetIrq(IRQ_HDC);                  // IRQ HDC de fin de transfert (FDC_SetIRQ)
 }

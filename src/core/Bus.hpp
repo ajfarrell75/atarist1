@@ -18,6 +18,7 @@
 #include "io/StePads.hpp"
 #include <cstdint>
 #include <cstddef>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -33,6 +34,7 @@ class Rtc;
 class MidiAcia;
 class GemdosHd;
 class Scc;
+class Ne2000;
 // -----------------------------------------------------------------------------
 //  Plan mémoire de l'Atari ST (bus d'adresses 24 bits → 16 Mo adressables).
 //  Les constantes documentent le POURQUOI de chaque zone.
@@ -128,6 +130,10 @@ public:
         addr &= stmap::ADDR_MASK;
         // (pas de garde overlay : write8 n'en a jamais eu — l'overlay est une
         //  redirection de LECTURE, l'écriture va bien en RAM.)
+        // DEBUG (NEOST_WATCH=hex, cf. Machine.cpp) : trace datée des écritures dans
+        // [watchBase_, watchBase_+0x300) — l'équivalent du breakpoint tracking
+        // Hatari « b ($addr).w ! ($addr).w :trace ». Désarmé : un test de bool.
+        if (watchHook && addr - watchBase_ < 0x300u) watchHook(addr, v);
         if (addr < mmuFastLimit()) { ram[addr] = v; return; }
         write8Slow(addr, v);
     }
@@ -267,6 +273,9 @@ public:
     Rtc*     rtc     = nullptr;   // horloge RP5C15 ($FFFC21) — Mega ST / Mega STE
     MidiAcia* midi   = nullptr;   // ACIA MIDI ($FFFC04) — bouclage OUT→IN
     Cpu68k*  cpu     = nullptr;   // pour rafraîchir l'IPL après un accès MMIO
+    // Watch d'écriture (debug, cf. write8) : hook posé par Machine si NEOST_WATCH.
+    uint32_t watchBase_ = 0xFF000000u;
+    std::function<void(uint32_t, uint8_t)> watchHook;
     // Émulation disque dur GEMDOS (redirection des appels GEMDOS vers un dossier
     // hôte, port de Hatari gemdos.c). Non nul = HD GEMDOS actif : le CPU intercepte
     // alors les opcodes magiques de la cartouche système (cf. Cpu68k::run). Posé par
@@ -275,6 +284,10 @@ public:
     // Contrôleur série SCC Z85C30 ($FF8C80-$FF8C87) — Mega STE uniquement. IRQ niv5
     // vectorisée gatée par le SCU. Posé par Machine (Mega STE). Cf. io/Scc.hpp.
     Scc*     scc    = nullptr;
+    // Carte réseau NE2000 sur le port cartouche (EtherNEC — extension NeoST).
+    // Non nul + activée = les lectures dans $FA0000-$FBFFFF sont décodées comme
+    // accès EtherNEC AVANT la ROM cartouche. Posé par Machine. Cf. io/Ne2000.hpp.
+    Ne2000*  ne2000 = nullptr;
 
     // Profil machine : décide quel matériel optionnel répond (son DMA STE, etc.)
     // et où une bus error se produit. Posé par Machine. Défaut : 1040 STE.

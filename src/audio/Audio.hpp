@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "audio/SampleRing.hpp"
+#include "core/AudioMix.hpp"   // chaîne de mixage partagée (GUI / headless / web)
 
 class YM2149;
 class DriveSound;
@@ -75,8 +76,7 @@ private:
     // `n`, `sampleCarry_` sont comptés en FRAMES (par canal) ; ring_.available()/space()
     // comptent en floats → toujours convertir (×2 / ÷2) au passage de frontière.
     SampleRing         ring_{32768};     // SPSC entrelacé : ~340 ms de marge à 48 kHz stéréo
-    std::vector<float> scratch_;         // sortie stéréo entrelacée (2×frames) de produceFrame
-    std::vector<float> ymScratch_;       // voie YM mono intermédiaire (frames)
+    neost::FrameMixBuffers mixBuf_;      // tampons de la chaîne partagée (YM mono + sortie L/R)
     std::vector<float> driveScratch_;    // bruits lecteur mono intermédiaires (frames)
     uint32_t           rate_ = 48000;    // fréquence de sortie réelle du périphérique (frames/s)
     float              masterVol_ = 1.0f; // volume maître utilisateur (cf. setMasterVolume)
