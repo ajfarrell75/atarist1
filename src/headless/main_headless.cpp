@@ -105,7 +105,7 @@ void usage() {
         "  --from-cfg F      replay the GUI config (neost.cfg); later options override it\n"
         "  --dump-at N A L F raw dump of L bytes of RAM from $A (hex) after frame N → F\n"
         "  --screenshot PPM  dump the final framebuffer in PPM format\n"
-        "  rom               TOS image (default roms/etos192fr.img)\n");
+        "  rom               TOS image (default roms/etos192us.img)\n");
 }
 
 // =============================================================================
@@ -607,6 +607,10 @@ int main(int argc, char** argv) {
                 else if (ln.rfind("fujinet=", 0) == 0) fujinet = (v(ln, 8) == "1");
                 else if (ln.rfind("fujinet_target=", 0) == 0) fujinetTarget = std::atoi(v(ln, 15).c_str());
                 else if (ln.rfind("fujinet_host=", 0) == 0) { if (ln.size() > 13) fujinetHost = v(ln, 13); }
+                // Clé écrite par le GUI : liste de slots séparés par '|', slot 0 en tête.
+                else if (ln.rfind("fujinet_hosts=", 0) == 0) {
+                    if (ln.size() > 14) fujinetHost = v(ln, 14).substr(0, v(ln, 14).find('|'));
+                }
                 else if (ln.rfind("machine=", 0) == 0) machType   = parseMachine(v(ln, 8).c_str());
                 else if (ln.rfind("mem=", 0) == 0)     ramBytes   = parseRamBytes(v(ln, 4).c_str());
                 else if (ln.rfind("cpu=", 0) == 0)     cpuCore    = Cpu68k::parseCore(v(ln, 4).c_str());

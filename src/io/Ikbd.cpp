@@ -554,6 +554,16 @@ void Ikbd::resetHw() {
     // l'échéance IKBD_RX (octet en cours d'acheminement vers l'ACIA).
     rxPending_ = false;
     if (sched_) sched_->cancel(Scheduler::IKBD_RX);
+    // ACIA CLAVIER : reset.c:111 ACIA_Reset remet LES DEUX ACIA — même référence
+    // que MidiAcia::reset(). Sans quoi un TIE armé ($FFFC00 = $b6) survivait au
+    // Ctrl-Alt-Del : l'échéance IKBD_TX en vol re-levait l'IRQ TX dans le boot
+    // suivant et $FFFC04 gardait un statut périmé jusqu'à la re-programmation TOS.
+    control_ = 0;
+    txEnableInt_ = false;
+    tdre_ = true;
+    rdrf_ = false;
+    rxOverrun_ = ovrn_ = srRead_ = false;
+    if (sched_) sched_->cancel(Scheduler::IKBD_TX);
     bootRom();                       // IKBD_Boot_ROM(false) — reset à chaud
 }
 

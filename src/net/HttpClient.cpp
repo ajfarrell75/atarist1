@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cerrno>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -164,18 +165,22 @@ bool parseUrl(const std::string& url, Url& out) {
 namespace {
 
 // Lit la réponse complète (Connection: close) puis sépare en-têtes/corps.
-bool readAll(int fd, std::vector<uint8_t>& raw, std::string& err) {
+// Budget MURAL de 30 s (pas seulement d'inactivité) : un serveur qui égrène un
+// octet toutes les 4 s ne peut plus bloquer l'appelant indéfiniment.
+bool readAll(int fd, std::vector<uint8_t>& raw, std::string& err,
+             const std::atomic<bool>* cancel) {
     uint8_t tmp[8192];
-    int idleBudget = 30000;                       // budget total ~30 s
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
     while (true) {
-        const int rc = sockRecv(fd, tmp, int(sizeof tmp), 5000);
+        if (cancel && cancel->load()) { err = "canceled"; return !raw.empty(); }
+        const int rc = sockRecv(fd, tmp, int(sizeof tmp), 1000);
         if (rc == 0) return true;                 // fermeture propre
         if (rc == -1) { err = "recv error"; return !raw.empty(); }
-        if (rc == -2) {
-            idleBudget -= 5000;
-            if (idleBudget <= 0) { err = "timeout"; return !raw.empty(); }
-            continue;
+        if (std::chrono::steady_clock::now() >= deadline) {
+            err = "timeout";
+            return !raw.empty();
         }
+        if (rc == -2) continue;
         raw.insert(raw.end(), tmp, tmp + rc);
         if (raw.size() > 128u * 1024u * 1024u) { err = "response too large (>128MB)"; return false; }
     }
@@ -191,7 +196,9 @@ bool dechunk(const std::vector<uint8_t>& in, std::vector<uint8_t>& out) {
         const unsigned long n = std::strtoul(lenStr.c_str(), nullptr, 16);
         p = eol + 2;
         if (n == 0) return true;
-        if (p + n > in.size()) return false;
+        // Comparaison par soustraction (p ≤ in.size() ici) : `p + n` pouvait
+        // déborder avec une longueur hostile type ffffffffffffffff.
+        if (n > in.size() - p) return false;
         out.insert(out.end(), in.begin() + long(p), in.begin() + long(p + n));
         p += n + 2;                               // saute le CRLF du chunk
     }
@@ -203,8 +210,15 @@ std::string headerValue(const std::string& headers, const std::string& key) {
     for (char& c : lower) c = char(tolower(uint8_t(c)));
     std::string k = key + ":";
     for (char& c : k) c = char(tolower(uint8_t(c)));
-    const auto pos = lower.find(k);
-    if (pos == std::string::npos) return {};
+    // Ancré en début de ligne : sinon « Content-Location » matcherait « Location »
+    // (ou la clé pourrait être trouvée dans la VALEUR d'un autre en-tête).
+    std::size_t pos = 0;
+    while (true) {
+        pos = lower.find(k, pos);
+        if (pos == std::string::npos) return {};
+        if (pos == 0 || (pos >= 2 && lower[pos - 2] == '\r' && lower[pos - 1] == '\n')) break;
+        ++pos;
+    }
     auto s = pos + k.size();
     while (s < headers.size() && headers[s] == ' ') ++s;
     auto e = headers.find("\r\n", s);
@@ -214,7 +228,8 @@ std::string headerValue(const std::string& headers, const std::string& key) {
 } // namespace
 
 HttpResult httpFetch(const std::string& url, const std::string* postBody,
-                     const std::vector<std::string>* headers) {
+                     const std::vector<std::string>* headers,
+                     const std::atomic<bool>* cancel) {
     HttpResult r;
     std::string cur = url;
     for (int redirect = 0; redirect < 5; ++redirect) {
@@ -246,7 +261,7 @@ HttpResult httpFetch(const std::string& url, const std::string* postBody,
             return r;
         }
         std::vector<uint8_t> raw;
-        const bool okRead = readAll(fd, raw, r.error);
+        const bool okRead = readAll(fd, raw, r.error, cancel);
         sockClose(fd);
         if (!okRead && raw.empty()) return r;
 
