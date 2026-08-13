@@ -265,6 +265,10 @@ void Ne2000::serialize(StateArchive& ar) {
     if (ar.loading() && mem_.size() != std::size_t(kMemSize))
         mem_.assign(kMemSize, 0);
     ar.vec(mem_);
+    // Compat : un .state v10 pris SANS EtherNEC (bug d'époque : mem_ n'était allouée
+    // qu'au premier reset() de la carte) porte un vecteur de taille 0 — on ré-alloue
+    // au lieu de rejeter, la NIC désactivée n'ayant aucun contenu à restaurer.
+    if (ar.loading() && mem_.empty()) mem_.assign(kMemSize, 0);
     ar.check(mem_.size() == std::size_t(kMemSize), "Ne2000::mem_ taille inattendue");
     // Bornes de l'anneau : pstart_/pstop_/bnry_/curr_ indexent mem_ par *256 —
     // des valeurs forgées feraient déborder deliverFrame/remoteDma.

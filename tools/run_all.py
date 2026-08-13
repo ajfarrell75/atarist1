@@ -32,6 +32,11 @@ FAST = [
      [sys.executable, str(TOOLS / "run_selftests.py")]),
     ("Cycle-bench (auto-régression du modèle de cycle 68000)",
      [sys.executable, str(TOOLS / "run_cyclebench.py")]),
+    # Round-trip save-state en CONFIG PAR DÉFAUT : la régression v10 (mem_ NE2000
+    # vide → tout .state rejeté au chargement, F7 mort) a vécu des semaines sans
+    # qu'aucun palier ne la voie — ce verdict la rend impossible à reproduire.
+    ("Save-state round-trip (config par défaut)",
+     [str(HEADLESS), "roms/etos192us.img", "--frames", "30", "--save-state-test"]),
 ]
 FULL = FAST + [
     ("P2 provenance des références",

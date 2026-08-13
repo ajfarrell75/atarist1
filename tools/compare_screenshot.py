@@ -30,20 +30,24 @@ def _read_ppm(path: Path) -> tuple[int, int, bytes]:
     data = path.read_bytes()
     if data[:2] != b"P6":
         raise ValueError(f"{path} : PPM P6 attendu")
-    i = 2
-    while data[i : i + 1] != b"\n":
-        i += 1
-    i += 1
-    while data[i : i + 1] == b"#":
-        while data[i : i + 1] != b"\n":
+    # Bornées par len(data) : sur un en-tête TRONQUÉ (réf interrompue, pointeur
+    # git-LFS, disque plein), « data[i:i+1] != b'\n' » restait vrai pour toujours
+    # (tranche vide ≠ '\n') → le run d'étalons entier se figeait sans diagnostic.
+    n = len(data)
+
+    def skip_to_nl(i: int) -> int:
+        while i < n and data[i : i + 1] != b"\n":
             i += 1
-        i += 1
+        if i >= n:
+            raise ValueError(f"{path} : en-tête PPM tronqué")
+        return i + 1
+
+    i = skip_to_nl(2)
+    while data[i : i + 1] == b"#":
+        i = skip_to_nl(i)
     line_end = data.index(b"\n", i)
     w, h = map(int, data[i:line_end].split())
-    i = line_end + 1
-    while data[i : i + 1] != b"\n":
-        i += 1
-    i += 1
+    i = skip_to_nl(line_end + 1)
     px = data[i : i + w * h * 3]
     if len(px) != w * h * 3:
         raise ValueError(f"{path} : taille incohérente ({w}x{h})")

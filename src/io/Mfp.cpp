@@ -255,21 +255,33 @@ void Mfp::write8(uint32_t addr, uint8_t v) {
                    updateSerialConfig(); break;   // format du mot / prescaler (rs232.c:623)
         case 0x2F: timer_[0x2F] = v;                  // UDR : octet émis sur le port série
                    if (serialSink_) serialSink_(v);   // (RS-232). On le transmet aussitôt
+                   // TX : le buffer d'émission se vide dès l'octet parti (TX instantané) —
+                   // canaux 10 (buffer vide) et 9 (underrun) si le TRANSMETTEUR est activé
+                   // (TSR bit0 TE), branché ou non : Hatari lève TRN_BUF_EMPTY à CHAQUE
+                   // émission (rs232.c:569), sans condition de bouclage ni de récepteur.
+                   // L'ancien gating « loopback ET RE » tuait la TX pilotée par IRQ : un
+                   // terminal qui arme IERA bit2 et attend le canal 10 pour envoyer
+                   // l'octet suivant (STiK, streaming modem) émettait UN octet puis
+                   // attendait pour toujours. raise() ne pose l'IPR que si IER arme le
+                   // canal → aucune IRQ parasite pour les impressions série normales.
+                   if (timer_[0x2D] & 0x01) {          // TSR bit0 = Transmitter Enable
+                       raise(SRC_TXERR);               // canal 9  : underrun (TX idle après envoi)
+                       raise(SRC_TXEMPTY);             // canal 10 : buffer d'émission vidé
+                   }
                    // Connecteur de bouclage TxD→RxD : l'octet émis revient en réception
-                   // (RSR Buffer Full + canal 12). Sans bouclage rien ne le lirait : le
-                   // diagnostic « S RS232 » en a besoin pour valider la boucle locale.
-                   // Le récepteur USART ne capte (et ne lève le canal 12) que s'il est
-                   // ACTIVÉ : RSR bit0 = Receiver Enable. Le diagnostic ne l'arme que
-                   // pendant le test « S RS232 » ; les impressions série normales (RE=0)
-                   // ne doivent donc PAS générer d'IRQ parasite (sinon le test clavier,
-                   // au boot, échoue). C'est le comportement matériel du MFP 68901.
-                   if (loopback_ && (timer_[0x2B] & 0x01)) {   // connecteur branché ET récepteur activé (RE) : TxD→RxD (buffer 1 octet)
-                       if (rxFull_) { rxOverrun_ = true; raise(SRC_RXERR); }  // octet sur buffer plein → overrun (canal 11)
-                       rxByte_ = v;
-                       rxFull_ = true;
-                       raise(SRC_TXERR);         // canal 9  : underrun (transmetteur idle après envoi)
-                       raise(SRC_TXEMPTY);       // canal 10 : buffer d'émission vidé (TX instantané)
-                       raise(SRC_RXFULL);        // canal 12 : octet reçu par le bouclage
+                   // (RSR Buffer Full + canal 12). Le récepteur ne capte que s'il est
+                   // ACTIVÉ (RSR bit0 = Receiver Enable) — les impressions série normales
+                   // (RE=0) ne génèrent pas de RXFULL parasite (sinon le test clavier au
+                   // boot échoue). Sur buffer PLEIN : overrun, l'octet fautif est PERDU —
+                   // l'ancien code l'écrasait dans le tampon et re-levait RXFULL, là où
+                   // le 68901 (et rs232.c:277 « if !ByteReceived ») garde l'ANCIEN octet.
+                   if (loopback_ && (timer_[0x2B] & 0x01)) {
+                       if (rxFull_) { rxOverrun_ = true; raise(SRC_RXERR); }  // canal 11 — octet perdu
+                       else {
+                           rxByte_ = v;
+                           rxFull_ = true;
+                           raise(SRC_RXFULL);          // canal 12 : octet reçu par le bouclage
+                       }
                    }
                    break;
         default: timer_[addr & 0x3F] = v; break;      // autres timers/USART : mémorisés
@@ -569,7 +581,10 @@ void Mfp::setXsintLine(bool a) {
         const bool pinOld = colorMonitor_ ^ xsint_;    // niveau GPIP7 avant
         const bool pinNew = colorMonitor_ ^ a;         // niveau GPIP7 après
         const bool aerBit = (aer & 0x80) != 0;
-        if (pinOld != pinNew && pinNew == aerBit)      // front actif (cf. Hatari)
+        // (ddr & 0x80) == 0 : le front ne compte que si GPIP7 est en ENTRÉE — même
+        // règle que gpipUpdateInterrupt (MFP_GPIP_Set_Line_Input exige DDR=0,
+        // mfp.c:1201). Ce setter court-circuitait le test DDR.
+        if ((ddr & 0x80) == 0 && pinOld != pinNew && pinNew == aerBit)
             raise(SRC_GPIP7);                          // canal 15 (IERA bit7) si armé
     }
     xsint_ = a;
@@ -602,6 +617,21 @@ bool Mfp::mfpSelfTest() {
     aciaLineKbd_ = false; aciaLineMidi_ = true;
     chk("bit4 ACIA midi→0 (wire-OR)", (gpipInput() & 0x10) ? 1 : 0, 0);
     aciaLineMidi_ = false; chk("bit4 ACIA repos→1", (gpipInput() & 0x10) ? 1 : 0, 1);
+    // Bits 6 (RI) et 3 (blitter) : NIVEAU de registre, 0 au repos, 1 ligne haute —
+    // figés à 0 ils courts-circuiteraient le détecteur de front (bug 2026-08-13 :
+    // IRQ fin de blit et RI mortes, gpipInput invariant sous ces lignes).
+    gpuLine_ = true;  chk("bit3 blit en cours→1", (gpipInput() & 0x08) ? 1 : 0, 1);
+    gpuLine_ = false; chk("bit3 repos→0",         (gpipInput() & 0x08) ? 1 : 0, 0);
+    riLine_ = true;   chk("bit6 RI haut→1",       (gpipInput() & 0x40) ? 1 : 0, 1);
+    riLine_ = false;  chk("bit6 RI repos→0",      (gpipInput() & 0x40) ? 1 : 0, 0);
+    // Front de FIN DE BLIT (canal 3 = GPIP3, IERB bit3, AER=0 → front 1→0) : le
+    // chemin complet setBlitterLine(start)→(done) doit lever IPRB bit3.
+    ierb = 0xFF; aer = 0x00; iprb = 0; gpuLine_ = false;
+    setBlitterLine(false);                // démarrage : ligne haute (blit en cours)
+    chk("blit start : pas d'IRQ", (iprb & 0x08) ? 1 : 0, 0);
+    setBlitterLine(true);                 // fin : front 1→0 → canal 3
+    chk("blit done : IPRB bit3", (iprb & 0x08) ? 1 : 0, 1);
+    iprb = 0;
     // Une ligne en SORTIE (ddr=1) renvoie le latch gpip, PAS l'entrée calculée.
     ddr = 0x20; gpip = 0x20; fdcLine_ = true;   // fdc asserté, mais bit5 en sortie=1
     chk("bit5 en sortie = latch", (read8(0x01) & 0x20) ? 1 : 0, 1);
@@ -642,16 +672,19 @@ uint8_t Mfp::gpipInput() const {
     // L'ancien repos « haut » rendait $F9 là où l'oracle rend $B1 — l'inventaire
     // matériel de CLOSURE (Sync) stocke cet octet dans sa table d'identité et
     // toute sa génération de code divergeait ensuite (docs/CLOSURE_CHANTIER.md).
-    // Les FRONTS d'IRQ des lignes (loopback RI, blitter) restent portés par les
-    // transitions via gpipSetLine/gpipUpdateInterrupt — seule la valeur LUE change.
+    // ⚠ Mais les bits 6 et 3 SUIVENT leur ligne (riLine_/gpuLine_ = niveau de
+    // registre, 0 au reset) : les figer à 0 court-circuitait le détecteur de front
+    // de gpipSetLine (gpipInput avant == après) — l'IRQ de fin de blit (canal 3)
+    // et l'IRQ RI du bouclage (canal 14) ne partaient JAMAIS, et $FFFA01 restait
+    // insensible à un blit en cours (Hatari : bit3=1 pendant le blit).
     uint8_t v = 0xFF & ~0x48;                    // bits au repos (haut, sauf 6 et 3)
     bool bit7 = colorMonitor_;                   // moniteur : couleur=1, mono=0
     if (hasDmaSound_) bit7 ^= xsint_;            // STE/Mega STE : XOR ligne XSINT son DMA
     if (!bit7)          v &= ~0x80;              // bit7 = moniteur^XSINT
-    if (riLine_)        v &= ~0x40;              // bit6 = RS232 RI
+    if (riLine_)        v |= 0x40;               // bit6 = RS232 RI (niveau, 0 au repos)
     if (fdcLine_)       v &= ~0x20;              // bit5 = FDC
     if (aciaLineKbd_ || aciaLineMidi_) v &= ~0x10;  // bit4 = ACIA clavier OU MIDI (wire-OR)
-    if (gpuLine_)       v &= ~0x08;              // bit3 = blitter GPU_DONE
+    if (gpuLine_)       v |= 0x08;               // bit3 = blitter (1 = blit EN COURS)
     if (ctsLine_)       v &= ~0x04;              // bit2 = RS232 CTS
     if (dcdLine_)       v &= ~0x02;              // bit1 = RS232 DCD
     if (busyLine_)      v &= ~0x01;              // bit0 = Centronics BUSY
