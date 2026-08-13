@@ -45,6 +45,19 @@ void sockClose(int fd) {
 #endif
 }
 
+// Coupe les deux sens sans libérer le NUMÉRO de descripteur : le recv d'un
+// thread lecteur retourne aussitôt, mais le fd ne peut pas être réattribué à
+// une autre connexion tant que sockClose n'a pas été appelé — c'est la moitié
+// « sûre » d'un arrêt de thread lecteur (shutdown → join → close).
+void sockShutdown(int fd) {
+    if (fd < 0) return;
+#ifdef _WIN32
+    shutdown(SOCKET(fd), SD_BOTH);
+#else
+    ::shutdown(fd, SHUT_RDWR);
+#endif
+}
+
 int tcpConnect(const std::string& host, int port, int timeoutMs, std::string& err) {
     netInitOnce();
     addrinfo hints{};
