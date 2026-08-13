@@ -330,6 +330,13 @@ reset HW/canal, IRQ niveau 5 gatée par le SCU).
   re-peuple les pendings à chaque updateIpl) les fait survivre. Observable seulement sur
   MegaSTE si un programme polle $FF8E01 avec une VBL/HBL en attente — divergence assumée du
   modèle niveau, à re-trancher si un étalon MegaSTE l'expose.
+- **[SC5 — basse, suivi (bug hunt 2026-08-13)]** **Miroir RR6/RR7 (FIFO de statut coupée)** :
+  NeoST renvoie RR2/RR3 du **canal A** quel que soit le canal adressé et teste `WR15`
+  du canal A (`Scc.cpp:297-299`) ; la sémantique miroir du Z85C30 voudrait RR2B (vecteur
+  modifié) / RR3B (=0) pour le canal B. Registres miroirs rarement lus, non tranché faute
+  d'oracle (l'arbre Hatari n'est pas dans le checkout d'audit) — à vérifier contre `scc.c`
+  avant toute correction. Deux **typos avérées** corrigées le même jour (commit `a5c9e6f`) :
+  statut vectorisé lisait RR0 au lieu de RR1, et la lecture RR15 écrasait WR15 (`&=`).
 
 ---
 

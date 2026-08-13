@@ -136,9 +136,13 @@ uint8_t FujiHostLive::close(int chanIdx) {
     Chan* c = at(chanIdx);
     if (!c) return fn_err::BAD_CMD;
     {
-        // Fermer le socket AVANT le join débloque le thread lecteur TCP.
+        // shutdown() AVANT le join débloque le recv du thread lecteur TCP sans
+        // LIBÉRER le numéro de fd : close() ici ouvrait une fenêtre où l'OS
+        // réattribuait le même numéro à une autre connexion (worker HTTP d'un
+        // autre canal) et le lecteur périmé consommait SES octets. La fermeture
+        // réelle attend le join (closeLocked ci-dessous).
         std::lock_guard<std::mutex> lk(c->mtx);
-        if (c->fd >= 0) { neonet::sockClose(c->fd); c->fd = -1; }
+        if (c->fd >= 0) neonet::sockShutdown(c->fd);
     }
     c->joinWorker();
     std::lock_guard<std::mutex> lk(c->mtx);
