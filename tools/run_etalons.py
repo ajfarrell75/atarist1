@@ -203,6 +203,14 @@ def run_one(entry: dict, args) -> bool:
     print(f"  capture → {neost_ppm.relative_to(ROOT)}")
 
     if args.update_ref:
+        # Un étalon « oracle » ne compare JAMAIS la self-capture : y copier un .ppm
+        # était un no-op trompeur (« référence → … » affiché, baseline inchangée,
+        # fichier orphelin dans tests/reference/). La référence oracle se régénère
+        # avec --oracle, pas --update-ref.
+        if entry.get("ref_kind") == "oracle":
+            print(f"  ✗ {eid}: ref_kind=oracle — --update-ref sans effet "
+                  f"(utiliser --oracle pour régénérer la référence Hatari)")
+            return False
         REF_DIR.mkdir(parents=True, exist_ok=True)
         shutil.copy2(neost_ppm, ref_ppm)
         print(f"  référence → {ref_ppm.relative_to(ROOT)}")
@@ -308,7 +316,10 @@ def verify_refs(entries: list[dict]) -> int:
         # de 3 couleurs n'est pas une preuve — sauf pour les étalons dont c'est le
         # signal voulu (trace_odd peint l'écran en vert/rouge selon le verdict,
         # overscan_top n'a que 2 couleurs par construction) : "uniform_ok": true.
-        ref = png if png.exists() else (ppm if ppm.exists() else None)
+        # MÊME résolution que la comparaison réelle (resolve_ref) : le raccourci
+        # « png d'abord » inspectait un .png inutilisé quand un étalon snapshot
+        # possède les deux fichiers — un .ppm noirci passait le contrôle.
+        ref, _k = resolve_ref(e, ppm, png)
         if ref is not None and not e.get("uniform_ok"):
             got = _ref_content(ref)
             if got is None:
@@ -350,8 +361,22 @@ def main() -> int:
 
     entries = load_manifest()
     if args.verify_refs:
-        return verify_refs([e for e in entries
-                            if not args.only or e["id"] in args.only.split(",")])
+        # Même discipline --only que le chemin d'exécution (strip + IDs inconnus
+        # refusés) : « --verify-refs --only bogus » sortait « RÉFS OK », code 0,
+        # en n'ayant vérifié AUCUNE référence.
+        if args.only:
+            want = {t.strip() for t in args.only.split(",") if t.strip()}
+            unknown = want - {e["id"] for e in entries}
+            if unknown:
+                print("ID inconnu(s) : " + ", ".join(sorted(unknown)))
+                return 2
+            sel = [e for e in entries if e["id"] in want]
+        else:
+            sel = entries
+        if not sel:
+            print("aucun étalon sélectionné — rien vérifié")
+            return 2
+        return verify_refs(sel)
     if args.list:
         for e in entries:
             opt = " [opt]" if e.get("optional") else ""

@@ -3765,9 +3765,14 @@ int main(int argc, char** argv) {
             }
             // Pas-à-pas INSTRUCTION : une seule instruction, ordonnanceur en lockstep
             // (pas de produceFrame — trop court, le son reste muet en pas-à-pas).
+            // Les écritures PSG/DMA du pas restent horodatées sur des trames périmées :
+            // on les jette (clearEvents re-synchronise aussi le miroir DMA), sinon la
+            // reprise les rejouait toutes en rafale écrêtée sur UNE trame.
             if (g_dbgPaused && g_dbgStepInstr) {
                 g_dbgStepInstr = false;
                 machine.stepInstruction();
+                machine.psg.clearEvents();
+                machine.dmasnd.clearEvents();
             }
         } else {
             // 6 trames max ≈ 120 ms de retard résorbable d'un coup : un stall GUI

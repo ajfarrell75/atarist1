@@ -225,10 +225,18 @@ int fujiSelfTest() {
 
     // --- 6. L'opcode $60 reste REJETÉ sur une cible non-FujiNet ----------------
     machine.fdc.mountAcsi("disks/etalons/selftest_hd.img", 0);   // peut échouer : absent
+    // CDB $60 COMPLET (10 octets) vers la cible 0, avec un octet device INVALIDE :
+    // s'il était routé à tort vers FujiNet, execute() poserait NO_DEVICE — le test
+    // est falsifiable. L'ancienne version n'envoyait que 2 octets : execute() ne
+    // tournait jamais (déclenché à byteCount == 10), lastError restait OK dans
+    // TOUS les builds, gating cassé compris — l'assertion ne validait rien.
     w16(0xFF8606, 0x0088);
     w16(0xFF8604, uint16_t((0u << 5) | 0x1F));              // cible 0, marqueur ICD
     w16(0xFF8606, 0x008A);
-    w16(0xFF8604, 0x0060);                                  // opcode vendeur…
+    for (uint8_t b : {uint8_t(0x60), uint8_t(0x00), uint8_t(0xEE), uint8_t('Z'),
+                      uint8_t(0x00), uint8_t(0x00), uint8_t(0x00), uint8_t(0x00),
+                      uint8_t(0x00), uint8_t(0x00)})
+        w16(0xFF8604, b);
     // …cible vide (pas d'IRQ) ou peuplée : dans les deux cas, JAMAIS routé FujiNet.
     check(machine.fuji.lastError() == fn_err::OK, "vendor opcode gated to Fuji target");
 
@@ -335,16 +343,19 @@ bool writePpm(const char* path, const uint32_t* px, int w, int h) {
     std::FILE* f = std::fopen(path, "wb");
     if (!f) return false;
     std::fprintf(f, "P6\n%d %d\n255\n", w, h);
+    bool ok = true;
     for (int i = 0; i < w * h; ++i) {
         const uint32_t c = px[i];                 // ARGB8888
         const unsigned char rgb[3] = {
             static_cast<unsigned char>((c >> 16) & 0xFF),
             static_cast<unsigned char>((c >> 8)  & 0xFF),
             static_cast<unsigned char>( c        & 0xFF) };
-        std::fwrite(rgb, 1, 3, f);
+        if (std::fwrite(rgb, 1, 3, f) != 3) { ok = false; break; }
     }
-    std::fclose(f);
-    return true;
+    // fclose vérifié aussi : un disque plein peut n'échouer qu'au flush final —
+    // une capture tronquée qui « réussit » finit diffée comme si c'était l'image.
+    if (std::fclose(f) != 0) ok = false;
+    return ok;
 }
 
 uint8_t stScancode(char c) {
@@ -558,7 +569,12 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(a, "--msa-selftest")) msaSelfTest = true;
         else if (!std::strcmp(a, "--fuji-selftest")) fujiSelfTestFlag = true;
         else if (!std::strcmp(a, "--enec-selftest")) enecSelfTestFlag = true;
-        else if (!std::strcmp(a, "--shot-every"))  { shotEvery = std::atoi(next(a)); shotPrefix = next(a); }
+        else if (!std::strcmp(a, "--shot-every"))  {
+            shotEvery = std::atoi(next(a)); shotPrefix = next(a);
+            if (shotEvery <= 0)             // le préfixe a été consommé pour rien : le dire
+                std::fprintf(stderr, "[headless] --shot-every %d: no periodic capture "
+                             "will be taken\n", shotEvery);
+        }
         else if (!std::strcmp(a, "--shot-from"))   shotFrom = std::atoi(next(a));
         else if (!std::strcmp(a, "--keys-at"))     { const int f = std::atoi(next(a)); keysAtList.emplace_back(f, next(a)); }
         else if (!std::strcmp(a, "--key-down"))    { const int f = std::atoi(next(a)); keyDownList.emplace_back(f, next(a)[0]); }
@@ -924,10 +940,13 @@ int main(int argc, char** argv) {
             }
         }
     }
+    bool traceAttached = false;   // --trace-from réellement atteint ? (cf. garde de fin)
     for (int frame = 0; frame < frames; ++frame) {
         // Trace fenêtrée (--trace-from N) : branche le hook d'instruction à la trame N.
-        if (traceFrom > 0 && frame == traceFrom && !tracePath.empty())
+        if (traceFrom > 0 && frame == traceFrom && !tracePath.empty()) {
             machine.cpu.setTracer(&tracer);
+            traceAttached = true;
+        }
 #ifdef NEOST_WITH_NET
         if (modem) modem->poll();   // pompe le TCP entrant vers la file RX du MFP
 #endif
@@ -1070,6 +1089,12 @@ int main(int argc, char** argv) {
     }
 
     // Écriture du WAV (--sound-dump) : PCM 16 bits stéréo 48 kHz, en-tête RIFF canonique.
+    if (soundDump && dumpPcm.empty()) {
+        // Zéro échantillon → AUCUN fichier écrit : le dire et échouer, sinon un WAV
+        // périmé d'un run précédent serait ré-analysé comme s'il venait d'être produit.
+        std::fprintf(stderr, "[headless] --sound-dump produced 0 samples — no WAV written\n");
+        outFail = true;
+    }
     if (soundDump && !dumpPcm.empty()) {
         std::FILE* wf = std::fopen(soundDumpPath.c_str(), "wb");
         if (wf) {
@@ -1186,6 +1211,14 @@ int main(int argc, char** argv) {
     if (dumpAtFrame >= 0 && !dumpDone) {
         std::fprintf(stderr, "[headless] --dump-at frame %d never reached (LEN=%u) — "
                      "no dump written\n", dumpAtFrame, dumpLen);
+        outFail = true;
+    }
+    // Même garde pour --trace-from : trame jamais atteinte (>= --frames, ou sortie
+    // anticipée sur --break/--until-pc) → le fichier de trace existe mais est VIDE,
+    // et le diff oracle en aval croirait re-lire une trace fraîche.
+    if (traceFrom > 0 && !tracePath.empty() && !traceAttached) {
+        std::fprintf(stderr, "[headless] --trace-from frame %d never reached "
+                     "(%d frames run) — trace is empty\n", traceFrom, frames);
         outFail = true;
     }
 
