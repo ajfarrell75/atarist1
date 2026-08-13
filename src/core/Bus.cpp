@@ -52,6 +52,17 @@ void Bus::serialize(StateArchive& ar) {
     // le même plafond ici — l'échec rejoue le backup (Machine::loadState).
     ar.check(cart.size() <= (stmap::CART_END - stmap::CART_BASE),
              "Bus::cart.size() dépasse la fenêtre cartouche 128 Ko");
+    // Taille RAM restreinte aux configs réelles : la ligne `default` de ramBanks
+    // (b0 = taille brute) suppose une puissance de deux — un .state forgé portant
+    // p.ex. 2,5 Mo rendrait tous les masques `r & (ramSz-1)` du remappage RAS/CAS
+    // faux (aliasing corrompu), sans jamais réactiver le raccourci mmuFastLimit_.
+    {
+        const std::size_t kb = ram.size() / 1024;
+        ar.check((ram.size() % 1024) == 0
+                 && (kb == 128 || kb == 256 || kb == 512 || kb == 640
+                     || kb == 1024 || kb == 2048 || kb == 4096),
+                 "Bus::ram.size() hors des configs ST supportées");
+    }
 
     // Profil machine + config ROM/TOS chargée.
     ar(machine);
@@ -255,6 +266,13 @@ int64_t Bus::mmuTranslate(uint32_t addr) const {
                                ? mmuConfSize(static_cast<uint8_t>(conf & 3))
                                : mmuB0;
     uint32_t ramB0, ramB1; ramBanks(ram.size(), ramB0, ramB1);
+
+    // Trou de décodage MMU (port de memory_map_Standard_RAM, cpu/memory.c) : la
+    // combinaison bank0 = 128 Ko + bank1 = 2 Mo ne sélectionne AUCUNE puce sur
+    // $40000-$7FFFF (mesuré sur STF) — lecture flottante, écriture perdue. Ne peut
+    // se produire que sur ST/Mega ST (les STE calquent bank1 sur bank0).
+    if (mmuB0 == BANK_128 && mmuB1 == BANK_2M
+        && addr >= 0x40000 && addr < 0x80000) return -1;
 
     uint32_t bankStart, ramSz, mmuSz;
     if (addr < mmuB0)              { bankStart = 0;     ramSz = ramB0; mmuSz = mmuB0; }
@@ -897,6 +915,15 @@ void Bus::mmioWrite8(uint32_t addr, uint8_t v) {
     // Miroir matériel du YM2149 sur tout $FF8800-$FF88FF (cf. read8 / Hatari shadow PSG).
     if (addr >= stmap::PSG_BASE && addr < stmap::PSG_BASE + 0x100 && psg) {
         if (cpu) cpu->addPsgWaitCycles();      // wait state YM2149 (4 cyc / 1er accès instr.)
+        // Écriture OCTET (ou movep) sur adresse IMPAIRE : ombre du registre pair —
+        // le YM ne décode pas A0, $FF8801 agit comme $FF8800 (sélecteur) et $FF8803
+        // comme $FF8802 (donnée). Port de PSG_ff8801/ff8803_WriteByte (le fix
+        // « X-Out musique muette » d'Hatari). L'octet impair d'un accès MOT reste
+        // ignoré (il est porté par l'octet pair du même accès, comme chez Hatari).
+        if (addr & 1) {
+            if (ioAccessWidth() == 1) psg->write8(addr & ~1u, v);
+            return;
+        }
         psg->write8(addr, v);
         return;
     }

@@ -634,8 +634,11 @@ MFP, périphériques (FDC/son-statuts/bus/SCC/ACIA), son approfondi (cœur YM + 
   (`Shifter.cpp:1644-1647`), 0xFF ailleurs — couverture exacte (commit 88ec84a).
 - **read32/zone RAM void** — mécanisme `cpuDb` (`Bus.cpp:215-216`) ≙ `VoidMem_wget/lget` (la zone
   vide rend la dernière valeur du bus), latch `Cpu68k.cpp:261-262`.
-- **Trou MMU STF bank 128K/2048K** — `mmuXlatSTF/STE` + `ConfToBank` (`Bus.cpp:102-176`,
-  commit 6df9432).
+- **Trou MMU STF bank 128K/2048K** — ⚠ l'entrée précédente (« commit 6df9432 ») était
+  FAUSSE : ce hash n'existe pas et aucune révision de `Bus.cpp` n'a jamais porté le trou —
+  seuls `mmuXlatSTF/STE` + `ConfToBank` l'étaient. RÉELLEMENT porté le 2026-08-13 (3ᵉ
+  passe de bug hunt) : `mmuTranslate` rend void `$40000-$7FFFF` quand bank0 = 128 Ko et
+  bank1 = 2 Mo (≙ `memory_map_Standard_RAM`, cpu/memory.c — quirk mesuré sur STF).
 - **Son : bruit ≥/250 kHz** (incrément 125 kHz, comparaison 250 kHz, plancher per=1 retiré —
   `YM2149.cpp:184-193` = sound.c:1050-1058) et **`mode_ &= 0x8F`** (`DmaSound.cpp:434`).
 - **Filtre « écriture redondante » freq/res** — PRÉSENT (`recordSyncWrite`, `Shifter.cpp:871-879`,

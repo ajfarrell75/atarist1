@@ -82,7 +82,11 @@ private:
     uint8_t par_[6] = {0};              // adresse MAC (page 1)
     uint8_t mar_[8] = {0};              // filtre multicast (page 1)
 
-    std::vector<uint8_t> mem_;          // RAM tampon de la NIC (anneau RX + tampon TX)
+    // RAM tampon de la NIC (anneau RX + tampon TX). Allouée DÈS la construction :
+    // vide tant qu'enabled_ était faux, serialize() écrivait un vecteur de taille 0
+    // et l'invariant « mem_ taille inattendue » rejetait AU CHARGEMENT tout .state
+    // pris en config par défaut (sans EtherNEC) — F7/« load state » échouait toujours.
+    std::vector<uint8_t> mem_ = std::vector<uint8_t>(std::size_t(kMemSize), 0);
 
     void page0Write(uint8_t reg, uint8_t v);
     uint8_t page0Read(uint8_t reg);
