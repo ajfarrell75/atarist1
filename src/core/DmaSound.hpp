@@ -76,7 +76,18 @@ public:
     // sautée) : borne la mémoire ET draine le flux capturé (sinon un retard s'accumule
     // et rejouerait en différé au démarrage de l'audio). Appelé par Audio::produceFrame
     // sur les chemins early-out.
-    void    clearEvents() { events_.clear(); capR_ = capW_; }
+    // ⚠ RE-SYNCHRONISE aussi le miroir de rendu sur l'état CPU (même geste que
+    // YM2149::clearEvents et son « audioRegs_ = regs_ ») : les événements jetés
+    // portaient les transitions PLAY/STOP/MODE — sans recopie, un jeu qui démarre
+    // sa musique DMA en boucle AVANT le 1er rendu (autoplay web : l'audio n'existe
+    // qu'au 1er geste utilisateur) laissait aPlaying_/aMode_ aux défauts du reset :
+    // flux 50 kHz consommé à 6258 Hz mono, définitivement (le mode repeat ne
+    // regénère aucun événement).
+    void    clearEvents() {
+        events_.clear(); capR_ = capW_;
+        aPlaying_ = playing_; aMode_ = mode_;
+        aPhase_ = 0.0; aHaveCur_ = false;
+    }
 
     // Gain de sortie linéaire (LMC1992 : volume maître + gauche/droite, en mono).
     // S'applique à TOUT le son STE (YM2149 + DMA), comme la puce réelle. 1.0 par

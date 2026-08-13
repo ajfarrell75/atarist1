@@ -212,7 +212,10 @@ public:
     // Ligne GPU_DONE du blitter sur GPIP3 (active BAS). Le blitter la met HAUT au
     // démarrage puis BAS à la fin du transfert (cf. Hatari Blitter_Start). N'existe
     // que sur Mega ST/STE/Mega STE (le blitter n'est câblé au bus que sur ces modèles).
-    void setBlitterLine(bool active) { gpipSetLine(gpuLine_, active); }
+    // `done` est INVERSÉ vers le niveau de registre : gpuLine_ = 1 pendant le blit
+    // (comme le bit 3 du GPIP d'Hatari), 0 au repos/fini — le front 1→0 de la fin
+    // lève le canal 3 sous AER=0. Reset : 0 tant qu'aucun blit n'a tourné (mfp.c:523).
+    void setBlitterLine(bool done) { gpipSetLine(gpuLine_, !done); }
 
     // Type de moniteur lu sur GPIP bit7 : couleur (basse rés) ou mono (haute rés).
     // À changer AVANT un reset pour que TOS détecte la bonne résolution au boot.
