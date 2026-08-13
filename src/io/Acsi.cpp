@@ -206,9 +206,12 @@ void Acsi::cmdRequestSense() {
     // Comme pour INQUIRY : la branche n <= 4 écrit b[0..3] sans condition (fidèle
     // à HDC_Cmd_RequestSense) → garantir 4 octets de stockage minimum, dataLen_
     // restant la longueur demandée (n peut valoir 1..3 sur commande farfelue).
-    uint8_t* b = prepRespBuf(std::max(n, 4));
+    // ⚠ 22 octets de stockage TOUJOURS : la branche étendue (n > 4) écrit b[21]
+    // sans condition — Hatari travaille dans un tampon local de 22 octets ; avec
+    // n = 5..21 on écrivait hors du tampon (corruption de tas).
+    uint8_t* b = prepRespBuf(22);
     dataLen_ = n;
-    memset(b, 0, std::max(n, 4));
+    memset(b, 0, 22);
     if (n <= 4) {
         b[0] = dev.lastError;
         if (dev.setLastBlockAddr) {
@@ -292,7 +295,10 @@ void Acsi::cmdReadSector() {
     // que pour l'opcode $60) → secteur introuvable, sans toucher au fichier.
     if (!dev.fp) { status_ = HD_STATUS_ERROR; dev.lastError = HD_REQSENS_NOSECTOR;
                    dev.setLastBlockAddr = true; return; }
+    // Borne sur lba ET lba+count (cf. écriture) : le dernier secteur lu doit
+    // exister aussi, sinon INVADDR — pas une lecture courte requalifiée.
     if (dev.lastBlockAddr >= dev.hdSize ||
+        count() > int(dev.hdSize - dev.lastBlockAddr) ||
         fseeko(dev.fp, (off_t)dev.lastBlockAddr * dev.blockSize, SEEK_SET) != 0) {
         status_ = HD_STATUS_ERROR; dev.lastError = HD_REQSENS_INVADDR;
     } else {
@@ -310,7 +316,11 @@ void Acsi::cmdWriteSector() {
     dev.lastBlockAddr = lba();
     if (!dev.fp) { status_ = HD_STATUS_ERROR; dev.lastError = HD_REQSENS_WRITEERR;
                    dev.setLastBlockAddr = true; return; }
+    // Borne sur lba ET lba+count : un WRITE à lba = hdSize-1 avec count = 128
+    // passait le test du seul secteur de départ puis faisait GRANDIR le fichier
+    // image hôte au-delà de hdSize×blockSize (secteurs ensuite illisibles).
     if (dev.lastBlockAddr >= dev.hdSize ||
+        count() > int(dev.hdSize - dev.lastBlockAddr) ||
         fseeko(dev.fp, (off_t)dev.lastBlockAddr * dev.blockSize, SEEK_SET) != 0) {
         status_ = HD_STATUS_ERROR; dev.lastError = HD_REQSENS_INVADDR;
     } else {
