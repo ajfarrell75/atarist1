@@ -43,6 +43,7 @@ HttpResult httpFetch(const std::string& url,
 // Renvoie le descripteur (>=0) ou -1. `timeoutMs` couvre la résolution+connexion.
 int  tcpConnect(const std::string& host, int port, int timeoutMs, std::string& err);
 void sockClose(int fd);
+void sockShutdown(int fd);                               // débloque recv/send SANS libérer le fd
 int  sockSend(int fd, const uint8_t* p, int n);          // -1 = erreur
 int  sockRecv(int fd, uint8_t* p, int n, int timeoutMs); // 0 = fermé, -1 = erreur, -2 = timeout
 bool sockHasData(int fd);                                // données prêtes (poll 0 ms)
