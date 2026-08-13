@@ -30,6 +30,59 @@
 #endif
 #include <unistd.h>
 #include <utime.h>
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX               // sinon windows.h définit min()/max() en MACROS et
+#endif                         // casse les std::min / std::max du fichier
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>           // GetDiskFreeSpaceExW (Dfree), faute de statvfs
+#include <filesystem>          // canonical() : il n'y a pas de realpath()
+// MinGW n'a pas les bits de permission « groupe » et « autres » : sous Windows il
+// n'existe qu'un attribut « lecture seule », que le CRT dérive du bit propriétaire.
+// On les définit à 0 pour que les masques ci-dessous restent lisibles tels quels
+// (mode & 0 = 0 : neutre, ce qui est exactement la sémantique de l'hôte).
+#ifndef S_IRGRP
+#define S_IRGRP 0
+#endif
+#ifndef S_IROTH
+#define S_IROTH 0
+#endif
+#ifndef S_IWGRP
+#define S_IWGRP 0
+#endif
+#ifndef S_IWOTH
+#define S_IWOTH 0
+#endif
+#ifndef S_IRWXG
+#define S_IRWXG 0
+#endif
+#ifndef S_IRWXO
+#define S_IRWXO 0
+#endif
+#ifndef S_IRWXU
+#define S_IRWXU (S_IRUSR | S_IWUSR | S_IXUSR)
+#endif
+// MinGW : mkdir() ne prend PAS de mode (Windows n'a pas de bits POSIX), et les
+// constantes de access() s'appellent autrement. On ramène les deux à la forme
+// POSIX pour que le corps du fichier reste écrit une seule fois.
+// ⚠ ORDRE : les en-têtes DOIVENT venir avant le #define — <direct.h> déclare
+// lui-même `int mkdir(const char*)`, et la macro le réécrirait en plein milieu
+// de sa propre déclaration (« macro 'mkdir' requires 2 arguments »).
+#include <direct.h>            // _mkdir, _rmdir, _getcwd, et son mkdir() 1 argument
+#include <io.h>                // _access
+#define mkdir(p, m) _mkdir(p)
+#ifndef F_OK
+#define F_OK 0
+#endif
+#ifndef W_OK
+#define W_OK 2
+#endif
+#ifndef R_OK
+#define R_OK 4
+#endif
+#endif
 
 // -----------------------------------------------------------------------------
 //  Octets assemblés de la cartouche système (cart_asm.s → cartData.c d'Hatari).
@@ -272,7 +325,7 @@ GemdosHd::~GemdosHd() { clearAllFileHandles(); }
 
 bool GemdosHd::setDirectory(const std::string& hostDir) {
     if (!dirExists(hostDir)) {
-        std::fprintf(stderr, "[gemdos] dossier introuvable ou non-dossier : %s\n", hostDir.c_str());
+        std::fprintf(stderr, "[gemdos] folder not found or not a folder: %s\n", hostDir.c_str());
         return false;
     }
     trace_ = getenv("NEOST_GEMDOS_TRACE") != nullptr;
@@ -290,8 +343,8 @@ bool GemdosHd::setDirectory(const std::string& hostDir) {
     // laissait le montage PRÉCÉDENT en miettes — un simple dossier disparu (clé USB
     // retirée) suffisait à tuer le C: de la session, sans reset ni retour en arrière.
     if (countMappableDrives(absDir) == 0) {
-        std::fprintf(stderr, "[gemdos] aucun lecteur GEMDOS mappé depuis %s "
-                     "(montage courant conservé)\n", hostDir.c_str());
+        std::fprintf(stderr, "[gemdos] no GEMDOS drive mapped from %s "
+                     "(current mount kept)\n", hostDir.c_str());
         return false;
     }
     initDrives(absDir);
@@ -326,7 +379,7 @@ void GemdosHd::unmount() {
     // les deux partageant le même stockage bus_.cart ($FA0000).
     if (bus_.mountedCartPath().empty()) bus_.ejectCart();
     active_ = false;
-    std::fprintf(stderr, "[gemdos] HDD GEMDOS démonté\n");
+    std::fprintf(stderr, "[gemdos] GEMDOS HDD unmounted\n");
 }
 
 void GemdosHd::reset() {
@@ -403,7 +456,7 @@ static bool determineMaxPartitions(const std::string& dir, int& maxDrives) {
     maxDrives = 0;
     DIR* d = opendir(dir.c_str());
     if (!d) {
-        std::fprintf(stderr, "[gemdos] accès impossible : %s\n", dir.c_str());
+        std::fprintf(stderr, "[gemdos] cannot access: %s\n", dir.c_str());
         return false;
     }
     int count = 0, last = 0;
@@ -674,8 +727,21 @@ bool GemdosHd::addPathComponent(std::string& path, const std::string& origname, 
 static std::string physicalCanon(const std::string& path) {
     std::string head = path, tail;
     for (;;) {
+#if defined(_WIN32)
+        // Pas de realpath() : std::filesystem::canonical résout de la même façon les
+        // liens (jonctions/liens NTFS) et les « . / .. ». On NORMALISE les séparateurs
+        // en '/' derrière, car tout le reste du fichier compare avec PATHSEP — un
+        // retour en '\\' ferait échouer le test de préfixe du bac à sable, donc
+        // rabattrait chaque accès sur la racine. generic_string() fait exactement ça.
+        std::error_code cec;
+        const std::filesystem::path cp = std::filesystem::canonical(head, cec);
+        const bool ok = !cec;
+        std::string res = ok ? cp.generic_string() : std::string();
+        if (ok) {
+#else
         char* rp = ::realpath(head.c_str(), nullptr);
         if (rp) { std::string res(rp); std::free(rp);
+#endif
                   if (!tail.empty()) { if (res.empty() || res.back() != PATHSEP) res.push_back(PATHSEP);
                                        res += tail; }
                   return res; }
@@ -711,7 +777,7 @@ void GemdosHd::clampToSandbox(const EmuDrive& d, const std::string& gemName, std
     if (isRoot || canon.compare(0, root.size(), root) == 0) { out = canon; return; }
     const std::size_t sep = canon.rfind(PATHSEP);
     const std::string base = (sep == std::string::npos) ? canon : canon.substr(sep + 1);
-    std::fprintf(stderr, "[gemdos] REFUS : '%s' sortait du lecteur (%s) — rabattu sur la racine\n",
+    std::fprintf(stderr, "[gemdos] REFUSED: '%s' escaped the drive (%s) — clamped to the root\n",
                  gemName.c_str(), canon.c_str());
     out = root + base;
 }
@@ -768,7 +834,7 @@ void GemdosHd::createHostFileName(int drive, const std::string& gemNameIn, std::
             out.push_back(PATHSEP);
             out += filename;                       // (conversion charset off)
         } else if (!addPathComponent(out, filename, false)) {
-            if (trace_) std::fprintf(stderr, "[gemdos] introuvable: %s\n", out.c_str());
+            if (trace_) std::fprintf(stderr, "[gemdos] not found: %s\n", out.c_str());
             clampToSandbox(d, gemNameIn, out);
             return;
         }
@@ -803,6 +869,20 @@ bool GemdosHd::gemDFree(uint32_t p) {
             const uint64_t frsize = sv.f_frsize ? sv.f_frsize : sv.f_bsize;
             total = sv.f_blocks * frsize / 1024;
             freeC = sv.f_bavail * frsize / 1024;
+        }
+    }
+#elif defined(_WIN32)
+    // Même intention que statvfs ci-dessus : sans espace RÉEL, « Informations disque »
+    // et les installeurs qui vérifient Dfree avant d'extraire se font tromper par les
+    // valeurs factices. GetDiskFreeSpaceExW rend des OCTETS (pas des blocs) et le
+    // premier paramètre accepte un dossier quelconque du volume.
+    {
+        ULARGE_INTEGER avail{}, tot{}, dummy{};
+        const std::wstring dir =
+            std::filesystem::path(emudrives_[drive - 2].hdEmuDir).wstring();
+        if (GetDiskFreeSpaceExW(dir.c_str(), &avail, &tot, &dummy)) {
+            total = uint64_t(tot.QuadPart) / 1024;
+            freeC = uint64_t(avail.QuadPart) / 1024;
         }
     }
 #endif
@@ -1603,7 +1683,7 @@ void GemdosHd::boot() {
         bus_.cart[off + 3] = (uint8_t)(oldVec);
     }
     writeLong(0x0084, CART_GEMDOS);
-    if (trace_) std::fprintf(stderr, "[gemdos] hook installé : (0x84)=$%06X, ancien=$%06X, act_pd=$%06X\n",
+    if (trace_) std::fprintf(stderr, "[gemdos] hook installed: (0x84)=$%06X, previous=$%06X, act_pd=$%06X\n",
                              CART_GEMDOS, oldVec, actPd_);
 }
 

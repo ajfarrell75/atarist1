@@ -30,6 +30,8 @@
 #include "io/MidiAcia.hpp"
 #include "io/GemdosHd.hpp"
 #include "io/Scc.hpp"
+#include "io/FujiDevice.hpp"
+#include "io/Ne2000.hpp"
 
 class Machine {
 public:
@@ -198,7 +200,39 @@ public:
     // que le frontend n'a pas appelé gemdos.setDirectory(...) — cf. io/GemdosHd.hpp.
     GemdosHd  gemdos{bus, cpu};
     Scc       scc;     // SCC série Z85C30 ($FF8C80) — Mega STE uniquement (cf. ctor/reconfigure)
+    // Périphérique FujiNet virtuel (extension NeoST, INACTIF par défaut). Attaché
+    // au bus ACSI par enableFujiNet ; le backend réseau (FujiHost) est posé par le
+    // frontend via fuji.setHost — le cœur reste sans socket ni thread.
+    FujiDevice fuji;
+    // Carte réseau NE2000 sur le port cartouche (EtherNEC, extension NeoST,
+    // INACTIVE par défaut). Le backend physique (NetBackend) est posé par le
+    // frontend. Exclusive d'une cartouche montée (mêmes adresses $FA0000).
+    Ne2000    ne2000;
     Scheduler sched;
+
+    // Active la NE2000/EtherNEC. Refuse si une cartouche est montée (conflit de
+    // fenêtre $FA0000) — renvoie false et n'active rien. N'est PAS remise à zéro
+    // par reset() (une carte réseau survit au reboot de l'ST) ; hardReset() la
+    // reset comme un power-cycle de la carte.
+    bool enableEtherNec() {
+        if (!bus.cart.empty()) return false;   // cartouche présente : conflit
+        ne2000.setEnabled(true);
+        ne2000.reset();
+        bus.ne2000 = &ne2000;
+        return true;
+    }
+    void disableEtherNec() { bus.ne2000 = nullptr; ne2000.setEnabled(false); }
+
+    // Active le FujiNet virtuel sur la cible ACSI `target` (défaut 6 — laisse
+    // les cibles basses aux images disque de l'utilisateur). N'est PAS remis à
+    // zéro par reset()/hardReset() : un FujiNet réel survit au reboot de l'ST.
+    void enableFujiNet(int target = 6) {
+        fdc.attachFujiNet(&fuji, target);
+        fuji.setEnabled(true);
+        fuji.mountFloppyA  = [this](const std::string& p) { return fdc.loadImage(p, 0); };
+        fuji.mountHardDisk = [this, target](const std::string& p) { return fdc.mountAcsi(p, target); };
+    }
+    void disableFujiNet() { fdc.detachFujiNet(); fuji.setEnabled(false); }
 
 private:
     // Câble les callbacks de l'ordonnanceur (appelé une fois, au constructeur).
@@ -219,6 +253,10 @@ private:
     // Display-Enable (résolution + 50/60 Hz du Shifter, front début/fin via l'AER du
     // MFP) — cf. Shifter::timerBLinePos / Hatari Video_TimerB_GetDefaultPos.
     int timerBPos() const { return shifter.timerBLinePos(mfp.timerBStartOfLine()); }
+    // Position PAR LIGNE (DE réel de la machine Glue — tricks compris), pour le
+    // Timer B event-count : cf. Shifter::timerBPosForLine et Machine::onTimerB.
+    int timerBPosLine(int line) { return shifter.timerBPosForLine(line, mfp.timerBStartOfLine()); }
+    int64_t tbScheduledAt_ = 0;   // échéance PLANIFIÉE du tic Timer B courant (cf. onTimerB)
 
     MachineType machineType_ = MachineType::Ste;   // profil matériel (figé au boot)
 

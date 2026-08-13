@@ -1,5 +1,5 @@
 # =============================================================================
-#  Artefacts NeoST — 5 paquets, calqués sur la release POM1 (jobs natifs,
+#  Artefacts NeoST — 8 paquets, calqués sur la release POM1 (jobs natifs,
 #  vérifications structurelles, smoke-launch headless, publication sur tag) :
 #
 #    1. NeoST-<ver>-x86_64.AppImage             (Linux Intel/AMD, image bionic
@@ -7,11 +7,20 @@
 #    2. NeoST-<ver>-aarch64.AppImage            (Linux ARM64 générique)
 #    3. NeoST-<ver>-macOS-universal2.dmg        (Universal 2 arm64+x86_64,
 #                                                GLFW statique)
-#    4. NeoST-<ver>-raspberry-aarch64.AppImage  (Raspberry Pi, plancher glibc
+#    4. NeoST-<ver>-raspberry-aarch64.AppImage  (Raspberry Pi GÉNÉRIQUE Pi 3→Pi 5,
+#                                                aucun -mcpu ; plancher glibc
 #                                                bookworm 2.36 = Pi OS)
-#    5. NeoST-<ver>-web-wasm.zip                (WebAssembly, contenu libre)
+#    5. NeoST-<ver>-pi400-aarch64.AppImage      (Pi 4 / Pi 400 : -mcpu=cortex-a72,
+#                                                NE démarre pas sur un cœur plus
+#                                                ancien — c'est le prix du gain)
+#    6. NeoST-<ver>-windows-x86_64.zip          (Windows 10/11 x64, MinGW-w64,
+#                                                tout statique — aucune DLL à
+#                                                installer, non signé)
+#    7. NeoST-<ver>-web-wasm.zip                (WebAssembly, contenu libre)
+#    8. NeoST-<ver>-android-arm64-debug.apk     (Android 5.0+ arm64-v8a, signé
+#                                                clé de DEBUG → installable tel
+#                                                quel ; EmuTOS + diskA seulement)
 #
-#  Pas de job Windows : NeoST cible macOS Silicon / Linux (cf. CLAUDE.md).
 #
 #  Chaque job SMOKE-LANCE le paquet via neost-headless (déterministe, sans
 #  affichage) : --version puis boot EmuTOS 500 trames (le bureau apparaît vers
@@ -20,13 +29,13 @@
 #  EmuTOS GPL + tos102uk/tos162uk des profils 520 ST / 1040 STE + diskA.st) —
 #  jamais les autres TOS ni les jeux du dépôt.
 #
-#  Déclencheurs : chaque push/PR vérifie que la génération des 5 artefacts
+#  Déclencheurs : chaque push/PR vérifie que la génération des 8 artefacts
 #  passe ; un tag de version (v1.0.0 ou 1.0.0) les attache en plus à la Release.
 #
 #  Planchers glibc : x86_64 = 2.27 (image bionic gelée neost-bionic-builder,
 #  dérivée du pom1-bionic-builder — gcc-11 car Moira exige C++20) ;
-#  Raspberry = 2.36 (conteneur debian:bookworm = Pi OS) ; arm64 générique =
-#  l'image du runner (2.39), suffisant pour les distros ARM récentes.
+#  Raspberry et pi400 = 2.36 (conteneur debian:bookworm = Pi OS) ; arm64
+#  générique = l'image du runner (2.39), suffisant pour les distros ARM récentes.
 # =============================================================================
 name: Artefacts (release)
 
@@ -203,7 +212,8 @@ jobs:
   # --------------------------------------------- Linux ARM64 générique ------
   # Bâti directement sur le runner ARM64 natif (gratuit en dépôt public) :
   # plancher glibc = image du runner (2.39) — pour les distros ARM récentes.
-  # Le paquet Raspberry (job `raspberry`) couvre Pi OS avec son plancher 2.36.
+  # Les paquets Raspberry (jobs `raspberry` générique et `pi400` -mcpu) couvrent
+  # Pi OS avec leur plancher 2.36.
   linux-arm64:
     needs: version
     runs-on: ubuntu-24.04-arm
@@ -422,6 +432,103 @@ jobs:
           path: dist/*.AppImage
           if-no-files-found: error
 
+  # ------------------------------------------- Raspberry Pi 4 / Pi 400 -------
+  # Jumeau TAILLÉ POUR UN CŒUR du job `raspberry` ci-dessus, et c'est toute la
+  # différence : `raspberry` est aarch64 GÉNÉRIQUE (aucun -mcpu) parce qu'il doit
+  # tourner du Pi 3 au Pi 5 ; celui-ci compile en -mcpu=cortex-a72 (Pi 4 / Pi 400)
+  # et ne démarrera PAS sur un cœur plus ancien. Les deux sont publiés : le nom
+  # dit lequel on prend. Même script que la borne (packaging/raspberry/), déjà
+  # éprouvé par pi-borne.yml — d'où le PGO + LTO et les 90 minutes (deux
+  # compilations complètes + le parcours d'entraînement). Cf. docs/PERFORMANCE.md § 5.
+  pi400:
+    needs: version
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - name: Build -mcpu=cortex-a72 dans un conteneur bookworm arm64
+        env:
+          NEOST_VERSION: ${{ needs.version.outputs.neost_version }}
+          NEOST_MCPU: cortex-a72
+        run: |
+          docker run --rm -v "$PWD":/work -w /work \
+            -e NEOST_VERSION -e NEOST_MCPU \
+            debian:bookworm bash /work/packaging/raspberry/build_in_bookworm_pi.sh
+
+      - name: Vérifier l'AppImage (nom, arch, plancher glibc <= 2.36, contenu libre)
+        run: |
+          set -euo pipefail
+          APP=$(ls dist/*.AppImage)
+          echo "Paquet : $APP"
+          # Le nom doit porter « pi400 » : le job publish aplatit tous les artefacts
+          # dans un même dossier, et une collision écraserait EN SILENCE l'AppImage
+          # raspberry générique — c'est-à-dire remplacerait le paquet Pi 3→Pi 5 par
+          # un binaire qui ne démarre que sur Cortex-A72.
+          case "$APP" in
+            *-pi400-aarch64.AppImage) ;;
+            *) echo "ERREUR : $APP n'est pas nommé -pi400-aarch64.AppImage"; exit 1 ;;
+          esac
+          TYPE=$(readelf -h "$APP" | awk -F'[ :]+' '/^ *Type/ {print $3; exit}')
+          echo "Type ELF du runtime : $TYPE"
+          test "$TYPE" = "EXEC" || { echo "ERREUR : runtime $TYPE ≠ EXEC"; exit 1; }
+          MAGIC=$(xxd -s 8 -l 3 -p "$APP")
+          test "$MAGIC" = "414902" || { echo "ERREUR : magic AppImage $MAGIC ≠ 414902"; exit 1; }
+          "$APP" --appimage-extract >/dev/null
+          BIN=squashfs-root/usr/bin/neost
+          readelf -h "$BIN" | grep -q AArch64 \
+            || { echo "ERREUR : pas un binaire AArch64"; exit 1; }
+          MAX=$(objdump -T "$BIN" 2>/dev/null | grep -oE 'GLIBC_[0-9]+\.[0-9]+' | sort -V | tail -1)
+          echo "Symbole glibc le plus haut : ${MAX:-aucun}"
+          test "$(printf '%s\nGLIBC_2.36\n' "$MAX" | sort -V | tail -1)" = "GLIBC_2.36" \
+            || { echo "ERREUR : le paquet exige ${MAX} > GLIBC_2.36 — Pi OS ne le lancera pas"; exit 1; }
+          find squashfs-root -name 'libglfw*' | grep -q . \
+            || { echo "ERREUR : libglfw absente du paquet"; exit 1; }
+          if find squashfs-root -name 'libGL.so*' -o -name 'libOpenGL.so*' | grep -q .; then
+            echo "ERREUR : libGL embarquée dans l'AppImage"; exit 1
+          fi
+          for rom in tos102uk.img tos162uk.img; do
+            test -s "squashfs-root/usr/roms/$rom" \
+              || { echo "ERREUR : $rom absent du paquet"; exit 1; }
+          done
+          STRAY=$(find squashfs-root/usr/roms -maxdepth 1 -name '*.img' \
+                  ! -name 'etos*' ! -name 'tos102uk.img' ! -name 'tos162uk.img')
+          test -z "$STRAY" || { echo "ERREUR : ROM non autorisée embarquée : $STRAY"; exit 1; }
+          STRAYD=$(find squashfs-root/usr/disks -type f ! -name 'diskA.st')
+          test -z "$STRAYD" || { echo "ERREUR : disquette non libre embarquée : $STRAYD"; exit 1; }
+          for f in DejaVuSans.ttf fa-solid-900.ttf; do
+            test -s "squashfs-root/usr/fonts/$f" || { echo "ERREUR : police absente du paquet : $f"; exit 1; }
+          done
+          echo "OK : AppImage Pi 4 / Pi 400 valide (-mcpu=cortex-a72, glibc <= 2.36)"
+
+      - name: Smoke-launch (boot EmuTOS headless 500 trames + capture)
+        env:
+          NEOST_VERSION: ${{ needs.version.outputs.neost_version }}
+        run: |
+          set -euo pipefail
+          # Le runner ubuntu-24.04-arm est un Neoverse : il EXÉCUTE du cortex-a72
+          # (même ISA ARMv8-A, -mcpu ne fait qu'ordonnancer et choisir des
+          # extensions déjà présentes). Le smoke est donc réel, pas symbolique.
+          cd squashfs-root/usr
+          bin/neost-headless --version
+          bin/neost-headless --version | grep -qF "$NEOST_VERSION" \
+            || { echo "ERREUR : version binaire ≠ $NEOST_VERSION"; exit 1; }
+          bin/neost-headless roms/etos192us.img --frames 500 --screenshot boot.ppm
+          python3 - <<'EOF'
+          data = open('boot.ppm', 'rb').read()
+          body = data.split(b'\n', 3)[3]
+          assert len(set(body)) > 1, "capture uniforme — le boot EmuTOS a échoué"
+          print(f"OK : capture {len(body)} octets, {len(set(body))} valeurs distinctes")
+          EOF
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: NeoST-pi400-arm64-AppImage
+          path: dist/*-pi400-aarch64.AppImage
+          if-no-files-found: error
+
   # ----------------------------------------------------------------- macOS --
   # UN .dmg Universal 2 (arm64 + x86_64) — natif sur Apple Silicon ET Intel,
   # aucun Rosetta. Le runner arm64 cross-compile la tranche x86_64 nativement.
@@ -545,15 +652,198 @@ jobs:
           mkdir -p dist
           (cd wasm && zip -9 "../dist/NeoST-$NEOST_VERSION-web-wasm.zip" index.html index.js index.wasm index.data)
 
+      # Téléversé AVANT la garde ci-dessous, donc téléversé MÊME quand elle
+      # échoue : quand elle se déclenche, le zip qu'on vient de produire EST le
+      # bundle à recommiter. On peut donc le récupérer ici et le déposer dans
+      # wasm/ sans installer emsdk sur le poste de dev.
       - uses: actions/upload-artifact@v5
         with:
           name: NeoST-web-wasm
           path: dist/*.zip
           if-no-files-found: error
 
+      # GARDE DE FRAÎCHEUR — depuis que Pages est repassé en « deploy from a
+      # branch » (build_type=legacy, main/(root)), la démo en ligne EST le
+      # dossier wasm/ COMMITÉ : ce job le reconstruit pour le paquet, mais ce
+      # n'est plus lui qui déploie. Un oubli de reconstruction mettrait donc en
+      # ligne une démo périmée, en silence — c'est ce qui avait laissé
+      # wasm/index.html sur une coque française pendant des semaines.
+      # On compare les SOURCES et non le bundle : emcc n'est pas reproductible
+      # d'une version d'emsdk à l'autre, un diff octet échouerait pour rien.
+      - name: wasm/ commité à jour ?
+        run: tools/wasm_stamp.sh --check
+
+  # ------------------------------------------------------ Windows x86_64 -----
+  # MSYS2/MINGW64 et non MSVC : le code est écrit pour GCC/Clang (options -W…,
+  # C++20 pour Moira) et se compile ainsi tel quel, sans porter la chaîne de
+  # dépendances vers vcpkg. Le runner windows-latest EXÉCUTE le binaire produit :
+  # le smoke-launch ci-dessous est donc un vrai lancement Windows, pas un
+  # contrôle symbolique. Tout est lié en STATIQUE — cf. packaging/windows/
+  # build_mingw.sh, qui refuse le paquet s'il importe une DLL non système.
+  windows:
+    needs: version
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: false
+          install: >-
+            zip
+            unzip
+          pacboy: >-
+            toolchain:p
+            cmake:p
+            ninja:p
+            glfw:p
+            python:p
+
+      - name: Build + zip (MinGW64, tout statique)
+        env:
+          NEOST_VERSION: ${{ needs.version.outputs.neost_version }}
+        run: packaging/windows/build_mingw.sh
+
+      - name: Vérifier le zip (contenu libre, pas de DLL parasite)
+        run: |
+          set -euo pipefail
+          ZIP=$(ls dist/*-windows-x86_64.zip)
+          echo "Paquet : $ZIP"
+          unzip -q "$ZIP" -d _check
+          ROOT=$(ls -d _check/*/)
+          test -s "${ROOT}neost.exe"          || { echo "ERREUR : neost.exe absent"; exit 1; }
+          test -s "${ROOT}neost-headless.exe" || { echo "ERREUR : neost-headless.exe absent"; exit 1; }
+          # Aucune DLL ne doit être livrée : le build est statique. Une DLL ici
+          # signifierait que le -static a silencieusement lâché.
+          if find "$ROOT" -name '*.dll' | grep -q .; then
+            echo "ERREUR : DLL présente dans le zip — le lien statique a lâché"
+            find "$ROOT" -name '*.dll'; exit 1
+          fi
+          # Mêmes gardes de contenu que les AppImage : liste autorisée seulement.
+          for rom in tos102uk.img tos162uk.img; do
+            test -s "${ROOT}roms/$rom" || { echo "ERREUR : $rom absent du paquet"; exit 1; }
+          done
+          STRAY=$(find "${ROOT}roms" -maxdepth 1 -name '*.img' \
+                  ! -name 'etos*' ! -name 'tos102uk.img' ! -name 'tos162uk.img')
+          test -z "$STRAY" || { echo "ERREUR : ROM non autorisée embarquée : $STRAY"; exit 1; }
+          STRAYD=$(find "${ROOT}disks" -type f ! -name 'diskA.st')
+          test -z "$STRAYD" || { echo "ERREUR : disquette non libre embarquée : $STRAYD"; exit 1; }
+          for f in DejaVuSans.ttf fa-solid-900.ttf; do
+            test -s "${ROOT}fonts/$f" || { echo "ERREUR : police absente du paquet : $f"; exit 1; }
+          done
+          echo "OK : zip Windows valide (statique, contenu libre)"
+
+      - name: Smoke-launch (boot EmuTOS headless 500 trames + capture)
+        env:
+          NEOST_VERSION: ${{ needs.version.outputs.neost_version }}
+        run: |
+          set -euo pipefail
+          cd "$(ls -d _check/*/)"
+          ./neost-headless.exe --version
+          ./neost-headless.exe --version | grep -qF "$NEOST_VERSION" \
+            || { echo "ERREUR : version binaire ≠ $NEOST_VERSION"; exit 1; }
+          ./neost-headless.exe roms/etos192us.img --frames 500 --screenshot boot.ppm
+          python3 - <<'EOF'
+          data = open('boot.ppm', 'rb').read()
+          body = data.split(b'\n', 3)[3]
+          assert len(set(body)) > 1, "capture uniforme — le boot EmuTOS a échoué"
+          print(f"OK : capture {len(body)} octets, {len(set(body))} valeurs distinctes")
+          EOF
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: NeoST-windows-x86_64
+          path: dist/*-windows-x86_64.zip
+          if-no-files-found: error
+
   # ----------------------------------------------- attacher à la Release ----
+  # ------------------------------------------------------ Android arm64 ------
+  # APK arm64-v8a signé avec la clé de DEBUG d'Android : installable directement
+  # (adb install / « sources inconnues »), mais PAS publiable sur un store — le
+  # projet n'a pas de clé de signature et n'en aura pas dans le dépôt (cf.
+  # packaging/android/README.md § Signature). SDL2 est récupéré par
+  # fetch_sdl.sh (vendorisé non commité, comme Hatari) ; les assets sont
+  # STRICTEMENT la liste libre (stage_assets.sh, garde-fou intégré) — la
+  # politique des stores est plus stricte que celle des paquets de bureau, donc
+  # PAS de tos102uk/tos162uk ici, contrairement aux AppImage/DMG.
+  #
+  # Le runner ubuntu-latest livre un SDK Android préinstallé ($ANDROID_HOME) ;
+  # on n'installe que les VERSIONS ÉPINGLÉES du projet (NDK 27, CMake 3.22,
+  # API 34) — celles du README, validées en local. JDK 17 COMPLET via
+  # setup-java : un JRE headless n'a pas `jlink`, dont AGP a besoin pour ses
+  # « system modules », et son message d'erreur ne dit pas qu'il manque un
+  # paquet (piège documenté dans packaging/android/README.md).
+  android:
+    needs: version
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive     # extern/imgui : le menu Android en dépend
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin     # JDK COMPLET (jlink inclus), pas un JRE
+          java-version: '17'
+
+      - name: Installer les composants SDK épinglés (NDK 27, CMake 3.22, API 34)
+        run: |
+          set -eu
+          # ubuntu-latest préinstalle le SDK mais n'expose PAS sdkmanager dans le
+          # PATH (vérifié : « command not found » au premier run) → chemin complet,
+          # avec repli sur le PATH pour un éventuel runner qui l'y mettrait.
+          SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          command -v sdkmanager >/dev/null 2>&1 && SDKM=sdkmanager
+          yes | "$SDKM" --licenses > /dev/null || true
+          "$SDKM" --install "platforms;android-34" "build-tools;34.0.0" \
+                  "ndk;27.2.12479018" "cmake;3.22.1"
+
+      - name: Récupérer SDL2 (couche plateforme, vendorisée non commitée)
+        run: ./packaging/android/fetch_sdl.sh
+
+      - name: Build APK (debug = signé clé de debug, installable)
+        run: ./packaging/android/build_apk.sh debug
+
+      # Pas d'appareil ni de KVM sur les runners : vérification STATIQUE, la
+      # même qui a validé le premier APK en local — bibliothèques natives et
+      # assets (déjà garantis par build_apk.sh), plus le manifeste (paquet,
+      # activité lançable, arm64-v8a). Le CŒUR arm64, lui, est validé par
+      # ailleurs : image et son identiques au bit près au x86-64 sous
+      # qemu-aarch64 (packaging/android/README.md § Vérifier sans appareil).
+      - name: Vérifier le manifeste de l'APK
+        run: |
+          set -eu
+          APK=packaging/android/app/build/outputs/apk/debug/app-debug.apk
+          AAPT="$ANDROID_HOME/build-tools/34.0.0/aapt"
+          "$AAPT" dump badging "$APK" | tee badging.txt
+          grep -q "package: name='net.gistlabs.neost" badging.txt
+          grep -q "native-code: 'arm64-v8a'" badging.txt
+          grep -q "launchable-activity: name='net.gistlabs.neost.NeoSTActivity'" badging.txt
+
+      - name: Renommer pour la release
+        env:
+          NEOST_VERSION: ${{ needs.version.outputs.neost_version }}
+        run: |
+          mkdir -p dist
+          cp packaging/android/app/build/outputs/apk/debug/app-debug.apk \
+             "dist/NeoST-$NEOST_VERSION-android-arm64-debug.apk"
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: NeoST-android-arm64
+          path: dist/*.apk
+          if-no-files-found: error
+
   publish:
-    needs: [linux-bionic, linux-arm64, raspberry, macos, wasm]
+    needs: [linux-bionic, linux-arm64, raspberry, pi400, macos, wasm, windows, android]
     runs-on: ubuntu-latest
     if: github.ref_type == 'tag'
     steps:
@@ -561,7 +851,7 @@ jobs:
         with:
           path: artifacts
 
-      - name: Attacher les 5 paquets + sommes SHA-256 à la Release
+      - name: Attacher les 8 paquets + sommes SHA-256 à la Release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
@@ -571,11 +861,12 @@ jobs:
         run: |
           set -eu
           mkdir -p staging
-          find artifacts -type f \( -name '*.AppImage' -o -name '*.dmg' -o -name '*.zip' \) \
+          find artifacts -type f \( -name '*.AppImage' -o -name '*.dmg' -o -name '*.zip' \
+                                     -o -name '*.apk' \) \
                -exec cp -v {} staging/ \;
           cd staging
           COUNT=$(ls | wc -l)
-          test "$COUNT" -eq 5 || { echo "ERREUR : $COUNT paquet(s) au lieu de 5"; exit 1; }
+          test "$COUNT" -eq 8 || { echo "ERREUR : $COUNT paquet(s) au lieu de 8"; exit 1; }
           sha256sum -- * > SHA256SUMS.txt
           cat SHA256SUMS.txt
           if gh release view "$TAG" >/dev/null 2>&1; then

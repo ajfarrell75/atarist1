@@ -17,6 +17,7 @@
 #include "io/Rtc.hpp"
 #include "io/MidiAcia.hpp"
 #include "io/Scc.hpp"
+#include "io/Ne2000.hpp"
 
 #include <algorithm>
 #include <cassert>
@@ -112,7 +113,7 @@ void Bus::peripheralReset() {
 bool Bus::loadTos(const std::string& path) {
     std::ifstream f(path, std::ios::binary | std::ios::ate);
     if (!f) {
-        std::fprintf(stderr, "[Bus] TOS introuvable : %s\n", path.c_str());
+        std::fprintf(stderr, "[Bus] TOS not found: %s\n", path.c_str());
         return false;
     }
     const std::streamsize n = f.tellg();
@@ -120,7 +121,7 @@ bool Bus::loadTos(const std::string& path) {
     // Linux) → resize géant. Borne haute : la fenêtre ROM à $E00000 fait 1 Mo.
     constexpr std::streamsize kMaxTos = 1024 * 1024;
     if (n <= 0 || n > kMaxTos) {
-        std::fprintf(stderr, "[Bus] TOS invalide (%lld o, max %lld o) : %s\n",
+        std::fprintf(stderr, "[Bus] invalid TOS (%lld B, max %lld B): %s\n",
                      static_cast<long long>(n), static_cast<long long>(kMaxTos), path.c_str());
         return false;
     }
@@ -136,7 +137,7 @@ bool Bus::loadTos(const std::string& path) {
     // Vecteurs reset $0-$7 : le GLUE les mappe sur la ROM en permanence — on les
     // recopie en RAM dès le chargement (et à chaque reset, cf. seedResetVectors).
     seedResetVectors();
-    std::fprintf(stderr, "[Bus] TOS chargé : %s (%zu Ko @ $%06X, version $%04X)\n",
+    std::fprintf(stderr, "[Bus] TOS loaded: %s (%zu KB @ $%06X, version $%04X)\n",
                  path.c_str(), rom.size() / 1024, romBase, tosVersion);
     return true;
 }
@@ -144,13 +145,13 @@ bool Bus::loadTos(const std::string& path) {
 bool Bus::loadCart(const std::string& path) {
     std::ifstream f(path, std::ios::binary | std::ios::ate);
     if (!f) {
-        std::fprintf(stderr, "[Bus] cartouche introuvable : %s\n", path.c_str());
+        std::fprintf(stderr, "[Bus] cartridge not found: %s\n", path.c_str());
         return false;
     }
     const std::streamsize n = f.tellg();
     const std::size_t maxSize = stmap::CART_END - stmap::CART_BASE;   // 128 Ko
     if (n <= 0 || static_cast<std::size_t>(n) > maxSize) {
-        std::fprintf(stderr, "[Bus] cartouche invalide (%lld o, max %zu o) : %s\n",
+        std::fprintf(stderr, "[Bus] invalid cartridge (%lld B, max %zu B): %s\n",
                      static_cast<long long>(n), maxSize, path.c_str());
         return false;
     }
@@ -163,18 +164,18 @@ bool Bus::loadCart(const std::string& path) {
         ? (uint32_t(cart[0]) << 24) | (uint32_t(cart[1]) << 16) |
           (uint32_t(cart[2]) << 8)  |  uint32_t(cart[3])
         : 0;
-    const char* kind = magic == 0xFA52235F ? "diagnostic (saut $FA0004 au reset)"
-                     : magic == 0xABCDEF42 ? "applicative (lancée par le TOS)"
-                     : "inconnue (magic absent)";
+    const char* kind = magic == 0xFA52235F ? "diagnostic (jump to $FA0004 at reset)"
+                     : magic == 0xABCDEF42 ? "application (launched by TOS)"
+                     : "unknown (no magic)";
     cartPath_ = path;
-    std::fprintf(stderr, "[Bus] cartouche chargée : %s (%zu Ko @ $FA0000, magic $%08X, %s)\n",
+    std::fprintf(stderr, "[Bus] cartridge loaded: %s (%zu KB @ $FA0000, magic $%08X, %s)\n",
                  path.c_str(), cart.size() / 1024, magic, kind);
     return true;
 }
 
 void Bus::ejectCart() {
     if (!cart.empty())
-        std::fprintf(stderr, "[Bus] cartouche éjectée : %s\n", cartPath_.c_str());
+        std::fprintf(stderr, "[Bus] cartridge ejected: %s\n", cartPath_.c_str());
     cart.clear();
     cartPath_.clear();
 }
@@ -369,6 +370,15 @@ uint8_t Bus::read8Slow(uint32_t addr) {
     // d'Hatari (memory.c) — PAS de bus error dans la fenêtre.
     if (addr >= romBase && addr < romBase + romWindowSize())
         return addr < romBase + rom.size() ? rom[addr - romBase] : 0x00;
+
+    // Carte réseau NE2000 sur le port cartouche (EtherNEC — extension NeoST) :
+    // les lectures $FA0000-$FBFFFF encodent les accès registre (cf. Ne2000.hpp).
+    // Décodée AVANT la ROM cartouche ; les deux sont mutuellement exclusives
+    // (Machine::enableEtherNec refuse si une cartouche est montée).
+    if (ne2000 && addr >= stmap::CART_BASE && addr < stmap::CART_END) {
+        uint8_t v;
+        if (ne2000->cartRead(addr, v)) return v;
+    }
 
     // Port cartouche ($FA0000-$FBFFFF) : si une cartouche est montée, on expose
     // sa ROM ; le TOS lit le magic à $FA0000 et amorce (diagnostic/applicative).
@@ -671,6 +681,12 @@ bool Bus::megaSteCacheUpdate(uint32_t addr, int size, uint16_t val, bool write, 
 uint8_t Bus::dmaRead8(uint32_t addr) {
     addr &= stmap::ADDR_MASK;
     if (busFault(addr)) return 0x00;         // DMA_READ_BYTE_BUS_ERR
+    // Jamais de dispatch MMIO : certains registres whitelistés (pads STE
+    // $FF9200, FDC $FF8604-07) déclenchent une bus error périphérique en accès
+    // octet — levée ici hors du try/catch de Moira, elle terminerait le
+    // processus. Chez Hatari le pointeur DMA masqué n'atteint jamais l'espace
+    // IO ; on lit 0 comme pour une zone fautive (et sans effet de bord puce).
+    if (addr >= stmap::MMIO_BASE) return 0x00;
     return read8(addr);
 }
 
@@ -683,6 +699,7 @@ void Bus::dmaWrite8(uint32_t addr, uint8_t v) {
     // l'idiome de reboot à chaud « move.l $4.w,a0 ; jmp (a0) ». Chez Hatari l'écriture
     // est simplement perdue (cpu/memory.c:775, SysMem_bput : « if (addr < 0x8) »).
     if (addr < 0x8 || busFault(addr)) return;   // écriture en zone protégée/fautive perdue
+    if (addr >= stmap::MMIO_BASE) return;       // pas de dispatch MMIO (cf. dmaRead8)
     write8(addr, v);
 }
 
@@ -783,7 +800,12 @@ uint8_t Bus::mmioRead8(uint32_t addr) {
         // $FFFA31-$FFFA3F (impairs) : VOID chez Hatari (ioMemTabST.c:143-150,
         // IoMem_VoidRead) — lecture 0xFF, AUCUN wait-state (pas de handler). Le
         // dernier registre câblé est l'UDR USART à $FFFA2F.
-        if ((addr & 0x3F) >= 0x31) return 0xFF;
+        // Octets PAIRS : non décodés par le 68901 (registres sur adresses
+        // impaires). Atteignables seulement par un accès MOT (la whitelist
+        // faute l'accès octet) : chez Hatari l'octet pair passe alors par
+        // IoMem_BusErrorEvenReadAccess → 0xFF, jamais par la puce. Sans ce
+        // filtre, les default du MFP en faisaient des cellules RAM fantômes.
+        if (!(addr & 1) || (addr & 0x3F) >= 0x31) return 0xFF;
         // Wait state MFP (4 cyc) facturé UNE fois par accès : seul l'octet IMPAIR
         // porte un registre câblé (Hatari : M68000_WaitState(4) dans le handler du
         // registre ; l'octet pair d'un accès mot n'ajoute rien).
@@ -895,7 +917,9 @@ void Bus::mmioWrite8(uint32_t addr, uint8_t v) {
     if (addr >= stmap::MFP_BASE && addr < stmap::MFP_BASE + 0x40 && mfp) {
         // $FFFA31-$FFFA3F : void — écriture ABSORBÉE sans wait-state (cf. mmioRead8) ;
         // l'ancien chemin en faisait 8 octets de RAM relisible cachés dans le MFP.
-        if ((addr & 0x3F) >= 0x31) return;
+        // Octets PAIRS : non décodés, écriture jetée (IoMem_BusErrorEvenWriteAccess),
+        // cf. mmioRead8.
+        if (!(addr & 1) || (addr & 0x3F) >= 0x31) return;
         // Wait state MFP facturé UNE fois par accès : octet impair seulement (cf. mmioRead8).
         if (cpu && (addr & 1)) cpu->addMfpWaitCycles();
         mfp->write8(addr, v);

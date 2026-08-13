@@ -1,0 +1,70 @@
+plugins {
+    id 'com.android.application'
+}
+
+// Racine du dépôt, vue depuis packaging/android/app.
+def repoRoot = file("${rootDir}/../..")
+
+android {
+    namespace 'net.gistlabs.neost'
+    compileSdk 34
+    ndkVersion '27.2.12479018'
+
+    defaultConfig {
+        applicationId 'net.gistlabs.neost'
+        // 21 = Android 5.0. En dessous, ni AAudio ni les API de stockage utilisées
+        // par SDL2 ne sont disponibles, pour un parc résiduel.
+        minSdk 21
+        targetSdk 34
+        versionCode 1
+        versionName '0.5.2'
+
+        externalNativeBuild {
+            cmake {
+                // On ne construit QUE la bibliothèque de l'application : le
+                // CMakeLists racine définit aussi neost-headless, inutile ici.
+                targets 'neost'
+                arguments '-DANDROID_STL=c++_shared'
+            }
+        }
+        // arm64 uniquement : c'est ce que Google Play exige depuis 2019, et
+        // l'émulation 68000 cycle-exact n'a aucun intérêt sur un parc 32 bits.
+        ndk {
+            abiFilters 'arm64-v8a'
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path file("${repoRoot}/CMakeLists.txt")
+            version '3.22.1'
+        }
+    }
+
+    sourceSets {
+        main {
+            // La couche Java de SDL2 est LUE dans le sous-module, jamais recopiée :
+            // une copie divergerait de la version C++ liée juste à côté.
+            java.srcDirs += ["${repoRoot}/extern/SDL2/android-project/app/src/main/java"]
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false          // rien à minifier : tout le code utile est natif
+            signingConfig null           // paquet NON signé (cf. packaging/android/README.md)
+        }
+        debug {
+            applicationIdSuffix '.debug'
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    lint {
+        abortOnError false
+    }
+}

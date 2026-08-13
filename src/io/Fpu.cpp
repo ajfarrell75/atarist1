@@ -779,5 +779,5 @@ void Fpu::genOp(uint16_t cmd, Ext src) {
 void Fpu::trace(const char* what, uint16_t v) {
     if (traceCount_ >= 32) return;
     std::fprintf(stderr, "[fpu] %s $%04X%s\n", what, v,
-                 ++traceCount_ == 32 ? " (suite du dialogue non journalisée)" : "");
+                 ++traceCount_ == 32 ? " (rest of the dialogue not logged)" : "");
 }
