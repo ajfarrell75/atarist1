@@ -555,7 +555,11 @@ void Shifter::liveGlueCatchUp(int targetLine) {
                 glueLineStart_[liveGlueLine_] = (liveGlueLine_ == 0) ? 0 : prevStart + liveGlueLen_;
             liveGlueLen_ = cpl;
         }
-        const int freqHz = (liveGlueRes_ & 0x02) ? 71 : (liveGlueFreq50_ ? 50 : 60);
+        // ⚠ Décode de Video_StartHBL : hi SEULEMENT si (res & 3) == 2 — res 3 suit
+        // le bit freq de $FF820A (video.c:3541-3581). Le décode « bit 1 = 71 Hz »
+        // (res & 2, utilisé par updateGlueState) enverrait une ligne res 3 d'un
+        // écran 50 Hz dans la branche 60 Hz (DE 52-372 + left+2/right-2).
+        const int freqHz = ((liveGlueRes_ & 0x03) == 0x02) ? 71 : (liveGlueFreq50_ ? 50 : 60);
         startHBL(liveGlueLine_, liveGlueRes_, freqHz);
     }
 }
@@ -1667,7 +1671,8 @@ void Shifter::replayGlue() {
     const std::size_t nw = syncWrites_.size();
     int64_t lineCyc = 0;                                  // cycle-trame du début de la ligne (V2/LINELEN)
     for (int line = 0; line < lpf; ++line) {
-        int freqHz = (curRes & 0x02) ? 71 : (curFreq50 ? 50 : 60);
+        // cf. le feeder live : décode Video_StartHBL, hi si (res & 3) == 2 seulement.
+        int freqHz = ((curRes & 0x03) == 0x02) ? 71 : (curFreq50 ? 50 : 60);
         startHBL(line, curRes, freqHz);
         int len = cpl;
         if (v2 && !lineLen) {                            // ligne raccourcie ? (heuristique V2)
