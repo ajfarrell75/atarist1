@@ -3,7 +3,7 @@
 #  (disks/diskA.st) avec des fichiers + un dossier, montable dans NeoST.
 #  (c) 2026 VERHILLE Arnaud — projet NeoST.
 # =============================================================================
-import struct, os
+import struct, os, sys
 
 SECT=512; SPT=9; SIDES=2; TRACKS=80
 TOTAL=TRACKS*SIDES*SPT          # 1440
@@ -75,8 +75,12 @@ add_file(0,'LISEZMOI','TXT',2,b'Bienvenue sur NeoST !\r\nEmulateur Atari ST.\r\n
 add_file(1,'NEOST','TXT',3,b'Disquette FAT12 generee pour tester le FDC WD1772.\r\n')
 add_dir(2,'PROGS',4)
 
-_out = os.path.join(os.path.dirname(__file__), '..', 'disks', 'diskA.st')
-os.makedirs(os.path.dirname(_out), exist_ok=True)
+# Contrat des générateurs (cf. ensure_disk/ensure_rom_asset) : argv[1] = chemin de
+# sortie. Il était IGNORÉ — câblé en disk_generate sur un autre chemin, l'outil
+# écrivait disks/diskA.st et l'appelant ne trouvait jamais son fichier.
+_out = sys.argv[1] if len(sys.argv) > 1 else os.path.join(
+    os.path.dirname(__file__), '..', 'disks', 'diskA.st')
+os.makedirs(os.path.dirname(os.path.abspath(_out)), exist_ok=True)
 with open(_out,'wb') as f:
     f.write(img)
-print("disk.st :", len(img), "octets,", TOTAL, "secteurs, SPT", SPT, "faces", SIDES)
+print(_out, ":", len(img), "octets,", TOTAL, "secteurs, SPT", SPT, "faces", SIDES)

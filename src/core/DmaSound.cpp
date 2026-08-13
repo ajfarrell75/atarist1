@@ -187,9 +187,17 @@ void DmaSound::updateDac() {
     const int64_t  samples = num / CPU_HZ;
     dacRem_ = num % CPU_HZ;
     const uint32_t step  = (mode_ & 0x80) ? 1u : 2u;          // octets par échantillon
-    int64_t        bytes = samples * step;
-    while (bytes-- > 0 && (fifoNb_ > 0 || playing_))
-        capPush(fifoPull());
+    // Consommation par ÉCHANTILLON entier (paire L/R en stéréo), jamais par octet
+    // isolé : s'arrêter entre le L et le R (fin de flux sur résidu impair) laissait
+    // un nombre IMPAIR d'octets dans l'anneau de capture — tous les échantillons
+    // suivants décalés d'un octet, canaux inversés jusqu'au drain complet. Hatari
+    // ne peut pas le faire : sa boucle stéréo tire toujours les deux octets ensemble.
+    for (int64_t s = 0; s < samples; ++s) {
+        if (fifoNb_ == 0 && !playing_) break;
+        if (step == 2 && fifoNb_ < 2 && !playing_) break;     // paire incomplète : on n'entame pas
+        for (uint32_t b = 0; b < step; ++b)
+            capPush(fifoPull());
+    }
 }
 
 // Tic HBL — port de DmaSnd_STE_HBL_Update (dmaSnd.c:727-741) : le DMA garde la

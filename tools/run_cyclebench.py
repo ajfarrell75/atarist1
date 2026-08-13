@@ -64,6 +64,14 @@ def main() -> int:
     periods = measure()
 
     if "--update" in sys.argv:
+        # Refus d'un golden à trous : une boucle mesurée None (< MIN_ITERS itérations)
+        # écrite dans le golden donnait ensuite « OK name None » pour toujours —
+        # une ligne verte en permanence qui ne valide rien (None == None).
+        holes = [n for n, p in periods.items() if p is None]
+        if holes:
+            print("mesure incomplète (< MIN_ITERS itérations) pour : "
+                  + ", ".join(holes) + " — golden NON écrit", file=sys.stderr)
+            return 2
         GOLDEN.write_text(json.dumps(periods, indent=1) + "\n")
         print(f"golden cycle écrit : {GOLDEN.relative_to(ROOT)}")
         for n, p in periods.items():
@@ -78,7 +86,9 @@ def main() -> int:
     ok = True
     for name, want in golden.items():
         got = periods.get(name)
-        if got != want:
+        # Un golden null (ancien --update permissif) ou une mesure None ne peuvent
+        # pas compter OK : None == None validerait zéro cycle.
+        if want is None or got is None or got != want:
             ok = False
             print(f"  FAIL {name:12} got={got} want={want}")
         else:
