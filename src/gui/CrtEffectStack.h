@@ -80,6 +80,10 @@ private:
     int uPhosphorGamma = -1;
 
     int  outW = 0, outH = 0;
+    // Dernière taille de FBO REFUSÉE par le pilote : on ne retente pas à taille
+    // identique (spam GL), mais un changement de taille (zoom réduit) redonne sa
+    // chance à l'effet — l'échec n'est plus définitif pour la session.
+    int  failedW = -1, failedH = -1;
     int  srcW_ = 0, srcH_ = 0;
     int  pingPongIdx = 0;
     bool firstFrame  = true;

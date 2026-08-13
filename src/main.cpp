@@ -206,7 +206,13 @@ static void parseConfigLine(Config& c, std::string line) {
     else if (line.rfind("fpu=", 0)  == 0) c.fpu  = (line.substr(4) == "1");
     else if (line.rfind("joyport=", 0) == 0) c.joyport = (line.substr(8) == "0") ? 0 : 1;
     else if (line.rfind("joymap=", 0) == 0) c.joymap = line.substr(7);
-    else if (line.rfind("joydeadzone=", 0) == 0) c.joydeadzone = std::strtof(line.substr(12).c_str(), nullptr);
+    else if (line.rfind("joydeadzone=", 0) == 0) {
+        // Bornée comme volume= : négative, > 0.95 ou NaN (fichier hostile/corrompu),
+        // la valeur brute rendait le menu kiosque incontrôlable (padAxis compare
+        // fabs(v) > deadzone sans re-borner).
+        c.joydeadzone = std::strtof(line.substr(12).c_str(), nullptr);
+        if (!(c.joydeadzone >= 0.0f && c.joydeadzone <= 0.95f)) c.joydeadzone = 0.30f;
+    }
     else if (line.rfind("fastfdc=", 0) == 0) c.fastfdc = (line.substr(8) == "1");
     else if (line.rfind("volume=", 0) == 0) {
         c.volume = std::strtof(line.substr(7).c_str(), nullptr);
@@ -267,6 +273,8 @@ static bool g_kioskLaunched = false;
 // elle, et Machine::loadState n'accepte que l'entre-deux-trames.
 //   0 = rien à faire · 1 = passer en kiosk · 2 = revenir au GUI.
 static int g_kioskSwitchReq = 0;
+static bool g_saveStateReq = false;    // F5 latché dans onKey (cf. F8)
+static bool g_loadStateReq = false;    // F7 latché dans onKey
 // Zoom ADAPTATIF (cale le contenu réel sur la hauteur disponible) : ON par défaut.
 // S'applique aux DEUX modes — plein écran kiosk (viewport GL) et fenêtre « Atari ST
 // Screen » du bureau (UV de l'image) — pour que le bureau présente le même cadrage
@@ -1129,7 +1137,12 @@ void onKey(GLFWwindow*, int key, int scancode, int action, int /*mods*/) {
         if (action == GLFW_PRESS) g_kioskSwitchReq = g_kiosk ? 2 : 1;
         return;
     }
-    if (key == GLFW_KEY_F5 || key == GLFW_KEY_F7 || key == GLFW_KEY_F11) return;
+    // F5/F7 : latchés ICI comme F8 (même justification anti-scrutation — un appui
+    // bref entre deux tours de boucle était perdu, l'utilisateur croyait l'état
+    // sauvé sans qu'il le soit). Consommés à la frontière de trame.
+    if (key == GLFW_KEY_F5) { if (action == GLFW_PRESS) g_saveStateReq = true; return; }
+    if (key == GLFW_KEY_F7) { if (action == GLFW_PRESS) g_loadStateReq = true; return; }
+    if (key == GLFW_KEY_F11) return;
     // F9/F10/F12 sont des raccourcis HÔTE du kiosk : ils ne partent pas au ST. K a été
     // ABANDONNÉ comme raccourci — c'est une lettre, donc du jeu (taper ses initiales dans
     // une table des scores ouvrait le bandeau clavier) ; l'intercepter privait en plus le
@@ -1268,14 +1281,19 @@ void drawJoystickWindow(GLFWwindow* win, uint8_t lastJoy0, uint8_t lastJoy1) {
     ImGui::Separator();
 
     // --- État brut de chaque manette présente -----------------------------------
-    int nPresent = 0;
+    // Port affiché = affectation EFFECTIVE (joymap + AUTO), comme la page kiosque —
+    // l'ordre d'énumération mentait dès qu'un rôle était épinglé (PORT 0/OFF).
+    int8_t joyRoles[GLFW_JOYSTICK_LAST + 1];
+    joyResolveRoles(joyRoles);
+    int8_t joyAssign[GLFW_JOYSTICK_LAST + 1];
+    stjoy::resolveAssign(joyRoles, joyAssign);
     for (int jid = GLFW_JOYSTICK_1; jid <= GLFW_JOYSTICK_LAST; ++jid) {
         if (!glfwJoystickPresent(jid)) continue;
-        ++nPresent;
         const char* nm = glfwGetJoystickName(jid);
-        const int stPort = (nPresent == 1) ? 1 : (nPresent == 2 ? 0 : -1);
+        const int stPort = joyAssign[jid];
         ImGui::Text("Pad %d: %s", jid, nm ? nm : "?");
         if (stPort >= 0) { ImGui::SameLine(); ImGui::TextDisabled("→ ST port %d", stPort); }
+        else             { ImGui::SameLine(); ImGui::TextDisabled("(off)"); }
 
         GLFWgamepadstate gs;
         if (glfwGetGamepadState(jid, &gs)) {
@@ -2831,13 +2849,19 @@ void drawConfigWindow(ConfigUi& ui) {
             g_joyCfgDirty = true;
         }
         ImGui::Separator();
-        ImGui::TextDisabled("USB pads detected (1st → port 1, 2nd → port 0):");
+        ImGui::TextDisabled("USB pads detected (effective assignment, joymap):");
         int nPad = 0;
+        // cf. drawJoystickWindow : montrer l'affectation RÉELLE, pas l'ordre d'énumération.
+        int8_t padRoles[GLFW_JOYSTICK_LAST + 1];
+        joyResolveRoles(padRoles);
+        int8_t padAssign[GLFW_JOYSTICK_LAST + 1];
+        stjoy::resolveAssign(padRoles, padAssign);
         for (int jid = GLFW_JOYSTICK_1; jid <= GLFW_JOYSTICK_LAST; ++jid) {
             if (!glfwJoystickPresent(jid)) continue;
             const char* nm = glfwGetGamepadName(jid);
             if (!nm) nm = glfwGetJoystickName(jid);
-            ImGui::BulletText("Port %d: %s", (nPad == 0) ? 1 : 0, nm ? nm : "?");
+            if (padAssign[jid] >= 0) ImGui::BulletText("Port %d: %s", padAssign[jid], nm ? nm : "?");
+            else                     ImGui::BulletText("Off: %s", nm ? nm : "?");
             ++nPad;
         }
         if (nPad == 0) ImGui::BulletText("(none)");
@@ -3315,7 +3339,14 @@ int main(int argc, char** argv) {
         if (cfg.gemdos.empty()) machine.gemdos.unmount();
         else                    machine.gemdos.setDirectory(resolvePath(cfg.gemdos));
         if (cfg.acsi.empty())   machine.fdc.unmountAcsi();
-        else if (!machine.fdc.acsiActive()) machine.fdc.mountAcsi(resolvePath(cfg.acsi));
+        else {
+            // Remonter aussi quand la config désigne une AUTRE image : le seul test
+            // « déjà actif » laissait l'ancienne image montée alors que la barre de
+            // statut et neost.cfg affichaient la nouvelle (profil chargé).
+            const std::string want = resolvePath(cfg.acsi);
+            if (!machine.fdc.acsiActive() || machine.fdc.acsiMountedPath() != want)
+                machine.fdc.mountAcsi(want);
+        }
         machine.mfp.setColorMonitor(!cfg.mono);
         machine.fdc.setFastFdc(cfg.fastfdc);   // ré-applique le FDC rapide après reconfig
         machine.bus.setFpuPresent(cfg.fpu && machTypeR == MachineType::MegaSte);
@@ -3483,7 +3514,12 @@ int main(int argc, char** argv) {
             // g_cfgPristine et RÉÉCRIT par-dessus machine/mem/rom/disk/crt/dock/show*
             // avec les valeurs du lancement — les préférences de la séance, que ce
             // saveConfig venait d'enregistrer, sont perdues sans le moindre message.
-            g_cfgPristine = cfg;
+            // ⚠ MAIS seulement si le saveConfig ci-dessus a réellement écrit : lancé
+            // en --kiosk (g_kioskLaunched), il est un no-op — remplacer quand même la
+            // référence pristine par la cfg salie pendant l'excursion bureau (F8)
+            // ferait persister la machine du visiteur au premier save forcé
+            // (auto-purge ROM, réaffectation manette) : l'exact contraire du gel.
+            if (!g_kioskLaunched) g_cfgPristine = cfg;
 #if defined(NEOST_WITH_IMGUI)
             // Disposition des fenêtres écrite MAINTENANT : en kiosk plus aucune n'est
             // soumise, une sauvegarde automatique plus tard n'aurait rien à dire d'elles.
@@ -3757,23 +3793,23 @@ int main(int argc, char** argv) {
         // la frontière de trame. En kiosk la config est figée mais l'état de jeu, lui, se
         // sauve/charge (ce n'est pas la config). Fronts montants.
         {
-            static bool f5Prev = false, f7Prev = false;
+            // Demandes latchées dans onKey (cf. le commentaire F8 : la scrutation
+            // glfwGetKey ratait un appui bref posé/relâché entre deux tours).
             const std::string statePath = exeDir + "/../neost.state";
-            const bool f5 = glfwGetKey(window, GLFW_KEY_F5) == GLFW_PRESS;
-            const bool f7 = glfwGetKey(window, GLFW_KEY_F7) == GLFW_PRESS;
-            if (f5 && !f5Prev) {
+            if (g_saveStateReq) {
+                g_saveStateReq = false;
                 const bool ok = machine.saveStateFile(statePath);
                 g_stateMsg = ok ? "\xef\x83\x87 State saved (F5)" : "Save failed";
                 g_stateMsgFrames = 120;
                 std::fprintf(stderr, "[state] save %s → %s\n", ok ? "OK" : "FAILED", statePath.c_str());
             }
-            if (f7 && !f7Prev) {
+            if (g_loadStateReq) {
+                g_loadStateReq = false;
                 const bool ok = machine.loadStateFile(statePath);
                 g_stateMsg = ok ? "\xef\x80\x9e State restored (F7)" : "No state / failed";
                 g_stateMsgFrames = 120;
                 std::fprintf(stderr, "[state] load %s ← %s\n", ok ? "OK" : "FAILED", statePath.c_str());
             }
-            f5Prev = f5; f7Prev = f7;
         }
         screen.update(machine.shifter.pixels(), machine.shifter.width(), machine.shifter.height());
 
@@ -3906,8 +3942,10 @@ int main(int argc, char** argv) {
                     { "F7",  "reload the state" },
                     { "F8",  "kiosk mode (toggle)" },
                     { "F11", "keyboard joystick emulation" },
-                    { "F12", "mouse capture (or click inside the screen)" },
-                    { "DEL", "release the captured mouse" },
+                    // F12 n'a JAMAIS eu de handler bureau (historique vérifié) : il
+                    // n'existe qu'en kiosque — documenter la réalité, pas l'intention.
+                    { "F12", "kiosk: keyboard & mouse overlay" },
+                    { "DEL", "release the mouse (click inside the screen captures it)" },
                 };
                 for (const auto& k : keys) ImGui::BulletText("%-6s %s", k.k, k.w);
                 ImGui::Separator();
@@ -4009,8 +4047,11 @@ int main(int argc, char** argv) {
             // configuration qui déchire les démos européennes.
             const int hz = machine.shifter.refreshHz();
             char hzbuf[32];
-            std::snprintf(hzbuf, sizeof hzbuf, "%d Hz %s", hz, hz >= 55 ? "NTSC" : "PAL");
-            seg(hzbuf, kCfgRom, "Scan rate (set by the ROM)", hz >= 55);
+            // 71 Hz = mono haute résolution, ni NTSC ni un problème : l'avertissement
+            // orange ne vise que le 60 Hz (déchirement des démos européennes).
+            std::snprintf(hzbuf, sizeof hzbuf, "%d Hz %s",
+                          hz, hz == 60 ? "NTSC" : hz >= 70 ? "mono" : "PAL");
+            seg(hzbuf, kCfgRom, "Scan rate (set by the ROM)", hz == 60);
             seg("A: " + shortName(machine.fdc.mountedPath(0)), kCfgFloppy, "Floppy drive A");
             seg("B: " + shortName(machine.fdc.mountedPath(1)), kCfgFloppy, "Floppy drive B");
             const std::string c = machine.gemdos.active() ? shortName(cfg.gemdos) + "/"
@@ -4227,6 +4268,15 @@ int main(int argc, char** argv) {
                     };
                     wantDisk(cfg.disk,  prevA, reqMount,  reqEject);
                     wantDisk(cfg.diskb, prevB, reqMountB, reqEjectB);
+                    // Réseau : le profil porte fujinet=/modem=/ethernec= mais ni
+                    // applyConfig ni le rebuild ne les branchent — sans ces appels,
+                    // les cases affichaient l'état du profil alors que le matériel
+                    // restait celui d'avant (modem coché mais AT dans le vide…).
+                    fujiApply(cfg.fujinet);
+#ifdef NEOST_WITH_NET
+                    modemApply(cfg.modem);
+#endif
+                    etherApply(cfg.ethernec);
                     saveConfig(exeDir, cfg, &machine);
                     reqRebuild = true;        // modèle/RAM/FPU/ROM/cartouche/HD/moniteur/FDC
                     cfgUi.pendInit = false;   // resème les champs « en attente »

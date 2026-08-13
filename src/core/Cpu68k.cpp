@@ -713,9 +713,18 @@ int Cpu68k::run(int cycles) {
             const moira::u16 ird = g_moira->getIRD();
             if (ird >= 0x0008 && ird <= 0x000A) {
                 const uint32_t pc0 = g_moira->getPC0() & 0x00FFFFFF;
-                if (pc0 >= 0xFA0000 && pc0 < 0xFC0000 &&
-                    g_bus->gemdos->handleOpcode(ird))
-                    g_moira->setIRD(0x4E71);         // → exécuté comme NOP
+                if (pc0 >= 0xFA0000 && pc0 < 0xFC0000) {
+                    // Filet : handleOpcode tourne HORS execute(), un BusError qui
+                    // s'en échapperait (accès invité non gardé) traverserait
+                    // runFrame sans catch → std::terminate. Les primitives de
+                    // GemdosHd sont non-fautives (checkArea), ceci ne couvre
+                    // qu'une régression future — l'appel est alors abandonné.
+                    bool handled = false;
+                    try { handled = g_bus->gemdos->handleOpcode(ird); }
+                    catch (const moira::BusError&) { handled = true; }
+                    if (handled)
+                        g_moira->setIRD(0x4E71);     // → exécuté comme NOP
+                }
             }
         }
         // DIAG (gated NEOST_HTRACE) — trace cycle-exact d'UNE itération du handler en jeu

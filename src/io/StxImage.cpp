@@ -7,6 +7,7 @@
 #include <filesystem>
 #include "io/StxImage.hpp"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -53,7 +54,9 @@ void StxImage::buildSectorsSimple(Track& trk, const uint8_t* p) {
         Sector& sec = trk.sectors[s];
         sec.saveIndex   = -1;
         sec.dataOffset  = 0;
-        sec.bitPosition = uint16_t(bytePos * 8);
+        // Écrêté (pas de wrap uint16) : une piste HD/ED simple dépasse 65535 bits —
+        // le wrap inversait l'ordre angulaire (nextSectorIDStx suppose croissant).
+        sec.bitPosition = uint16_t(std::min(bytePos * 8, 0xFFFF));
         sec.readTime    = 0;
         sec.idTrack  = uint8_t(trk.trackNumber & 0x7f);
         sec.idHead   = uint8_t((trk.trackNumber >> 7) & 0x01);
@@ -312,7 +315,10 @@ void StxImage::reinterpretSaveTrack(Track& t) {
         sec.idCrc     = crc16({ 0xa1, 0xa1, 0xa1, 0xfe, f.tr, f.hd, f.sr, f.sz });
         sec.fdcStatus = 0;
         sec.sectorSize  = uint16_t(f.dataLen);
-        sec.bitPosition = uint16_t((f.fePos + 1) * 8);       // « juste après l'IDAM » (octet ID piste)
+        // « Juste après l'IDAM » (octet ID piste). Écrêté : un flux WRITE TRACK
+        // HD/ED (~12,5/25 Ko) dépasse 65535 bits — le wrap uint16 cassait l'ordre
+        // angulaire croissant supposé par nextSectorIDStx (secteurs masqués/RNF).
+        sec.bitPosition = uint16_t(std::min<uint32_t>((f.fePos + 1) * 8, 0xFFFF));
         sec.readTime    = 0;
         sec.dataOffset  = 0;
         sec.pFuzzy = nullptr; sec.pTiming = nullptr;

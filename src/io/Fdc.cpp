@@ -813,6 +813,12 @@ int Fdc::tracksPerDisk(int drive) const {
 // secteurs/piste (cf. Hatari FDC_GetBytesPerTrack : ≥36 spt → ED ×4, ≥18 → HD ×2).
 int Fdc::bytesPerTrack() const {
     const FloppyDisk& dk = drive_[driveSel_ < 0 ? 0 : driveSel_];
+    // .stx : longueur RÉELLE de la piste sous la tête (dispatch comme Hatari
+    // FDC_GetBytesPerTrack) — dk.spt n'est pas renseigné au montage STX et
+    // gardait la valeur du média PRÉCÉDENT (bruit READ TRACK jusqu'à 4× trop
+    // long après un hot-swap .st ED → .stx).
+    if (dk.imgType == FloppyDisk::IMG_STX && dk.stx)
+        return bytesPerTrackStx(dk.headTrack, side_);
     if (dk.spt >= 36) return BYTES_PER_TRACK * 4;
     if (dk.spt >= 18) return BYTES_PER_TRACK * 2;
     return BYTES_PER_TRACK;
@@ -1268,13 +1274,33 @@ void Fdc::writeBack(FloppyDisk& dk, uint64_t off, uint64_t len) {
         const std::string tmp = dk.path + ".tmp";
         {
             std::ofstream o(tmp, std::ios::binary | std::ios::trunc);
-            if (!o) return;                       // dossier non inscriptible : on renonce
+            if (!o) {                             // dossier non inscriptible : on renonce, EN LE DISANT
+                std::fprintf(stderr, "[FDC] %s: cannot create tmp file — "
+                                     "write NOT persisted\n", dk.path.c_str());
+                return;
+            }
             o.write(reinterpret_cast<const char*>(enc.data()),
                     static_cast<std::streamsize>(enc.size()));
             o.flush();
-            if (!o.good()) { o.close(); std::remove(tmp.c_str()); return; }
+            if (!o.good()) {
+                o.close(); std::remove(tmp.c_str());
+                std::fprintf(stderr, "[FDC] %s: tmp write failed (disk full?) — "
+                                     "write NOT persisted\n", dk.path.c_str());
+                return;
+            }
         }
-        if (std::rename(tmp.c_str(), dk.path.c_str()) != 0) std::remove(tmp.c_str());
+        // ⚠ std::filesystem::rename, PAS std::rename : le rename C de la CRT Windows
+        // ÉCHOUE si la destination existe — or elle existe toujours ici. Chaque
+        // write-back .msa échouait donc en silence sous Windows (sauvegardes de jeu
+        // perdues à l'éjection). fs::rename remplace atomiquement sur les deux OS
+        // (même raison que writeConfigAtomic, main.cpp).
+        std::error_code rnec;
+        std::filesystem::rename(tmp, dk.path, rnec);
+        if (rnec) {
+            std::remove(tmp.c_str());
+            std::fprintf(stderr, "[FDC] %s: cannot replace (%s) — write NOT persisted\n",
+                         dk.path.c_str(), rnec.message().c_str());
+        }
         return;
     }
 
