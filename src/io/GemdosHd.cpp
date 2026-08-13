@@ -393,12 +393,19 @@ void GemdosHd::reset() {
 // -----------------------------------------------------------------------------
 //  Accès mémoire ST (port des helpers STMemory_*)
 // -----------------------------------------------------------------------------
-uint8_t  GemdosHd::readByte (uint32_t a) { return bus_.read8(a); }
-uint16_t GemdosHd::readWord (uint32_t a) { return bus_.read16(a); }
-uint32_t GemdosHd::readLong (uint32_t a) { return bus_.read32(a); }
-void GemdosHd::writeByte(uint32_t a, uint8_t  v) { bus_.write8(a, v); }
-void GemdosHd::writeWord(uint32_t a, uint16_t v) { bus_.write16(a, v); }
-void GemdosHd::writeLong(uint32_t a, uint32_t v) { bus_.write32(a, v); }
+// ⚠ NON-FAUTIVES, comme les STMemory_* d'Hatari : ces helpers tournent HORS de
+// Moira::execute(), donc hors de tout try/catch — un pointeur invité forgé vers
+// une MMIO fautive ($FF8604, $FF9200…) jetait moira::BusError jusqu'à
+// std::terminate (crash de l'émulateur entier). Lecture : RAM + ROM ; écriture :
+// RAM seule. Hors zone → 0 / écriture ignorée, l'appel GEMDOS échoue proprement
+// par ses propres chemins d'erreur. Bonus : plus d'effet de bord MMIO (une
+// lecture ACIA consommait l'octet RX pendant un trap).
+uint8_t  GemdosHd::readByte (uint32_t a) { return checkArea(a, 1, true) ? bus_.read8(a)  : 0; }
+uint16_t GemdosHd::readWord (uint32_t a) { return checkArea(a, 2, true) ? bus_.read16(a) : 0; }
+uint32_t GemdosHd::readLong (uint32_t a) { return checkArea(a, 4, true) ? bus_.read32(a) : 0; }
+void GemdosHd::writeByte(uint32_t a, uint8_t  v) { if (checkArea(a, 1, false)) bus_.write8(a, v); }
+void GemdosHd::writeWord(uint32_t a, uint16_t v) { if (checkArea(a, 2, false)) bus_.write16(a, v); }
+void GemdosHd::writeLong(uint32_t a, uint32_t v) { if (checkArea(a, 4, false)) bus_.write32(a, v); }
 void GemdosHd::flushCache() { bus_.megaSteCacheFlushIfEnabled(); }
 
 bool GemdosHd::checkArea(uint32_t addr, uint32_t size, bool allowRom) {
@@ -956,7 +963,12 @@ bool GemdosHd::gemChDir(uint32_t p) {
     makeAbsoluteName(host);
 
     EmuDrive& d = emudrives_[drive - 2];
-    if (host.compare(0, d.hdEmuDir.size(), d.hdEmuDir) == 0) {
+    // Préfixe testé SÉPARATEUR INCLUS (comme clampToSandbox) : le test nu laissait
+    // passer un frère « <racine>EVIL/ ». Défense en profondeur — host sort toujours
+    // de createHostFileName→clampToSandbox, donc déjà sous la racine aujourd'hui.
+    std::string root = d.hdEmuDir;
+    addSlash(root);
+    if (host.compare(0, root.size(), root) == 0) {
         d.fsCurrPath = host;
         setD0(cpu_, GEMDOS_EOK);
     } else {
@@ -1133,15 +1145,18 @@ bool GemdosHd::gemFDelete(uint32_t p) {
 }
 
 bool GemdosHd::gemLSeek(uint32_t p) {
-    long offset = (int32_t)readLong(p);
+    // ftello/fseeko (off_t 64 bits) comme gemRead : ftell/fseek plafonnent à 2 Go
+    // sous Windows x64 (LLP64, long = 32 bits) — un fichier hôte ≥ 2 Go faussait
+    // fileSize et la borne dest. L'interface GEMDOS reste 32 bits signés (D0).
+    off_t offset = (int32_t)readLong(p);
     int handle = readWord(p + 4);
     int mode = readWord(p + 6);
     if ((handle = getValidFileHandle(handle)) < 0) return false;
     FILE* fp = fileHandles_[handle].fp;
-    long oldPos = ftell(fp);
-    if (fseek(fp, 0, SEEK_END) != 0 || oldPos < 0) { setD0(cpu_, GEMDOS_E_SEEK); return true; }
-    long fileSize = ftell(fp);
-    long dest;
+    off_t oldPos = ftello(fp);
+    if (fseeko(fp, 0, SEEK_END) != 0 || oldPos < 0) { setD0(cpu_, GEMDOS_E_SEEK); return true; }
+    off_t fileSize = ftello(fp);
+    off_t dest;
     switch (mode) {
     case 0: dest = offset; break;
     case 1: dest = oldPos + offset; break;
@@ -1149,12 +1164,12 @@ bool GemdosHd::gemLSeek(uint32_t p) {
     default: dest = -1;
     }
     if (dest < 0 || dest > fileSize) {
-        fseek(fp, oldPos, SEEK_SET);
+        fseeko(fp, oldPos, SEEK_SET);
         setD0(cpu_, GEMDOS_ERANGE);
         return true;
     }
-    fseek(fp, dest, SEEK_SET);
-    setD0(cpu_, (int32_t)ftell(fp));
+    fseeko(fp, dest, SEEK_SET);
+    setD0(cpu_, (int32_t)ftello(fp));
     return true;
 }
 

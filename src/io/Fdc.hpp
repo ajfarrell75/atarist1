@@ -117,6 +117,12 @@ public:
         // --- Position physique / transition par lecteur (PAS le contenu image) ---
         for (int d = 0; d < 2; ++d) {
             ar(drive_[d].headTrack);        // position PHYSIQUE de la tête
+            // Borné comme stxNextSector_/fifoSize_ : hors [0, 90] (= MAX_TRACK,
+            // Fdc.cpp), les clamps par ÉGALITÉ d'updateSeek/updateStep (ht == 0 /
+            // == MAX_TRACK) ne retiennent plus la tête — elle marche arbitrairement
+            // loin (RNF partout jusqu'au remontage).
+            ar.check(drive_[d].headTrack >= 0 && drive_[d].headTrack <= 90,
+                     "Fdc::headTrack hors [0, 90]");
             ar(drive_[d].transitionPhase);  // phase Mediach (éjection/insertion)
             ar(drive_[d].transitionDeadline);
         }
