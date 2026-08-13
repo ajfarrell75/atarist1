@@ -611,6 +611,14 @@ public:
             a(g.displayStartCycle); a(g.displayEndCycle);
             a(g.displayPixelShift); a(g.borderMask);
         });
+        // commitAnchor_ nourrit « sl = commitAnchor_ + vcLineY_ » : borne LARGE
+        // (convention cpl_/lpf_ ≤ 4096 de Machine) — un INT_MAX forgé rendait
+        // l'addition UB, même si les indexeurs aval re-bornent sl. Pas de borne
+        // sur glueLines_.size() : replayGlue() peut légitimement redimensionner
+        // glueLines_ en cours de trame (lpf changé), l'ancre restant à l'ancienne
+        // géométrie jusqu'au beginFrame suivant.
+        ar.check(commitAnchor_ >= -1 && commitAnchor_ <= 4096,
+                 "Shifter::commitAnchor_ hors [-1, 4096]");
         ar(glueStartHBL_);
         ar(glueEndHBL_);
         ar(glueVOverscan_);

@@ -55,6 +55,13 @@ public:
 
     bool anyEnabled() const;
     bool targetEnabled() const;            // cible courante peuplée ?
+    // Chemin de l'image montée sur `target` (vide si cible non peuplée) — permet au
+    // GUI de détecter qu'un profil demande une AUTRE image (remontage nécessaire).
+    const std::string& mountedPath(int target = 0) const {
+        static const std::string none;
+        return (target >= 0 && target < MAX_DEVS && devs_[target].enabled)
+                   ? devs_[target].path : none;
+    }
     int  byteCount() const { return byteCount_; }
     // Nombre total de partitions sur toutes les images (port HDC_PartitionCount).
     int  partitionCount() const;

@@ -648,14 +648,30 @@
       if (!file || !ready) return;
       var m = /\.(st|msa|dim|stx)$/i.exec(file.name);
       if (!m) { Module.setStatus('Unrecognized format: ' + file.name + ' (.st/.msa/.dim/.stx)'); return; }
+      // Garde de taille : la plus grosse image ST légitime (.stx ED) reste < 4 Mo —
+      // au-delà, c'est un mauvais fichier, et MEMFS échouerait de toute façon.
+      if (file.size > 8 * 1024 * 1024) {
+        Module.setStatus('File too large for a floppy image: ' + file.name);
+        return;
+      }
       var reader = new FileReader();
+      // Sans onerror ni try/catch, un échec de lecture était muet et un échec
+      // d'écriture MEMFS avortait AVANT le montage en laissant le statut sur
+      // « Ready » — le dépôt semblait avoir réussi.
+      reader.onerror = function () {
+        Module.setStatus('Cannot read file: ' + file.name);
+      };
       reader.onload = function () {
         var data = new Uint8Array(reader.result);
         // L'extension d'origine est conservée : le FDC détecte aussi par contenu,
         // mais STX (Pasti) se repère par son en-tête + extension.
         var path = '/disks/_upload.' + m[1].toLowerCase();
-        Module.FS.writeFile(path, data);
-        mountWithAutoTos(path, file.name + ' (' + data.length + ' bytes)');
+        try {
+          Module.FS.writeFile(path, data);
+          mountWithAutoTos(path, file.name + ' (' + data.length + ' bytes)');
+        } catch (e) {
+          Module.setStatus('Cannot store the image (' + e + ')');
+        }
       };
       reader.readAsArrayBuffer(file);
     }

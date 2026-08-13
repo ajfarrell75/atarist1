@@ -395,14 +395,38 @@ unsigned int CrtEffectStack::process(unsigned int srcTex, int srcW, int srcH,
     srcH_ = srcH;
 
     if (outputTex[0] == 0) {
-        if (!createTextures(dstW, dstH)) { ready = false; return 0; }
+        // Échec d'allocation NON définitif : on repasse simplement en rendu direct
+        // pour cette trame (return 0 = passthrough côté appelant) et on retentera
+        // dès que la taille demandée change. `ready = false` condamnait l'effet
+        // pour toute la session sur un échec transitoire.
+        if (dstW == failedW && dstH == failedH) return 0;
+        if (!createTextures(dstW, dstH)) { failedW = dstW; failedH = dstH; return 0; }
+        failedW = failedH = -1;
     } else if (dstW != outW || dstH != outH) {
-        // Fenêtre/zoom changé — redimensionne la paire ping-pong.
+        // Fenêtre/zoom changé — redimensionne la paire ping-pong. La réallocation
+        // est VÉRIFIÉE (complétude FBO) : sans ce contrôle, un glTexImage2D refusé
+        // (FBO énorme après zoom sur GPU limité) laissait un attachement périmé
+        // plus petit que le viewport — sortie corrompue sans le moindre message.
         outW = dstW; outH = dstH;
+        bool resizeOk = true;
         for (int i = 0; i < 2; ++i) {
             glBindTexture(GL_TEXTURE_2D, outputTex[i]);
             glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, outW, outH, 0,
                          GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+            glBindFramebuffer(GL_FRAMEBUFFER, fbo[i]);
+            if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+                resizeOk = false;
+        }
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        if (!resizeOk) {
+            errorMsg = "FBO incomplete after resize";
+            glDeleteFramebuffers(2, fbo);
+            glDeleteTextures(2, outputTex);
+            fbo[0] = fbo[1] = 0;
+            outputTex[0] = outputTex[1] = 0;
+            outW = outH = 0;
+            failedW = dstW; failedH = dstH;      // re-tenté au prochain changement de taille
+            return 0;
         }
         firstFrame = true;
     }
