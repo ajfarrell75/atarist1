@@ -69,6 +69,10 @@ void Mfp::reset() {
     // (RS232_Get_DCD_CTS) et ne peuvent donc pas rester coincées ; ici, sans cette
     // remise, une désassertion sous --loopback survivait à tous les resets.
     ctsLine_ = dcdLine_ = true;
+    // Même logique pour Centronics BUSY (GPIP0) : entrée recalculée seulement quand
+    // le sink PSG tire — psg.reset() (R15=0) ne le fait pas, un BUSY asserté par le
+    // bouclage ou la capture imprimante restait donc coincé après reset.
+    busyLine_ = false;
     rxByte_ = 0; rxFull_ = false; rxOverrun_ = false;   // USART : tampon vidé (pas de RXFULL fantôme)
     serialBaud_ = 0; serialUcr_ = 0;      // suivi débit série remis (sinon serialBaud() rapporte l'avant-reset)
     if (sched_) {   // reset MACHINE : Hatari appelle CycInt_Reset() (reset.c:76) avant MFP_Reset_All

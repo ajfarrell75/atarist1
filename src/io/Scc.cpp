@@ -137,13 +137,15 @@ uint8_t Scc::getVectorStatus() {
     if (rr3 & RR3_RX_IP_A) {
         mask = RR1_RX_OVERRUN | RR1_CRC_FRAMING | RR1_EOF_SDLC;
         if (chn_[0].WR[1] & WR1_PARITY_SPECIAL) mask |= RR1_PARITY_ERROR;
-        status = (chn_[0].RR[0] & mask) ? 7 : 6;
+        // Bits d'erreur RX : ils vivent dans RR1 (tester RR0 prenait CTS/underrun
+        // pour des erreurs → chaque RX vectorisé partait en « special condition »).
+        status = (chn_[0].RR[1] & mask) ? 7 : 6;
     } else if (rr3 & RR3_TX_IP_A) status = 4;
     else if (rr3 & RR3_EXT_IP_A) status = 5;
     else if (rr3 & RR3_RX_IP_B) {
         mask = RR1_RX_OVERRUN | RR1_CRC_FRAMING | RR1_EOF_SDLC;
         if (chn_[1].WR[1] & WR1_PARITY_SPECIAL) mask |= RR1_PARITY_ERROR;
-        status = (chn_[1].RR[0] & mask) ? 3 : 2;
+        status = (chn_[1].RR[1] & mask) ? 3 : 2;    // cf. canal A : erreurs RX = RR1
     } else if (rr3 & RR3_TX_IP_B) status = 0;
     else if (rr3 & RR3_EXT_IP_B) status = 1;
     else status = 3;
@@ -302,7 +304,9 @@ uint8_t Scc::readControl(int c) {
     case 10: case 14: value = chn_[c].RR[10]; break;
     case 12: value = chn_[c].WR[12]; break;
     case 13: case 9: value = chn_[c].WR[13]; break;
-    case 15: case 11: value = chn_[c].WR[15] &= 0xFA; break;
+    // Lecture SANS effet de bord : « &= » effaçait pour de bon WR15 bit0 (accès
+    // WR7') et bit2 (FIFO de statut) à chaque lecture de RR15.
+    case 15: case 11: value = chn_[c].WR[15] & 0xFA; break;
     default: value = 0; break;
     }
     return value;

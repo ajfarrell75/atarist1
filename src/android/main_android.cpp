@@ -523,6 +523,11 @@ int main(int argc, char* argv[]) {
                 glDeleteBuffers(1, &g_vbo);
                 g_texW = g_texH = 0;
                 if (!initGl()) NEOERR("GL re-init failed after resume");
+                // Les objets GL d'ImGui (atlas de fontes, shader, buffers) sont
+                // morts avec le contexte eux aussi — sans cette recréation, le
+                // menu resterait invisible/corrompu au retour au premier plan.
+                ImGui_ImplOpenGL3_DestroyDeviceObjects();
+                ImGui_ImplOpenGL3_CreateDeviceObjects();
                 if (g_audioDev) SDL_PauseAudioDevice(g_audioDev, 0);
                 break;
             case SDL_CONTROLLERBUTTONDOWN:

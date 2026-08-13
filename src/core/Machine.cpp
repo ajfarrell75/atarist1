@@ -34,6 +34,7 @@ MachineType Machine::adjustMachineForTos(MachineType requested, const std::strin
     uint8_t b[2] = {0, 0};
     f.seekg(2);                               // version TOS : mot big-endian à l'offset 2
     f.read(reinterpret_cast<char*>(b), 2);
+    if (f.gcount() != 2) return requested;    // fichier tronqué/illisible → loadTos signalera
     const uint16_t tosVer = uint16_t((b[0] << 8) | b[1]);
     // TOS <= 1.04 (TOS 1.0x ; EmuTOS 192 Ko se présente en « Atari ST » 1.4) ne gère ni
     // le STE ni le Mega STE → Hatari bascule en mode ST. machineIsSte() = STE || Mega STE
@@ -749,6 +750,15 @@ void Machine::serializeState(StateArchive& ar) {
     scc.serialize(ar);      mapAt("fuji",    ar.saveSize());   // SCC Z85C30 (Mega STE)
     fuji.serialize(ar);     mapAt("ne2000",  ar.saveSize());   // FujiNet virtuel (v10)
     ne2000.serialize(ar);   mapAt("fin",     ar.saveSize());   // NE2000/EtherNEC (v10)
+    if (ar.loading()) {
+        // tbScheduledAt_ n'est pas dans le flux : chaque schedule(TIMER_B) lui est
+        // apparié, donc il se re-dérive de l'échéance restaurée. Le laisser à la
+        // valeur de la SESSION COURANTE faussait le test « tbScheduledAt_ < target »
+        // d'onTimerB après chargement d'un état pris en cours de trame (tic Timer B
+        // parti à la mauvaise position → une ligne raster décalée).
+        const int64_t rem = sched.rawCyclesUntil(Scheduler::TIMER_B);
+        tbScheduledAt_ = (rem == INT64_MIN) ? 0 : sched.now() + rem;
+    }
 }
 
 // En-tête d'un .state v7 : magic(4) version(2) machine(1) ram(4) tos(2) flags(1)

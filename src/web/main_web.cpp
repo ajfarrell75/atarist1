@@ -34,6 +34,7 @@
 namespace {
 
 Machine* g_machine = nullptr;            // carte mère (allouée dans main)
+MachineType g_reqMachine = MachineType::St;  // machine DEMANDÉE (?machine=…) — cf. neost_load_tos
 GLFWwindow* g_window = nullptr;
 bool   g_kbdJoy = false;                 // émulation joystick clavier (flèches + Ctrl droit)
 int    g_kbdJoyPort = 1;                 // port ST visé par l'émulation clavier
@@ -518,7 +519,10 @@ EMSCRIPTEN_KEEPALIVE void neost_load_tos(const char* path) {
     // Garde machine/TOS comme le GUI et le headless (adjustMachineForTos) : un
     // TOS ≤ 1.04 chargé sur STE/Mega STE (menu ROM du shell) haltait le CPU —
     // écran figé sans message. On bascule le profil comme les autres frontends.
-    const MachineType adj = Machine::adjustMachineForTos(g_machine->bus.machine, path);
+    // Ajuster depuis la machine DEMANDÉE (pas la courante) : sinon la bascule
+    // STE→ST d'un vieux TOS était définitive — recharger ensuite un TOS moderne
+    // laissait la session en ST jusqu'au rechargement de la page.
+    const MachineType adj = Machine::adjustMachineForTos(g_reqMachine, path);
     if (adj != g_machine->bus.machine)
         g_machine->reconfigure(g_machine->bus.ram.size(), CpuCore::Moira, adj);
     g_machine->loadTos(path);
@@ -664,6 +668,7 @@ int main(int argc, char** argv) {
 
     // Garde machine/TOS au boot, comme le headless (main_headless.cpp) : un
     // ?machine=ste|megaste avec un vieux TOS en argv figeait le CPU sans message.
+    g_reqMachine = machType;               // mémorisé pour neost_load_tos (menu ROM)
     const MachineType machTypeAdj = Machine::adjustMachineForTos(machType, romPath);
     static Machine machine(ramBytes, cpuCore, machTypeAdj); // RAM+cœur+machine (statique)
     g_machine = &machine;

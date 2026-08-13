@@ -9,6 +9,7 @@
 //  (c) 2026 VERHILLE Arnaud — projet NeoST.
 // =============================================================================
 #pragma once
+#include <atomic>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -32,9 +33,11 @@ struct HttpResult {
 };
 
 // GET/POST bloquant (timeout total ~30 s). `postBody` nul → GET.
+// `cancel` non nul : abandon coopératif (vérifié ~1 s) — corps partiel renvoyé.
 HttpResult httpFetch(const std::string& url,
                      const std::string* postBody = nullptr,
-                     const std::vector<std::string>* headers = nullptr);
+                     const std::vector<std::string>* headers = nullptr,
+                     const std::atomic<bool>* cancel = nullptr);
 
 // --- Aide sockets partagée (TCP) — utilisée aussi par FujiHostLive -----------
 // Renvoie le descripteur (>=0) ou -1. `timeoutMs` couvre la résolution+connexion.

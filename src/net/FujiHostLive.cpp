@@ -67,7 +67,9 @@ uint8_t FujiHostLive::open(int chanIdx, const std::string& spec, uint8_t mode, u
         c->lastError = fn_err::OK;
         c->workerDone = false;
         c->worker = std::thread([c, spec]() {
-            neonet::HttpResult r = neonet::httpFetch(spec);
+            // &c->stop : close()/reset() (via joinWorker) interrompent le
+            // téléchargement en ~1 s au lieu d'attendre sa fin complète.
+            neonet::HttpResult r = neonet::httpFetch(spec, nullptr, nullptr, &c->stop);
             std::lock_guard<std::mutex> wl(c->mtx);
             if (r.status >= 200 && r.status < 300) {
                 c->buf.insert(c->buf.end(), r.body.begin(), r.body.end());
@@ -96,13 +98,23 @@ uint8_t FujiHostLive::open(int chanIdx, const std::string& spec, uint8_t mode, u
         c->workerDone = false;
         c->worker = std::thread([c]() {
             uint8_t tmp[4096];
+            // Contre-pression : au-delà de ce seuil on cesse de lire (le TCP
+            // freine l'émetteur) — sinon un pair rapide jamais lu par le ST
+            // ferait grossir buf sans borne.
+            constexpr std::size_t kBufCap = 1u << 20;
             while (!c->stop) {
                 int fd;
+                bool full;
                 {
                     std::lock_guard<std::mutex> wl(c->mtx);
                     fd = c->fd;
+                    full = c->buf.size() >= kBufCap;
                 }
                 if (fd < 0) break;
+                if (full) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                    continue;
+                }
                 const int rc = neonet::sockRecv(fd, tmp, int(sizeof tmp), 200);
                 if (rc == -2) continue;                       // timeout de poll → re-teste stop
                 std::lock_guard<std::mutex> wl(c->mtx);
@@ -174,8 +186,16 @@ uint8_t FujiHostLive::jsonParse(int chanIdx) {
     if (!c) return fn_err::BAD_CMD;
     // Attend la fin du téléchargement HTTP (borné) : parser un corps partiel
     // n'aurait aucun sens et le vrai FujiNet fait pareil (P bloque brièvement).
-    for (int i = 0; i < 300 && !c->workerDone; ++i)
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    // Canaux TCP exclus : leur lecteur tourne tant que la connexion vit,
+    // attendre workerDone y gèlerait l'émulateur 30 s à chaque commande P.
+    bool waitHttp;
+    {
+        std::lock_guard<std::mutex> lk(c->mtx);
+        waitHttp = (c->kind == Kind::Http);
+    }
+    if (waitHttp)
+        for (int i = 0; i < 300 && !c->workerDone; ++i)
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
     std::lock_guard<std::mutex> lk(c->mtx);
     if (!c->open) return fn_err::IO_ERROR;
     c->jsonSrc.assign(c->buf.begin(), c->buf.end());
