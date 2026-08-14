@@ -19,6 +19,8 @@
 #include <functional>
 #include <string>
 
+#include "net/HttpClient.hpp"
+
 class MidiRing {
 public:
     // `peer` = "hôte:port" du pair AVAL (où envoyer). `listenPort` = port UDP
@@ -34,10 +36,10 @@ public:
     // pris. À appeler une fois par trame.
     void poll(const std::function<bool(uint8_t)>& accept);
 
-    bool ok() const { return fd_ >= 0; }
+    bool ok() const { return neonet::socketValid(fd_); }
 
 private:
-    int  fd_ = -1;                               // socket UDP
+    neonet::SocketHandle fd_ = neonet::kInvalidSocket; // socket UDP
     // Adresse du pair aval (sockaddr_storage opaque pour ne pas fuir <netinet>).
     unsigned char peerAddr_[128] = {0};
     int  peerAddrLen_ = 0;

@@ -1287,8 +1287,10 @@ void drawJoystickWindow(GLFWwindow* win, uint8_t lastJoy0, uint8_t lastJoy1) {
     joyResolveRoles(joyRoles);
     int8_t joyAssign[GLFW_JOYSTICK_LAST + 1];
     stjoy::resolveAssign(joyRoles, joyAssign);
+    int nPresent = 0;
     for (int jid = GLFW_JOYSTICK_1; jid <= GLFW_JOYSTICK_LAST; ++jid) {
         if (!glfwJoystickPresent(jid)) continue;
+        ++nPresent;
         const char* nm = glfwGetJoystickName(jid);
         const int stPort = joyAssign[jid];
         ImGui::Text("Pad %d: %s", jid, nm ? nm : "?");

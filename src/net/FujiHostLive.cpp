@@ -39,7 +39,7 @@ FujiHostLive::FujiHostLive() {
 FujiHostLive::~FujiHostLive() { reset(); }
 
 void FujiHostLive::closeLocked(Chan& c) {
-    if (c.fd >= 0) { neonet::sockClose(c.fd); c.fd = -1; }
+    if (neonet::socketValid(c.fd)) { neonet::sockClose(c.fd); c.fd = neonet::kInvalidSocket; }
     c.open = false;
     c.kind = Kind::None;
     c.connected = false;
@@ -88,8 +88,8 @@ uint8_t FujiHostLive::open(int chanIdx, const std::string& spec, uint8_t mode, u
 
     if (u.scheme == "tcp" || u.scheme == "telnet") {
         std::string err;
-        const int fd = neonet::tcpConnect(u.host, u.port ? u.port : 23, 5000, err);
-        if (fd < 0) { ltrace("tcp connect failed", err); c->lastError = fn_err::OFFLINE; return fn_err::OFFLINE; }
+        const neonet::SocketHandle fd = neonet::tcpConnect(u.host, u.port ? u.port : 23, 5000, err);
+        if (!neonet::socketValid(fd)) { ltrace("tcp connect failed", err); c->lastError = fn_err::OFFLINE; return fn_err::OFFLINE; }
         c->kind = Kind::Tcp;
         c->fd = fd;
         c->open = true;
@@ -103,14 +103,14 @@ uint8_t FujiHostLive::open(int chanIdx, const std::string& spec, uint8_t mode, u
             // ferait grossir buf sans borne.
             constexpr std::size_t kBufCap = 1u << 20;
             while (!c->stop) {
-                int fd;
+                neonet::SocketHandle fd;
                 bool full;
                 {
                     std::lock_guard<std::mutex> wl(c->mtx);
                     fd = c->fd;
                     full = c->buf.size() >= kBufCap;
                 }
-                if (fd < 0) break;
+                if (!neonet::socketValid(fd)) break;
                 if (full) {
                     std::this_thread::sleep_for(std::chrono::milliseconds(20));
                     continue;
@@ -142,7 +142,7 @@ uint8_t FujiHostLive::close(int chanIdx) {
         // autre canal) et le lecteur périmé consommait SES octets. La fermeture
         // réelle attend le join (closeLocked ci-dessous).
         std::lock_guard<std::mutex> lk(c->mtx);
-        if (c->fd >= 0) neonet::sockShutdown(c->fd);
+        if (neonet::socketValid(c->fd)) neonet::sockShutdown(c->fd);
     }
     c->joinWorker();
     std::lock_guard<std::mutex> lk(c->mtx);
@@ -166,7 +166,7 @@ uint8_t FujiHostLive::write(int chanIdx, const uint8_t* src, int len) {
     if (!c) return fn_err::BAD_CMD;
     std::lock_guard<std::mutex> lk(c->mtx);
     if (!c->open) return fn_err::IO_ERROR;
-    if (c->kind == Kind::Tcp && c->fd >= 0)
+    if (c->kind == Kind::Tcp && neonet::socketValid(c->fd))
         return neonet::sockSend(c->fd, src, len) < 0 ? fn_err::IO_ERROR : fn_err::OK;
     // HTTP v1 : l'écriture sur un canal GET n'a pas de destinataire.
     return fn_err::BAD_CMD;

@@ -96,7 +96,17 @@ void Acsi::unmountAll() {
     }
 }
 
-void Acsi::reset() { status_ = 0; byteCount_ = 0; fujiPending_ = false; }
+void Acsi::reset() {
+    target_ = 0;
+    byteCount_ = 0;
+    std::memset(command_, 0, sizeof command_);
+    opcode_ = 0;
+    status_ = 0;
+    dmaError_ = false;
+    dataLen_ = 0;
+    dmaWrite_ = false;
+    fujiPending_ = false;
+}
 
 // -----------------------------------------------------------------------------
 //  FujiNet (extension NeoST — cf. docs/FUJINET.md)
@@ -161,7 +171,14 @@ uint32_t Acsi::lba() const {
     return rdInt32(command_, 2);                                  // classe 1
 }
 int Acsi::count() const {
-    if (opcode_ < 0x20) return command_[4];                       // classe 0
+    if (opcode_ < 0x20) {
+        // READ/WRITE(6) codent 256 secteurs par un champ Transfer Length nul.
+        // Les autres commandes de classe 0 (INQUIRY, REQUEST SENSE...) gardent
+        // bien leur longueur d'allocation 0 telle quelle.
+        if ((opcode_ == HD_READ_SECTOR || opcode_ == HD_WRITE_SECTOR) && command_[4] == 0)
+            return 256;
+        return command_[4];
+    }
     return (command_[7] << 8) | command_[8];                     // classe 1
 }
 uint8_t* Acsi::prepRespBuf(int size) {
@@ -266,13 +283,17 @@ void Acsi::cmdModeSense() {
         buf[22] = buf[23] = 0;
     };
     uint8_t* buf;
+    int responseLen = 0;
     switch (command_[2]) {
-    case 0x00: buf = prepRespBuf(16); page00(buf); break;
-    case 0x04: buf = prepRespBuf(28); page04(buf + 4); buf[0] = 24; buf[1] = buf[2] = buf[3] = 0; break;
-    case 0x3f: buf = prepRespBuf(44); page04(buf + 4); page00(buf + 28);
+    case 0x00: responseLen = 16; buf = prepRespBuf(responseLen); page00(buf); break;
+    case 0x04: responseLen = 28; buf = prepRespBuf(responseLen); page04(buf + 4); buf[0] = 24; buf[1] = buf[2] = buf[3] = 0; break;
+    case 0x3f: responseLen = 44; buf = prepRespBuf(responseLen); page04(buf + 4); page00(buf + 28);
                buf[0] = 43; buf[1] = buf[2] = buf[3] = 0; break;
     default:   status_ = HD_STATUS_ERROR; dev.lastError = HD_REQSENS_INVARG; return;
     }
+    // MODE SENSE(6), octet 4 : le périphérique ne doit jamais transférer plus
+    // que l'Allocation Length annoncée par l'initiateur.
+    dataLen_ = std::min(responseLen, int(command_[4]));
     status_ = HD_STATUS_OK;
     dev.lastError = HD_REQSENS_OK;
 }

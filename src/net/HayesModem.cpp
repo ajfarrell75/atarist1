@@ -27,7 +27,10 @@ void HayesModem::sendStr(const std::string& s) {
 }
 
 void HayesModem::hangup(bool notify) {
-    if (fd_ >= 0) { neonet::sockClose(fd_); fd_ = -1; }
+    if (neonet::socketValid(fd_)) {
+        neonet::sockClose(fd_);
+        fd_ = neonet::kInvalidSocket;
+    }
     dataMode_ = false;
     plusCount_ = 0;
     mfp_.setRs232Dcd(false);                     // porteuse tombée
@@ -47,12 +50,15 @@ void HayesModem::dial(const std::string& target) {
     if (host.empty()) { sendStr("ERROR"); return; }
 
     std::string err;
-    const int fd = neonet::tcpConnect(host, port, 5000, err);
-    if (fd < 0) {
+    const neonet::SocketHandle fd = neonet::tcpConnect(host, port, 5000, err);
+    if (!neonet::socketValid(fd)) {
         mtrace("dial failed:", err);
         sendStr("NO CARRIER");
         return;
     }
+    // Une nouvelle numérotation après +++ remplace la porteuse courante. Ne pas
+    // perdre son descripteur quand la nouvelle connexion a réussi.
+    if (neonet::socketValid(fd_)) neonet::sockClose(fd_);
     fd_ = fd;
     dataMode_ = true;
     plusCount_ = 0;
@@ -78,7 +84,7 @@ void HayesModem::execute(std::string line) {
         sendStr("OK");
         return;
     case 'O':                                    // ATO : retour en ligne
-        if (fd_ >= 0) { dataMode_ = true; sendStr("CONNECT"); }
+        if (neonet::socketValid(fd_)) { dataMode_ = true; sendStr("CONNECT"); }
         else sendStr("NO CARRIER");
         return;
     case 'Z':                                    // ATZ : reset
@@ -121,7 +127,7 @@ void HayesModem::onTx(uint8_t b) {
             }
             plusCount_ = 0;
         }
-        if (b != '+' && fd_ >= 0 && neonet::sockSend(fd_, &b, 1) < 0)
+        if (b != '+' && neonet::socketValid(fd_) && neonet::sockSend(fd_, &b, 1) < 0)
             hangup(true);                        // connexion morte
         return;
     }
@@ -145,7 +151,7 @@ void HayesModem::onTx(uint8_t b) {
 }
 
 void HayesModem::poll() {
-    if (fd_ < 0) return;
+    if (!neonet::socketValid(fd_)) return;
     // Pompe le TCP entrant tant que la file RX du MFP a de la place — la
     // livraison à l'ST reste cadencée au débit série par le MFP lui-même.
     while (mfp_.hostRxPending() < 3500 && neonet::sockHasData(fd_)) {

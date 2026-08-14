@@ -154,6 +154,7 @@ void Audio::produceFrame(int64_t frameCycles) {
 }
 
 bool Audio::start() {
+    if (device_) return true;
     auto* dev = new ma_device();
     ma_device_config cfg = ma_device_config_init(ma_device_type_playback);
     cfg.playback.format   = ma_format_f32;   // on synthétise en float

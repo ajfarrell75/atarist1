@@ -745,6 +745,10 @@ void Fdc::eject(int drive) {
 //  position PHYSIQUE des têtes (headTrack) survivent, comme sur le vrai matériel.
 // =============================================================================
 void Fdc::reset(bool cold) {
+    // Un reset machine annule aussi le paquet et la phase de données ACSI en
+    // vol. Le simple toggle du bit DMA 8 reste, lui, un resetCommand() limité
+    // au statut (voir dmaResetFifo), conformément au comportement matériel.
+    acsi_.reset();
     cr_  = 0;
     str_ = 0;
     sr_  = 1;

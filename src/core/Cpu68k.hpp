@@ -27,6 +27,12 @@ class Cpu68k {
 public:
     // core = cœur souhaité (toujours Moira ; paramètre conservé pour compat API).
     explicit Cpu68k(Bus& bus, CpuCore core = CpuCore::Moira);
+    ~Cpu68k();
+
+    Cpu68k(const Cpu68k&) = delete;
+    Cpu68k& operator=(const Cpu68k&) = delete;
+    Cpu68k(Cpu68k&&) = delete;
+    Cpu68k& operator=(Cpu68k&&) = delete;
 
     // Tolère l'ancienne clé "musashi"/"uae" (insensible à la casse) : on AVERTIT et
     // on bascule sur Moira, seul cœur disponible. Toute autre valeur → Moira aussi.

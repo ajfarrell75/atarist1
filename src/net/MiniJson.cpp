@@ -36,6 +36,30 @@ struct P {
         return true;
     }
 
+    // Nombre JSON strict : -?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?
+    bool number() {
+        if (peek() == '-') ++s;
+        if (peek() == '0') {
+            ++s;
+            if (!eof() && std::isdigit(uint8_t(*s))) return false;
+        } else {
+            if (eof() || *s < '1' || *s > '9') return false;
+            do { ++s; } while (!eof() && std::isdigit(uint8_t(*s)));
+        }
+        if (peek() == '.') {
+            ++s;
+            if (eof() || !std::isdigit(uint8_t(*s))) return false;
+            do { ++s; } while (!eof() && std::isdigit(uint8_t(*s)));
+        }
+        if (peek() == 'e' || peek() == 'E') {
+            ++s;
+            if (peek() == '+' || peek() == '-') ++s;
+            if (eof() || !std::isdigit(uint8_t(*s))) return false;
+            do { ++s; } while (!eof() && std::isdigit(uint8_t(*s)));
+        }
+        return true;
+    }
+
     // Parse une chaîne JSON ; si `out` non nul, y dépose la valeur DÉCODÉE.
     bool str(std::string* out) {
         if (peek() != '"') return false;
@@ -44,6 +68,14 @@ struct P {
             if (*s == '\\') {
                 ++s;
                 if (eof()) return false;
+                if (*s != '"' && *s != '\\' && *s != '/' && *s != 'b' && *s != 'f'
+                    && *s != 'n' && *s != 'r' && *s != 't' && *s != 'u')
+                    return false;
+                if (*s == 'u') {
+                    if (end - s < 5) return false;
+                    for (int i = 1; i <= 4; ++i)
+                        if (!std::isxdigit(uint8_t(s[i]))) return false;
+                }
                 if (out) {
                     switch (*s) {
                     case 'n': *out += '\n'; break;
@@ -52,7 +84,6 @@ struct P {
                     case 'b': *out += '\b'; break;
                     case 'f': *out += '\f'; break;
                     case 'u': {                       // \uXXXX → octet latin-1 approx.
-                        if (end - s < 5) return false;
                         char h[5] = {s[1], s[2], s[3], s[4], 0};
                         *out += char(std::strtoul(h, nullptr, 16) & 0xFF);
                         s += 4;
@@ -61,11 +92,11 @@ struct P {
                     default: *out += *s; break;
                     }
                 } else if (*s == 'u') {
-                    if (end - s < 5) return false;
                     s += 4;
                 }
                 ++s;
             } else {
+                if (uint8_t(*s) < 0x20) return false; // contrôles bruts interdits en JSON
                 if (out) *out += *s;
                 ++s;
             }
@@ -86,14 +117,7 @@ struct P {
         case '"': r = str(nullptr); break;
         default:
             if (lit("true") || lit("false") || lit("null")) { r = true; break; }
-            {   // nombre
-                const char* p = s;
-                if (peek() == '-') ++s;
-                bool digits = false;
-                while (!eof() && (std::isdigit(uint8_t(*s)) || *s == '.' || *s == 'e' ||
-                                  *s == 'E' || *s == '+' || *s == '-')) { ++s; digits = true; }
-                r = digits && s > p;
-            }
+            r = number();
             break;
         }
         if (r && raw) raw->assign(start, std::size_t(s - start));
@@ -161,6 +185,15 @@ struct P {
 } // namespace
 
 bool query(const std::string& doc, const std::string& path, std::string& out) {
+    // Valide d'abord le document COMPLET. Le parcours ciblé s'arrête dès qu'il
+    // trouve une clé ; sans cette passe, une valeur correcte suivie d'un suffixe
+    // corrompu (ou une erreur plus loin dans l'objet) était acceptée.
+    P valid{doc.c_str(), doc.c_str() + doc.size()};
+    valid.ws();
+    if (!valid.value(nullptr)) return false;
+    valid.ws();
+    if (!valid.eof()) return false;
+
     P p{doc.c_str(), doc.c_str() + doc.size()};
     p.ws();
 
@@ -199,7 +232,9 @@ bool query(const std::string& doc, const std::string& path, std::string& out) {
 bool looksLikeJson(const std::string& doc) {
     P p{doc.c_str(), doc.c_str() + doc.size()};
     p.ws();
-    return !p.eof() && p.value(nullptr);
+    if (p.eof() || !p.value(nullptr)) return false;
+    p.ws();
+    return p.eof();
 }
 
 } // namespace minijson

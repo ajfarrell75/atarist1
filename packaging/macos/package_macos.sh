@@ -72,7 +72,11 @@ assert_universal build-macos/neost-headless
 
 # --- Staging .app ------------------------------------------------------------
 APP="dist/NeoST.app"
-rm -rf dist
+DMG="dist/NeoST-$VERSION-macOS-universal2.dmg"
+# Ne retirer que les sorties de CE paquet : `rm -rf dist` effaçait aussi les
+# AppImage/ZIP/APK produits auparavant lors d'un empaquetage local multi-cible.
+rm -rf "$APP"
+rm -f "$DMG"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 install -m 755 build-macos/neost build-macos/neost-headless "$APP/Contents/MacOS/"
 packaging/stage_free_data.sh "$APP/Contents"
@@ -114,6 +118,5 @@ if [ -n "$LEAKED" ]; then
 fi
 
 # --- DMG ---------------------------------------------------------------------
-DMG="dist/NeoST-$VERSION-macOS-universal2.dmg"
 hdiutil create -volname "NeoST" -srcfolder "$APP" -ov -format UDZO "$DMG"
 echo "OK : $DMG"
