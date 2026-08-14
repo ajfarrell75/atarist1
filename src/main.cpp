@@ -137,7 +137,8 @@ struct Config { std::string rom; std::string disk; std::string diskb; std::strin
                 bool driveSound = true;  // bruits mécaniques du lecteur (roms/drivesound/, cf. DriveSound)
                 bool showHex = true, showCpu = true;
                 bool showJoy = false;
-                bool showCfg = true;           // fenêtre « Configuration » (tout se règle là)
+                bool showCfg = true;           // fenêtre des réglages matériels
+                bool showFloppy = true;        // fenêtre indépendante des disquettes
                 // Version de la DISPOSITION d'interface. Quand elle change, on resème la
                 // disposition ancrée une fois : sinon un imgui.ini écrit par une version
                 // précédente garde des nœuds pour des fenêtres disparues et la nouvelle
@@ -221,12 +222,14 @@ static void parseConfigLine(Config& c, std::string line) {
     }
     else if (line.rfind("audio_latency_ms=", 0) == 0) c.audioLatencyMs = std::atoi(line.substr(17).c_str());
     else if (line.rfind("drivesound=", 0) == 0) c.driveSound = (line.substr(11) == "1");
-    // showDisk=/showCart=/showHd= : clés d'anciennes fenêtres (bibliothèques),
-    // devenues des pages de la Configuration. Ignorées silencieusement.
+    // showCart=/showHd= : clés d'anciennes fenêtres devenues des pages de la
+    // Configuration. showDisk= reste accepté comme ancien nom de showFloppy=.
+    else if (line.rfind("showDisk=", 0) == 0) c.showFloppy = (line.substr(9) == "1");
     else if (line.rfind("showHex=", 0) == 0) c.showHex = (line.substr(8) == "1");
     else if (line.rfind("showCpu=", 0) == 0) c.showCpu = (line.substr(8) == "1");
     else if (line.rfind("showJoy=", 0) == 0) c.showJoy = (line.substr(8) == "1");
     else if (line.rfind("showCfg=", 0) == 0) c.showCfg = (line.substr(8) == "1");
+    else if (line.rfind("showFloppy=", 0) == 0) c.showFloppy = (line.substr(11) == "1");
     else if (line.rfind("uiVersion=", 0) == 0) c.uiVersion = std::atoi(line.c_str() + 10);
     else if (line.rfind("diskb=", 0)  == 0) c.diskb   = line.substr(6);
     else if (line.rfind("dock=", 0) == 0) c.dock = (line.substr(5) == "1");
@@ -366,6 +369,7 @@ static void writeConfigKeys(std::ostream& f, const Config& w, bool full) {
           << "\nshowCpu=" << (w.showCpu ? 1 : 0)
           << "\nshowJoy=" << (w.showJoy ? 1 : 0)
           << "\nshowCfg=" << (w.showCfg ? 1 : 0)
+          << "\nshowFloppy=" << (w.showFloppy ? 1 : 0)
           << "\nuiVersion=" << w.uiVersion
           << "\ndock=" << (w.dock ? 1 : 0) << "\n";
     f << "autozoom=" << (w.autoZoom ? 1 : 0)
@@ -661,6 +665,7 @@ constexpr int MOUSE_Y_SIGN = +1;
 
 Ikbd* g_ikbd = nullptr;                // cible des callbacks clavier/souris GLFW
 bool  g_mouseCaptured = false;         // souris capturée → entrées dirigées vers le ST
+bool  g_mouseCaptureToggleReq = false; // clic molette → bascule appliquée dans la boucle
 bool  g_dbgMouse = false;              // NEOST_DEBUG_MOUSE=1 → trace les paquets souris
 bool  g_dbgJoy = false;                // NEOST_DEBUG_JOY=1 → trace l'état brut des manettes
 bool  g_kbdJoy = false;                // émulation joystick au clavier (flèches + Ctrl droit)
@@ -718,7 +723,8 @@ static std::string joymapSerialize() {
 }
 bool  g_showHex = true, g_showCpu = true;   // fenêtres d'inspection masquables
 bool  g_showJoy = false;               // fenêtre joystick (visualisation live)
-bool  g_showCfg = true;                // fenêtre Configuration (tout se règle là)
+bool  g_showCfg = true;                // fenêtre Configuration
+bool  g_showFloppy = true;             // fenêtre indépendante des disquettes
 std::vector<std::string> g_dropped;    // chemins glissés-déposés, consommés dans la boucle
 
 // --- Effets CRT (façade moniteur) : passe FBO shader appliquée à l'écran ST.
@@ -761,7 +767,13 @@ void onGlfwError(int code, const char* desc) {
 // Callback bouton souris : ÉVÉNEMENTIEL (capte chaque transition, même un
 // double-clic rapide qu'une scrutation par trame manquerait). Envoie un paquet
 // IKBD sans mouvement portant l'état courant des boutons.
-void onMouseButton(GLFWwindow* w, int /*button*/, int /*action*/, int /*mods*/) {
+void onMouseButton(GLFWwindow* w, int button, int action, int /*mods*/) {
+    // Le bouton central est un interrupteur hôte : il accroche/décroche la souris
+    // sans envoyer de clic à l'Atari. La borne conserve son invariant de capture.
+    if (button == GLFW_MOUSE_BUTTON_MIDDLE) {
+        if (action == GLFW_PRESS && !g_kiosk) g_mouseCaptureToggleReq = true;
+        return;
+    }
     if (!g_ikbd || !g_mouseCaptured) return;
     const bool l = glfwGetMouseButton(w, GLFW_MOUSE_BUTTON_LEFT)  == GLFW_PRESS;
     const bool r = glfwGetMouseButton(w, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
@@ -1120,12 +1132,10 @@ void updateKbdCountry(const std::vector<uint8_t>& rom) {
                  : g_kbdCountry == 127 ? "multilingual (default)" : "other (default)");
 }
 
-// Callback clavier GLFW → IKBD. La touche Suppr (DEL) est réservée à l'hôte (elle
-// libère la souris capturée), donc jamais transmise au ST. Échap, lui, est bien
-// envoyé au ST (beaucoup de jeux/applications s'en servent).
+// Callback clavier GLFW → IKBD. Les touches Atari, dont Suppr et Échap, sont
+// transmises au ST (beaucoup de jeux/applications s'en servent).
 void onKey(GLFWwindow*, int key, int scancode, int action, int /*mods*/) {
     if (!g_ikbd || action == GLFW_REPEAT) return;   // TOS gère sa propre répétition (pas l'IKBD)
-    if (key == GLFW_KEY_DELETE) return;             // touche hôte (libération souris)
     // Touches réservées HÔTE : F5/F7 (save-state), F8 (bascule GUI ⇄ kiosk),
     // F11 (bascule joystick clavier), + F9/F10 en kiosk (menu disques, zoom). Sans
     // cette exclusion, le ST recevait la touche F5/F7 EN MÊME TEMPS que l'état était
@@ -1998,6 +2008,7 @@ static void applyDockLayout() {
     // affectées quand même : c'est cette affectation qui les fera réapparaître en
     // onglet du bon groupe plus tard, au lieu de flotter par-dessus l'écran.
     ImGui::DockBuilderDockWindow(ICON_FA_COG " Configuration", right);
+    ImGui::DockBuilderDockWindow(ICON_FA_SAVE " Floppies",      right);
     ImGui::DockBuilderDockWindow("CPU 68000",     rlow);
     ImGui::DockBuilderDockWindow("Memory (hex)", rlow);
     ImGui::DockBuilderDockWindow("Joystick",      rlow);
@@ -2042,13 +2053,13 @@ static void renderDockSpace(bool visible) {
 // titre (ImGui mémorise sa position). La taille d'affichage suit la résolution
 // COURANTE du buffer en respectant l'aspect pixel ST : basse rés ×2/×2, moyenne
 // ×1/×2, mono ×1/×1 — l'écran actif occupe donc toujours ~640×400.
-// Clic dans l'image = capture souris.
+// Le clic sur la molette accroche/décroche la souris.
 //
 // [cTop, cTop+cH) = région de CONTENU (cf. stContentRegion) : le bureau applique le
 // MÊME zoom adaptatif que le kiosk, à ceci près qu'il le cadre en UV de l'image et
 // non en viewport GL — les bordures inutilisées sortent du cadre au lieu d'ajouter
 // des bandes noires. Zoom auto OFF → cTop=0, cH=hauteur du buffer (cadre entier).
-void drawStScreen(const GlScreen& s, bool captured, bool& reqCapture, float topOffset,
+void drawStScreen(const GlScreen& s, bool captured, float topOffset,
                   int cTop, int cH, int cW) {
     // ANCRÉE : c'est le nœud qui donne position ET taille. On ne pose donc ni pos, ni
     // taille, ni contrainte de ratio (elles se battraient avec le nœud — la fenêtre
@@ -2092,14 +2103,14 @@ void drawStScreen(const GlScreen& s, bool captured, bool& reqCapture, float topO
                  ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse |
                  ImGuiWindowFlags_NoBringToFrontOnFocus;
     // Souris capturée → tout le mouvement va au ST (curseur verrouillé) : on FIGE la
-    // fenêtre (pas de glissé). Une fois libérée (DEL), elle redevient déplaçable.
+    // fenêtre (pas de glissé). Une fois libérée (clic molette), elle redevient déplaçable.
     if (captured) flags |= ImGuiWindowFlags_NoMove;
     ImGui::Begin("Atari ST Screen", nullptr, flags);
 #ifdef IMGUI_HAS_DOCK
     s_docked = ImGui::IsWindowDocked();   // pour la trame SUIVANTE (cf. plus haut)
 #endif
-    ImGui::TextDisabled(captured ? "Mouse captured — press DEL to release it"
-                                 : "Click inside the screen to capture the mouse (GEM cursor)");
+    ImGui::TextDisabled(captured ? "Mouse captured — middle-click to release it"
+                                 : "Middle-click to capture the mouse (GEM cursor)");
     // Cadrage de l'image dans la zone dispo. Deux régimes :
     //  · Zoom auto (défaut) — RÈGLE DU KIOSK : l'échelle est pilotée par la HAUTEUR,
     //    la région de contenu cale dessus, et la largeur en excès (bordures latérales)
@@ -2157,14 +2168,12 @@ void drawStScreen(const GlScreen& s, bool captured, bool& reqCapture, float topO
     const int fboH = (int)std::lround(dh / std::max(0.001f, v1 - v0));
     const ImTextureID id = (ImTextureID)(intptr_t)crtApply(s, std::max(1, fboW), std::max(1, fboH));
     ImGui::Image(id, ImVec2((float)dstW, (float)dstH), ImVec2(u0, v0), ImVec2(u1, v1));
-    if (!captured && ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
-        reqCapture = true;
     ImGui::End();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Pages de la fenêtre « Configuration ». Ce sont des FRAGMENTS (pas de Begin/End) :
-// la fenêtre unique les compose. Aucune ne monte ni ne démonte quoi que ce soit —
+// Contenu des fenêtres de supports et pages de « Configuration ». Ce sont des
+// FRAGMENTS (pas de Begin/End). Aucun ne monte ni ne démonte quoi que ce soit —
 // elles remplissent des requêtes consommées en fin de trame, seul endroit qui sait
 // enchaîner un reset et persister neost.cfg.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2553,12 +2562,11 @@ void drawNetworkPage(bool fujiOn, int fujiTarget, const char* backendName,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Fenêtre « Configuration » — UNE adresse pour tout régler.
+// Fenêtre « Configuration » — réglages de la machine.
 //
 // Elle remplace six sous-menus (Modèle, Mémoire, ROM, Cartouche, Disque dur,
-// Résolution/Joystick/Son) ET les trois anciennes fenêtres-bibliothèques : il n'y a
-// désormais qu'UNE façon de monter un support, quelle qu'en soit la nature. La barre
-// de menus ne garde que ce qu'on fait EN JOUANT.
+// Résolution/Joystick/Son). Les disquettes, que l'on change couramment en jouant,
+// vivent volontairement dans leur propre fenêtre indépendante.
 //
 // Deux principes qui expliquent la forme :
 //  · Elle ne fait RIEN elle-même. Tout sort en requêtes (`ConfigUi::req*`) consommées
@@ -2613,11 +2621,26 @@ struct ConfigUi {
 
 // Page ouverte. Statique : on revient là où on était en rouvrant la fenêtre.
 enum ConfigPage {
-    kCfgMachine = 0, kCfgMem, kCfgRom, kCfgFloppy, kCfgHd, kCfgCart, kCfgNet,
+    kCfgMachine = 0, kCfgMem, kCfgRom, kCfgHd, kCfgCart, kCfgNet,
     kCfgScreen, kCfgSound, kCfgInput, kCfgEmul, kCfgProfiles, kCfgKiosk, kCfgCount
 };
-int g_cfgPage = kCfgFloppy;   // au premier lancement : ce qu'on cherche le plus souvent
+int g_cfgPage = kCfgMachine;
 bool g_profilesDirty = false; // un profil vient d'être écrit/supprimé → relire le dossier
+
+// Fenêtre autonome : les disquettes sont des supports manipulés en jouant, pas un
+// réglage matériel. Les requêtes restent consommées par la boucle principale.
+void drawFloppyWindow(ConfigUi& ui) {
+    ImGui::SetNextWindowSize(ImVec2(560, 520), ImGuiCond_FirstUseEver);
+    if (!ImGui::Begin(ICON_FA_SAVE " Floppies", &g_showFloppy,
+                      ImGuiWindowFlags_HorizontalScrollbar)) {
+        ImGui::End();
+        return;
+    }
+    drawFloppyPage(ui.disksDir,
+                   ui.machine->fdc.mountedPath(0), ui.machine->fdc.mountedPath(1),
+                   ui.reqMountA, ui.reqMountB, ui.reqEjectA, ui.reqEjectB);
+    ImGui::End();
+}
 
 // Suffixe pays d'une ROM → fréquence de balayage. C'est LA cause d'écran « déchiré »
 // la plus fréquente sur les démos européennes (images Spectrum 512 calculées pour le
@@ -2667,8 +2690,8 @@ void drawConfigWindow(ConfigUi& ui) {
     // ── Colonne de navigation + page ──────────────────────────────────────
     static const char* kPageNames[kCfgCount] = {
         ICON_FA_MICROCHIP " Machine",  ICON_FA_MEMORY " Memory",
-        ICON_FA_SAVE " ROM / TOS",     ICON_FA_SAVE " Floppies",
-        ICON_FA_HDD " Hard disks",     ICON_FA_COMPACT_DISC " Cartridge",
+        ICON_FA_SAVE " ROM / TOS",     ICON_FA_HDD " Hard disks",
+        ICON_FA_COMPACT_DISC " Cartridge",
         ICON_FA_WIFI " Network",
         ICON_FA_DESKTOP " Screen",     ICON_FA_VOLUME_UP " Sound",
         ICON_FA_GAMEPAD " Input",      ICON_FA_BOLT " Emulation",
@@ -2762,11 +2785,6 @@ void drawConfigWindow(ConfigUi& ui) {
                            "hardware.");
         break;
     }
-    case kCfgFloppy:
-        drawFloppyPage(ui.disksDir,
-                       ui.machine->fdc.mountedPath(0), ui.machine->fdc.mountedPath(1),
-                       ui.reqMountA, ui.reqMountB, ui.reqEjectA, ui.reqEjectB);
-        break;
     case kCfgHd:
         drawHardDiskPage(ui.hdDir, ui.gemdosDir,
                          ui.curGemdos, ui.machine->gemdos.active(),
@@ -3036,12 +3054,12 @@ int main(int argc, char** argv) {
     Config cfg = loadConfig(exeDir);
     g_cfgPristine = cfg;      // référence figée pour le mode borne (cf. saveConfig)
     g_showHex = cfg.showHex; g_showCpu = cfg.showCpu;
-    g_showJoy = cfg.showJoy; g_showCfg = cfg.showCfg;
+    g_showJoy = cfg.showJoy; g_showCfg = cfg.showCfg; g_showFloppy = cfg.showFloppy;
     // Disposition ancrée : un imgui.ini écrit par une version antérieure garde des
     // nœuds pour des fenêtres qui n'existent plus (Disk/Cart Library) et ne connaît
     // pas la fenêtre Configuration — qui flotterait alors au-dessus de l'écran ST.
     // On resème la disposition UNE fois, puis on note la version dans neost.cfg.
-    static constexpr int kUiVersion = 3;
+    static constexpr int kUiVersion = 4;
     const bool uiLayoutOutdated = (cfg.uiVersion < kUiVersion);
     cfg.uiVersion = kUiVersion;
     g_dockOn   = cfg.dock;     // mode ancré mémorisé (cf. renderDockSpace)
@@ -3144,15 +3162,15 @@ int main(int argc, char** argv) {
         if (glfwRawMouseMotionSupported())
             glfwSetInputMode(window, GLFW_RAW_MOUSE_MOTION, GLFW_TRUE);
     }
-    // VSync DÉSACTIVÉ : la boucle est cadencée par le bridage au temps émulé
-    // (sleep_until, cf. plus bas), pas par l'écran. Avec vsync ON, swapBuffers
-    // BLOQUE jusqu'au vblank suivant : sur un écran 60 Hz, le sleep à ~20 ms +
-    // l'attente du vblank faisaient battre la boucle à ~30-37 fps au lieu de 50 →
-    // temps émulé ralenti de 25-40 % (musique LENTE, tempo cadencé par les IRQ
-    // émulées) et anneau audio produit sous le débit drainé (son HACHÉ, bruits
-    // lecteur compris — même anneau). Le modèle « push » audio exige que la boucle
-    // tienne EXACTEMENT la cadence des trames émulées.
-    glfwSwapInterval(0);
+    // VSync : évite le tearing hôte (une coupure horizontale rare à une hauteur
+    // variable, très visible sur les rasters de Super Hang-On). L'ancien bridage
+    // dormait 20 ms APRÈS le swap bloquant et tombait donc à 30-37 fps sur un écran
+    // 60 Hz ; ce n'est plus le cas : le sommeil ci-dessous vise une échéance ABSOLUE
+    // (`emuNext`) et soustrait implicitement le temps passé dans swapBuffers. Si un
+    // écran lent fait malgré tout manquer une échéance, la boucle de rattrapage
+    // exécute plusieurs trames avant la présentation suivante, donc le temps émulé
+    // et la production audio restent à 50/60/71 Hz.
+    glfwSwapInterval(1);
 
     // Abaisse la machine si le TOS ne la supporte pas (TOS <= 1.04 → ST), comme Hatari.
     const MachineType machType0 = Machine::adjustMachineForTos(parseMachine(cfg.machine), tosPath);
@@ -3443,7 +3461,7 @@ int main(int argc, char** argv) {
     ImGui_ImplOpenGL2_Init();
 #endif
 
-    std::printf("[main] Click inside the screen: capture mouse | DEL: release | "
+    std::printf("[main] Middle mouse button: capture/release mouse | "
                 "Reset button in the CPU window | close the window: quit\n");
     std::printf("[main] Joystick: USB pad auto-detected (port 1) | F11 = keyboard "
                 "emulation (arrows + right Ctrl) | \"Joystick\" menu\n");
@@ -3506,7 +3524,7 @@ int main(int argc, char** argv) {
             cfg.mono = !machine.mfp.colorMonitor();
             cfg.showHex  = g_showHex;
             cfg.showCpu  = g_showCpu;  cfg.showJoy  = g_showJoy;  cfg.dock = g_dockOn;
-            cfg.showCfg  = g_showCfg;
+            cfg.showCfg  = g_showCfg;  cfg.showFloppy = g_showFloppy;
             saveConfig(exeDir, cfg, &machine);
             // ⚠ La référence PRISTINE doit devenir CE qui vient d'être persisté, pas la
             // config lue au démarrage. Sinon le gel kiosk se retourne contre la ligne
@@ -3600,6 +3618,20 @@ int main(int argc, char** argv) {
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();                      // les transitions de boutons → onMouseButton
 
+        // Le callback ne touche pas aux coordonnées locales de cette boucle : il
+        // pose une requête, puis la bascule est faite ici avant de lire un delta.
+        if (g_mouseCaptureToggleReq) {
+            g_mouseCaptureToggleReq = false;
+            g_mouseCaptured = !g_mouseCaptured;
+            glfwSetInputMode(window, GLFW_CURSOR,
+                             g_mouseCaptured ? GLFW_CURSOR_DISABLED : GLFW_CURSOR_NORMAL);
+            if (g_mouseCaptured) {
+                glfwGetCursorPos(window, &lastMx, &lastMy);
+                if (glfwRawMouseMotionSupported())
+                    glfwSetInputMode(window, GLFW_RAW_MOUSE_MOTION, GLFW_TRUE);
+            }
+        }
+
         // Bascule GUI ⇄ kiosk demandée (F8 / menus) : appliquée ICI, en tête de tour,
         // donc entre deux trames émulées — la seule fenêtre où l'instantané se recharge.
         if (g_kioskSwitchReq) {
@@ -3608,14 +3640,6 @@ int main(int argc, char** argv) {
             switchKioskMode(on);
         }
 
-
-        // Suppr (DEL) libère la souris si elle est capturée (le curseur GEM est piloté
-        // tant que la capture est active). Échap, lui, reste disponible pour le ST.
-        // En kiosk, la souris reste TOUJOURS capturée (borne).
-        if (!g_kiosk && g_mouseCaptured && glfwGetKey(window, GLFW_KEY_DELETE) == GLFW_PRESS) {
-            g_mouseCaptured = false;
-            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
-        }
 
         if (g_mouseCaptured) {                  // mouvement relatif → paquet IKBD (boutons inclus)
             double mx, my; glfwGetCursorPos(window, &mx, &my);
@@ -3836,7 +3860,7 @@ int main(int argc, char** argv) {
         int kTop = 0, kH = machine.shifter.height(), kW = machine.shifter.width();
         if (g_autoZoom) { kTop = cTop; kH = cH; kW = cW; }
 
-        bool reqReset = false, reqHardReset = false, reqRebuild = false, reqCapture = false;
+        bool reqReset = false, reqHardReset = false, reqRebuild = false;
         int  reqMonitor = -1;
 #if defined(NEOST_WITH_IMGUI)
         // Vit HORS de la trame : porte les réglages matériels en attente entre deux
@@ -3871,6 +3895,7 @@ int main(int argc, char** argv) {
                 if (ImGui::MenuItem(ICON_FA_REDO " Reset"))            reqReset = true;
                 if (ImGui::MenuItem(ICON_FA_POWER_OFF " Hard Reset"))  reqHardReset = true;
                 ImGui::Separator();
+                ImGui::MenuItem(ICON_FA_SAVE " Floppies…", nullptr, &g_showFloppy);
                 ImGui::MenuItem(ICON_FA_COG " Configuration…", nullptr, &g_showCfg);
                 // Raccourci vers la page des profils : sans lui, « enregistrer mes
                 // réglages » n'était visible qu'en descendant la colonne de la fenêtre.
@@ -3929,9 +3954,9 @@ int main(int argc, char** argv) {
 #endif
                 ImGui::EndMenu();
             }
-            // Fenêtres : rien que les outils d'INSPECTION. Les bibliothèques de supports
-            // n'y sont plus — elles sont devenues des pages de la Configuration.
+            // Fenêtres indépendantes et outils d'inspection.
             if (ImGui::BeginMenu(ICON_FA_CLONE " Windows")) {
+                ImGui::MenuItem(ICON_FA_SAVE " Floppies",       nullptr, &g_showFloppy);
                 ImGui::MenuItem(ICON_FA_MEMORY " Memory (hex)", nullptr, &g_showHex);
                 ImGui::MenuItem(ICON_FA_MICROCHIP " CPU 68000",  nullptr, &g_showCpu);
                 ImGui::MenuItem(ICON_FA_GAMEPAD " Joystick",     nullptr, &g_showJoy);
@@ -3952,7 +3977,7 @@ int main(int argc, char** argv) {
                     // F12 n'a JAMAIS eu de handler bureau (historique vérifié) : il
                     // n'existe qu'en kiosque — documenter la réalité, pas l'intention.
                     { "F12", "kiosk: keyboard & mouse overlay" },
-                    { "DEL", "release the mouse (click inside the screen captures it)" },
+                    { "MMB", "capture/release the mouse (middle button)" },
                 };
                 for (const auto& k : keys) ImGui::BulletText("%-6s %s", k.k, k.w);
                 ImGui::Separator();
@@ -3978,7 +4003,14 @@ int main(int argc, char** argv) {
                      ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
                      ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking |
                      ImGuiWindowFlags_NoBringToFrontOnFocus);
+        if (IconButton(ICON_FA_SAVE, "Floppies")) g_showFloppy = !g_showFloppy;
+        ImGui::SameLine();
         if (IconButton(ICON_FA_COG, "Configuration")) g_showCfg = !g_showCfg;
+        ImGui::SameLine();
+        // Accès direct à la borne : le menu Machine et F8 restent disponibles, mais
+        // la bascule principale ne doit pas être enfouie dans un sous-menu.
+        if (IconButton(ICON_FA_DESKTOP, "Switch to kiosk mode (F8)"))
+            g_kioskSwitchReq = 1;
         ImGui::SameLine();
         if (IconButton(ICON_FA_REDO, "Reset")) reqReset = true;
         ImGui::SameLine();
@@ -4026,15 +4058,19 @@ int main(int argc, char** argv) {
                      ImGuiWindowFlags_NoBringToFrontOnFocus);
         {
             bool first = true;
+            // page == -1 ouvre la fenêtre Floppies ; les autres valeurs ouvrent
+            // la page correspondante de Configuration.
             auto seg = [&](const std::string& text, int page, const char* tip, bool warn = false) {
                 if (!first) { ImGui::SameLine(); ImGui::TextDisabled("|"); ImGui::SameLine(); }
                 first = false;
                 if (warn) ImGui::TextColored(ImVec4(1.f, .6f, .2f, 1.f), "%s", text.c_str());
                 else      ImGui::TextUnformatted(text.c_str());
                 if (ImGui::IsItemHovered()) {
-                    ImGui::SetTooltip("%s\n(click: open the configuration)", tip);
+                    ImGui::SetTooltip("%s\n(click: open %s)", tip,
+                                      page < 0 ? "Floppies" : "the configuration");
                     if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-                        g_showCfg = true; g_cfgPage = page;
+                        if (page < 0) g_showFloppy = true;
+                        else { g_showCfg = true; g_cfgPage = page; }
                     }
                 }
             };
@@ -4059,8 +4095,8 @@ int main(int argc, char** argv) {
             std::snprintf(hzbuf, sizeof hzbuf, "%d Hz %s",
                           hz, hz == 60 ? "NTSC" : hz >= 70 ? "mono" : "PAL");
             seg(hzbuf, kCfgRom, "Scan rate (set by the ROM)", hz == 60);
-            seg("A: " + shortName(machine.fdc.mountedPath(0)), kCfgFloppy, "Floppy drive A");
-            seg("B: " + shortName(machine.fdc.mountedPath(1)), kCfgFloppy, "Floppy drive B");
+            seg("A: " + shortName(machine.fdc.mountedPath(0)), -1, "Floppy drive A");
+            seg("B: " + shortName(machine.fdc.mountedPath(1)), -1, "Floppy drive B");
             const std::string c = machine.gemdos.active() ? shortName(cfg.gemdos) + "/"
                                 : machine.fdc.acsiActive() ? shortName(cfg.acsi)
                                 : std::string("—");
@@ -4075,30 +4111,31 @@ int main(int argc, char** argv) {
         renderDockSpace(g_dockOn);
 
         // --- Fenêtre écran (base) + fenêtres masquables ----------------------
-        drawStScreen(screen, g_mouseCaptured, reqCapture, menuH + toolH, kTop, kH, kW);
+        drawStScreen(screen, g_mouseCaptured, menuH + toolH, kTop, kH, kW);
+
+        // État commun aux deux fenêtres. Floppies reste pleinement fonctionnelle
+        // lorsque Configuration est fermée.
+        cfgUi.cfg     = &cfg;
+        cfgUi.machine = &machine;
+        cfgUi.color   = color;
+        cfgUi.volume  = audio.masterVolume();
+        cfgUi.driveSound = driveSoundOn;
+        cfgUi.driveSoundAvail = driveSoundAvail;
+        cfgUi.curGemdos = cfg.gemdos.empty() ? std::string() : resolvePath(cfg.gemdos);
+        cfgUi.curAcsi   = cfg.acsi.empty()   ? std::string() : resolvePath(cfg.acsi);
+
+        if (g_showFloppy) drawFloppyWindow(cfgUi);
         if (g_showCfg) {
             // La fenêtre ne monte/démonte/redémarre rien : elle remplit `cfgUi`, qu'on
             // déverse dans les requêtes de la boucle juste après. Les chemins de disque
             // dur sont lus dans `cfg` (tenu à jour par les montages) — ni GemdosHd ni
             // Acsi n'exposent le leur.
-            cfgUi.cfg     = &cfg;
-            cfgUi.machine = &machine;
-            cfgUi.color   = color;
-            cfgUi.volume  = audio.masterVolume();
-            cfgUi.driveSound = driveSoundOn;
-            cfgUi.driveSoundAvail = driveSoundAvail;
-            cfgUi.curGemdos = cfg.gemdos.empty() ? std::string() : resolvePath(cfg.gemdos);
-            cfgUi.curAcsi   = cfg.acsi.empty()   ? std::string() : resolvePath(cfg.acsi);
             drawConfigWindow(cfgUi);
 
             // Déversement des requêtes de la fenêtre dans celles de la boucle.
-            if (!cfgUi.reqMountA.empty())      { reqMount       = cfgUi.reqMountA;      cfgUi.reqMountA.clear(); }
-            if (!cfgUi.reqMountB.empty())      { reqMountB      = cfgUi.reqMountB;      cfgUi.reqMountB.clear(); }
             if (!cfgUi.reqMountCart.empty())   { reqMountCart   = cfgUi.reqMountCart;   cfgUi.reqMountCart.clear(); }
             if (!cfgUi.reqMountGemdos.empty()) { reqMountGemdos = cfgUi.reqMountGemdos; cfgUi.reqMountGemdos.clear(); }
             if (!cfgUi.reqMountAcsi.empty())   { reqMountAcsi   = cfgUi.reqMountAcsi;   cfgUi.reqMountAcsi.clear(); }
-            if (cfgUi.reqEjectA)      { reqEject       = true; cfgUi.reqEjectA = false; }
-            if (cfgUi.reqEjectB)      { reqEjectB      = true; cfgUi.reqEjectB = false; }
             if (cfgUi.reqEjectCart)   { reqEjectCart   = true; cfgUi.reqEjectCart = false; }
             if (cfgUi.reqEjectGemdos) { reqEjectGemdos = true; cfgUi.reqEjectGemdos = false; }
             if (cfgUi.reqEjectAcsi)   { reqEjectAcsi   = true; cfgUi.reqEjectAcsi = false; }
@@ -4306,6 +4343,13 @@ int main(int argc, char** argv) {
                 cfgUi.reqDeleteProfile.clear();
             }
         }
+        // Requêtes propres à la fenêtre Floppies, consommées indépendamment de
+        // l'ouverture de Configuration et avant le traitement des montages ci-dessous.
+        if (!cfgUi.reqMountA.empty()) { reqMount  = cfgUi.reqMountA; cfgUi.reqMountA.clear(); }
+        if (!cfgUi.reqMountB.empty()) { reqMountB = cfgUi.reqMountB; cfgUi.reqMountB.clear(); }
+        if (cfgUi.reqEjectA) { reqEject  = true; cfgUi.reqEjectA = false; }
+        if (cfgUi.reqEjectB) { reqEjectB = true; cfgUi.reqEjectB = false; }
+
         if (g_showHex)  drawHexViewer(machine.bus);
         if (g_showCpu)  drawCpuState(machine.cpu, reqReset);
         if (g_showJoy)  drawJoystickWindow(window, g_lastJoy0, g_lastJoy1);
@@ -4883,14 +4927,6 @@ int main(int argc, char** argv) {
         if (reqRebuild)   applyConfig();       // modèle/RAM/cœur/ROM → reconfig à chaud
         if (reqHardReset) machine.hardReset(); // power-cycle (RAM effacée, boot à froid)
         if (reqReset)     machine.reset();     // reset « doux » (RAM conservée)
-        if (reqCapture) {                      // clic dans l'écran → on capture la souris
-            g_mouseCaptured = true;
-            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
-            glfwGetCursorPos(window, &lastMx, &lastMy);
-            if (glfwRawMouseMotionSupported())
-                glfwSetInputMode(window, GLFW_RAW_MOUSE_MOTION, GLFW_TRUE);
-        }
-
         glfwSwapBuffers(window);
 
         // Dort jusqu'à l'échéance de la prochaine trame émulée (posée par la boucle
@@ -4911,7 +4947,7 @@ int main(int argc, char** argv) {
     cfg.cart = machine.bus.mountedCartPath();
     cfg.mono = !machine.mfp.colorMonitor();
     cfg.showHex = g_showHex; cfg.showCpu = g_showCpu;
-    cfg.showJoy = g_showJoy; cfg.showCfg = g_showCfg;
+    cfg.showJoy = g_showJoy; cfg.showCfg = g_showCfg; cfg.showFloppy = g_showFloppy;
     saveConfig(exeDir, cfg, &machine);
 
 #if defined(NEOST_WITH_IMGUI)

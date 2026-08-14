@@ -8,7 +8,7 @@
 // analytiquement (fwidth) sans moiré.
 //
 // Sûreté : opt-in. Si le shader ne compile pas ou que les points d'entrée GL
-// manquent (ex. contexte legacy 2.1 macOS), available() reste false et
+// manquent, available() reste false et
 // process() est un no-op (renvoie 0) → l'appelant présente la texture brute.
 
 #ifndef NEOST_CRT_EFFECT_STACK_H
@@ -29,7 +29,7 @@ public:
     CrtEffectStack(const CrtEffectStack&) = delete;
     CrtEffectStack& operator=(const CrtEffectStack&) = delete;
 
-    // Compile le shader + alloue le VAO du quad plein écran. L'allocation
+    // Compile le shader + alloue le VBO (et un VAO si le contexte le permet).
     // texture/FBO est paresseuse (au 1er process(), on a besoin des dims).
     // Renvoie true en cas de succès ; sur échec GL available() reste false et
     // process() devient un no-op (renvoie 0).
@@ -60,6 +60,7 @@ private:
     unsigned int fbo[2]       = {0, 0};
     unsigned int vao          = 0;
     unsigned int vbo          = 0;
+    bool         useVertexArray = true;
 
     int uSrc         = -1;
     int uPrevFrame   = -1;

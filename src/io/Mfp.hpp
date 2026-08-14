@@ -60,10 +60,12 @@ public:
     // touche pas dans MFP_Reset). reset() (reset MACHINE) l'appelle puis élargit.
     void resetChip();
 
-    // Période en CYCLES CPU d'un timer (0..3 = A/B/C/D) en mode délai, ou 0 s'il
-    // est arrêté ou en event-count. `fromCounter` : période calculée depuis le
-    // COMPTEUR courant (démarrage/continuation, cf. MFP_StartTimer_AB qui part de
-    // TA_MAINCOUNTER) au lieu de la valeur de RECHARGE (rechargement à expiration).
+    // Partie entière de la période en CYCLES CPU d'un timer (0..3 = A/B/C/D) en
+    // mode délai, ou 0 s'il est arrêté/event-count. La planification conserve en
+    // interne les 8 bits fractionnaires (comme CYCINT_SHIFT d'Hatari), donc les
+    // rechargements successifs ne dérivent pas de cette valeur arrondie.
+    // `fromCounter` : période calculée depuis le COMPTEUR courant
+    // (démarrage/continuation) plutôt que depuis la valeur de RECHARGE.
     int64_t timerPeriodCycles(int timer, bool fromCounter) const;
     void    scheduleTimer(int timer);
     // Programme l'échéance d'un timer (mode délai) à `anchor + période`. `anchor` =
@@ -157,6 +159,14 @@ public:
         // --- Timers B/C/D : mode, recharge et compteurs figés ------------------------
         ar(tbcr_); ar(tbReload_); ar(tbCounter_);
         ar(tcCounter_); ar(tdCounter_);
+
+        // Échéances absolues en sous-cycles CPU (1/256) : la fraction MFP→CPU doit
+        // survivre au save/load, sinon la grille du timer saute d'un cycle après la
+        // reprise et peut déplacer une IRQ raster ou musicale.
+        ar(timerDueSub_);
+        for (int i = 0; i < 4; ++i)
+            ar.check(timerDueSub_[i] >= 0 && timerDueSub_[i] <= INT64_MAX - 255,
+                     "Mfp::timerDueSub_ hors bornes");
 
         // --- Timer A event-count (ligne TAI = XSINT son DMA STE) ---------------------
         ar(taReload_); ar(taCounter_);
@@ -356,6 +366,12 @@ private:
     uint8_t taReload_ = 0, taCounter_ = 0;
     bool    tai_ = false;
 
+    // Grille absolue des timers délai A/B/C/D en unités de 1/256 cycle CPU.
+    // 0 = pas de délai actif. Le Scheduler ne voit que ceil(timerDueSub_/256),
+    // mais cette valeur exacte sert d'ancre au rechargement suivant : aucune
+    // fraction MFP→CPU n'est perdue d'une période à l'autre.
+    int64_t timerDueSub_[4] = {};
+
     // Backing store des autres registres timer/USART : TOS les écrit puis relit
     // pour vérifier la présence du MFP, donc ils doivent renvoyer ce qu'on y a mis.
     uint8_t timer_[0x40] = {};
@@ -417,6 +433,9 @@ private:
     // Recalcule la config USART effective (cf. serialBaud) et la journalise au
     // premier réglage / à chaque CHANGEMENT (boîte à hack : on VOIT la négociation).
     void updateSerialConfig();
+
+    // Période MFP convertie en unités internes de 1/256 cycle CPU, sans flottant.
+    int64_t timerPeriodSubCycles(int timer, bool fromCounter) const;
 
     Scheduler* sched_ = nullptr;    // pour dater les timers (mode délai)
     std::function<void(uint8_t)> serialSink_;   // port série RS-232 (UDR $FFFA2F)

@@ -10,7 +10,8 @@
 #if defined(__EMSCRIPTEN__)
 #  include <GLES3/gl3.h>
 #elif defined(__APPLE__)
-#  include <OpenGL/gl3.h>
+#  include <OpenGL/gl.h>
+#  include <OpenGL/glext.h>
 #else
 #  include <GL/gl.h>
 #  include <GL/glext.h>
@@ -110,9 +111,50 @@ namespace { bool loadEntryPoints() { return true; } }
 
 namespace {
 
+#if defined(__APPLE__)
+// NeoST conserve sur macOS le contexte OpenGL 2.1 de compatibilité requis par
+// ImGui OpenGL2 et le rendu immédiat du kiosk. Apple n'y expose les FBO qu'avec
+// les noms EXT (les noms core ne deviennent valides qu'avec un contexte 3.2).
+bool g_appleLegacyGl = false;
+void genFramebuffersCompat(GLsizei n, GLuint* ids) {
+    g_appleLegacyGl ? glGenFramebuffersEXT(n, ids) : glGenFramebuffers(n, ids);
+}
+void bindFramebufferCompat(GLenum target, GLuint id) {
+    g_appleLegacyGl ? glBindFramebufferEXT(target, id) : glBindFramebuffer(target, id);
+}
+void framebufferTexture2DCompat(GLenum target, GLenum attachment, GLenum texTarget,
+                                GLuint tex, GLint level) {
+    g_appleLegacyGl ? glFramebufferTexture2DEXT(target, attachment, texTarget, tex, level)
+                    : glFramebufferTexture2D(target, attachment, texTarget, tex, level);
+}
+GLenum checkFramebufferStatusCompat(GLenum target) {
+    return g_appleLegacyGl ? glCheckFramebufferStatusEXT(target)
+                           : glCheckFramebufferStatus(target);
+}
+void deleteFramebuffersCompat(GLsizei n, const GLuint* ids) {
+    g_appleLegacyGl ? glDeleteFramebuffersEXT(n, ids) : glDeleteFramebuffers(n, ids);
+}
+#  define glGenFramebuffers        genFramebuffersCompat
+#  define glBindFramebuffer        bindFramebufferCompat
+#  define glFramebufferTexture2D   framebufferTexture2DCompat
+#  define glCheckFramebufferStatus checkFramebufferStatusCompat
+#  define glDeleteFramebuffers     deleteFramebuffersCompat
+// Ces noms core ne sont pas déclarés par <OpenGL/gl.h>. Ils restent présents
+// dans les branches mortes du code quand le contexte Apple legacy n'emploie
+// aucun VAO ; les aliases permettent néanmoins de compiler cette TU.
+#  define glGenVertexArrays        glGenVertexArraysAPPLE
+#  define glBindVertexArray        glBindVertexArrayAPPLE
+#  define glDeleteVertexArrays     glDeleteVertexArraysAPPLE
+#endif
+
 const char* kVertexShader = R"GLSL(
+#if __VERSION__ < 130
+attribute vec2 aPos;
+varying vec2 vUv;
+#else
 in vec2 aPos;
 out vec2 vUv;
+#endif
 void main() {
     vUv = aPos * 0.5 + 0.5;
     gl_Position = vec4(aPos, 0.0, 1.0);
@@ -123,8 +165,15 @@ void main() {
 // on applique la façade « verre » du CRT. La teinte est appliquée ici aussi
 // (rotation chroma sur du RGB).
 const char* kFragmentShader = R"GLSL(
+#if __VERSION__ < 130
+varying vec2 vUv;
+#define texture texture2D
+#define FRAG_COLOR gl_FragColor
+#else
 in vec2 vUv;
 out vec4 fragColor;
+#define FRAG_COLOR fragColor
+#endif
 
 uniform sampler2D uSrc;        // framebuffer RGBA source
 uniform sampler2D uPrev;       // sortie précédente (persistance)
@@ -285,7 +334,7 @@ void main()
 
     // Masque de bord appliqué EN TOUT DERNIER : le résultat écrit (= `prev` de la
     // trame suivante) est noir hors du cadre déformé, sans halo de rémanence débordant.
-    fragColor = vec4(rgb * edgeMask, 1.0);
+    FRAG_COLOR = vec4(rgb * edgeMask, 1.0);
 }
 )GLSL";
 
@@ -304,6 +353,16 @@ bool CrtEffectStack::initialize()
         errorMsg = "GL 3.x entry points unavailable";
         return false;
     }
+#endif
+
+#if defined(__APPLE__)
+    int glMajor = 0;
+    const char* glVersion = reinterpret_cast<const char*>(glGetString(GL_VERSION));
+    if (glVersion) std::sscanf(glVersion, "%d", &glMajor);
+    g_appleLegacyGl = glMajor < 3;
+    useVertexArray = !g_appleLegacyGl;
+#else
+    useVertexArray = true;
 #endif
 
     program = compileShaderProgram(kVertexShader, kFragmentShader, &errorMsg);
@@ -331,14 +390,16 @@ bool CrtEffectStack::initialize()
         -1.0f, -1.0f,  1.0f, -1.0f, -1.0f,  1.0f,
         -1.0f,  1.0f,  1.0f, -1.0f,  1.0f,  1.0f,
     };
-    glGenVertexArrays(1, &vao);
-    glBindVertexArray(vao);
+    if (useVertexArray) {
+        glGenVertexArrays(1, &vao);
+        glBindVertexArray(vao);
+    }
     glGenBuffers(1, &vbo);
     glBindBuffer(GL_ARRAY_BUFFER, vbo);
     glBufferData(GL_ARRAY_BUFFER, sizeof(verts), verts, GL_STATIC_DRAW);
     glEnableVertexAttribArray(0);
     glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, nullptr);
-    glBindVertexArray(0);
+    if (useVertexArray) glBindVertexArray(0);
     glBindBuffer(GL_ARRAY_BUFFER, 0);   // ne pas laisser le VBO lié (cf. process())
 
     ready = true;
@@ -490,9 +551,17 @@ unsigned int CrtEffectStack::process(unsigned int srcTex, int srcW, int srcH,
     if (uCenterLighting >= 0) glUniform1f(uCenterLighting, params.centerLighting);
     if (uPhosphorGamma >= 0) glUniform1f(uPhosphorGamma, params.phosphorGamma);
 
-    glBindVertexArray(vao);
+    if (useVertexArray) {
+        glBindVertexArray(vao);
+    } else {
+        // En OpenGL 2.1 il n'y a pas d'état VAO core : rattacher explicitement
+        // l'attribut au VBO avant chaque dessin.
+        glBindBuffer(GL_ARRAY_BUFFER, vbo);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, nullptr);
+    }
     glDrawArrays(GL_TRIANGLES, 0, 6);
-    glBindVertexArray(0);
+    if (useVertexArray) glBindVertexArray(0);
 
     // CRUCIAL pour NeoST (≠ POM2 core-profile) : l'écran ST et ImGui sont
     // dessinés en pipeline FIXE (immediate mode + imgui_impl_opengl2). Laisser

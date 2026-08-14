@@ -86,10 +86,12 @@ private:
     double             sampleCarry_ = 0.0; // report fractionnaire (nb d'échantillons/trame exact à long terme)
     uint32_t           latencyMs_ = 85;      // coussin visé en ms (cf. setLatencyMs) — lu par start()
     uint32_t           primeSamples_ = 4000; // coussin cible (≈ latence visée, ~85 ms) — amorçage + asservissement
+    uint32_t           recoverSamples_ = 960;// ré-amorce courte après underrun (≈20 ms, au moins 1 callback)
     bool               primed_ = false;  // (thread audio) : l'anneau a-t-il atteint le coussin ? sinon → silence
+    bool               played_ = false;  // premier amorçage terminé ; ensuite recoverSamples_ suffit
 
     // Diagnostic « son haché » : nombre d'underruns de l'anneau (le thread audio a
-    // voulu drainer plus que produit → trou de ~85 ms le temps de re-amorcer).
+    // voulu drainer plus que produit → courte ré-amorce ~20 ms avant la reprise).
     // Incrémenté par render() (thread audio), surveillé par produceFrame() (thread
     // émulation) qui avertit sur stderr — un underrun RÉPÉTÉ signifie que la boucle
     // d'émulation ne tient pas la cadence des trames (cf. bridage dans main.cpp).

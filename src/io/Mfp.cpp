@@ -46,6 +46,7 @@ void Mfp::resetChip() {
     tbcr_ = tbReload_ = tbCounter_ = 0;
     taReload_ = taCounter_ = 0;
     tcCounter_ = tdCounter_ = 0;
+    for (int64_t& t : timerDueSub_) t = 0;
     tai_ = false;                         // TAI/TBI = 0 (entrées event-count)
     timer_[0x19] = timer_[0x1B] = timer_[0x1D] = 0;                 // TACR / TBCR / TCDCR
     timer_[0x1F] = timer_[0x21] = timer_[0x23] = timer_[0x25] = 0;  // TADR / TBDR / TCDR / TDDR
@@ -368,7 +369,7 @@ uint8_t& Mfp::timerCounterRef(int timer) {
     }
 }
 
-int64_t Mfp::timerPeriodCycles(int timer, bool fromCounter) const {
+int64_t Mfp::timerPeriodSubCycles(int timer, bool fromCounter) const {
     const int ctrl = delayCtrl(timerCtrl(timer));
     if (ctrl < 1 || ctrl > 7) return 0;       // 0 = arrêté ; 8 = event-count (pas délai)
     int data;
@@ -380,7 +381,15 @@ int64_t Mfp::timerPeriodCycles(int timer, bool fromCounter) const {
     }
     const int count = data ? data : 256;      // données = 0 → 256
     const int64_t mfpCycles = static_cast<int64_t>(kMfpDiv[ctrl]) * count;
-    return mfpCycles * 31333 / 9600;          // MFP → cycles CPU
+    // Même unité interne qu'Hatari (CYCINT_SHIFT=8) : la conversion est tronquée
+    // UNE FOIS à 1/256 cycle, puis cette fraction est conservée entre les périodes.
+    // L'ancien calcul tronquait à chaque recharge en cycles entiers (ex. Timer C
+    // 200 Hz : 40106 au lieu de 40106,238), d'où une dérive monotone timer/faisceau.
+    return ((mfpCycles << 8) * 31333) / 9600;
+}
+
+int64_t Mfp::timerPeriodCycles(int timer, bool fromCounter) const {
+    return timerPeriodSubCycles(timer, fromCounter) >> 8;
 }
 
 // Port des MFP_TimerXCtrl_WriteByte (Hatari). Trois règles importantes :
@@ -484,24 +493,34 @@ void Mfp::scheduleTimer(int timer) {
 void Mfp::scheduleTimerAt(int timer, int64_t anchor, bool fromCounter) {
     if (!sched_) return;
     // Timer B (timer==1) : seul le mode DÉLAI (TBCR 1-7) est daté ici ; en event-count
-    // (TBCR=8) timerPeriodCycles renvoie 0 → on annule la source délai (le tic est
+    // (TBCR=8) timerPeriodSubCycles renvoie 0 → on annule la source délai (le tic est
     // alors piloté par Machine via mfp.hblank()).
     const Scheduler::Source src = kTimerSrc[timer];
-    const int64_t period = timerPeriodCycles(timer, fromCounter);
-    if (period <= 0) { sched_->cancel(src); return; }   // arrêté / event-count
-    // Échéance = ancre + période. Pour une programmation fraîche, ancre = maintenant
-    // → maintenant + période. Pour une replanification périodique, ancre = échéance
-    // servie → échéance + période, ce qui ABSORBE le dépassement de latence d'IRQ
-    // (overshoot) au lieu de l'ajouter à chaque tour : pas de dérive.
-    int64_t next = anchor + period;
-    const int64_t now = sched_->liveNow();
-    if (next <= now) {
+    const int64_t periodSub = timerPeriodSubCycles(timer, fromCounter);
+    if (periodSub <= 0) {
+        timerDueSub_[timer] = 0;
+        sched_->cancel(src);
+        return;
+    }
+
+    // Une programmation fraîche repart de l'horloge CPU entière de l'écriture.
+    // Un rechargement repart de l'échéance FRACTIONNAIRE précédente et non de son
+    // ceil entier exposé au Scheduler : c'est le reste accumulé de cycInt/Hatari.
+    const int64_t anchorSub = (!fromCounter && timerDueSub_[timer] > 0)
+                            ? timerDueSub_[timer] : anchor * 256;
+    int64_t nextSub = anchorSub + periodSub;
+    const int64_t nowSub = sched_->liveNow() * 256;
+    if (nextSub <= nowSub) {
         // Retard ≥ une période entière (cas rare : on a sauté des échéances) : on
         // réaligne sur la grille d'origine sans tirer une rafale d'IRQ en retard —
         // équivalent du modulo sur PendingCyclesOver d'Hatari (≤ une période).
-        const int64_t over = (now - anchor) % period;
-        next = now + period - over;
+        const int64_t skipped = (nowSub - nextSub) / periodSub + 1;
+        nextSub += skipped * periodSub;
     }
+    timerDueSub_[timer] = nextSub;
+    // CycInt_Process déclenche quand deadline_sub <= clock_cpu<<8 : le premier
+    // cycle CPU qui atteint l'échéance est donc son plafond, pas sa troncature.
+    const int64_t next = (nextSub + 255) >> 8;
     sched_->schedule(src, next);
 }
 
@@ -660,6 +679,23 @@ bool Mfp::mfpSelfTest() {
     // --- (c) Timer B event-count : fin/début de ligne selon AER bit3 ----------------
     aer = 0x00; chk("TimerB fin de ligne (AER3=0)",   timerBStartOfLine() ? 1 : 0, 0);
     aer = 0x08; chk("TimerB début de ligne (AER3=1)", timerBStartOfLine() ? 1 : 0, 1);
+
+    // --- (d) Conversion MFP→CPU fractionnaire : aucune dérive à chaque recharge ----
+    // Timer C TCDR=192, prescaler /64 = 12288 cycles MFP = 40106,23828125 cycles
+    // CPU. Avec l'ancien arrondi indépendant, 25 périodes finissaient à 1002650 ;
+    // la grille Hatari ×256 finit à ceil(25*10267197/256) = 1002656.
+    Scheduler timerSched;
+    Mfp timerProbe;
+    timerProbe.setScheduler(&timerSched);
+    timerProbe.timer_[0x1D] = 0x50;       // Timer C /64
+    timerProbe.timer_[0x23] = 192;
+    timerProbe.tcCounter_ = 192;
+    timerProbe.scheduleTimerAt(2, 0, /*fromCounter=*/true);
+    chk("TimerC 1re échéance ceil", timerSched.rawCyclesUntil(Scheduler::TIMER_C), 40107);
+    chk("TimerC période sub-cycle", timerProbe.timerDueSub_[2], 10267197);
+    for (int i = 1; i < 25; ++i)
+        timerProbe.scheduleTimerAt(2, 0, /*fromCounter=*/false);
+    chk("TimerC reste accumulé x25", timerSched.rawCyclesUntil(Scheduler::TIMER_C), 1002656);
 
     std::fprintf(stderr, "[mfp-selftest] %d OK, %d FAIL\n", pass, fail);
     return fail == 0;

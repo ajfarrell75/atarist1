@@ -36,7 +36,9 @@ Audio::~Audio() { stop(); }
 // tant que l'anneau n'a pas atteint le coussin cible (~85 ms), on sort du SILENCE sans
 // drainer — sinon on jouerait un anneau quasi-vide en underrun permanent, où seules les
 // transitoires (drums) passent et la musique continue se perd ; l'anneau mettrait des
-// dizaines de secondes à se remplir. Après tout underrun, on RÉ-AMORCE le coussin.
+// dizaines de secondes à se remplir. Après un underrun, on ne refait en revanche qu'un
+// petit coussin (~20 ms, au moins un bloc backend) : ré-attendre 85 ms avalait à elle
+// seule une percussion/note entière alors que le producteur avait déjà repris.
 void Audio::render(float* out, uint32_t frames, uint32_t /*sampleRate*/) {
     const uint32_t need = frames * 2;                       // sortie stéréo entrelacée
     // Diagnostic : taille réelle des blocs demandés par le backend (3 premiers
@@ -46,8 +48,13 @@ void Audio::render(float* out, uint32_t frames, uint32_t /*sampleRate*/) {
     if (dbg < 3) { std::fprintf(stderr, "[Audio] callback: %u frames (ring %zu floats, cushion %u frames)\n",
                                 frames, ring_.available(), primeSamples_); ++dbg; }
     if (!primed_) {
-        if (ring_.available() < size_t(primeSamples_) * 2) { std::fill(out, out + need, 0.0f); return; }
+        // Démarrage : latence cible complète. Reprise : seuil court mais jamais plus
+        // petit que la demande courante, sinon le callback se remettrait aussitôt en
+        // underrun structurel si CoreAudio négocie un bloc de plus de 20 ms.
+        const uint32_t threshold = played_ ? std::max(recoverSamples_, frames) : primeSamples_;
+        if (ring_.available() < size_t(threshold) * 2) { std::fill(out, out + need, 0.0f); return; }
         primed_ = true;                                   // coussin atteint → on démarre la lecture
+        played_ = true;
     }
     if (ring_.pull(out, need) < need) {                     // underrun → on reconstitue le coussin
         primed_ = false;
@@ -175,8 +182,10 @@ bool Audio::start() {
     // ma_device_init.
     rate_    = dev->sampleRate ? dev->sampleRate : cfg.sampleRate;  // fréquence réelle négociée
     primeSamples_ = rate_ * latencyMs_ / 1000; // coussin ≈ latencyMs_ (défaut 85 ms) à la fréquence réelle
+    recoverSamples_ = std::max(1u, rate_ / 50); // ≈20 ms ; render() le monte à la taille du callback si besoin
     ring_.clear();
     primed_      = false;                     // ré-amorçage propre
+    played_      = false;
     sampleCarry_ = 0.0;
     if (ma_device_start(dev) != MA_SUCCESS) {
         std::fprintf(stderr, "[Audio] ma_device_start failed\n");

@@ -651,7 +651,8 @@ static uint32_t cartFingerprint(const std::vector<uint8_t>& cart) {
 static uint32_t stateCrc32(const uint8_t* p, std::size_t n);   // défini plus bas
 void Machine::serializeState(StateArchive& ar) {
     uint32_t magic   = 0x4E535453u;   // 'NSTS'
-    uint16_t version = 10;            // v10 : + FujiDevice + Acsi::fujiPending_ + flag bit1
+    uint16_t version = 11;            // v11 : + Mfp::timerDueSub_ (phase MFP ×256) ;
+                                      // v10 : + FujiDevice + Acsi::fujiPending_ + flag bit1
                                       // FujiNet ; v9 : + lineScrollSnap_ (scroll fin STE par
                                       // ligne, renderGlueFrame per-line) ; v8 : empreinte
                                       // cartouche INSENSIBLE aux octets mutés par le HD GEMDOS
@@ -799,9 +800,9 @@ bool Machine::loadState(const uint8_t* data, std::size_t n) {
     uint32_t magic;   std::memcpy(&magic, data, 4);
     uint16_t version; std::memcpy(&version, data + 4, 2);
     if (magic != 0x4E535453u) return false;
-    if (version != 10) {
+    if (version != 11) {
         std::fprintf(stderr, "[state] rejected: unsupported format v%u (this build of "
-                     "NeoST writes v10) — re-save the state with F5\n", version);
+                     "NeoST writes v11) — older states are not compatible\n", version);
         return false;
     }
     uint8_t  mt    = data[6];

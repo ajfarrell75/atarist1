@@ -36,8 +36,9 @@ handling ») contient l'INTÉGRALITÉ du bug hunt 39-findings — **M1 (fronts G
 $FF8264, VoidRead 0x00, read32 void, trou MMU STF, bruit ≥/250 kHz, `mode_ &0x8f` sont CORRIGÉS** ;
 **D4, BL-MST, cartouche 0xFF, bits SR MIDI sont des FAUX POSITIFS** (Hatari fait pareil) ; V3 est
 **partiellement résolu** (restart compteur porté). Nouvelles entrées : **S4 table DAC YM**
-(défaut Hatari = table mesurée, NeoST = modèle), **hybride WS1/WS3**, troncature MFP→CPU sans
-reste. La 5ᵉ passe fait foi en cas de contradiction avec les sections historiques.
+(défaut Hatari = table mesurée, NeoST = modèle), **hybride WS1/WS3** et, à l'époque,
+troncature MFP→CPU sans reste (**portée depuis le 2026-08-14**). La 5ᵉ passe fait foi en cas
+de contradiction avec les sections historiques.
 
 ---
 
@@ -73,7 +74,7 @@ reste. La 5ᵉ passe fait foi en cas de contradiction avec les sections historiq
 | M1 ✅ | MFP | ~~Lignes GPIP on-chip sans machine de fronts AER/DDR~~ **corrigé (bc15a67)** : `gpipSetLine`/`gpipUpdateInterrupt` = port de `MFP_GPIP_Set_Line_Input`, tous les appelants convertis | moyenne | `Mfp.hpp:303-308`, `Mfp.cpp:493-504` | `MFP_GPIP_Set_Line_Input` `mfp.c:1143-1219` |
 | S4 ✅ | Son | ~~Table DAC « model » seul~~ **corrigé (2026-07-07 soir)** : table MESURÉE par défaut (`ym2149_fixed_vol.h` vendorisé + port de `interpolate_volumetable`), modèle conservé sous `NEOST_YM_MIXING=model` | moyenne | `YM2149.cpp` `dacTable()` | `YM_TABLE_MIXING` défaut `configuration.c:807`, `sound.c:505-543` |
 | S3 ✅ | Son | ~~Gain LMC ×2 manquant (YM STE −6 dB)~~ **corrigé (2026-07-07 soir)** : `kLmcMakeup=2.0` dans `gainLeft/Right/masterGain` + `kDmaGain` 0.7→0.375 (= ¾×½). Validé : cloche GEM ST vs STE ratio RMS **1.000** ; ratio DMA 0.75 exact | moyenne (audible) | `DmaSound.cpp` | ×2 `dmaSnd.c:1152-1153,1460-1461` + « 3/4 level » `dmaSnd.c:1146-1158` |
-| MC ✚ | MFP | **Conversion MFP→CPU tronquée par période, sans reste accumulé** (perte ≤1 cyc/période, dérive de phase timer↔faisceau) — candidat « lignes transitoires SHO » | moyenne-basse | `Mfp.cpp:267-268` | unités internes ×9600/×31333 `cycInt.c:26-45` |
+| MC ✅ | MFP | ~~**Conversion MFP→CPU tronquée par période, sans reste accumulé**~~ **corrigée (2026-08-14)** : échéances absolues ×256, plafond vers le Scheduler, phase sérialisée v11 | moyenne-basse | `Mfp.cpp` (`timerPeriodSubCycles`, `scheduleTimerAt`) | unités internes ×256 `cycInt.c:26-45` |
 | BU1 ✅ | Bus | **Miroir matériel du PSG `$FF8804-$FF88FF`** non routé vers le YM2149 (lit `0xFF`, écritures ignorées) | moyenne | `Bus.cpp:531,623` | `IoMem_Init` shadow PSG `ioMem.c:386-393` |
 | BL2 ✅ | Blitter | Accès **OCTET** aux registres mot/long non rejetés | moyenne | `Blitter.cpp:50-61` | `Blitter_CheckAccess_Byte` `blitter.c:972-989` |
 | SC1 | SCC | **TX émis immédiatement** (pas de cadence baud / Zero Count) ; `WR14` bit4 Local Loopback honoré (datasheet, absent d'Hatari) — **tranché : choix délibéré** | volontaire | `Scc.cpp:234,269-274`, reset `Scc.cpp:61` | `SCC_WriteDataReg` / `SCC_Process_TX` `scc.c:1655-1681,1986` |
@@ -91,10 +92,11 @@ auto/software, antidatage), timers datés, compteur vivant, event-count Timer A/
   `gpipSetLine`/`gpipUpdateInterrupt` (`Mfp.hpp:303-308`, `Mfp.cpp:493-504`) = port de
   `MFP_GPIP_Set_Line_Input`/`_Update_Interrupt` (mfp.c:1143-1219), AER/DDR respectés, tous les
   appelants on-chip convertis (Ikbd/MidiAcia wire-OR/Fdc/Blitter). Cf. 5ᵉ passe.
-- **[basse]** Conversion cycles MFP↔CPU par troncature (`Mfp.cpp:255`) vs unités internes
-  haute résolution + reste accumulé chez Hatari → jitter ±1 cyc (atténué par ré-ancrage sur
-  l'échéance servie). *Hatari ajoute même un jitter aléatoire volontaire pour Lethal Xcess,
-  non reproduit.*
+- **[basse] ✅ corrigé (2026-08-14)** — conversion cycles MFP↔CPU en échéances absolues
+  de 1/256 cycle CPU (`timerPeriodSubCycles` + `timerDueSub_`), même `CYCINT_SHIFT=8`
+  qu'Hatari. Le plafond n'est appliqué qu'à la frontière du Scheduler et la fraction
+  reste l'ancre du rechargement suivant ; phase sérialisée en save-state v11. *Hatari
+  ajoute aussi un jitter aléatoire volontaire pour Lethal Xcess, non reproduit.*
 - **[basse] ✅ corrigé (bc15a67)** — Event-count Timer B : garde `tbCounter_==0` supprimée,
   wrap uint8 0→255 (`Mfp.cpp:415-432` = `MFP_TimerB_EventCount` mfp.c:1297-1320).
 - **[basse]** Retombée d'IRQ immédiate (`Mfp.cpp:529`) vs TODO Hatari d'un délai mesuré (`mfp.c:789`) — identique aujourd'hui, suivi seulement.
@@ -734,10 +736,9 @@ TODO) :
   un timer expirant PENDANT l'instruction qui polle est vu ≤ 1 instruction en retard. Compensé
   pour les data-registers en mode délai (`Mfp.cpp:337-341`) ; fermé par `NEOST_SYNC_DISPATCH=1`
   (réfuté par ailleurs). L'IRQ elle-même n'est PAS affectée (antidatage + commit frontière).
-- **[moyenne-basse] Conversion MFP→CPU tronquée par période sans reste accumulé**
-  (`Mfp.cpp:267-268`, `×31333/9600` tronqué) vs unités internes fines Hatari (cycInt.c:26-45) :
-  perte ≤ 1 cyc CPU par période, ré-ancrée → dérive de phase timer↔faisceau monotone
-  (Timer C 200 Hz : 40106 vs 40106,24). Sans effet TOS ; candidat SHO (cf. plus bas).
+- **[moyenne-basse] ✅ corrigé (2026-08-14)** — conversion MFP→CPU et grille périodique
+  conservées en unités ×256 comme `cycInt` : Timer C 200 Hz = 40106,238 cycles sans
+  perdre la fraction à chaque recharge. Échéances `timerDueSub_` incluses au save-state v11.
 - **[basses]** AER bit3 écrit mid-ligne : tic Timer B déjà armé non repositionné (mfp.c:2772-2815,
   cas Seven Gates of Jambala) ; `setBusyLine` GPIP0 Centronics sans détection de front (fix
   trivial : `gpipSetLine(busyLine_, a)`) ; `setXsintLine` sans test DDR bit7 ; RS232 CTS/DCD/RI

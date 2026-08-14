@@ -891,11 +891,15 @@ Pour ce qui reste → [`../TODO.md`](../TODO.md).
   Correctif : **boucle de RATTRAPAGE** (pattern émulateur classique) — chaque
   itération GUI exécute autant de trames émulées que le temps réel l'exige (`emuNext`
   repoussé de la durée ÉMULÉE de chaque trame, géométrie 50/60/71 Hz ; garde-fou
-  4 trames après une pause), l'affichage saute les trames intermédiaires. Vsync off
-  (le sommeil cadence), sommeil plafonné à 20 ms (GUI réactif). **Mesuré : 0 underrun
+  4 trames après une pause), l'affichage saute les trames intermédiaires. Depuis le
+  2026-08-14, **VSync ON** : le sommeil vise désormais `emuNext` en absolu et ne
+  s'ajoute donc plus au blocage du swap ; cela supprime le tearing horizontal sans
+  ralentir le temps émulé. Sommeil plafonné à 20 ms (GUI réactif). **Mesuré : 0 underrun
   en 20 s** (contre ~6/s avant). Diagnostic pérenne : compteur d'underruns atomique +
   message stderr avec la cadence observée (`[Audio] underrun anneau … trames/s`) —
-  un son haché s'auto-explique désormais dans la console.
+  un son haché s'auto-explique désormais dans la console. Après un underrun, la
+  ré-amorce est courte (~20 ms, au moins un bloc backend) au lieu de réimposer le
+  coussin complet de 85 ms qui pouvait masquer une percussion ou une note entière.
 - **YM2149** : 3 voies carrées + bruit, enveloppe (R11-13, formes via Continue/Attack/
   Alternate/Hold), vitesse d'enveloppe corrigée (diviseur de pas). Backend miniaudio (CoreAudio).
   **`YM2149::reset()`** remet tous les registres à 0 (volumes 0 = SILENCE) et est appelé par
@@ -938,8 +942,9 @@ Pour ce qui reste → [`../TODO.md`](../TODO.md).
     fait que drainer (plus aucune course sur l'état de synthèse).
   - **Amorçage + asservissement** (corrige « la musique démarre 30 s trop tard, seuls les drums au
     début ») : le consommateur attend un coussin de ~85 ms avant de jouer (sinon on draine un anneau
-    quasi-vide en underrun permanent où seules les transitoires passent) et **ré-amorce après tout
-    underrun** ; le producteur calibre le nombre d'échantillons par report fractionnaire + un
+    quasi-vide en underrun permanent où seules les transitoires passent). Après le premier départ,
+    un underrun ne ré-amorce plus qu'environ 20 ms (au moins un bloc backend), ce qui évite de
+    masquer une note entière ; le producteur calibre le nombre d'échantillons par report fractionnaire + un
     asservissement proportionnel (|adj| ≤ 8 ech., < 0,8 % de hauteur) qui remplit vite à l'amorçage
     et recale ensuite. Latence régime ~80 ms, stable. **Validé à l'oreille sur _Magic Pocket_.**
   - Le modèle push n'est armé que si le frontend pose l'horloge (`setCycleClock`). **Les TROIS
@@ -1158,7 +1163,8 @@ Pour ce qui reste → [`../TODO.md`](../TODO.md).
   POSITIFS (D4 6268, BL-MST, cartouche 0xFF, bits SR MIDI — Hatari fait pareil), V3
   partiellement résolu (restart compteur porté). Nouvelles entrées : **S4 table DAC YM**
   (défaut Hatari = mesures P. Simoes, NeoST = modèle circuit), **hybride WS1/WS3** (HBL 508 =
-  WS1 vs oracle WS3 à 512), **troncature MFP→CPU sans reste** (dérive de phase timer↔faisceau).
+  WS1 vs oracle WS3 à 512), **troncature MFP→CPU sans reste** (dérive de phase timer↔faisceau,
+  depuis portée en unités ×256 le 2026-08-14).
   Deux chantiers ciblés et testables documentés : lignes raster transitoires SHO (3 candidats +
   traces) et son YM STE (S3 gain LMC ×2 + S4, oracle `--ym-mixing model`). Cf.
   `docs/HATARI_DIVERGENCES.md` § 5ᵉ passe.
@@ -1534,7 +1540,7 @@ Ces fonctionnalités **n'existent pas dans Hatari** (extensions assumées, consi
   Les commandes SCSI standard restent intactes sur la cible ; l'opcode $60 **verrouillé**
   à la cible FujiNet (toute autre cible = port `hdc.c` byte-identique). Lib 68000 +
   `NWGET.TOS` dans `dev/fujinet/`. Auto-test fil : `--fuji-selftest` (palier `fast`).
-  Save-state **v10**.
+  État FujiNet introduit dans les save-states **v10** ; format courant **v11**.
 - **Modem Hayes sur RS-232** (`net/HayesModem`, `--modem`) : commandes `AT` sur l'USART
   MFP → **pont TCP réel** (`ATDT hôte:port` → `CONNECT`, `+++`/`ATH`, DCD suit la
   porteuse). Débloque STiK/STinG (SLIP/PPP), terminaux, BBS. S'appuie sur

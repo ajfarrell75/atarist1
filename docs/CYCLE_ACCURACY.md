@@ -50,7 +50,10 @@ l'échéance) est reporté au handler → **pas de dérive cumulée**.
 Pour synchroniser CPU (8021248 Hz) et MFP 68901 (2457600 Hz) **sans flottant** :
 `1 cycle CPU → 9600 unités`, `1 cycle MFP → 31333 unités` (ratio exact `31333/9600`,
 `CYCINT_SHIFT`). Idée d'Arnaud Carre (sc68). Indispensable pour des périodes de timers exactes
-sur des milliers de trames.
+sur des milliers de trames. NeoST conserve les échéances A/B/C/D en unités internes de
+**1/256 cycle CPU** (`Mfp::timerDueSub_`) et n'arrondit au cycle entier qu'au moment de les
+présenter au Scheduler ; la fraction reste l'ancre du rechargement suivant et survit au
+save/load (format v11).
 
 ### 2.4 Vidéo au cycle (`video.c`)
 
