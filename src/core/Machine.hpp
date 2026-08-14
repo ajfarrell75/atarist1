@@ -48,6 +48,9 @@ public:
     explicit Machine(std::size_t ramBytes = 512u * 1024u,
                      CpuCore cpuCore = CpuCore::Moira,
                      MachineType machine = MachineType::Ste);
+    ~Machine() {
+        if (printerFile_) std::fclose(printerFile_);
+    }
 
     MachineType machineType() const { return machineType_; }
 

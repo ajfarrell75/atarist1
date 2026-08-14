@@ -24,7 +24,9 @@ set(CMAKE_C_STANDARD 99)
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE "Release" CACHE STRING "" FORCE)
 endif()
-set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG")
+# Garder les drapeaux Release fournis par CMake, la toolchain ou l'appelant.
+# Écraser CMAKE_CXX_FLAGS_RELEASE ici rendait par exemple
+# -DCMAKE_CXX_FLAGS_RELEASE="-O0 -g" totalement inopérant.
 
 # Version affichée par `--version` et par l'« À propos ». Les scripts d'empaquetage
 # passent -DNEOST_VERSION_STR=<tag> pour que le binaire livré annonce la MÊME version

@@ -31,8 +31,8 @@ done
 
 # Première fois ? Pas de build → setup complet (dépendances + sous-modules).
 if [ ! -d "$BUILD_DIR" ]; then
-    echo "==> Pas de build — lancement de ./setup.sh…"
-    ./setup.sh
+    echo "==> Pas de build dans $BUILD_DIR — lancement de ./setup.sh…"
+    NEOST_BUILD="$BUILD_DIR" ./setup.sh
 fi
 
 # Recompile l'incrément (no-op si à jour).

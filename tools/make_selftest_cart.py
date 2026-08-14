@@ -20,6 +20,8 @@
 #
 #  68000 big-endian. (c) 2026 VERHILLE Arnaud — projet NeoST.
 # =============================================================================
+from __future__ import annotations
+
 import argparse
 import struct
 import sys

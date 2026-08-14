@@ -26,6 +26,7 @@
 #include "core/Machine.hpp"
 #include "net/FujiHost.hpp"
 #include "net/FujiHostReplay.hpp"
+#include "net/MiniJson.hpp"
 #include "net/NetBackend.hpp"
 #ifdef NEOST_WITH_NET
 #include "net/FujiHostLive.hpp"
@@ -116,7 +117,7 @@ void usage() {
 //  sont auto-générées dans un dossier temporaire : aucune E/S réseau, aucun
 //  fichier du dépôt requis — rejouable par tools/run_all.py --tier fast.
 // =============================================================================
-int fujiSelfTest() {
+int fujiSelfTest(Machine& machine) {
     namespace fs = std::filesystem;
     int passed = 0, failed = 0;
     auto check = [&](bool ok, const char* what) {
@@ -133,7 +134,6 @@ int fujiSelfTest() {
     { std::ofstream f(dir / "HTTP___test_hello.txt", std::ios::binary); f << hello; }
     { std::ofstream f(dir / "HTTP___test_data.json", std::ios::binary); f << json; }
 
-    Machine machine;                     // 512 Ko, STE — pas de TOS : on pilote le MMIO
     FujiHostReplay host(dir.string());
     machine.fuji.setHost(&host);
     machine.enableFujiNet(6);
@@ -240,6 +240,56 @@ int fujiSelfTest() {
     // …cible vide (pas d'IRQ) ou peuplée : dans les deux cas, JAMAIS routé FujiNet.
     check(machine.fuji.lastError() == fn_err::OK, "vendor opcode gated to Fuji target");
 
+    // --- 7. Cas limites du parseur JSON utilisé par N: --------------------------
+    bool invalidRejected = true;
+    for (const char* bad : {".", "+", "01", "1.", "1e", "true garbage", "{\"a\":1}tail",
+                            "\"bad\\q\"", "\"bad\\uZZZZ\"", "\"raw\nline\""})
+        invalidRejected = invalidRejected && !minijson::looksLikeJson(bad);
+    std::string jsonValue;
+    check(invalidRejected && minijson::looksLikeJson(" -12.5e+2 \n")
+          && minijson::query("{\"a\":1.25e-2}", "/a", jsonValue)
+          && jsonValue == "1.25e-2", "JSON strict numbers + full EOF");
+#ifdef NEOST_WITH_NET
+    neonet::Url parsed;
+    const bool queryUrl = neonet::parseUrl("http://example.test?x=1", parsed)
+                       && parsed.host == "example.test" && parsed.path == "/?x=1";
+    const bool ipv6Url = neonet::parseUrl("http://[::1]:8080/x", parsed)
+                      && parsed.host == "::1" && parsed.port == 8080 && parsed.path == "/x";
+    check(queryUrl && ipv6Url && !neonet::parseUrl("http://host:abc/x", parsed)
+          && !neonet::parseUrl("http://::1/x", parsed),
+          "URL query/IPv6/port validation");
+#endif
+
+    // --- 8. Cas limites SCSI ACSI (sans passer par le backend FujiNet) ----------
+    const fs::path acsiPath = dir / "acsi-count-probe.img";
+    {
+        std::ofstream f(acsiPath, std::ios::binary | std::ios::trunc);
+        const char zero[512] = {};
+        for (int i = 0; i < 300; ++i) f.write(zero, sizeof zero);
+    }
+    Acsi acsi;
+    const bool mounted = acsi.mount(0, acsiPath.string());
+    auto sendAcsi = [&](std::initializer_list<uint8_t> cdb) {
+        acsi.selectTarget(0);
+        for (uint8_t b : cdb) acsi.feedByte(b);
+    };
+    sendAcsi({0x08, 0, 0, 0, 0, 0});              // READ(6), count 0 == 256
+    check(mounted && acsi.status() == 0 && acsi.dataLen() == 256 * 512,
+          "ACSI READ(6) count 0 means 256");
+    sendAcsi({0x0A, 0, 0, 0, 0, 0});              // WRITE(6), même codage spécial
+    check(acsi.status() == 0 && acsi.dataLen() == 256 * 512 && acsi.isWrite(),
+          "ACSI WRITE(6) count 0 means 256");
+    sendAcsi({0x1A, 0, 0x04, 0, 4, 0});            // MODE SENSE(6), allocation 4
+    check(acsi.status() == 0 && acsi.dataLen() == 4,
+          "ACSI MODE SENSE allocation cap");
+    acsi.selectTarget(0);
+    acsi.feedByte(0x08); acsi.feedByte(0); acsi.feedByte(0); // CDB partiel
+    acsi.reset();
+    check(acsi.byteCount() == 0 && acsi.dataLen() == 0 && !acsi.isWrite(),
+          "ACSI reset cancels command/data");
+    acsi.unmountAll();
+    fs::remove(acsiPath, ec);
+
     std::fprintf(stderr, "[fuji-selftest] %d passed, %d failed\n", passed, failed);
     return failed == 0 ? 0 : 1;
 }
@@ -252,14 +302,13 @@ int fujiSelfTest() {
 //  trame émise revient en réception → on la relit via Remote DMA. Aucune E/S
 //  réseau. Cf. docs/FUJINET.md § EtherNEC.
 // =============================================================================
-int enecSelfTest() {
+int enecSelfTest(Machine& machine) {
     int passed = 0, failed = 0;
     auto check = [&](bool ok, const char* what) {
         std::fprintf(stderr, "[enec-selftest] %-34s %s\n", what, ok ? "OK" : "FAIL");
         (ok ? passed : failed)++;
     };
 
-    Machine machine;                 // 512 Ko STE, pas de TOS : on pilote la carte au fil
     NetBackendLoop loop;
     machine.ne2000.setBackend(&loop);
     if (!machine.enableEtherNec()) { std::fprintf(stderr, "[enec-selftest] enable failed\n"); return 1; }
@@ -669,8 +718,8 @@ int main(int argc, char** argv) {
     if (busSelfTest) return machine.bus.busSelfTest() ? 0 : 1;
     if (mfpSelfTest) return machine.mfp.mfpSelfTest() ? 0 : 1;
     if (msaSelfTest) return machine.fdc.msaSelfTest() ? 0 : 1;
-    if (fujiSelfTestFlag) return fujiSelfTest();
-    if (enecSelfTestFlag) return enecSelfTest();
+    if (fujiSelfTestFlag) return fujiSelfTest(machine);
+    if (enecSelfTestFlag) return enecSelfTest(machine);
     std::fprintf(stderr, "[headless] CPU core: %s | machine: %s | RAM: %s\n",
                  Cpu68k::coreName(machine.cpu.core()), machineName(machType), ramLabel(ramBytes));
     if (!machine.loadTos(romPath)) {

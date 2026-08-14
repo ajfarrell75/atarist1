@@ -19,6 +19,7 @@
 #include "io/Scc.hpp"
 
 #include <cstdio>
+#include <stdexcept>
 
 #include "Moira.h"
 
@@ -613,9 +614,27 @@ const char* Cpu68k::coreName(CpuCore) {
 }
 
 Cpu68k::Cpu68k(Bus& bus, CpuCore core) : core_(core) {
+    if (g_cpuSelf)
+        throw std::logic_error("Cpu68k supports only one live instance");
     g_bus = &bus;
     g_cpuSelf = this;      // cf. rebaseQuantumAndSync (hook d'IACK)
-    initCore();
+    try {
+        initCore();
+    } catch (...) {
+        g_cpuSelf = nullptr;
+        g_bus = nullptr;
+        throw;
+    }
+}
+
+Cpu68k::~Cpu68k() {
+    if (g_cpuSelf != this) return;
+    delete g_moira;
+    g_moira = nullptr;
+    g_tracer = nullptr;
+    g_sched = nullptr;
+    g_cpuSelf = nullptr;
+    g_bus = nullptr;
 }
 
 // Transfère à l'ordonnanceur le temps couru depuis le début du quantum, PUIS

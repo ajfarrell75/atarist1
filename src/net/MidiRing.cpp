@@ -54,15 +54,19 @@ bool MidiRing::open(const std::string& peer, int listenPort) {
     peerAddrLen_ = int(res->ai_addrlen);
     freeaddrinfo(res);
 
-    fd_ = int(socket(AF_INET, SOCK_DGRAM, 0));
-    if (fd_ < 0) { rtrace("socket failed", ""); return false; }
+    fd_ = static_cast<neonet::SocketHandle>(socket(AF_INET, SOCK_DGRAM, 0));
+    if (!neonet::socketValid(fd_)) { rtrace("socket failed", ""); return false; }
 
     // Écoute locale (amont).
     sockaddr_in in{};
     in.sin_family = AF_INET;
     in.sin_addr.s_addr = htonl(INADDR_ANY);
     in.sin_port = htons(uint16_t(listenPort));
+#ifdef _WIN32
+    if (bind(SOCKET(fd_), reinterpret_cast<sockaddr*>(&in), sizeof in) != 0) {
+#else
     if (bind(fd_, reinterpret_cast<sockaddr*>(&in), sizeof in) != 0) {
+#endif
         rtrace("bind failed", std::to_string(listenPort));
         close();
         return false;
@@ -78,18 +82,22 @@ bool MidiRing::open(const std::string& peer, int listenPort) {
 }
 
 void MidiRing::close() {
-    if (fd_ >= 0) { neonet::sockClose(fd_); fd_ = -1; }
+    if (neonet::socketValid(fd_)) { neonet::sockClose(fd_); fd_ = neonet::kInvalidSocket; }
     peerAddrLen_ = 0;
 }
 
 void MidiRing::sendByte(uint8_t b) {
-    if (fd_ < 0 || peerAddrLen_ == 0) return;
+    if (!neonet::socketValid(fd_) || peerAddrLen_ == 0) return;
+#ifdef _WIN32
+    sendto(SOCKET(fd_), reinterpret_cast<const char*>(&b), 1, 0,
+#else
     sendto(fd_, reinterpret_cast<const char*>(&b), 1, 0,
+#endif
            reinterpret_cast<const sockaddr*>(peerAddr_), socklen_t(peerAddrLen_));
 }
 
 void MidiRing::poll(const std::function<bool(uint8_t)>& accept) {
-    if (fd_ < 0) return;
+    if (!neonet::socketValid(fd_)) return;
     // 1) Draine le socket dans le tampon de gigue (borné pour ne pas gonfler sans fin).
     uint8_t buf[512];
     for (int guard = 0; guard < 64; ++guard) {

@@ -60,11 +60,18 @@ def _load_image(path: Path) -> tuple[int, int, bytes]:
     if path.suffix.lower() in (".png", ".jpg", ".jpeg"):
         tmp = Path(tempfile.mkstemp(suffix=".ppm")[1])
         try:
-            subprocess.run(
-                ["ffmpeg", "-y", "-loglevel", "error", "-i", str(path),
-                 "-f", "image2", "-pix_fmt", "rgb24", str(tmp)],
-                check=True,
-            )
+            try:
+                subprocess.run(
+                    ["ffmpeg", "-y", "-loglevel", "error", "-i", str(path),
+                     "-f", "image2", "-pix_fmt", "rgb24", str(tmp)],
+                    check=True,
+                )
+            except FileNotFoundError as exc:
+                raise RuntimeError(
+                    "ffmpeg est requis pour lire les références PNG/JPEG "
+                    "(macOS : brew install ffmpeg ; Debian/Ubuntu : "
+                    "sudo apt install ffmpeg)"
+                ) from exc
             return _read_ppm(tmp)
         finally:
             tmp.unlink(missing_ok=True)
@@ -205,7 +212,11 @@ def main() -> int:
     ap.add_argument("--report", action="store_true",
                     help="diagnostic par scanline (localise un décalage spec512)")
     args = ap.parse_args()
-    diff, total, info = compare(Path(args.a), Path(args.b), args.crop, report=args.report)
+    try:
+        diff, total, info = compare(Path(args.a), Path(args.b), args.crop, report=args.report)
+    except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError) as exc:
+        print(f"ERREUR : {exc}", file=sys.stderr)
+        return 2
     pct = 100.0 * diff / total if total else 0.0
     print(f"diff_px={diff} / {total} ({pct:.2f} %)")
     if args.report and diff:

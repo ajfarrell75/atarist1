@@ -36,8 +36,8 @@ void netInitOnce() {
 #endif
 }
 
-void sockClose(int fd) {
-    if (fd < 0) return;
+void sockClose(SocketHandle fd) {
+    if (!socketValid(fd)) return;
 #ifdef _WIN32
     closesocket(SOCKET(fd));
 #else
@@ -49,8 +49,8 @@ void sockClose(int fd) {
 // thread lecteur retourne aussitôt, mais le fd ne peut pas être réattribué à
 // une autre connexion tant que sockClose n'a pas été appelé — c'est la moitié
 // « sûre » d'un arrêt de thread lecteur (shutdown → join → close).
-void sockShutdown(int fd) {
-    if (fd < 0) return;
+void sockShutdown(SocketHandle fd) {
+    if (!socketValid(fd)) return;
 #ifdef _WIN32
     shutdown(SOCKET(fd), SD_BOTH);
 #else
@@ -58,7 +58,7 @@ void sockShutdown(int fd) {
 #endif
 }
 
-int tcpConnect(const std::string& host, int port, int timeoutMs, std::string& err) {
+SocketHandle tcpConnect(const std::string& host, int port, int timeoutMs, std::string& err) {
     netInitOnce();
     addrinfo hints{};
     hints.ai_family   = AF_UNSPEC;
@@ -67,12 +67,12 @@ int tcpConnect(const std::string& host, int port, int timeoutMs, std::string& er
     char portStr[16];
     std::snprintf(portStr, sizeof portStr, "%d", port);
     const int gai = getaddrinfo(host.c_str(), portStr, &hints, &res);
-    if (gai != 0 || !res) { err = "cannot resolve " + host; return -1; }
+    if (gai != 0 || !res) { err = "cannot resolve " + host; return kInvalidSocket; }
 
-    int fd = -1;
+    SocketHandle fd = kInvalidSocket;
     for (addrinfo* ai = res; ai; ai = ai->ai_next) {
-        fd = int(socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol));
-        if (fd < 0) continue;
+        fd = static_cast<SocketHandle>(socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol));
+        if (!socketValid(fd)) continue;
 #ifndef _WIN32
         // Connexion avec timeout : non-bloquant + poll, puis retour en bloquant.
         const int fl = fcntl(fd, F_GETFL, 0);
@@ -90,19 +90,38 @@ int tcpConnect(const std::string& host, int port, int timeoutMs, std::string& er
         }
         fcntl(fd, F_SETFL, fl);
 #else
-        (void)timeoutMs;
+        u_long nonBlocking = 1;
+        ioctlsocket(SOCKET(fd), FIONBIO, &nonBlocking);
         int rc = ::connect(SOCKET(fd), ai->ai_addr, int(ai->ai_addrlen));
+        if (rc == SOCKET_ERROR && WSAGetLastError() == WSAEWOULDBLOCK) {
+            fd_set wfds;
+            FD_ZERO(&wfds);
+            FD_SET(SOCKET(fd), &wfds);
+            timeval tv{timeoutMs / 1000, (timeoutMs % 1000) * 1000};
+            rc = select(0, nullptr, &wfds, nullptr, &tv) == 1 ? 0 : -1;
+            if (rc == 0) {
+                int soerr = 0;
+                int sl = sizeof soerr;
+                if (getsockopt(SOCKET(fd), SOL_SOCKET, SO_ERROR,
+                               reinterpret_cast<char*>(&soerr), &sl) != 0 || soerr != 0)
+                    rc = -1;
+            }
+        } else if (rc == SOCKET_ERROR) {
+            rc = -1;
+        }
+        nonBlocking = 0;
+        ioctlsocket(SOCKET(fd), FIONBIO, &nonBlocking);
 #endif
         if (rc == 0) break;
         sockClose(fd);
-        fd = -1;
+        fd = kInvalidSocket;
     }
     freeaddrinfo(res);
-    if (fd < 0) err = "cannot connect to " + host;
+    if (!socketValid(fd)) err = "cannot connect to " + host;
     return fd;
 }
 
-int sockSend(int fd, const uint8_t* p, int n) {
+int sockSend(SocketHandle fd, const uint8_t* p, int n) {
     int sent = 0;
     while (sent < n) {
 #ifdef _WIN32
@@ -116,7 +135,7 @@ int sockSend(int fd, const uint8_t* p, int n) {
     return sent;
 }
 
-int sockRecv(int fd, uint8_t* p, int n, int timeoutMs) {
+int sockRecv(SocketHandle fd, uint8_t* p, int n, int timeoutMs) {
 #ifndef _WIN32
     pollfd pf{fd, POLLIN, 0};
     const int pr = poll(&pf, 1, timeoutMs);
@@ -136,7 +155,7 @@ int sockRecv(int fd, uint8_t* p, int n, int timeoutMs) {
     return rc < 0 ? -1 : rc;
 }
 
-bool sockHasData(int fd) {
+bool sockHasData(SocketHandle fd) {
 #ifndef _WIN32
     pollfd pf{fd, POLLIN, 0};
     return poll(&pf, 1, 0) == 1 && (pf.revents & POLLIN);
@@ -158,16 +177,43 @@ bool parseUrl(const std::string& url, Url& out) {
     out.scheme = url.substr(0, sep);
     for (char& c : out.scheme) c = char(tolower(uint8_t(c)));
     std::string rest = url.substr(sep + 3);
-    const auto slash = rest.find('/');
-    std::string hostPort = (slash == std::string::npos) ? rest : rest.substr(0, slash);
-    out.path = (slash == std::string::npos) ? "/" : rest.substr(slash);
-    const auto colon = hostPort.rfind(':');
-    if (colon != std::string::npos) {
-        out.host = hostPort.substr(0, colon);
-        out.port = std::atoi(hostPort.c_str() + colon + 1);
+    const auto delim = rest.find_first_of("/?#");
+    std::string hostPort = (delim == std::string::npos) ? rest : rest.substr(0, delim);
+    out.path = (delim == std::string::npos || rest[delim] == '#') ? "/"
+             : (rest[delim] == '?' ? "/" + rest.substr(delim) : rest.substr(delim));
+    if (const auto fragment = out.path.find('#'); fragment != std::string::npos)
+        out.path.resize(fragment);
+
+    std::string portText;
+    if (!hostPort.empty() && hostPort.front() == '[') {
+        const auto close = hostPort.find(']');
+        if (close == std::string::npos) return false;
+        out.host = hostPort.substr(1, close - 1);
+        if (close + 1 < hostPort.size()) {
+            if (hostPort[close + 1] != ':') return false;
+            portText = hostPort.substr(close + 2);
+        }
     } else {
-        out.host = hostPort;
-        out.port = (out.scheme == "http") ? 80 : (out.scheme == "https") ? 443 : 0;
+        const auto colon = hostPort.rfind(':');
+        if (colon != std::string::npos) {
+            // Une adresse IPv6 littérale doit être entre crochets ; sinon le
+            // dernier groupe serait pris à tort pour un port.
+            if (hostPort.find(':') != colon) return false;
+            out.host = hostPort.substr(0, colon);
+            portText = hostPort.substr(colon + 1);
+        } else {
+            out.host = hostPort;
+        }
+    }
+    out.port = (out.scheme == "http") ? 80 : (out.scheme == "https") ? 443 : 0;
+    if (!portText.empty()) {
+        if (!std::all_of(portText.begin(), portText.end(), [](unsigned char c) { return std::isdigit(c); }))
+            return false;
+        const unsigned long port = std::strtoul(portText.c_str(), nullptr, 10);
+        if (port == 0 || port > 65535) return false;
+        out.port = int(port);
+    } else if (hostPort.find(':') != std::string::npos && hostPort.back() == ':') {
+        return false;
     }
     return !out.host.empty();
 }
@@ -180,18 +226,18 @@ namespace {
 // Lit la réponse complète (Connection: close) puis sépare en-têtes/corps.
 // Budget MURAL de 30 s (pas seulement d'inactivité) : un serveur qui égrène un
 // octet toutes les 4 s ne peut plus bloquer l'appelant indéfiniment.
-bool readAll(int fd, std::vector<uint8_t>& raw, std::string& err,
+bool readAll(SocketHandle fd, std::vector<uint8_t>& raw, std::string& err,
              const std::atomic<bool>* cancel) {
     uint8_t tmp[8192];
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
     while (true) {
-        if (cancel && cancel->load()) { err = "canceled"; return !raw.empty(); }
+        if (cancel && cancel->load()) { err = "canceled"; return false; }
         const int rc = sockRecv(fd, tmp, int(sizeof tmp), 1000);
         if (rc == 0) return true;                 // fermeture propre
-        if (rc == -1) { err = "recv error"; return !raw.empty(); }
+        if (rc == -1) { err = "recv error"; return false; }
         if (std::chrono::steady_clock::now() >= deadline) {
             err = "timeout";
-            return !raw.empty();
+            return false;
         }
         if (rc == -2) continue;
         raw.insert(raw.end(), tmp, tmp + rc);
@@ -205,15 +251,29 @@ bool dechunk(const std::vector<uint8_t>& in, std::vector<uint8_t>& out) {
         std::size_t eol = p;
         while (eol + 1 < in.size() && !(in[eol] == '\r' && in[eol + 1] == '\n')) ++eol;
         if (eol + 1 >= in.size()) return false;
-        const std::string lenStr(reinterpret_cast<const char*>(in.data()) + p, eol - p);
-        const unsigned long n = std::strtoul(lenStr.c_str(), nullptr, 16);
+        std::string lenStr(reinterpret_cast<const char*>(in.data()) + p, eol - p);
+        if (const auto ext = lenStr.find(';'); ext != std::string::npos) lenStr.resize(ext);
+        if (lenStr.empty() || !std::all_of(lenStr.begin(), lenStr.end(),
+                                           [](unsigned char c) { return std::isxdigit(c); }))
+            return false;
+        const unsigned long long parsed = std::strtoull(lenStr.c_str(), nullptr, 16);
+        if (parsed > std::numeric_limits<std::size_t>::max()) return false;
+        const std::size_t n = std::size_t(parsed);
         p = eol + 2;
-        if (n == 0) return true;
+        if (n == 0) {
+            // Un corps chunked se termine par une ligne vide après le chunk zéro
+            // (les éventuels trailers sont donc eux aussi complètement reçus).
+            if (p + 2 <= in.size() && in[p] == '\r' && in[p + 1] == '\n') return true;
+            const char endTrailers[] = "\r\n\r\n";
+            return std::search(in.begin() + long(p), in.end(), endTrailers, endTrailers + 4) != in.end();
+        }
         // Comparaison par soustraction (p ≤ in.size() ici) : `p + n` pouvait
         // déborder avec une longueur hostile type ffffffffffffffff.
         if (n > in.size() - p) return false;
         out.insert(out.end(), in.begin() + long(p), in.begin() + long(p + n));
-        p += n + 2;                               // saute le CRLF du chunk
+        p += n;
+        if (p + 2 > in.size() || in[p] != '\r' || in[p + 1] != '\n') return false;
+        p += 2;                                   // saute le CRLF du chunk
     }
     return true;
 }
@@ -233,9 +293,11 @@ std::string headerValue(const std::string& headers, const std::string& key) {
         ++pos;
     }
     auto s = pos + k.size();
-    while (s < headers.size() && headers[s] == ' ') ++s;
+    while (s < headers.size() && (headers[s] == ' ' || headers[s] == '\t')) ++s;
     auto e = headers.find("\r\n", s);
-    return headers.substr(s, e == std::string::npos ? std::string::npos : e - s);
+    if (e == std::string::npos) e = headers.size();
+    while (e > s && (headers[e - 1] == ' ' || headers[e - 1] == '\t')) --e;
+    return headers.substr(s, e - s);
 }
 
 } // namespace
@@ -254,11 +316,13 @@ HttpResult httpFetch(const std::string& url, const std::string* postBody,
         }
         if (u.scheme != "http") { r.error = "unsupported scheme: " + u.scheme; return r; }
 
-        const int fd = tcpConnect(u.host, u.port, 5000, r.error);
-        if (fd < 0) return r;
+        const SocketHandle fd = tcpConnect(u.host, u.port, 5000, r.error);
+        if (!socketValid(fd)) return r;
 
+        const std::string hostHeader = (u.host.find(':') != std::string::npos ? "[" + u.host + "]" : u.host)
+                                     + ((u.port == 80) ? "" : ":" + std::to_string(u.port));
         std::string req = std::string(postBody ? "POST " : "GET ") + u.path + " HTTP/1.1\r\n"
-                        + "Host: " + u.host + "\r\n"
+                        + "Host: " + hostHeader + "\r\n"
                         + "User-Agent: NeoST-FujiNet/1.0\r\n"
                         + "Accept: */*\r\nConnection: close\r\n";
         if (headers)
@@ -276,7 +340,7 @@ HttpResult httpFetch(const std::string& url, const std::string* postBody,
         std::vector<uint8_t> raw;
         const bool okRead = readAll(fd, raw, r.error, cancel);
         sockClose(fd);
-        if (!okRead && raw.empty()) return r;
+        if (!okRead) return r;
 
         // Sépare l'en-tête du corps.
         const char* sep = "\r\n\r\n";
@@ -293,9 +357,20 @@ HttpResult httpFetch(const std::string& url, const std::string* postBody,
         if (r.status >= 301 && r.status <= 308 && r.status != 304) {
             const std::string loc = headerValue(head, "Location");
             if (!loc.empty()) {
-                cur = (loc.find("://") != std::string::npos)
-                          ? loc
-                          : "http://" + u.host + ":" + std::to_string(u.port) + loc;
+                const std::string authority = "http://"
+                    + (u.host.find(':') != std::string::npos ? "[" + u.host + "]" : u.host)
+                    + ((u.port == 80) ? "" : ":" + std::to_string(u.port));
+                if (loc.find("://") != std::string::npos) cur = loc;
+                else if (loc.rfind("//", 0) == 0) cur = "http:" + loc;
+                else if (!loc.empty() && loc.front() == '/') cur = authority + loc;
+                else if (!loc.empty() && loc.front() == '?') {
+                    const auto query = u.path.find('?');
+                    cur = authority + u.path.substr(0, query) + loc;
+                }
+                else {
+                    const auto slash = u.path.rfind('/');
+                    cur = authority + u.path.substr(0, slash == std::string::npos ? 0 : slash + 1) + loc;
+                }
                 continue;
             }
         }
@@ -303,9 +378,24 @@ HttpResult httpFetch(const std::string& url, const std::string* postBody,
         for (char& c : te) c = char(tolower(uint8_t(c)));
         if (te.find("chunked") != std::string::npos) {
             r.body.clear();
-            if (!dechunk(body, r.body)) { r.error = "bad chunked body"; return r; }
+            if (!dechunk(body, r.body)) {
+                r.status = 0;
+                r.body.clear();
+                r.error = "bad chunked body";
+                return r;
+            }
         } else {
             r.body = std::move(body);
+            const std::string cl = headerValue(head, "Content-Length");
+            if (!cl.empty()) {
+                if (!std::all_of(cl.begin(), cl.end(), [](unsigned char c) { return std::isdigit(c); })) {
+                    r.status = 0; r.body.clear(); r.error = "bad Content-Length"; return r;
+                }
+                const unsigned long long expected = std::strtoull(cl.c_str(), nullptr, 10);
+                if (expected != r.body.size()) {
+                    r.status = 0; r.body.clear(); r.error = "truncated HTTP body"; return r;
+                }
+            }
         }
         return r;
     }

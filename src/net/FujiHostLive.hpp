@@ -24,6 +24,7 @@
 #include <vector>
 
 #include "net/FujiHost.hpp"
+#include "net/HttpClient.hpp"
 
 class FujiHostLive final : public FujiHost {
 public:
@@ -49,7 +50,7 @@ private:
         std::mutex mtx;
         Kind kind = Kind::None;
         bool open = false;
-        int  fd   = -1;                     // TCP
+        neonet::SocketHandle fd = neonet::kInvalidSocket; // TCP
         std::vector<uint8_t> buf;           // octets prêts pour le ST
         std::string jsonSrc;                // document figé par jsonParse
         std::atomic<bool> workerDone{true};

@@ -14,6 +14,8 @@
 #   ./setup.sh            # build Release complet
 #   ./setup.sh --debug    # build Debug
 #   ./setup.sh --no-deps  # saute l'installation des paquets système
+# Variable d'env :
+#   NEOST_BUILD=build-alt répertoire de build (défaut : build)
 set -euo pipefail
 
 # Racine du dépôt = répertoire de ce script (marche depuis n'importe où).
@@ -21,6 +23,7 @@ cd "$(dirname "$0")"
 
 BUILD_TYPE=Release
 INSTALL_DEPS=1
+BUILD_DIR="${NEOST_BUILD:-build}"
 for arg in "$@"; do
     case "$arg" in
         --debug)   BUILD_TYPE=Debug ;;
@@ -69,10 +72,10 @@ fi
 # ---------------------------------------------------------------------------
 # 3) Configuration + compilation des 3 cibles (neost, neost-headless, lib).
 # ---------------------------------------------------------------------------
-say "Configuration CMake ($BUILD_TYPE)…"
-cmake -B build -DCMAKE_BUILD_TYPE="$BUILD_TYPE"
+say "Configuration CMake ($BUILD_TYPE) dans $BUILD_DIR…"
+cmake -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE="$BUILD_TYPE"
 
 say "Compilation (neost, neost-headless, neost_core)…"
-cmake --build build -j
+cmake --build "$BUILD_DIR" -j
 
 say "Terminé. Lance l'émulateur avec : ./run.sh"

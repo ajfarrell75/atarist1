@@ -24,6 +24,7 @@
 #include <string>
 
 #include "io/Mfp.hpp"
+#include "net/HttpClient.hpp"
 
 class HayesModem {
 public:
@@ -32,12 +33,12 @@ public:
 
     void onTx(uint8_t b);       // octet écrit par l'ST dans l'UDR
     void poll();                // une fois par trame : pompe le TCP entrant
-    bool connected() const { return fd_ >= 0; }
+    bool connected() const { return neonet::socketValid(fd_); }
     void hangup(bool notify);
 
 private:
     Mfp& mfp_;
-    int  fd_ = -1;
+    neonet::SocketHandle fd_ = neonet::kInvalidSocket;
     bool dataMode_ = false;
     bool echo_ = true;
     int  plusCount_ = 0;

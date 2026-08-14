@@ -14,6 +14,8 @@
 #
 #  (c) 2026 VERHILLE Arnaud — projet NeoST.
 # =============================================================================
+from __future__ import annotations
+
 import argparse
 import subprocess
 import sys

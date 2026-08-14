@@ -78,7 +78,6 @@ bool StxImage::parse(std::vector<uint8_t> raw) {
 
     const uint8_t* const base = buf_.data();
     const uint8_t* const end  = base + buf_.size();
-    auto inBuf = [&](const uint8_t* q, std::size_t n) { return q >= base && q + n <= end; };
     // Plafonne une taille d'image de piste annoncée par le fichier sur ce qui reste
     // du tampon à partir de `img` (cf. les deux branches TRACK_FLAG_IMAGE plus bas).
     auto clampImage = [](uint16_t sz, const uint8_t* img, const uint8_t* e) -> uint16_t {
@@ -97,7 +96,7 @@ bool StxImage::parse(std::vector<uint8_t> raw) {
     tracks_.reserve(tracksCountHdr_);
 
     for (int t = 0; t < tracksCountHdr_; ++t) {
-        if (!inBuf(p, 16)) return false;
+        if (16u > std::size_t(end - p)) return false;
         const uint8_t* p_cur = p;
 
         tracks_.emplace_back();
@@ -110,9 +109,10 @@ bool StxImage::parse(std::vector<uint8_t> raw) {
         trk.trackNumber  = *p++;
         trk.recordType   = *p++;
 
-        // Borne du bloc de piste (p_cur + BlockSize) ; on s'y recale à la fin.
+        // Valider la taille par soustraction AVANT de former le pointeur de fin :
+        // un BlockSize hostile ne doit jamais produire un pointeur hors tableau.
+        if (trk.blockSize < 16 || trk.blockSize > std::size_t(end - p_cur)) return false;
         const uint8_t* next = p_cur + trk.blockSize;
-        if (trk.blockSize < 16 || !inBuf(p_cur, trk.blockSize)) return false;
 
         bool simple = false;
         if (trk.sectorsCount > 0 && (trk.flags & TRACK_FLAG_SECTOR_BLOCK) == 0) {
@@ -120,7 +120,8 @@ bool StxImage::parse(std::vector<uint8_t> raw) {
             // Invariant : « sectorsCount == sectors.size() toujours » — le FDC
             // (nextSectorIDStx/readSectorStx) borne ses parcours sur sectorsCount
             // mais indexe sectors[] : toute désynchronisation = accès hors borne.
-            if (inBuf(p, std::size_t(trk.sectorsCount) * 512u))
+            const std::size_t dataBytes = std::size_t(trk.sectorsCount) * 512u;
+            if (dataBytes <= std::size_t(next - p))
                 buildSectorsSimple(trk, p);       // resize(sectorsCount) → invariant tenu
             else
                 trk.sectorsCount = 0;             // image tronquée → piste vide cohérente
@@ -129,7 +130,10 @@ bool StxImage::parse(std::vector<uint8_t> raw) {
 
         if (!simple) {
             // Zones optionnelles fuzzy / image de piste.
-            trk.pFuzzy     = p + std::size_t(trk.sectorsCount) * 16u;   // après les blocs secteur
+            const std::size_t sectorInfoBytes = std::size_t(trk.sectorsCount) * 16u;
+            if (sectorInfoBytes > std::size_t(next - p)) return false;
+            trk.pFuzzy = p + sectorInfoBytes;             // après les blocs secteur
+            if (trk.fuzzySize > std::size_t(next - trk.pFuzzy)) return false;
             trk.pTrackData = trk.pFuzzy + trk.fuzzySize;
 
             if ((trk.flags & TRACK_FLAG_IMAGE) == 0) {
@@ -143,18 +147,18 @@ bool StxImage::parse(std::vector<uint8_t> raw) {
             // TRONQUE plutôt qu'on ne rejette (esprit du clamp de msa.c:205) : une
             // image partiellement valide reste exploitable.
             } else if ((trk.flags & TRACK_FLAG_IMAGE_SYNC) == 0) {
-                if (inBuf(trk.pTrackData, 2)) {
-                    trk.trackImageSize = clampImage(rd16le(trk.pTrackData), trk.pTrackData + 2, end);
+                if (2u <= std::size_t(next - trk.pTrackData)) {
+                    trk.trackImageSize = clampImage(rd16le(trk.pTrackData), trk.pTrackData + 2, next);
                     trk.pTrackImage    = trk.trackImageSize ? trk.pTrackData + 2 : nullptr;
                     trk.pSectorsImage  = trk.pTrackData + 2 + trk.trackImageSize;
-                }
+                } else return false;
             } else {
-                if (inBuf(trk.pTrackData, 4)) {
+                if (4u <= std::size_t(next - trk.pTrackData)) {
                     trk.trackImageSyncPos = rd16le(trk.pTrackData);
-                    trk.trackImageSize    = clampImage(rd16le(trk.pTrackData + 2), trk.pTrackData + 4, end);
+                    trk.trackImageSize    = clampImage(rd16le(trk.pTrackData + 2), trk.pTrackData + 4, next);
                     trk.pTrackImage       = trk.trackImageSize ? trk.pTrackData + 4 : nullptr;
                     trk.pSectorsImage     = trk.pTrackData + 4 + trk.trackImageSize;
-                }
+                } else return false;
             }
 
             if (trk.sectorsCount > 0) {
@@ -164,7 +168,7 @@ bool StxImage::parse(std::vector<uint8_t> raw) {
                 uint32_t maxOffsetEnd = 0;
 
                 for (int s = 0; s < trk.sectorsCount; ++s) {
-                    if (!inBuf(p, 16)) return false;
+                    if (16u > std::size_t(next - p)) return false;
                     Sector& sec = trk.sectors[s];
                     sec.dataOffset  = rd32le(p);            p += 4;
                     sec.bitPosition = rd16le(p);            p += 2;
@@ -180,13 +184,15 @@ bool StxImage::parse(std::vector<uint8_t> raw) {
 
                     if ((sec.fdcStatus & FLAG_RNF) == 0) {
                         sec.sectorSize = uint16_t(128 << (sec.idSize & SECTOR_SIZE_MASK));
-                        const uint8_t* d = trk.pTrackData + sec.dataOffset;
-                        if (inBuf(d, sec.sectorSize)) sec.pData = d;
+                        if (sec.dataOffset <= std::size_t(next - trk.pTrackData)
+                            && sec.sectorSize <= std::size_t(next - trk.pTrackData) - sec.dataOffset)
+                            sec.pData = trk.pTrackData + sec.dataOffset;
                         if (sec.fdcStatus & FLAG_FUZZY) {
-                            if (inBuf(pFuzzy, sec.sectorSize)) sec.pFuzzy = pFuzzy;
+                            if (sec.sectorSize > std::size_t(next - pFuzzy)) return false;
+                            sec.pFuzzy = pFuzzy;
                             pFuzzy += sec.sectorSize;
                         }
-                        if (sec.dataOffset + sec.sectorSize > maxOffsetEnd)
+                        if (sec.pData && sec.dataOffset + sec.sectorSize > maxOffsetEnd)
                             maxOffsetEnd = sec.dataOffset + sec.sectorSize;
                         if (sec.fdcStatus & FLAG_VARIABLE_TIME) variableTimings = true;
                     }
@@ -197,7 +203,7 @@ bool StxImage::parse(std::vector<uint8_t> raw) {
                 if (trk.pTiming < trk.pSectorsImage) trk.pTiming = trk.pSectorsImage;
 
                 if (variableTimings) {
-                    if (revision_ == 2 && inBuf(trk.pTiming, 4)) {
+                    if (revision_ == 2 && 4u <= std::size_t(next - trk.pTiming)) {
                         trk.timingFlags = rd16le(trk.pTiming);
                         trk.timingSize  = rd16le(trk.pTiming + 2);
                         trk.pTimingData = trk.pTiming + 4;
@@ -208,8 +214,13 @@ bool StxImage::parse(std::vector<uint8_t> raw) {
                         sec.pTiming = nullptr;
                         if ((sec.fdcStatus & FLAG_RNF) == 0 && (sec.fdcStatus & FLAG_VARIABLE_TIME)) {
                             if (revision_ == 2) {
-                                if (pTim && inBuf(pTim, (sec.sectorSize / 16) * 2)) sec.pTiming = pTim;
-                                if (pTim) pTim += (sec.sectorSize / 16) * 2;
+                                const std::size_t timingBytes = (sec.sectorSize / 16) * 2u;
+                                if (pTim && timingBytes <= std::size_t(next - pTim)) {
+                                    sec.pTiming = pTim;
+                                    pTim += timingBytes;
+                                } else {
+                                    pTim = nullptr;
+                                }
                             } else if (sec.sectorSize <= 512) {
                                 // Table fixe révision 0 : 64 octets = 32 blocs de 16 o,
                                 // soit un secteur de 512 o max. Un .stx forgé rév. 0 avec
@@ -223,7 +234,6 @@ bool StxImage::parse(std::vector<uint8_t> raw) {
             }
         }
 
-        if (!inBuf(next, 0)) return false;
         p = next;   // bloc de piste suivant
     }
 
