@@ -6,6 +6,23 @@ l'ordre inverse. Version courante : **0.5.2**.
 - « NeoST gère-t-il X ? » → [`docs/IMPLEMENTED.md`](docs/IMPLEMENTED.md) (inventaire par puce)
 - « Que reste-t-il ? » → [`TODO.md`](TODO.md)
 
+## Super Hang-On : phase MFP sans dérive (2026-08-14)
+
+Les timers MFP A/B/C/D conservent désormais leur échéance en unités de **1/256 de
+cycle CPU**, comme `CYCINT_SHIFT` dans Hatari. Auparavant chaque recharge tronquait
+séparément la conversion MFP→CPU (par exemple 40106 au lieu de 40106,238 cycles pour
+le Timer C 200 Hz) : la phase dérivait progressivement par rapport au faisceau et aux
+écritures YM, terrain commun aux rares lignes raster transitoires et aux événements
+musicaux manqués de *Super Hang-On*. L'auto-test MFP couvre l'accumulation sur 25
+périodes. La phase fractionnaire est sérialisée ; save-state **v11**.
+
+Deux défauts de présentation amplifiaient les symptômes : le bureau désactivait la
+**VSync**, ce qui pouvait couper une image à une ligne aléatoire (tearing hôte), et un
+seul underrun audio imposait ensuite **85 ms de silence** avant de reprendre. La VSync
+est réactivée avec la boucle de rattrapage à échéance absolue (elle maintient le temps
+émulé même si un swap bloque), et la ré-amorce après underrun descend à environ 20 ms,
+au moins la taille d'un bloc CoreAudio. Le premier amorçage conserve la latence choisie.
+
 ## Réseau : FujiNet + modem Hayes + EtherNEC + anneau MIDI (2026-08-12)
 
 Première ouverture de la machine émulée sur le réseau — **quatre extensions NeoST**,

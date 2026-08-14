@@ -89,8 +89,8 @@ executable, so running from the repository root or from `build/` both work.
 
 ## Using it
 
-Click inside the ST screen to capture the mouse (you are then driving the GEM cursor);
-<kbd>Del</kbd> releases it. The keyboard goes straight to the IKBD. Everything else —
+Click the middle mouse button (usually the wheel) to capture or release the mouse.
+When captured, you are driving the GEM cursor. The keyboard goes straight to the IKBD. Everything else —
 machine model, memory, ROM, floppies, hard disks, sound, CRT look — lives in one
 **Configuration** window, and the status bar at the bottom always tells you what machine
 you are actually running.
@@ -100,8 +100,8 @@ you are actually running.
 | <kbd>F5</kbd> / <kbd>F7</kbd> | Save / load state |
 | <kbd>F8</kbd> | Toggle kiosk (cabinet) mode |
 | <kbd>F11</kbd> | Keyboard joystick (arrows + right Ctrl) |
-| <kbd>F12</kbd> | Capture the mouse |
-| <kbd>Del</kbd> | Release the mouse |
+| <kbd>F12</kbd> | Kiosk: keyboard & mouse overlay |
+| Middle mouse button | Capture / release the mouse |
 
 **Floppies** — drop a `.st`, `.msa`, `.dim` or `.stx` (Pasti, for copy-protected games)
 onto the window, or mount it from the Configuration window. Writes are persisted back to

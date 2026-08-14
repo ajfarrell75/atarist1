@@ -139,9 +139,10 @@ partout. Trace : `NEOST_FUJI_TRACE=1`.
   Intégré au palier `fast` (`tools/etalons.json`, type `fuji_selftest`).
 * Bout-en-bout : cf. la commande de démonstration ci-dessus ; validée disquette
   HTTP ↔ montage local **0 px d'écart**.
-* Save-states : format **v10** (état du protocole sérialisé ; les canaux réseau du
-  backend ne survivent pas à un load — le ST doit rouvrir, comme après une coupure
-  WiFi ; flag d'en-tête bit1 = FujiNet, configs save/load doivent concorder).
+* Save-states : état du protocole introduit en **v10**, format courant **v11** (les
+  canaux réseau du backend ne survivent pas à un load — le ST doit rouvrir, comme
+  après une coupure WiFi ; flag d'en-tête bit1 = FujiNet, configs save/load doivent
+  concorder).
 
 ## Limites v1 (assumées)
 

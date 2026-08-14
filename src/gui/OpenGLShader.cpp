@@ -112,8 +112,8 @@ struct GlslDialect {
 };
 
 // Dialectes à essayer, le plus riche d'abord. Le corps des shaders NeoST
-// n'utilise que des constructions GLSL 1.30 (`in`/`out`, `texture()`,
-// `fwidth()`) : 130 et 140 conviennent donc aussi bien que 150. Certaines
+// fournit aussi un petit chemin de compatibilité GLSL 1.20 pour le contexte
+// OpenGL 2.1 imposé par le frontend fixe sur macOS. Certaines
 // piles n'exposent PAS 1.50 — c'est le cas du V3D des Raspberry Pi sous Mesa,
 // qui plafonne à 1.40 (« GLSL 1.50 is not supported. Supported versions are:
 // 1.10, 1.20, 1.30, 1.40, 1.00 ES, 3.00 ES ») — d'où le repli en cascade
@@ -143,7 +143,8 @@ std::vector<GlslDialect> glslDialects()
     if (ver == 0 || ver >= 150) out.push_back({ "#version 150\n", "\n" });
     if (ver == 0 || ver >= 140) out.push_back({ "#version 140\n", "\n" });
     if (ver == 0 || ver >= 130) out.push_back({ "#version 130\n", "\n" });
-    if (out.empty()) out.push_back({ "#version 130\n", "\n" });  // dernier recours
+    if (ver == 0 || ver >= 120) out.push_back({ "#version 120\n", "\n" });
+    if (out.empty()) out.push_back({ "#version 120\n", "\n" });  // dernier recours
     return out;
 #endif
 }
