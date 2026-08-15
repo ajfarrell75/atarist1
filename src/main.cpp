@@ -665,7 +665,7 @@ constexpr int MOUSE_Y_SIGN = +1;
 
 Ikbd* g_ikbd = nullptr;                // cible des callbacks clavier/souris GLFW
 bool  g_mouseCaptured = false;         // souris capturée → entrées dirigées vers le ST
-bool  g_mouseCaptureToggleReq = false; // clic molette → bascule appliquée dans la boucle
+bool  g_mouseCaptureToggleReq = false; // molette / Ctrl+Alt+G → bascule dans la boucle
 bool  g_dbgMouse = false;              // NEOST_DEBUG_MOUSE=1 → trace les paquets souris
 bool  g_dbgJoy = false;                // NEOST_DEBUG_JOY=1 → trace l'état brut des manettes
 bool  g_kbdJoy = false;                // émulation joystick au clavier (flèches + Ctrl droit)
@@ -1134,8 +1134,24 @@ void updateKbdCountry(const std::vector<uint8_t>& rom) {
 
 // Callback clavier GLFW → IKBD. Les touches Atari, dont Suppr et Échap, sont
 // transmises au ST (beaucoup de jeux/applications s'en servent).
-void onKey(GLFWwindow*, int key, int scancode, int action, int /*mods*/) {
+void onKey(GLFWwindow*, int key, int scancode, int action, int mods) {
     if (!g_ikbd || action == GLFW_REPEAT) return;   // TOS gère sa propre répétition (pas l'IKBD)
+    // Secours pour les trackpads et souris à deux boutons : même bascule que le clic
+    // molette. Ctrl+Alt+G est réservé à l'hôte, mais G SEUL poursuit normalement
+    // vers l'IKBD. Le latch absorbe aussi le BREAK du raccourci si Ctrl/Alt sont
+    // relâchés avant G. En kiosk la capture reste imposée.
+    static bool mouseCaptureChordHeld = false;
+    if (key == GLFW_KEY_G) {
+        if (action == GLFW_PRESS && (mods & GLFW_MOD_CONTROL) && (mods & GLFW_MOD_ALT)) {
+            mouseCaptureChordHeld = true;
+            if (!g_kiosk) g_mouseCaptureToggleReq = true;
+            return;
+        }
+        if (action == GLFW_RELEASE && mouseCaptureChordHeld) {
+            mouseCaptureChordHeld = false;
+            return;
+        }
+    }
     // Touches réservées HÔTE : F5/F7 (save-state), F8 (bascule GUI ⇄ kiosk),
     // F11 (bascule joystick clavier), + F9/F10 en kiosk (menu disques, zoom). Sans
     // cette exclusion, le ST recevait la touche F5/F7 EN MÊME TEMPS que l'état était
@@ -2053,7 +2069,7 @@ static void renderDockSpace(bool visible) {
 // titre (ImGui mémorise sa position). La taille d'affichage suit la résolution
 // COURANTE du buffer en respectant l'aspect pixel ST : basse rés ×2/×2, moyenne
 // ×1/×2, mono ×1/×1 — l'écran actif occupe donc toujours ~640×400.
-// Le clic sur la molette accroche/décroche la souris.
+// Le clic sur la molette ou Ctrl+Alt+G accroche/décroche la souris.
 //
 // [cTop, cTop+cH) = région de CONTENU (cf. stContentRegion) : le bureau applique le
 // MÊME zoom adaptatif que le kiosk, à ceci près qu'il le cadre en UV de l'image et
@@ -2103,14 +2119,14 @@ void drawStScreen(const GlScreen& s, bool captured, float topOffset,
                  ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse |
                  ImGuiWindowFlags_NoBringToFrontOnFocus;
     // Souris capturée → tout le mouvement va au ST (curseur verrouillé) : on FIGE la
-    // fenêtre (pas de glissé). Une fois libérée (clic molette), elle redevient déplaçable.
+    // fenêtre (pas de glissé). Une fois libérée (molette/Ctrl+Alt+G), elle redevient déplaçable.
     if (captured) flags |= ImGuiWindowFlags_NoMove;
     ImGui::Begin("Atari ST Screen", nullptr, flags);
 #ifdef IMGUI_HAS_DOCK
     s_docked = ImGui::IsWindowDocked();   // pour la trame SUIVANTE (cf. plus haut)
 #endif
-    ImGui::TextDisabled(captured ? "Mouse captured — middle-click to release it"
-                                 : "Middle-click to capture the mouse (GEM cursor)");
+    ImGui::TextDisabled(captured ? "Mouse captured — middle-click or Ctrl+Alt+G to release"
+                                 : "Middle-click or Ctrl+Alt+G to capture the mouse");
     // Cadrage de l'image dans la zone dispo. Deux régimes :
     //  · Zoom auto (défaut) — RÈGLE DU KIOSK : l'échelle est pilotée par la HAUTEUR,
     //    la région de contenu cale dessus, et la largeur en excès (bordures latérales)
@@ -3461,7 +3477,7 @@ int main(int argc, char** argv) {
     ImGui_ImplOpenGL2_Init();
 #endif
 
-    std::printf("[main] Middle mouse button: capture/release mouse | "
+    std::printf("[main] Middle mouse button or Ctrl+Alt+G: capture/release mouse | "
                 "Reset button in the CPU window | close the window: quit\n");
     std::printf("[main] Joystick: USB pad auto-detected (port 1) | F11 = keyboard "
                 "emulation (arrows + right Ctrl) | \"Joystick\" menu\n");
@@ -3978,6 +3994,7 @@ int main(int argc, char** argv) {
                     // n'existe qu'en kiosque — documenter la réalité, pas l'intention.
                     { "F12", "kiosk: keyboard & mouse overlay" },
                     { "MMB", "capture/release the mouse (middle button)" },
+                    { "Ctrl+Alt+G", "capture/release the mouse (keyboard fallback)" },
                 };
                 for (const auto& k : keys) ImGui::BulletText("%-6s %s", k.k, k.w);
                 ImGui::Separator();

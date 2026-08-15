@@ -6,6 +6,13 @@ l'ordre inverse. Version courante : **0.5.2**.
 - « NeoST gère-t-il X ? » → [`docs/IMPLEMENTED.md`](docs/IMPLEMENTED.md) (inventaire par puce)
 - « Que reste-t-il ? » → [`TODO.md`](TODO.md)
 
+## Capture souris sans bouton central (2026-08-15)
+
+Le clic molette reste la bascule principale, avec **Ctrl+Alt+G** comme raccourci de
+secours dans les frontends bureau et Web pour les trackpads et souris à deux boutons.
+Seul le chord **Ctrl+Alt+G** est réservé à l'hôte ; `G` seul reste transmis normalement
+à l'IKBD.
+
 ## Super Hang-On : phase MFP sans dérive (2026-08-14)
 
 Les timers MFP A/B/C/D conservent désormais leur échéance en unités de **1/256 de

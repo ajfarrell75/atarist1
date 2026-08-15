@@ -1558,6 +1558,10 @@ Ces fonctionnalités **n'existent pas dans Hatari** (extensions assumées, consi
   `MIDITEST.TOS` (OUT 10/10 octets ordre exact ; round-trip complet OUT→réseau→IN→ACIA).
 
 ## Frontend & outillage
+- **Capture souris accessible sans bouton central (2026-08-15)** : clic molette ou
+  **Ctrl+Alt+G** pour accrocher/décrocher la souris dans les frontends bureau et Web ;
+  seul ce chord est réservé à l'hôte, tandis que `G` seul reste transmis à l'IKBD.
+  Le kiosk conserve sa capture imposée et son overlay F12.
 - **Menu kiosk « Joysticks » : affectation des manettes hôte aux ports ST + boutons
   ESPACE/RETURN (2026-07-12)** : nouvelle action du menu in-game (START) — une ligne par
   manette détectée (pastille ● d'activité pour identifier physiquement chaque stick), le

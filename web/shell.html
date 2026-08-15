@@ -205,7 +205,7 @@
   <details>
     <summary>Help &amp; shortcuts</summary>
     <ul>
-      <li><b>Mouse</b>: click the middle button (usually the wheel) to <b>capture or release</b> it (GEM cursor). <kbd>Esc</kbd> and <kbd>Del</kbd> are sent to the ST.</li>
+      <li><b>Mouse</b>: click the middle button (usually the wheel), or press <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>G</kbd>, to <b>capture or release</b> it (GEM cursor). <kbd>Esc</kbd> and <kbd>Del</kbd> are sent to the ST.</li>
       <li><b>Keyboard</b>: routed to the IKBD (US layout). <b>Keyboard joystick</b>: arrows + <kbd>right Ctrl</kbd> = fire button (port 1).</li>
       <li><b>Game floppies</b>: "Mount A: + Reset" switches to a <b>real TOS</b> when needed (EmuTOS only boots system floppies) — TOS 2.06 on STE/Mega STE, TOS 1.0x on ST. Pick a ROM by hand to lock that choice.</li>
       <li><b>Drag and drop</b>: drop a <code>.st</code> / <code>.msa</code> / <code>.dim</code> / <code>.stx</code> image straight onto the screen to mount it in A: and reboot.</li>
@@ -263,7 +263,7 @@
     // EM_ASM appelant neostOnReady) : garantit que le runtime tourne vraiment.
     window.neostOnReady = function () {
       ready = true;
-      setStatusOk('Ready — middle-click the screen to capture the mouse.');
+      setStatusOk('Ready — middle-click or press Ctrl+Alt+G to capture the mouse.');
       // Peuple les menus depuis le FS virtuel : montre exactement ce qui a été
       // embarqué (tout en local, EmuTOS+diskA pour le déploiement libre). La ROM
       // présélectionnée suit la machine : EmuTOS 256 Ko (STE/Mega STE) ou 192 Ko.
