@@ -319,8 +319,30 @@ uint8_t glfwToStScancode(int key) {
     }
 }
 
-void onKey(GLFWwindow*, int key, int /*scancode*/, int action, int /*mods*/) {
+void setMouseCaptured(GLFWwindow* w, bool captured) {
+    g_mouseCaptured = captured;
+    glfwSetInputMode(w, GLFW_CURSOR,
+                     g_mouseCaptured ? GLFW_CURSOR_DISABLED : GLFW_CURSOR_NORMAL);
+    if (g_mouseCaptured) glfwGetCursorPos(w, &g_lastMx, &g_lastMy);
+}
+
+void onKey(GLFWwindow* w, int key, int /*scancode*/, int action, int mods) {
     if (!g_machine || action == GLFW_REPEAT) return;   // l'IKBD gère sa répétition
+    // Repli indispensable aux trackpads / souris sans bouton central. Le keydown est
+    // aussi un geste utilisateur valide pour demander le pointer lock du navigateur.
+    // Seul le CHORD est réservé : un G sans Ctrl+Alt continue vers l'IKBD.
+    static bool mouseCaptureChordHeld = false;
+    if (key == GLFW_KEY_G) {
+        if (action == GLFW_PRESS && (mods & GLFW_MOD_CONTROL) && (mods & GLFW_MOD_ALT)) {
+            mouseCaptureChordHeld = true;
+            setMouseCaptured(w, !g_mouseCaptured);
+            return;
+        }
+        if (action == GLFW_RELEASE && mouseCaptureChordHeld) {
+            mouseCaptureChordHeld = false;
+            return;
+        }
+    }
     // Émulation joystick clavier active : les touches du joystick (flèches + Ctrl
     // droit) pilotent la manette et ne sont PAS transmises au clavier ST.
     if (g_kbdJoy && stjoy::kbdBit(key)) return;
@@ -331,12 +353,7 @@ void onKey(GLFWwindow*, int key, int /*scancode*/, int action, int /*mods*/) {
 void onMouseButton(GLFWwindow* w, int button, int action, int /*mods*/) {
     if (!g_machine) return;
     if (button == GLFW_MOUSE_BUTTON_MIDDLE) {
-        if (action == GLFW_PRESS) {
-            g_mouseCaptured = !g_mouseCaptured;
-            glfwSetInputMode(w, GLFW_CURSOR,
-                             g_mouseCaptured ? GLFW_CURSOR_DISABLED : GLFW_CURSOR_NORMAL);
-            if (g_mouseCaptured) glfwGetCursorPos(w, &g_lastMx, &g_lastMy);
-        }
+        if (action == GLFW_PRESS) setMouseCaptured(w, !g_mouseCaptured);
         return;
     }
     if (!g_mouseCaptured) return;
@@ -704,7 +721,7 @@ int main(int argc, char** argv) {
     glfwSetKeyCallback(g_window, onKey);
     glfwSetMouseButtonCallback(g_window, onMouseButton);
 
-    std::printf("[web] NeoST started. Middle mouse button = capture/release.\n");
+    std::printf("[web] NeoST started. Middle mouse button or Ctrl+Alt+G = capture/release.\n");
 
     // fps=0 → requestAnimationFrame ; simulate_infinite_loop=1 → main() ne rend
     // pas la main (le cœur reste vivant via la Machine statique).

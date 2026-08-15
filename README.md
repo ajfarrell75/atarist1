@@ -89,7 +89,9 @@ executable, so running from the repository root or from `build/` both work.
 
 ## Using it
 
-Click the middle mouse button (usually the wheel) to capture or release the mouse.
+Click the middle mouse button (usually the wheel), or press <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>G</kbd>,
+to capture or release the mouse. The keyboard shortcut also works with trackpads and
+two-button mice.
 When captured, you are driving the GEM cursor. The keyboard goes straight to the IKBD. Everything else —
 machine model, memory, ROM, floppies, hard disks, sound, CRT look — lives in one
 **Configuration** window, and the status bar at the bottom always tells you what machine
@@ -101,6 +103,7 @@ you are actually running.
 | <kbd>F8</kbd> | Toggle kiosk (cabinet) mode |
 | <kbd>F11</kbd> | Keyboard joystick (arrows + right Ctrl) |
 | <kbd>F12</kbd> | Kiosk: keyboard & mouse overlay |
+| <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>G</kbd> | Capture / release the mouse |
 | Middle mouse button | Capture / release the mouse |
 
 **Floppies** — drop a `.st`, `.msa`, `.dim` or `.stx` (Pasti, for copy-protected games)
