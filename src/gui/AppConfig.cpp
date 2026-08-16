@@ -1,0 +1,303 @@
+// =============================================================================
+//  AppConfig.cpp — implémentation. Voir AppConfig.hpp pour la raison d'être.
+//  (c) 2026 VERHILLE Arnaud — projet NeoST.
+// =============================================================================
+#include "gui/AppConfig.hpp"
+
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <algorithm>
+#include <filesystem>
+#include <fstream>
+#include <ostream>
+
+namespace fs = std::filesystem;
+
+namespace neost::appconfig {
+
+std::string cfgPath(const std::string& exeDir) { return exeDir + "/../neost.cfg"; }
+
+bool parseRtcConfig(const std::string& s, Rtc::DateTime& dt) {
+    return std::sscanf(s.c_str(), "%d,%d,%d,%d,%d,%d,%d",
+                       &dt.sec, &dt.min, &dt.hour, &dt.wday,
+                       &dt.day, &dt.month, &dt.year) == 7;
+}
+
+// Applique UNE ligne « clé=valeur » à `c`. Extrait de loadConfig pour être partagé
+// avec les PROFILS nommés (profiles/*.cfg, même format) : un profil n'écrit qu'un
+// sous-ensemble des clés, et tout ce qu'il omet garde donc la valeur déjà présente
+// dans `c`. C'est ce qui permet de charger un profil PAR-DESSUS la configuration
+// courante sans tenir à jour une liste de recopie champ par champ.
+void parseConfigLine(Config& c, std::string line) {
+    // Fin de ligne CRLF (fichier passé par Windows, un éditeur, un partage réseau) :
+    // getline ne retire que le \n, et TOUTES les valeurs sont comparées EXACTEMENT
+    // (parseMachine, parseRamBytes, == "1"). Un \r collé faisait donc tomber chaque
+    // clé sur son défaut SILENCIEUX — machine ST demandée, STE démarrée ; 4 Mo
+    // demandés, 512 Ko alloués — et rendait tout chemin introuvable. Pire : saveConfig
+    // réécrivait ensuite le fichier avec les \r intacts, donc la panne était définitive.
+    // Même rognage que SymbolTable (Symbols.cpp). On retire aussi les espaces de fin.
+    while (!line.empty() && (line.back() == '\r' || line.back() == ' ' || line.back() == '\t'))
+        line.pop_back();
+    if      (line.rfind("rom=", 0)  == 0) c.rom  = line.substr(4);
+    else if (line.rfind("disk=", 0) == 0) c.disk = line.substr(5);
+    else if (line.rfind("cart=", 0) == 0) c.cart = line.substr(5);
+    else if (line.rfind("gemdos=", 0) == 0) c.gemdos = line.substr(7);
+    else if (line.rfind("acsi=", 0) == 0) c.acsi = line.substr(5);
+    else if (line.rfind("fujinet=", 0) == 0) c.fujinet = (line.substr(8) == "1");
+    else if (line.rfind("fujinet_target=", 0) == 0) c.fujinetTarget = std::atoi(line.substr(15).c_str());
+    else if (line.rfind("fujinet_hosts=", 0) == 0) c.fujinetHosts = line.substr(14);
+    else if (line.rfind("modem=", 0) == 0) c.modem = (line.substr(6) == "1");
+    else if (line.rfind("ethernec=", 0) == 0) c.ethernec = (line.substr(9) == "1");
+    else if (line.rfind("mono=", 0) == 0) c.mono = (line.substr(5) == "1");
+    else if (line.rfind("cpu=", 0)  == 0) c.cpu  = line.substr(4);
+    else if (line.rfind("machine=", 0) == 0) c.machine = line.substr(8);
+    else if (line.rfind("mem=", 0)  == 0) c.mem  = line.substr(4);
+    else if (line.rfind("fpu=", 0)  == 0) c.fpu  = (line.substr(4) == "1");
+    else if (line.rfind("joyport=", 0) == 0) c.joyport = (line.substr(8) == "0") ? 0 : 1;
+    else if (line.rfind("joymap=", 0) == 0) c.joymap = line.substr(7);
+    else if (line.rfind("joydeadzone=", 0) == 0) {
+        // Bornée comme volume= : négative, > 0.95 ou NaN (fichier hostile/corrompu),
+        // la valeur brute rendait le menu kiosque incontrôlable (padAxis compare
+        // fabs(v) > deadzone sans re-borner).
+        c.joydeadzone = std::strtof(line.substr(12).c_str(), nullptr);
+        if (!(c.joydeadzone >= 0.0f && c.joydeadzone <= 0.95f)) c.joydeadzone = 0.30f;
+    }
+    else if (line.rfind("fastfdc=", 0) == 0) c.fastfdc = (line.substr(8) == "1");
+    else if (line.rfind("volume=", 0) == 0) {
+        c.volume = std::strtof(line.substr(7).c_str(), nullptr);
+        if (c.volume < 0.0f) c.volume = 0.0f;
+        if (c.volume > 1.0f) c.volume = 1.0f;
+    }
+    else if (line.rfind("audio_latency_ms=", 0) == 0) c.audioLatencyMs = std::atoi(line.substr(17).c_str());
+    else if (line.rfind("drivesound=", 0) == 0) c.driveSound = (line.substr(11) == "1");
+    // showCart=/showHd= : clés d'anciennes fenêtres devenues des pages de la
+    // Configuration. showDisk= reste accepté comme ancien nom de showFloppy=.
+    else if (line.rfind("showDisk=", 0) == 0) c.showFloppy = (line.substr(9) == "1");
+    else if (line.rfind("showHex=", 0) == 0) c.showHex = (line.substr(8) == "1");
+    else if (line.rfind("showCpu=", 0) == 0) c.showCpu = (line.substr(8) == "1");
+    else if (line.rfind("showJoy=", 0) == 0) c.showJoy = (line.substr(8) == "1");
+    else if (line.rfind("showCfg=", 0) == 0) c.showCfg = (line.substr(8) == "1");
+    else if (line.rfind("showFloppy=", 0) == 0) c.showFloppy = (line.substr(11) == "1");
+    else if (line.rfind("uiVersion=", 0) == 0) c.uiVersion = std::atoi(line.c_str() + 10);
+    else if (line.rfind("diskb=", 0)  == 0) c.diskb   = line.substr(6);
+    else if (line.rfind("dock=", 0) == 0) c.dock = (line.substr(5) == "1");
+    else if (line.rfind("autozoom=", 0) == 0) c.autoZoom = (line.substr(9) == "1");
+    else if (line.rfind("rtc_saved=", 0) == 0) c.rtcSaved = std::strtoll(line.substr(10).c_str(), nullptr, 10);
+    else if (line.rfind("rtc=", 0) == 0) c.rtc = line.substr(4);
+    else if (line.rfind("kiosk_romdir=", 0) == 0) { const std::string d = line.substr(13); if (!d.empty()) c.romDirs.push_back(d); }
+    // Effets CRT (cf. gui/CrtParams.h). Un preset (--crt-preset / applyCrtPreset)
+    // n'est qu'un raccourci qui écrit ces mêmes clés numériques.
+    else if (line.rfind("crt=", 0) == 0) c.crt = (line.substr(4) == "1");
+    else if (line.rfind("crt_bright=", 0)  == 0) c.crtParams.brightness  = std::strtof(line.substr(11).c_str(), nullptr);
+    else if (line.rfind("crt_contrast=", 0) == 0) c.crtParams.contrast   = std::strtof(line.substr(13).c_str(), nullptr);
+    else if (line.rfind("crt_sat=", 0)     == 0) c.crtParams.saturation  = std::strtof(line.substr(8).c_str(), nullptr);
+    else if (line.rfind("crt_hue=", 0)     == 0) c.crtParams.hue         = std::strtof(line.substr(8).c_str(), nullptr);
+    else if (line.rfind("crt_sharp=", 0)   == 0) c.crtParams.sharpness   = std::strtof(line.substr(10).c_str(), nullptr);
+    else if (line.rfind("crt_persist=", 0) == 0) c.crtParams.persistence = std::strtof(line.substr(12).c_str(), nullptr);
+    else if (line.rfind("crt_scanlines=", 0) == 0) c.crtParams.scanlines = std::strtof(line.substr(14).c_str(), nullptr);
+    else if (line.rfind("crt_barrel=", 0)  == 0) c.crtParams.barrel      = std::strtof(line.substr(11).c_str(), nullptr);
+    else if (line.rfind("crt_mask=", 0)    == 0) c.crtParams.shadowMask  = static_cast<neost::CrtParams::ShadowMask>(std::atoi(line.substr(9).c_str()));
+    else if (line.rfind("crt_maskstr=", 0) == 0) c.crtParams.shadowMaskStrength = std::strtof(line.substr(12).c_str(), nullptr);
+    else if (line.rfind("crt_lumgain=", 0) == 0) c.crtParams.luminanceGain = std::strtof(line.substr(12).c_str(), nullptr);
+    else if (line.rfind("crt_center=", 0)  == 0) c.crtParams.centerLighting = std::strtof(line.substr(11).c_str(), nullptr);
+    else if (line.rfind("crt_gamma=", 0)   == 0) c.crtParams.phosphorGamma  = std::strtof(line.substr(10).c_str(), nullptr);
+}
+Config loadConfig(const std::string& exeDir) {
+    Config c;
+    std::ifstream f(cfgPath(exeDir));
+    if (!f) f.open("neost.cfg");
+    std::string line;
+    while (std::getline(f, line)) parseConfigLine(c, line);
+    return c;
+}
+
+// Sérialise `w` en « clé=valeur ». `full` = le neost.cfg complet ; false = un PROFIL
+// nommé, qui laisse dehors ce qui n'appartient pas à un jeu de réglages :
+//   · rtc= / rtc_saved=  → état de la machine, pas un réglage ;
+//   · kiosk_romdir=      → déploiement de la borne, propre à l'installation ;
+//   · showXxx= / dock= / uiVersion= → disposition de l'interface (cousins d'imgui.ini) :
+//     charger un profil ne doit pas déplacer les fenêtres de l'utilisateur.
+// Tout ce qui n'est PAS écrit ici reste donc inchangé au chargement d'un profil
+// (cf. parseConfigLine) — les deux fonctions se répondent, ne toucher qu'ensemble.
+void writeConfigKeys(std::ostream& f, const Config& w, bool full) {
+    f << "rom=" << w.rom << "\ndisk=" << w.disk << "\ndiskb=" << w.diskb
+      << "\ncart=" << w.cart
+      << "\ngemdos=" << w.gemdos << "\nacsi=" << w.acsi
+      << "\nfujinet=" << (w.fujinet ? 1 : 0)
+      << "\nfujinet_target=" << w.fujinetTarget
+      << "\nfujinet_hosts=" << w.fujinetHosts
+      << "\nmodem=" << (w.modem ? 1 : 0)
+      << "\nethernec=" << (w.ethernec ? 1 : 0)
+      << "\nmono=" << (w.mono ? 1 : 0)
+      << "\ncpu=" << w.cpu << "\nmachine=" << w.machine << "\nmem=" << w.mem
+      << "\nfpu=" << (w.fpu ? 1 : 0)
+      << "\njoyport=" << w.joyport
+      << "\njoymap=" << w.joymap
+      << "\njoydeadzone=" << w.joydeadzone << "\nfastfdc=" << (w.fastfdc ? 1 : 0)
+      << "\nvolume=" << w.volume
+      << "\naudio_latency_ms=" << w.audioLatencyMs
+      << "\ndrivesound=" << (w.driveSound ? 1 : 0) << "\n";
+    if (full)
+        f << "showHex=" << (w.showHex ? 1 : 0)
+          << "\nshowCpu=" << (w.showCpu ? 1 : 0)
+          << "\nshowJoy=" << (w.showJoy ? 1 : 0)
+          << "\nshowCfg=" << (w.showCfg ? 1 : 0)
+          << "\nshowFloppy=" << (w.showFloppy ? 1 : 0)
+          << "\nuiVersion=" << w.uiVersion
+          << "\ndock=" << (w.dock ? 1 : 0) << "\n";
+    f << "autozoom=" << (w.autoZoom ? 1 : 0)
+      << "\ncrt=" << (w.crt ? 1 : 0)
+      << "\ncrt_bright=" << w.crtParams.brightness
+      << "\ncrt_contrast=" << w.crtParams.contrast
+      << "\ncrt_sat=" << w.crtParams.saturation
+      << "\ncrt_hue=" << w.crtParams.hue
+      << "\ncrt_sharp=" << w.crtParams.sharpness
+      << "\ncrt_persist=" << w.crtParams.persistence
+      << "\ncrt_scanlines=" << w.crtParams.scanlines
+      << "\ncrt_barrel=" << w.crtParams.barrel
+      << "\ncrt_mask=" << static_cast<int>(w.crtParams.shadowMask)
+      << "\ncrt_maskstr=" << w.crtParams.shadowMaskStrength
+      << "\ncrt_lumgain=" << w.crtParams.luminanceGain
+      << "\ncrt_center=" << w.crtParams.centerLighting
+      << "\ncrt_gamma=" << w.crtParams.phosphorGamma << "\n";
+    if (full) {
+        f << "rtc=" << w.rtc << "\nrtc_saved=" << w.rtcSaved << "\n";
+        // Dossiers ROM additionnels (0..N) : une ligne kiosk_romdir= par dossier.
+        for (const auto& d : w.romDirs) f << "kiosk_romdir=" << d << "\n";
+    }
+}
+
+// Écriture ATOMIQUE : on rédige un fichier temporaire à côté, on vérifie que tout
+// s'est bien écrit, PUIS on renomme par-dessus. Auparavant, ouvrir le flux tronquait
+// (O_TRUNC) le fichier AVANT de savoir si on saurait le réécrire, et aucun retour
+// n'était testé : disque plein, quota atteint ou coupure au mauvais moment laissaient
+// un neost.cfg amputé — réglages CRT, horloge, joymap et TOUS les kiosk_romdir perdus,
+// sans le moindre message. L'échec survenait dans le destructeur du flux, hors de
+// portée de tout point de contrôle.
+// `cwdFallback` autorise le repli historique du neost.cfg vers le répertoire courant
+// quand le dossier du dépôt n'est pas inscriptible ; un profil, lui, échoue franchement
+// (le message remonte dans l'interface). false ⇒ RIEN n'a été écrit, l'ancien fichier
+// est intact, et `err` porte le motif.
+bool writeConfigAtomic(const std::string& finalPath, const Config& w, bool full,
+                              bool cwdFallback, std::string& err) {
+    std::string tmpPath = finalPath + ".tmp";
+    std::ofstream f(tmpPath);
+    if (!f && cwdFallback) { tmpPath = "neost.cfg.tmp"; f.open(tmpPath); }
+    if (!f) {
+        err = "cannot write (" + tmpPath + ")";
+        f.close(); std::error_code rmec; fs::remove(tmpPath, rmec);
+        return false;
+    }
+    writeConfigKeys(f, w, full);
+    f.flush();
+    const bool ok = f.good();
+    f.close();
+    if (!ok) {   // le flush a échoué : on garde l'ANCIEN fichier intact
+        err = "incomplete write (" + tmpPath + ") — previous file kept";
+        std::error_code rmec; fs::remove(tmpPath, rmec);
+        return false;
+    }
+    // Le nom de destination est celui du .tmp amputé de son suffixe : si l'ouverture est
+    // retombée sur le dossier courant, le rename doit y rester aussi.
+    const std::string dest = tmpPath.substr(0, tmpPath.size() - 4);
+    std::error_code mvec;
+    fs::rename(tmpPath, dest, mvec);
+    if (mvec) {
+        err = "cannot replace (" + tmpPath + " → " + dest + "): " + mvec.message();
+        std::error_code rmec; fs::remove(tmpPath, rmec);
+        return false;
+    }
+    return true;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PROFILS DE RÉGLAGES NOMMÉS — dossier profiles/, un fichier .cfg par profil, au
+// MÊME format que neost.cfg (cf. writeConfigKeys/parseConfigLine). neost.cfg reste
+// la configuration COURANTE, écrite automatiquement à chaque changement ; un profil
+// est une photo nommée qu'on rappelle plus tard (« 520 ST + TOS 1.02 + ma démo »).
+// Charger un profil = repartir de la config courante et lui appliquer les lignes du
+// fichier : ce qu'un profil ne dit pas ne change pas. Réservé à l'interface (le
+// headless n'a pas de notion de profil) → sous garde ImGui pour ne pas laisser de
+// fonctions inutilisées dans une compilation sans GUI.
+// ─────────────────────────────────────────────────────────────────────────────
+// Dossier des profils : à côté de neost.cfg. Quand ce dossier-là n'est pas inscriptible
+// (installation en lecture seule), writeConfigAtomic replie neost.cfg sur le répertoire
+// COURANT — on suit le même repli, sinon les profils seraient la seule chose cassée là où
+// la configuration, elle, fonctionne. Résolu UNE fois, après la première écriture de
+// neost.cfg (c'est elle qui tranche l'emplacement) : cf. l'appelant. Ne CRÉE rien ; seul
+// l'enregistrement d'un profil crée le dossier.
+std::string profilesDir(const std::string& exeDir) {
+    const std::string primary = exeDir + "/../profiles";
+    std::error_code ec;
+    if (fs::is_directory(primary, ec)) return primary;      // déjà utilisé : on y reste
+    if (fs::exists(cfgPath(exeDir), ec)) return primary;    // neost.cfg est là → les profils aussi
+    return "profiles";
+}
+
+// Nom saisi → nom de FICHIER sûr. Le champ est libre : sans ce filtre, « ../neost.cfg »
+// ou un nom contenant « / » écrirait HORS du dossier des profils. On ne garde donc pas
+// une liste blanche de lettres (elle mangerait les accents, « Démos » → « Dmos ») : on
+// retire les séparateurs de chemin, les caractères de contrôle et les réservés Windows,
+// puis les points et espaces de bord (« .. », fichiers cachés, noms refusés par Windows).
+// Renvoie "" si rien d'utilisable ne reste — l'appelant refuse alors d'écrire.
+std::string profileFileName(const std::string& in) {
+    static const std::string kBanned = "/\\:*?\"<>|";
+    std::string out;
+    for (unsigned char ch : in) {
+        if (ch < 0x20 || ch == 0x7f) continue;
+        if (kBanned.find(char(ch)) != std::string::npos) continue;
+        out += char(ch);
+    }
+    while (!out.empty() && (out.front() == ' ' || out.front() == '.')) out.erase(out.begin());
+    while (!out.empty() && (out.back()  == ' ' || out.back()  == '.')) out.pop_back();
+    if (out.size() > 64) out.resize(64);
+    return out;
+}
+
+// Profils présents, triés sans tenir compte de la casse. Itération MANUELLE comme les
+// pages Disquettes/Cartouche : l'incrément d'un range-for LANCE filesystem_error si le
+// dossier devient illisible en cours de parcours, et rien ne l'attrape ici.
+std::vector<std::string> listProfiles(const std::string& dir) {
+    std::vector<std::string> names;
+    std::error_code ec;
+    fs::directory_iterator it(dir, fs::directory_options::skip_permission_denied, ec), end;
+    while (!ec && it != end) {
+        std::error_code ec2;
+        if (it->is_regular_file(ec2) && it->path().extension() == ".cfg")
+            names.push_back(it->path().stem().string());
+        it.increment(ec);
+    }
+    std::sort(names.begin(), names.end(), [](const std::string& a, const std::string& b) {
+        return std::lexicographical_compare(a.begin(), a.end(), b.begin(), b.end(),
+                                            [](unsigned char x, unsigned char y) {
+                                                return std::tolower(x) < std::tolower(y);
+                                            });
+    });
+    return names;
+}
+
+bool saveProfile(const std::string& dir, const std::string& name,
+                        const Config& c, std::string& err) {
+    std::error_code ec;
+    fs::create_directories(dir, ec);
+    if (!fs::is_directory(dir, ec)) { err = "cannot create " + dir; return false; }
+    return writeConfigAtomic(dir + "/" + name + ".cfg", c, /*full=*/false, /*cwdFallback=*/false, err);
+}
+
+// Applique le profil PAR-DESSUS `c` (déjà rempli avec la config courante) : les clés
+// qu'un profil n'écrit pas (horloge, disposition de l'interface) restent telles quelles.
+bool loadProfileInto(const std::string& dir, const std::string& name, Config& c) {
+    std::ifstream f(dir + "/" + name + ".cfg");
+    if (!f) return false;
+    std::string line;
+    while (std::getline(f, line)) parseConfigLine(c, line);
+    return true;
+}
+
+bool deleteProfile(const std::string& dir, const std::string& name) {
+    std::error_code ec;
+    return fs::remove(fs::path(dir) / (name + ".cfg"), ec) && !ec;
+}
+
+}  // namespace neost::appconfig

@@ -24,6 +24,7 @@
 #include <fstream>
 
 #include "core/Machine.hpp"
+#include "util/HostPath.hpp"   // chemins hôte : UNE définition d'« absolu »
 #include "net/FujiHost.hpp"
 #include "net/FujiHostReplay.hpp"
 #include "net/MiniJson.hpp"
@@ -651,14 +652,21 @@ int main(int argc, char** argv) {
             // Les chemins de neost.cfg sont relatifs à exeDir (= <racine>/build) : le GUI
             // les écrit préfixés « ./../ » (build → racine). On résout relativement au
             // DOSSIER du cfg après avoir collapsé ce préfixe, pour retomber sur la racine.
-            const std::string cfgp = p;
-            const std::size_t slash = cfgp.find_last_of('/');
+            // ⚠ La règle « absolu » vient de util/HostPath : écrite ici à la main
+            // (« s[0] == '/' »), elle traitait tout chemin Windows comme relatif et
+            // reproduisait, dans --from-cfg, le défaut qui a tué le lecteur GEMDOS de
+            // tous les paquets Windows (issue #37). Même remarque pour le séparateur :
+            // un neost.cfg écrit sous Windows contient des « \\ ».
+            const std::string cfgp = neost::hostpath::normalizeSeparators(p);
+            const std::size_t slash = cfgp.find_last_of(neost::hostpath::SEP);
             const std::string cfgDir = (slash == std::string::npos) ? "" : cfgp.substr(0, slash);
             auto resolve = [&](std::string s) -> std::string {
-                if (s.empty() || s[0] == '/') return s;
+                if (s.empty()) return s;
+                s = neost::hostpath::normalizeSeparators(s);
+                if (neost::hostpath::isAbsolute(s)) return s;
                 while (s.rfind("./", 0) == 0) s = s.substr(2);     // ./ répétés
                 if (s.rfind("../", 0) == 0)   s = s.substr(3);     // build → racine
-                return cfgDir.empty() ? s : cfgDir + "/" + s;
+                return neost::hostpath::join(cfgDir, s);
             };
             std::string ln;
             auto v = [](const std::string& s, std::size_t n) { return s.substr(n); };

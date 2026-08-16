@@ -1,0 +1,406 @@
+// =============================================================================
+//  MediaPages.cpp — cf. MediaPages.hpp.
+//  (c) 2026 VERHILLE Arnaud — projet NeoST.
+// =============================================================================
+#include "gui/MediaPages.hpp"
+
+#include <algorithm>
+#include <cstdio>
+#include <cstring>
+#include <filesystem>
+#include <string>
+#include <vector>
+
+#include "imgui.h"
+
+#include "gui/UiCommon.hpp"
+#include "io/MediaScan.hpp"
+
+namespace fs = std::filesystem;
+
+// Champs de saisie LIBRE des pages Disque dur (chemin tapé à la main). Ils vivaient
+// dans main.cpp, présentés comme « globaux pour que le sous-menu Profils les
+// resynchronise » — mais ils y étaient dans un namespace ANONYME, donc à liaison
+// interne, et plus personne ne les touchait ailleurs. Ils suivent donc leurs pages.
+char g_gdBuf[512] = {0}, g_hdBuf[512] = {0};
+
+void drawFloppyPage(const std::string& disksDir,
+                    const std::string& mountedA, const std::string& mountedB,
+                    std::string& reqMountA, std::string& reqMountB,
+                    bool& reqEjectA, bool& reqEjectB) {
+    auto driveRow = [](const char* letter, const std::string& mounted, bool& reqEject) {
+        if (!mounted.empty()) {
+            ImGui::PushID(letter);
+            if (IconButton(ICON_FA_EJECT, "Eject")) reqEject = true;
+            ImGui::PopID();
+            ImGui::SameLine();
+            ImGui::Text("%s: %s", letter, fs::path(mounted).filename().string().c_str());
+        } else {
+            ImGui::Text("%s: ", letter); ImGui::SameLine();
+            ImGui::TextDisabled("(empty)");
+        }
+    };
+    driveRow("A", mountedA, reqEjectA);
+    driveRow("B", mountedB, reqEjectB);
+    ImGui::Separator();
+    ImGui::TextDisabled("Images in %s/", disksDir.c_str());
+
+    std::error_code ec;
+    if (!fs::is_directory(disksDir, ec)) {
+        ImGui::TextDisabled("(disks/ folder not found)");
+        return;
+    }
+    const fs::path base(disksDir);
+    // Récolte RÉCURSIVE des images .st/.msa/.dim/.stx, triées par ordre alphabétique de
+    // DOSSIER puis de FICHIER (insensible à la casse) sur le chemin relatif à disks/.
+    //
+    // ⚠ MISE EN CACHE OBLIGATOIRE. Ce scan tournait à CHAQUE trame, et sa clé de tri
+    // appelait fs::relative() — un weakly_canonical(), donc un readlink par composant —
+    // DEPUIS le comparateur de std::sort, soit O(n log n) fois. Mesuré : 21 ms par trame
+    // (le budget PAL entier) sur les 77 images du dépôt, et l'émulateur tombait de 50 à
+    // 0,9 trame/s sur une ludothèque de 3000 images, la fenêtre étant ouverte par défaut.
+    // Le chemin relatif est ici purement lexical : lexically_relative() ne touche pas le
+    // disque. On calcule la clé UNE fois par image (décorer-trier-dévorer).
+    struct Entry { std::string path, rel, key; };
+    static std::vector<Entry> cache;
+    static std::string  cacheDir;
+    static double       cacheTime = -1.0;
+    const double now = ImGui::GetTime();
+    bool refresh = (cacheDir != disksDir) || cacheTime < 0.0 || (now - cacheTime) > 2.0;
+    if (ImGui::SmallButton("Refresh")) refresh = true;
+    ImGui::SameLine();
+    ImGui::TextDisabled("(%zu images)", cache.size());
+    if (refresh) {
+        cache.clear();
+        cacheDir  = disksDir;
+        cacheTime = now;
+        // Itération manuelle : le range-for lancerait filesystem_error sur un
+        // sous-dossier/symlink illisible.
+        fs::recursive_directory_iterator dit(base, fs::directory_options::skip_permission_denied, ec), dend;
+        while (!ec && dit != dend) {
+            const fs::directory_entry& e = *dit;
+            std::error_code ec2;
+            if (e.is_regular_file(ec2)) {
+                std::string ext = e.path().extension().string();
+                for (auto& ch : ext) ch = (char)std::tolower((unsigned char)ch);
+                if (ext == ".st" || ext == ".msa" || ext == ".dim" || ext == ".stx") {
+                    Entry en;
+                    en.path = e.path().string();
+                    en.rel  = e.path().lexically_relative(base).generic_string();
+                    en.key  = en.rel;
+                    for (auto& ch : en.key) ch = (char)std::tolower((unsigned char)ch);
+                    cache.push_back(std::move(en));
+                }
+            }
+            dit.increment(ec);
+        }
+        ec.clear();
+        std::sort(cache.begin(), cache.end(),
+                  [](const Entry& a, const Entry& b) { return a.key < b.key; });
+    }
+
+    for (const auto& en : cache) {
+        ImGui::PushID(en.path.c_str());
+        // Chemin COMPLET et non nom de fichier : le scan est récursif, et deux
+        // dumps homonymes dans deux sous-dossiers (« Xenon/DISK1.ST », « Gods/
+        // DISK1.ST » — nommage très courant) étaient tous deux marqués « montée »,
+        // aucun n'offrant plus le bouton Monter : le second devenait inaccessible.
+        const bool inA = !mountedA.empty() && en.path == mountedA;
+        const bool inB = !mountedB.empty() && en.path == mountedB;
+        if (inA)      ImGui::TextDisabled("●A");
+        else if (ImGui::SmallButton("A")) reqMountA = en.path;
+        ImGui::SameLine(0.0f, 4.0f);
+        if (inB)      ImGui::TextDisabled("●B");
+        else if (ImGui::SmallButton("B")) reqMountB = en.path;
+        ImGui::SameLine();
+        ImGui::TextUnformatted(en.rel.c_str());        // affiché (montre le dossier)
+        ImGui::PopID();
+    }
+}
+
+// Page « Cartouche » : images de carts/ branchées sur le port $FA0000. Un reset
+// reste nécessaire pour que le TOS relise le magic de boot.
+void drawCartPage(const std::string& cartsDir, const std::string& mounted,
+                  std::string& reqMount, bool& reqEject) {
+    if (!mounted.empty()) {
+        if (IconButton(ICON_FA_EJECT, "Eject")) reqEject = true;
+        ImGui::SameLine();
+        ImGui::Text("plugged: %s", fs::path(mounted).filename().string().c_str());
+    } else {
+        ImGui::TextDisabled("(cartridge port empty)");
+    }
+    ImGui::Separator();
+    ImGui::TextDisabled("Images in %s/", cartsDir.c_str());
+
+    std::error_code ec;
+    if (fs::is_directory(cartsDir, ec)) {
+        const std::string mountedName = mounted.empty() ? "" : fs::path(mounted).filename().string();
+        // Itération MANUELLE, comme la page Disquettes : l'error_code passé au constructeur
+        // ne couvre QUE la construction — l'incrément du range-for, lui, lève
+        // filesystem_error si le dossier devient illisible en cours de parcours (carts/
+        // sur une clé USB retirée), et personne ne l'attrape ici → std::terminate.
+        fs::directory_iterator it(cartsDir, fs::directory_options::skip_permission_denied, ec), end;
+        while (!ec && it != end) {
+            const fs::directory_entry& e = *it;
+            // is_regular_file() SANS error_code LANCE sur un symlink dont la cible est devenue
+            // illisible (clé USB débranchée) : rien ne l'attrape ici → std::terminate.
+            std::error_code ec2;
+            if (e.is_regular_file(ec2)) {
+                std::string ext = e.path().extension().string();
+                for (auto& ch : ext) ch = (char)std::tolower((unsigned char)ch);
+                if (ext == ".bin" || ext == ".img" || ext == ".rom") {
+                    const std::string name = e.path().filename().string();
+                    ImGui::PushID(name.c_str());
+                    if (name == mountedName) {
+                        ImGui::TextDisabled("●");          // branchée
+                    } else if (ImGui::SmallButton("Plug in")) {
+                        reqMount = e.path().string();
+                    }
+                    ImGui::SameLine();
+                    ImGui::TextUnformatted(name.c_str());
+                    ImGui::PopID();
+                }
+            }
+            it.increment(ec);
+        }
+    } else {
+        ImGui::TextDisabled("(carts/ folder not found)");
+    }
+    ImGui::Separator();
+    ImGui::TextDisabled("Plugging in / ejecting restarts the machine to re-detect the cart.");
+    ImGui::TextDisabled("Exclusive with the GEMDOS drive: both occupy $FA0000.");
+}
+
+// Page « Disques durs » : les deux chemins d'accès (HD GEMDOS = dossier hôte monté en
+// C:, image ACSI = disque dur émulé sur la cible 0). Ils demandaient jusqu'ici de TAPER
+// un chemin absolu dans un menu ; on liste ici les candidats trouvés sur disque — un
+// clic monte, comme pour une disquette — le champ libre restant pour ce qui vit
+// ailleurs (le glisser-déposer sur la fenêtre couvre le même besoin).
+//
+// Convention de rangement, volontairement simple et documentée dans hd/README.md :
+//   · un DOSSIER dans hd/ (et le dossier gemdos/ du dépôt) = un lecteur GEMDOS ;
+//   · un FICHIER image à plat dans hd/ = une image ACSI.
+// Le scan des images ACSI n'est donc PAS récursif : sans ça, les .img rangés DANS un
+// lecteur GEMDOS (hd/JEUX/DEMOS/truc.img) seraient proposés comme disques durs.
+void drawHardDiskPage(const std::string& hdDir, const std::string& gemdosDefault,
+                      const std::string& curGemdos, bool gemdosActive,
+                      const std::string& curAcsi, bool acsiActive, int acsiParts,
+                      std::string& reqMountGemdos, bool& reqEjectGemdos,
+                      std::string& reqMountAcsi,  bool& reqEjectAcsi) {
+    // Scan mis en cache 2 s, comme la page Disquettes : la fenêtre peut rester ouverte
+    // et un parcours de dossier par trame coûte le budget PAL entier sur une grosse
+    // ludothèque (cf. la note de drawFloppyPage).
+    struct Cand { std::string path, label; };
+    static std::vector<Cand> gemCands, acsiCands;
+    static std::string cacheDir;
+    static double      cacheTime = -1.0;
+    const double now = ImGui::GetTime();
+    bool refresh = (cacheDir != hdDir) || cacheTime < 0.0 || (now - cacheTime) > 2.0;
+    if (refresh) {
+        gemCands.clear(); acsiCands.clear();
+        cacheDir = hdDir; cacheTime = now;
+        std::error_code ec;
+        // Le gemdos/ du dépôt est un lecteur à part entière : le proposer en tête.
+        if (fs::is_directory(gemdosDefault, ec))
+            gemCands.push_back({ gemdosDefault, gemdosDefault + "/" });
+        ec.clear();
+        if (fs::is_directory(hdDir, ec)) {
+            fs::directory_iterator it(hdDir, fs::directory_options::skip_permission_denied, ec), end;
+            while (!ec && it != end) {
+                const fs::directory_entry& e = *it;
+                std::error_code ec2;
+                if (e.is_directory(ec2)) {
+                    gemCands.push_back({ e.path().string(),
+                                         e.path().lexically_relative(fs::path(hdDir).parent_path())
+                                             .generic_string() + "/" });
+                } else if (e.is_regular_file(ec2)) {
+                    std::string ext = e.path().extension().string();
+                    for (auto& ch : ext) ch = (char)std::tolower((unsigned char)ch);
+                    if (ext == ".img" || ext == ".hd" || ext == ".acsi" ||
+                        ext == ".vhd" || ext == ".raw") {
+                        acsiCands.push_back({ e.path().string(),
+                                              e.path().filename().string() });
+                    }
+                }
+                it.increment(ec);
+            }
+        }
+        auto byLabel = [](const Cand& a, const Cand& b) { return a.label < b.label; };
+        std::sort(gemCands.begin(),  gemCands.end(),  byLabel);
+        std::sort(acsiCands.begin(), acsiCands.end(), byLabel);
+    }
+
+    // Le chemin monté vient de la config (« gemdos ») et le candidat du scan
+    // (« build/../gemdos ») : la comparaison textuelle rate. fs::equivalent tranche
+    // sur l'inode — le coût est négligeable, ces listes tiennent en quelques entrées.
+    auto samePath = [](const std::string& a, const std::string& b) {
+        if (a.empty() || b.empty()) return false;
+        if (a == b) return true;
+        std::error_code ec;
+        return fs::equivalent(a, b, ec) && !ec;
+    };
+
+    // ── GEMDOS ────────────────────────────────────────────────────────────
+    ImGui::TextDisabled(ICON_FA_FOLDER_OPEN " GEMDOS — host folder mounted as C:");
+    if (gemdosActive) {
+        if (IconButton(ICON_FA_EJECT, "Eject the GEMDOS drive")) reqEjectGemdos = true;
+        ImGui::SameLine();
+        ImGui::Text("mounted: %s", curGemdos.c_str());
+        ImGui::TextDisabled("(occupies cartridge port $FA0000 — exclusive with a cartridge)");
+    } else {
+        ImGui::TextDisabled("(no GEMDOS drive mounted)");
+    }
+    for (const auto& c : gemCands) {
+        ImGui::PushID(c.path.c_str());
+        if (gemdosActive && samePath(c.path, curGemdos)) ImGui::TextDisabled("●");
+        else if (ImGui::SmallButton("Mount")) reqMountGemdos = c.path;
+        ImGui::SameLine();
+        ImGui::TextUnformatted(c.label.c_str());
+        ImGui::PopID();
+    }
+    ImGui::SetNextItemWidth(-70.0f);
+    ImGui::InputTextWithHint("##gdPath", "path to a host folder…", g_gdBuf, sizeof g_gdBuf);
+    ImGui::SameLine();
+    if (ImGui::Button("Mount##gdFree") && g_gdBuf[0]) reqMountGemdos = g_gdBuf;
+
+    ImGui::Separator();
+
+    // ── ACSI ──────────────────────────────────────────────────────────────
+    ImGui::TextDisabled(ICON_FA_HDD " ACSI — hard disk image (target 0)");
+    if (acsiActive) {
+        if (IconButton(ICON_FA_EJECT, "Eject the ACSI image")) reqEjectAcsi = true;
+        ImGui::SameLine();
+        ImGui::Text("mounted: %s — %d partition(s)",
+                    fs::path(curAcsi).filename().string().c_str(), acsiParts);
+    } else {
+        ImGui::TextDisabled("(no ACSI image mounted)");
+    }
+    for (const auto& c : acsiCands) {
+        ImGui::PushID(c.path.c_str());
+        if (acsiActive && samePath(c.path, curAcsi)) ImGui::TextDisabled("●");
+        else if (ImGui::SmallButton("Mount")) reqMountAcsi = c.path;
+        ImGui::SameLine();
+        ImGui::TextUnformatted(c.label.c_str());
+        ImGui::PopID();
+    }
+    ImGui::SetNextItemWidth(-70.0f);
+    ImGui::InputTextWithHint("##hdPath", "path to a hard disk image…", g_hdBuf, sizeof g_hdBuf);
+    ImGui::SameLine();
+    if (ImGui::Button("Mount##hdFree") && g_hdBuf[0]) reqMountAcsi = g_hdBuf;
+
+    if (gemCands.empty() && acsiCands.empty())
+        ImGui::TextDisabled("(nothing in %s/ — drop a folder or an image there)", hdDir.c_str());
+
+    // Les deux montés : NeoST ne décale pas le lecteur GEMDOS derrière les partitions
+    // ACSI (contrairement à Hatari) → les deux revendiquent C:.
+    if (gemdosActive && acsiActive)
+        ImGui::TextColored(ImVec4(1.f, .6f, .2f, 1.f),
+                           "GEMDOS and ACSI both claim C:!");
+    ImGui::Separator();
+    ImGui::TextDisabled("Folder = GEMDOS drive, file = ACSI image. Mounting restarts");
+    ImGui::TextDisabled("the machine (TOS only probes disks at boot).");
+}
+
+// Page « Network » : le FujiNet virtuel (extension NeoST — cf. docs/FUJINET.md).
+// Discipline habituelle : données en entrée, requêtes en sortie, AUCUNE E/S ici.
+void drawNetworkPage(bool fujiOn, int fujiTarget, const char* backendName,
+                     const FujiDevice& fuji, FujiHost* host, bool modemOn, bool etherOn,
+                     bool cartMounted,
+                     int& reqFujinet, int& reqFujinetTarget,
+                     std::string& reqFujinetMount,
+                     std::string& reqFujinetHosts, bool& reqFujinetHostsSet,
+                     int& reqModem, int& reqEther) {
+    ImGui::TextDisabled("FujiNet — virtual network device (NeoST extension)");
+    ImGui::TextWrapped("Protocol offloading for the ST: mount disk images from URLs, "
+                       "give 68000 programs HTTP/TCP/JSON without a TCP/IP stack. "
+                       "Attached to the ACSI bus (vendor opcode $60 — docs/FUJINET.md).");
+    ImGui::Separator();
+
+    // Modem Hayes : indépendant du FujiNet (le logiciel d'époque — terminaux,
+    // BBS, STinG/STiK en SLIP — parle à « un modem sur le port série »).
+    bool mdm = modemOn;
+    if (ImGui::Checkbox("Hayes modem on RS-232 (AT commands \xe2\x86\x92 TCP bridge)", &mdm))
+        reqModem = mdm ? 1 : 0;
+
+    // EtherNEC : NE2000 sur le port cartouche → pilotes STinG/MiNTnet historiques.
+    bool eth = etherOn;
+    if (cartMounted && !etherOn) {
+        ImGui::TextDisabled("EtherNEC (NE2000): free the cartridge port to enable");
+    } else if (ImGui::Checkbox("EtherNEC (NE2000 on the cartridge port)", &eth)) {
+        reqEther = eth ? 1 : 0;
+    }
+    ImGui::Separator();
+
+    bool on = fujiOn;
+    if (ImGui::Checkbox("Enable FujiNet (restarts the machine)", &on))
+        reqFujinet = on ? 1 : 0;
+
+    if (!fujiOn) {
+        ImGui::TextDisabled("(disabled — no network access from the emulated machine)");
+        return;
+    }
+
+    ImGui::Text("Backend: %s", backendName);
+    int tgt = fujiTarget;
+    ImGui::SetNextItemWidth(120.0f);
+    if (ImGui::InputInt("ACSI target (0-7)", &tgt))
+        reqFujinetTarget = (tgt < 0) ? 0 : (tgt > 7 ? 7 : tgt);
+
+    // ── Montage direct d'une image distante ─────────────────────────────────
+    ImGui::Separator();
+    ImGui::TextDisabled("Mount a remote disk image (http://…/file.st or a raw HD image)");
+    static char g_fujiUrlBuf[512] = "";
+    ImGui::SetNextItemWidth(-110.0f);
+    ImGui::InputTextWithHint("##fujiUrl", "http://host/path/disk.st…",
+                             g_fujiUrlBuf, sizeof g_fujiUrlBuf);
+    ImGui::SameLine();
+    if (ImGui::Button("Download##fuji") && g_fujiUrlBuf[0]) reqFujinetMount = g_fujiUrlBuf;
+
+    // ── Slots d'hôtes (préfixes d'URL pour les programmes ST) ───────────────
+    ImGui::Separator();
+    ImGui::TextDisabled("Host slots (URL prefixes offered to ST-side programs)");
+    static char g_fujiHostBuf[4][256];
+    static bool g_fujiHostSeeded = false;
+    if (!g_fujiHostSeeded) {
+        for (int i = 0; i < 4; ++i)
+            std::snprintf(g_fujiHostBuf[i], sizeof g_fujiHostBuf[i], "%s",
+                          fuji.hostSlot(i).c_str());
+        g_fujiHostSeeded = true;
+    }
+    for (int i = 0; i < 4; ++i) {
+        ImGui::PushID(i);
+        ImGui::SetNextItemWidth(-60.0f);
+        char label[16];
+        std::snprintf(label, sizeof label, "slot %d", i);
+        ImGui::InputText(label, g_fujiHostBuf[i], sizeof g_fujiHostBuf[i]);
+        ImGui::PopID();
+    }
+    if (ImGui::Button("Apply host slots")) {
+        std::string joined;
+        for (int i = 0; i < 4; ++i) {
+            if (i) joined += '|';
+            joined += g_fujiHostBuf[i];
+        }
+        // Rogne les '|' de queue (slots vides) pour un neost.cfg propre.
+        while (!joined.empty() && joined.back() == '|') joined.pop_back();
+        reqFujinetHosts = joined;
+        reqFujinetHostsSet = true;
+    }
+
+    // ── État des canaux N: ──────────────────────────────────────────────────
+    if (host) {
+        ImGui::Separator();
+        ImGui::TextDisabled("N: channels");
+        bool any = false;
+        for (int i = 0; i < FujiHost::MAX_CHANNELS; ++i) {
+            const FujiChanStatus st = host->status(i);
+            if (st.connected == 0 && st.avail == 0 && st.error == fn_err::OFFLINE) continue;
+            ImGui::Text("N%d:  %u byte(s) ready, %s (err %u)", i + 1, st.avail,
+                        st.connected ? "connected" : "closed", st.error);
+            any = true;
+        }
+        if (!any) ImGui::TextDisabled("(no channel open)");
+    }
+    ImGui::Separator();
+    ImGui::TextDisabled("Last device error: %u", fuji.lastError());
+}

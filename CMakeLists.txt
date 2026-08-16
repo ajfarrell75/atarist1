@@ -78,7 +78,9 @@ add_library(neost_core STATIC
     src/io/MediaScan.cpp
     src/io/FujiDevice.cpp
     src/io/Ne2000.cpp
-    src/core/Framing.cpp)
+    src/core/Framing.cpp
+    src/util/HostPath.cpp
+    src/gui/AppConfig.cpp)
 
 target_include_directories(neost_core PUBLIC "${CMAKE_SOURCE_DIR}/src")
 # (Cpu68k.cpp est traité à part : il inclut l'en-tête tiers Moira.h → C++20 sans
@@ -86,7 +88,7 @@ target_include_directories(neost_core PUBLIC "${CMAKE_SOURCE_DIR}/src")
 set_source_files_properties(
     src/core/Bus.cpp src/core/Shifter.cpp src/core/YM2149.cpp src/core/DmaSound.cpp
     src/core/Blitter.cpp
-    src/core/Machine.cpp src/core/Tracer.cpp src/core/Symbols.cpp src/io/Mfp.cpp src/io/Ikbd.cpp src/io/Fdc.cpp src/io/StxImage.cpp src/io/Rtc.cpp src/io/MidiAcia.cpp src/io/Fpu.cpp src/io/GemdosHd.cpp src/io/Acsi.cpp src/io/Scc.cpp src/io/MediaScan.cpp src/io/FujiDevice.cpp src/io/Ne2000.cpp src/core/Framing.cpp
+    src/core/Machine.cpp src/core/Tracer.cpp src/core/Symbols.cpp src/io/Mfp.cpp src/io/Ikbd.cpp src/io/Fdc.cpp src/io/StxImage.cpp src/io/Rtc.cpp src/io/MidiAcia.cpp src/io/Fpu.cpp src/io/GemdosHd.cpp src/io/Acsi.cpp src/io/Scc.cpp src/io/MediaScan.cpp src/io/FujiDevice.cpp src/io/Ne2000.cpp src/core/Framing.cpp src/util/HostPath.cpp src/gui/AppConfig.cpp
     PROPERTIES COMPILE_OPTIONS "${NEOST_STRICT_OPTS}")
 
 # =============================================================================
@@ -180,6 +182,24 @@ add_executable(neost-headless src/headless/main_headless.cpp)
 target_link_libraries(neost-headless PRIVATE neost_core neost_net)
 target_compile_definitions(neost-headless PRIVATE NEOST_VERSION="${NEOST_VERSION_STR}")
 set_source_files_properties(src/headless/main_headless.cpp
+    PROPERTIES COMPILE_OPTIONS "${NEOST_STRICT_OPTS}")
+
+# =============================================================================
+#  neost-selftest — auto-test de la LOGIQUE PURE (chemins hôte, parseurs, formats).
+#
+#  Le pendant des auto-tests du headless pour tout ce qui n'a besoin NI de machine
+#  NI de ROM. Bâti par défaut (pas EXCLUDE_FROM_ALL) et lancé par le palier `fast`
+#  de tools/run_all.py : sans cela il pourrirait, comme tout test qu'aucun script
+#  n'exécute. Ne dépend que de neost_core.
+#
+#  ⚠ Il exerce la sémantique de chemins WINDOWS depuis n'importe quelle plateforme
+#  (hostpath::Style est un paramètre d'exécution) : c'est la seule façon d'attraper
+#  sur un Mac ou une CI Linux la classe de bugs de l'issue #37.
+# =============================================================================
+add_executable(neost-selftest tests/selftest_logic.cpp)
+target_link_libraries(neost-selftest PRIVATE neost_core)
+target_include_directories(neost-selftest PRIVATE "${CMAKE_SOURCE_DIR}/src")
+set_source_files_properties(tests/selftest_logic.cpp
     PROPERTIES COMPILE_OPTIONS "${NEOST_STRICT_OPTS}")
 
 # =============================================================================
@@ -338,6 +358,8 @@ add_executable(neost
     src/audio/Audio.cpp
     src/audio/DriveSound.cpp
     src/gui/OpenGLShader.cpp
+    src/gui/UiCommon.cpp
+    src/gui/MediaPages.cpp
     src/gui/CrtEffectStack.cpp)
 # ${CMAKE_DL_LIBS} : miniaudio charge sa backend par dlopen ; avant la glibc
 # 2.34 (bionic — l'image release Linux), libdl est séparée et doit être liée
