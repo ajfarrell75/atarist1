@@ -6,6 +6,34 @@ l'ordre inverse. Version courante : **0.5.2**.
 - « NeoST gère-t-il X ? » → [`docs/IMPLEMENTED.md`](docs/IMPLEMENTED.md) (inventaire par puce)
 - « Que reste-t-il ? » → [`TODO.md`](TODO.md)
 
+## Retours 0.5.2 : HD GEMDOS sous Windows, disquette livrée (2026-08-16)
+
+Deux défauts signalés par Christian Zietz (EmuTOS) sur la **0.5.2 Windows** —
+issues [#37](https://github.com/habib256/neost/issues/37) et
+[#38](https://github.com/habib256/neost/issues/38).
+
+- **HD GEMDOS : tout chemin Windows était traité comme RELATIF.** `makeAbsoluteName`
+  (port de `File_MakeAbsoluteName`) ne connaissait que la règle Unix « absolu = commence
+  par `/` ». Sous Windows un chemin absolu commence par une **lettre de lecteur**
+  (`C:\Temp\atari`) ou une racine **UNC** (`\\serveur\partage`) : le dossier glissé sur
+  la fenêtre était donc préfixé du répertoire courant → `C:\…\NeoST-0.5.2\C:\Temp\atari`,
+  « GEMDOS folder not found » sur un dossier pourtant valide. Ajout de
+  `isAbsoluteHostPath` (lettre de lecteur + UNC) et normalisation `\` → `/` des chemins
+  hôte à l'entrée (`makeAbsoluteName`, et le retour de `getcwd`, lui aussi en `\`), le
+  reste du fichier comparant déjà en `/` (comme `physicalCanon`). `cleanFileName` ne
+  rabote plus « `C:/` » en « `C:` » (racine du lecteur ≠ dossier courant du lecteur).
+  Aucun effet sur Unix/macOS (montages absolus, relatifs et `../` revérifiés).
+- **`disks/diskA.st` livrée n'était plus une disquette.** Écrasée par un test d'écriture
+  secteur (commit `828bc87`, juin 2026), elle partait dans **tous** les paquets avec un
+  motif binaire à la place du système de fichiers : BPB absurde, aucun secteur de boot,
+  inutilisable sous TOS. Regénérée par `tools/make_floppy.py` (FAT12 720 Ko, 9x2,
+  `LISEZMOI.TXT` + `NEOST.TXT` + dossier `PROGS`), avec un **numéro de série** non nul
+  (détection de changement de disquette par le TOS). Vérifiée de bout en bout : sur une
+  copie de travail munie d'un `EMUDESK.INF` qui ouvre `A:\*.*` au boot, le bureau EmuTOS
+  liste bien le contenu (« 497 bytes used in 4 items »).
+  Nouveau gate `tools/check_disk_assets.py` au palier **fast** (BPB + chaînes FAT +
+  égalité bit à bit avec le générateur) : l'image ne peut plus être écrasée en silence.
+
 ## Capture souris sans bouton central (2026-08-15)
 
 Le clic molette reste la bascule principale, avec **Ctrl+Alt+G** comme raccourci de
