@@ -12,6 +12,11 @@ img=bytearray(TOTAL*SECT)
 # --- Boot sector / BPB (offsets identiques DOS/Atari) ---
 img[0x00:0x02]=b'\x60\x1c'      # BRA.S (non bootable, peu importe)
 img[0x02:0x08]=b'NeoST '        # OEM
+# Numéro de série 24 bits ($008-$00A) : le TOS s'en sert pour DÉTECTER le changement
+# de disquette quand la ligne « disk changed » ne tranche pas. Laissé à zéro, il
+# ressemblait à une disquette non formatée. Valeur FIXE (« NST ») : le dépôt versionne
+# cette image, elle doit se regénérer octet pour octet (cf. tools/check_disk_assets.py).
+img[0x08:0x0b]=b'NST'
 struct.pack_into('<H',img,0x0b,SECT)   # octets/secteur
 img[0x0d]=2                      # secteurs/cluster
 struct.pack_into('<H',img,0x0e,1)      # secteurs reserves (boot)
