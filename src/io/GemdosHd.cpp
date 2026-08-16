@@ -262,8 +262,43 @@ std::string host2atari(const std::string& src) {
     return s;
 }
 
+// Chemin hôte porteur d'une lettre de lecteur Windows (« C: », « c:/… »). Défini
+// SANS #if (donc testable partout) : seuls ses APPELANTS sont conditionnés.
+[[maybe_unused]] inline bool hasDriveLetter(const std::string& s) {
+    return s.size() >= 2 && std::isalpha((unsigned char)s[0]) && s[1] == ':';
+}
+// Chemin hôte ABSOLU ? Sous Unix, « ça commence par '/' » suffit. Sous Windows, NON :
+// un chemin absolu commence par une lettre de lecteur (« C:\Temp ») ou par une racine
+// UNC (« \\serveur\partage »), jamais par un séparateur simple. Prendre la règle Unix
+// telle quelle faisait passer tout chemin Windows pour relatif → makeAbsoluteName le
+// préfixait du répertoire courant et produisait « C:/où/est/neost/C:/Temp/atari »,
+// donc « GEMDOS folder not found » sur un dossier pourtant valide (issue #37).
+inline bool isAbsoluteHostPath(const std::string& s) {
+#if defined(_WIN32)
+    if (hasDriveLetter(s)) return true;
+    if (s.size() >= 2 && s[0] == PATHSEP && s[1] == PATHSEP) return true;   // UNC
+#endif
+    return !s.empty() && s[0] == PATHSEP;
+}
+// Séparateurs hôte → PATHSEP. Tout ce fichier compare avec '/' (cf. physicalCanon, qui
+// normalise déjà la sortie de std::filesystem::canonical) ; or l'hôte Windows livre des
+// '\' partout — glisser-déposer GLFW, getcwd(), neost.cfg. Le '\' n'étant pas un
+// caractère de nom légal sous Windows, la conversion est sans perte.
+inline void toHostSeparators(std::string& s) {
+#if defined(_WIN32)
+    for (char& c : s) if (c == '\\') c = PATHSEP;
+#else
+    (void)s;
+#endif
+}
+
 // File_CleanFileName : retire les '/' de fin (mais en garde si len <= 2).
 void cleanFileName(std::string& s) {
+#if defined(_WIN32)
+    // « C:/ » est la RACINE du lecteur : la ramener à « C: » désignerait sous Windows
+    // le répertoire COURANT de ce lecteur, pas sa racine.
+    if (s.size() == 3 && hasDriveLetter(s) && s[2] == PATHSEP) return;
+#endif
     while (s.size() > 2 && s.back() == PATHSEP) s.pop_back();
 }
 // File_AddSlashToEndFileName.
@@ -281,11 +316,12 @@ const char* baseName(const char* path) {
 
 // File_MakeAbsoluteName : résout ./ et ../ d'un chemin (déjà absolu ici).
 void makeAbsoluteName(std::string& fileName) {
+    toHostSeparators(fileName);              // « C:\Temp\x » → « C:/Temp/x » (Windows)
     std::string tmp;
     const char* in = fileName.c_str();
-    if (in[0] != PATHSEP) {                  // pas absolu : préfixe cwd (cas rare)
+    if (!isAbsoluteHostPath(fileName)) {     // pas absolu : préfixe cwd (cas rare)
         char cwd[4096];
-        if (getcwd(cwd, sizeof(cwd))) { tmp = cwd; addSlash(tmp); }
+        if (getcwd(cwd, sizeof(cwd))) { tmp = cwd; toHostSeparators(tmp); addSlash(tmp); }
     }
     int inpos = 0;
     while (in[inpos]) {
