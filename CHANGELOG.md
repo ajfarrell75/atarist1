@@ -6,6 +6,32 @@ l'ordre inverse. Version courante : **0.5.2**.
 - « NeoST gère-t-il X ? » → [`docs/IMPLEMENTED.md`](docs/IMPLEMENTED.md) (inventaire par puce)
 - « Que reste-t-il ? » → [`TODO.md`](TODO.md)
 
+## La CI teste enfin le PAQUET, pas seulement son binaire (2026-08-17)
+
+Les deux seuls défauts jamais signalés sur un paquet publié (issues #37 et #38, la veille)
+avaient **la même racine** : le smoke-launch de la release amorçait le binaire — `--version`,
+500 trames d'EmuTOS, capture non uniforme — et s'arrêtait là. Il n'ouvrait ni la **disquette
+livrée** ni le **disque dur GEMDOS**, c'est-à-dire précisément les deux données que le paquet
+embarque. Un lecteur C: mort sur tout Windows et une `diskA.st` sans système de fichiers ont
+donc traversé plusieurs releases sans qu'une seule ligne rouge apparaisse.
+
+Nouveau `tools/smoke_package.sh`, appelé par les **6 jobs** qui exécutent le paquet
+(`linux-bionic`, `linux-arm64`, `raspberry`, `pi400`, `macos`, `windows`) — les 15 lignes
+dupliquées dans chacun disparaissent au passage. Quatre phases :
+
+1. version annoncée = version du paquet (contrôle existant) ;
+2. boot EmuTOS 500 trames + capture non uniforme (existant, via
+   `tools/check_ppm_nonuniform.py`) ;
+3. **disquette livrée** : structure FAT12 de la copie DU PAQUET
+   (`check_disk_assets.py --image`, nouvelle option) **et** montage réel par l'émulateur
+   du paquet (le FDC doit journaliser la géométrie) ;
+4. **HD GEMDOS sur chemin ABSOLU au format natif de l'hôte** (`cygpath -w` sous MSYS2) :
+   le montage doit aboutir en C: **et** aucun accès ne doit être refusé par le bac à sable.
+   C'est exactement la forme `D:\a\…` qui échouait sous Windows.
+
+Vérifié sur les deux régressions : avec l'ancienne `diskA.st` écrasée le smoke sort en
+échec à la phase 3, avec un montage GEMDOS qui rate il sort en échec à la phase 4.
+
 ## Retours 0.5.2 : HD GEMDOS sous Windows, disquette livrée (2026-08-16)
 
 Deux défauts signalés par Christian Zietz (EmuTOS) sur la **0.5.2 Windows** —
