@@ -79,7 +79,8 @@ add_library(neost_core STATIC
     src/io/FujiDevice.cpp
     src/io/Ne2000.cpp
     src/core/Framing.cpp
-    src/util/HostPath.cpp)
+    src/util/HostPath.cpp
+    src/gui/AppConfig.cpp)
 
 target_include_directories(neost_core PUBLIC "${CMAKE_SOURCE_DIR}/src")
 # (Cpu68k.cpp est traité à part : il inclut l'en-tête tiers Moira.h → C++20 sans
@@ -87,7 +88,7 @@ target_include_directories(neost_core PUBLIC "${CMAKE_SOURCE_DIR}/src")
 set_source_files_properties(
     src/core/Bus.cpp src/core/Shifter.cpp src/core/YM2149.cpp src/core/DmaSound.cpp
     src/core/Blitter.cpp
-    src/core/Machine.cpp src/core/Tracer.cpp src/core/Symbols.cpp src/io/Mfp.cpp src/io/Ikbd.cpp src/io/Fdc.cpp src/io/StxImage.cpp src/io/Rtc.cpp src/io/MidiAcia.cpp src/io/Fpu.cpp src/io/GemdosHd.cpp src/io/Acsi.cpp src/io/Scc.cpp src/io/MediaScan.cpp src/io/FujiDevice.cpp src/io/Ne2000.cpp src/core/Framing.cpp src/util/HostPath.cpp
+    src/core/Machine.cpp src/core/Tracer.cpp src/core/Symbols.cpp src/io/Mfp.cpp src/io/Ikbd.cpp src/io/Fdc.cpp src/io/StxImage.cpp src/io/Rtc.cpp src/io/MidiAcia.cpp src/io/Fpu.cpp src/io/GemdosHd.cpp src/io/Acsi.cpp src/io/Scc.cpp src/io/MediaScan.cpp src/io/FujiDevice.cpp src/io/Ne2000.cpp src/core/Framing.cpp src/util/HostPath.cpp src/gui/AppConfig.cpp
     PROPERTIES COMPILE_OPTIONS "${NEOST_STRICT_OPTS}")
 
 # =============================================================================
@@ -357,6 +358,8 @@ add_executable(neost
     src/audio/Audio.cpp
     src/audio/DriveSound.cpp
     src/gui/OpenGLShader.cpp
+    src/gui/UiCommon.cpp
+    src/gui/MediaPages.cpp
     src/gui/CrtEffectStack.cpp)
 # ${CMAKE_DL_LIBS} : miniaudio charge sa backend par dlopen ; avant la glibc
 # 2.34 (bionic — l'image release Linux), libdl est séparée et doit être liée

@@ -15,9 +15,11 @@
 //
 //  (c) 2026 VERHILLE Arnaud — projet NeoST.
 // =============================================================================
+#include "gui/AppConfig.hpp"
 #include "util/HostPath.hpp"
 
 #include <cstdio>
+#include <sstream>
 #include <string>
 
 using namespace neost;
@@ -149,10 +151,144 @@ static void testNativeDefaults() {
     checkStr("makeAbsolute(chemin absolu) inchangé", hostpath::makeAbsolute(cwd), cwd);
 }
 
+// -----------------------------------------------------------------------------
+//  neost.cfg — le parseur et l'écrivain doivent se répondre CLÉ POUR CLÉ. Un
+//  réglage écrit mais jamais relu (ou l'inverse) est muet : il ne casse rien au
+//  démarrage, il rend juste le réglage inopérant à la session suivante. C'est
+//  exactement le genre de défaut qu'aucun test d'émulation ne peut voir.
+// -----------------------------------------------------------------------------
+static void testConfigParser() {
+    using namespace neost::appconfig;
+    std::printf("neost.cfg (analyse / écriture)\n");
+
+    // CRLF : un fichier passé par Windows, un éditeur ou un partage réseau. Le '\r'
+    // collé faisait tomber CHAQUE clé sur son défaut, en silence (machine ST demandée,
+    // STE démarrée) — et saveConfig réécrivait ensuite les '\r', rendant la panne
+    // définitive. Le garde-fou est dans parseConfigLine ; il n'était testé nulle part.
+    {
+        Config c;
+        parseConfigLine(c, "machine=megaste\r");
+        parseConfigLine(c, "mem=4m\r");
+        parseConfigLine(c, "rom=roms/tos206fr.img\r");
+        checkStr("CRLF : machine",  c.machine, "megaste");
+        checkStr("CRLF : mem",      c.mem,     "4m");
+        checkStr("CRLF : rom",      c.rom,     "roms/tos206fr.img");
+    }
+    // Espaces de fin : même traitement que le '\r'.
+    {
+        Config c;
+        parseConfigLine(c, "machine=ste   ");
+        checkStr("espaces de fin", c.machine, "ste");
+    }
+    // Valeurs hostiles bornées : une deadzone > 0.95 rendait le menu de la borne
+    // incontrôlable, un volume hors [0,1] saturait la sortie.
+    {
+        Config c;
+        parseConfigLine(c, "joydeadzone=9.5");
+        checkBool("deadzone aberrante ramenée au défaut", c.joydeadzone == 0.30f, true);
+        parseConfigLine(c, "joydeadzone=nan");
+        checkBool("deadzone NaN ramenée au défaut",       c.joydeadzone == 0.30f, true);
+        parseConfigLine(c, "volume=42");
+        checkBool("volume borné à 1.0",                   c.volume == 1.0f, true);
+        parseConfigLine(c, "volume=-3");
+        checkBool("volume borné à 0.0",                   c.volume == 0.0f, true);
+    }
+    // Une clé inconnue (fichier d'une version future) ne doit RIEN faire.
+    {
+        Config c;
+        parseConfigLine(c, "cleQuiNExistePas=1");
+        parseConfigLine(c, "");
+        checkStr("clé inconnue ignorée", c.machine, Config().machine);
+    }
+    // ALLER-RETOUR : tout ce que writeConfigKeys écrit doit se relire à l'identique.
+    // C'est le contrat qui lie les deux fonctions, et le seul moyen d'attraper une
+    // clé ajoutée d'un seul côté.
+    {
+        Config a;
+        a.rom = "roms/tos206fr.img"; a.disk = "disks/x.st"; a.diskb = "disks/y.st";
+        a.cart = "carts/z.img";      a.gemdos = "/srv/gemdos"; a.acsi = "hd/c.img";
+        a.machine = "megaste";       a.mem = "4m";  a.mono = true;  a.fpu = true;
+        a.fujinet = true;            a.fujinetTarget = 5;
+        a.fujinetHosts = "http://a|http://b";
+        a.modem = true;              a.ethernec = true;
+        a.joyport = 0;               a.joymap = "GUID1:0,GUID2:x";
+        a.joydeadzone = 0.42f;       a.fastfdc = true;
+        a.volume = 0.5f;             a.audioLatencyMs = 40;  a.driveSound = false;
+        a.autoZoom = false;          a.crt = true;
+        a.crtParams.scanlines = 0.75f;
+
+        std::ostringstream out;
+        writeConfigKeys(out, a, /*full=*/true);
+        Config b;
+        std::istringstream in(out.str());
+        std::string line;
+        while (std::getline(in, line)) parseConfigLine(b, line);
+
+        checkStr("aller-retour rom",      b.rom,     a.rom);
+        checkStr("aller-retour gemdos",   b.gemdos,  a.gemdos);
+        checkStr("aller-retour machine",  b.machine, a.machine);
+        checkStr("aller-retour mem",      b.mem,     a.mem);
+        checkStr("aller-retour joymap",   b.joymap,  a.joymap);
+        checkStr("aller-retour fuji_hosts", b.fujinetHosts, a.fujinetHosts);
+        checkBool("aller-retour mono",     b.mono     == a.mono,     true);
+        checkBool("aller-retour fpu",      b.fpu      == a.fpu,      true);
+        checkBool("aller-retour fujinet",  b.fujinet  == a.fujinet,  true);
+        checkBool("aller-retour fuji_target", b.fujinetTarget == a.fujinetTarget, true);
+        checkBool("aller-retour modem",    b.modem    == a.modem,    true);
+        checkBool("aller-retour ethernec", b.ethernec == a.ethernec, true);
+        checkBool("aller-retour joyport",  b.joyport  == a.joyport,  true);
+        checkBool("aller-retour deadzone", b.joydeadzone == a.joydeadzone, true);
+        checkBool("aller-retour fastfdc",  b.fastfdc  == a.fastfdc,  true);
+        checkBool("aller-retour volume",   b.volume   == a.volume,   true);
+        checkBool("aller-retour latence",  b.audioLatencyMs == a.audioLatencyMs, true);
+        checkBool("aller-retour drivesound", b.driveSound == a.driveSound, true);
+        checkBool("aller-retour autozoom", b.autoZoom == a.autoZoom, true);
+        checkBool("aller-retour crt",      b.crt      == a.crt,      true);
+        checkBool("aller-retour crt_scanlines", b.crtParams.scanlines == a.crtParams.scanlines, true);
+    }
+    // Un PROFIL (full=false) ne doit PAS emporter l'horloge ni la disposition de
+    // l'interface : charger un profil ne déplace pas les fenêtres de l'utilisateur.
+    {
+        Config a; a.rtc = "1,2,3,4,5,6,26"; a.rtcSaved = 12345; a.uiVersion = 7;
+        a.romDirs.push_back("/srv/roms");
+        std::ostringstream out;
+        writeConfigKeys(out, a, /*full=*/false);
+        const std::string s = out.str();
+        checkBool("profil sans rtc=",          s.find("rtc=") == std::string::npos, true);
+        checkBool("profil sans uiVersion=",    s.find("uiVersion=") == std::string::npos, true);
+        checkBool("profil sans kiosk_romdir=", s.find("kiosk_romdir=") == std::string::npos, true);
+        checkBool("profil avec machine=",      s.find("machine=") != std::string::npos, true);
+    }
+    // Nom de fichier de profil : il devient un chemin, donc aucun séparateur ni
+    // « .. » ne doit survivre (un profil nommé « ../../etc/x » écrirait hors du
+    // dossier des profils).
+    {
+        checkStr("profil : séparateurs retirés",   profileFileName("a/b\\c"), "abc");
+        checkStr("profil : caractères Windows interdits retirés",
+                 profileFileName("a:b*c?d\"e<f>g|h"), "abcdefgh");
+        checkStr("profil : « ../../x » ne remonte nulle part",
+                 profileFileName("../../x"), "x");
+        checkStr("profil : points et espaces de tête/queue rognés",
+                 profileFileName("  .mon profil.  "), "mon profil");
+        checkBool("profil : nom borné à 64 caractères",
+                  profileFileName(std::string(200, 'a')).size() == 64, true);
+    }
+    // L'horloge sérialisée doit se relire (sinon la date repart à zéro à chaque boot).
+    {
+        Rtc::DateTime dt{};
+        checkBool("rtc= bien formée",   parseRtcConfig("1,2,3,4,5,6,26", dt), true);
+        checkBool("rtc= valeurs lues",  dt.sec == 1 && dt.min == 2 && dt.hour == 3
+                                     && dt.wday == 4 && dt.day == 5 && dt.month == 6
+                                     && dt.year == 26, true);
+        checkBool("rtc= tronquée refusée", parseRtcConfig("1,2,3", dt), false);
+    }
+}
+
 int main() {
     testWindowsPaths();
     testPosixPaths();
     testNativeDefaults();
+    testConfigParser();
     std::printf("[selftest-logic] %d OK, %d FAIL\n", g_ok, g_fail);
     return g_fail == 0 ? 0 : 1;
 }
