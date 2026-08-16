@@ -6,6 +6,36 @@ l'ordre inverse. Version courante : **0.5.2**.
 - « NeoST gère-t-il X ? » → [`docs/IMPLEMENTED.md`](docs/IMPLEMENTED.md) (inventaire par puce)
 - « Que reste-t-il ? » → [`TODO.md`](TODO.md)
 
+## Chemins hôte unifiés, logique pure testable, `main.cpp` dégrossi (2026-08-17)
+
+Chantier d'architecture né du constat des issues #37/#38 : la discipline du projet
+s'arrête à la frontière de l'émulation. Tout ce qui est *autour* — couche hôte, données
+livrées, frontend — n'avait ni module, ni test, ni gate.
+
+- **`src/util/HostPath` : UNE définition de « chemin absolu ».** Il y en avait quatre,
+  toutes écrites à la main sur la règle Unix « ça commence par `/` » : `GemdosHd`
+  (corrigé la veille), les deux résolveurs de `main.cpp`, et le lambda `resolve` de
+  `--from-cfg` côté headless — où le défaut de #37 était **toujours vivant**, clé
+  `gemdos=` comprise. Le style de chemin (`Posix` / `Windows`) est un **paramètre
+  d'exécution**, pas un `#ifdef` : c'est ce qui rend la sémantique Windows exerçable
+  depuis un Mac ou une CI Linux. Personne ne pouvait le faire, donc personne ne l'a fait,
+  et le lecteur C: est resté mort sur tous les paquets Windows depuis la 0.5.1.
+- **Nouvelle cible `neost-selftest`** (`tests/selftest_logic.cpp`, **84 cas**) pour la
+  logique qui n'a besoin ni de machine ni de ROM, et que le headless ne peut donc pas
+  couvrir. Câblée au palier `fast` — un test qu'aucun script n'exécute pourrit.
+- **`main.cpp` : 4981 → ~4250 lignes**, en trois unités qui n'avaient rien à faire là.
+  `gui/AppConfig` (structure `Config`, analyse, écriture atomique, profils) entre dans
+  `neost_core` : sans dépendance GUI, il devient **testable**, d'où les nouveaux cas
+  d'aller-retour `parseConfigLine` ↔ `writeConfigKeys` (une clé écrite mais jamais relue
+  est un réglage muet, invisible au démarrage), de bornage des valeurs hostiles et de
+  neutralisation des noms de profils. `gui/UiCommon` (pictogrammes + `IconButton`) et
+  `gui/MediaPages` (pages Disquettes / Cartouche / Disque dur / Réseau) sortent côté GUI ;
+  elles s'y prêtaient sans réécriture, ayant déjà la discipline « une page ne fait rien,
+  elle pose des requêtes ».
+
+Reste identifié, non fait : le headless garde **son propre parseur** de `neost.cfg`
+(`--from-cfg`), deuxième lecture du même format — à faire converger sur `gui/AppConfig`.
+
 ## La CI teste enfin le PAQUET, pas seulement son binaire (2026-08-17)
 
 Les deux seuls défauts jamais signalés sur un paquet publié (issues #37 et #38, la veille)
@@ -31,6 +61,7 @@ dupliquées dans chacun disparaissent au passage. Quatre phases :
 
 Vérifié sur les deux régressions : avec l'ancienne `diskA.st` écrasée le smoke sort en
 échec à la phase 3, avec un montage GEMDOS qui rate il sort en échec à la phase 4.
+
 
 ## Retours 0.5.2 : HD GEMDOS sous Windows, disquette livrée (2026-08-16)
 
