@@ -14,6 +14,7 @@
 // =============================================================================
 #include "io/GemdosHd.hpp"
 #include "core/Bus.hpp"
+#include "util/HostPath.hpp"
 #include "core/Cpu68k.hpp"
 
 #include <cctype>
@@ -134,6 +135,9 @@ static const uint8_t Cart_data[] = {
 0x65,0x2e,0x0d,0x0a,0x00,
 };
 
+// Chemins de l'hôte : UNE définition pour tout NeoST (cf. util/HostPath.hpp).
+namespace hostpath = neost::hostpath;
+
 // -----------------------------------------------------------------------------
 //  Constantes GEMDOS (gemdos_defines.h) et helpers de chemin/conversion.
 // -----------------------------------------------------------------------------
@@ -146,7 +150,7 @@ namespace {
 constexpr uint8_t FA_READONLY=0x01, FA_VOLUME=0x08, FA_DIR=0x10, FA_ARCHIVE=0x20;
 constexpr int IGNORED_FILE_ATTRIBS = FA_ARCHIVE | FA_READONLY;   // 0x21
 
-constexpr char PATHSEP = '/';
+constexpr char PATHSEP = hostpath::SEP;   // séparateur interne commun (util/HostPath)
 constexpr char INVALID_CHAR = '+';
 
 constexpr uint16_t SR_OVERFLOW = 0x0002, SR_ZERO = 0x0004, SR_SUPERMODE = 0x2000;
@@ -262,45 +266,15 @@ std::string host2atari(const std::string& src) {
     return s;
 }
 
-// Chemin hôte porteur d'une lettre de lecteur Windows (« C: », « c:/… »). Défini
-// SANS #if (donc testable partout) : seuls ses APPELANTS sont conditionnés.
-[[maybe_unused]] inline bool hasDriveLetter(const std::string& s) {
-    return s.size() >= 2 && std::isalpha((unsigned char)s[0]) && s[1] == ':';
-}
-// Chemin hôte ABSOLU ? Sous Unix, « ça commence par '/' » suffit. Sous Windows, NON :
-// un chemin absolu commence par une lettre de lecteur (« C:\Temp ») ou par une racine
-// UNC (« \\serveur\partage »), jamais par un séparateur simple. Prendre la règle Unix
-// telle quelle faisait passer tout chemin Windows pour relatif → makeAbsoluteName le
-// préfixait du répertoire courant et produisait « C:/où/est/neost/C:/Temp/atari »,
-// donc « GEMDOS folder not found » sur un dossier pourtant valide (issue #37).
-inline bool isAbsoluteHostPath(const std::string& s) {
-#if defined(_WIN32)
-    if (hasDriveLetter(s)) return true;
-    if (s.size() >= 2 && s[0] == PATHSEP && s[1] == PATHSEP) return true;   // UNC
-#endif
-    return !s.empty() && s[0] == PATHSEP;
-}
-// Séparateurs hôte → PATHSEP. Tout ce fichier compare avec '/' (cf. physicalCanon, qui
-// normalise déjà la sortie de std::filesystem::canonical) ; or l'hôte Windows livre des
-// '\' partout — glisser-déposer GLFW, getcwd(), neost.cfg. Le '\' n'étant pas un
-// caractère de nom légal sous Windows, la conversion est sans perte.
-inline void toHostSeparators(std::string& s) {
-#if defined(_WIN32)
-    for (char& c : s) if (c == '\\') c = PATHSEP;
-#else
-    (void)s;
-#endif
-}
+// Chemins de l'HÔTE : une seule définition pour tout NeoST — util/HostPath.
+// Ce fichier n'en garde que les adaptateurs de signature (Hatari passe ses chemins
+// par référence). La règle « absolu » y est consciente de Windows (lettre de lecteur,
+// racine UNC) et EXERÇABLE hors Windows, ce qui manquait quand le lecteur GEMDOS est
+// resté mort sur tous les paquets Windows (issue #37) — cf. tests/selftest_logic.cpp.
 
 // File_CleanFileName : retire les '/' de fin (mais en garde si len <= 2).
-void cleanFileName(std::string& s) {
-#if defined(_WIN32)
-    // « C:/ » est la RACINE du lecteur : la ramener à « C: » désignerait sous Windows
-    // le répertoire COURANT de ce lecteur, pas sa racine.
-    if (s.size() == 3 && hasDriveLetter(s) && s[2] == PATHSEP) return;
-#endif
-    while (s.size() > 2 && s.back() == PATHSEP) s.pop_back();
-}
+void cleanFileName(std::string& s) { s = hostpath::stripTrailingSep(s); }
+
 // File_AddSlashToEndFileName.
 void addSlash(std::string& s) {
     if (!s.empty() && s.back() != PATHSEP) s.push_back(PATHSEP);
@@ -314,37 +288,9 @@ const char* baseName(const char* path) {
     return b ? b + 1 : path;
 }
 
-// File_MakeAbsoluteName : résout ./ et ../ d'un chemin (déjà absolu ici).
-void makeAbsoluteName(std::string& fileName) {
-    toHostSeparators(fileName);              // « C:\Temp\x » → « C:/Temp/x » (Windows)
-    std::string tmp;
-    const char* in = fileName.c_str();
-    if (!isAbsoluteHostPath(fileName)) {     // pas absolu : préfixe cwd (cas rare)
-        char cwd[4096];
-        if (getcwd(cwd, sizeof(cwd))) { tmp = cwd; toHostSeparators(tmp); addSlash(tmp); }
-    }
-    int inpos = 0;
-    while (in[inpos]) {
-        if (in[inpos] == '.' && in[inpos + 1] == PATHSEP) {
-            inpos += 2;
-        } else if (in[inpos] == '.' && in[inpos + 1] == 0) {
-            inpos += 1;
-            if (tmp.size() > 1) tmp.pop_back();   // retire le '/' final
-        } else if (in[inpos] == '.' && in[inpos + 1] == '.'
-                   && (in[inpos + 2] == PATHSEP || in[inpos + 2] == 0)) {
-            inpos += 2;
-            if (!tmp.empty()) tmp.pop_back();      // retire le '/' final
-            size_t s = tmp.rfind(PATHSEP);
-            if (s != std::string::npos) tmp.resize(s + 1);
-            else { tmp = std::string(1, PATHSEP); }
-            if (in[inpos] == PATHSEP) inpos += 1;
-            else if (tmp.size() > 1) tmp.pop_back();
-        } else {
-            while (in[inpos]) { tmp.push_back(in[inpos++]); if (in[inpos - 1] == PATHSEP) break; }
-        }
-    }
-    fileName = tmp;
-}
+// File_MakeAbsoluteName : normalise les séparateurs, préfixe le répertoire courant
+// si besoin, puis résout « . » et « .. » — cf. util/HostPath (et son auto-test).
+void makeAbsoluteName(std::string& fileName) { fileName = hostpath::makeAbsolute(fileName); }
 } // namespace
 
 // Canonicalisation PHYSIQUE (realpath, liens résolus) — définie plus bas (scope global
