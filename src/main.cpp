@@ -64,6 +64,7 @@
 #include "io/JoystickInput.hpp"
 #include "io/MediaScan.hpp"
 #include "core/Framing.hpp"
+#include "util/HostPath.hpp"   // chemins hôte : UNE définition d'« absolu »
 
 namespace fs = std::filesystem;
 
@@ -75,8 +76,15 @@ static bool fileExists(const std::string& p) {
     std::error_code ec;
     return std::filesystem::exists(p, ec) && !ec;
 }
+// Un chemin ABSOLU ne se combine avec rien : le préfixer d'un dossier de base est
+// exactement ce qui produisait « C:\…\NeoST\C:\Temp\atari » sous Windows (issue #37).
+// La règle « absolu » vit dans util/HostPath, seule et testée (tests/selftest_logic.cpp).
 static std::string resolveData(const std::string& given, const std::string& exeDir) {
-    const std::string cands[] = { given, exeDir + "/" + given, exeDir + "/../" + given, "../" + given };
+    if (neost::hostpath::isAbsolute(given)) return given;
+    const std::string cands[] = { given,
+                                  neost::hostpath::join(exeDir, given),
+                                  neost::hostpath::join(exeDir + "/..", given),
+                                  neost::hostpath::join("..", given) };
     for (const auto& c : cands) if (fileExists(c)) return c;
     return given;
 }
@@ -3211,7 +3219,13 @@ int main(int argc, char** argv) {
     // Résolution de chemin façon resolveData mais tolérante aux DOSSIERS (le HD
     // GEMDOS monte un répertoire ; fs::exists accepte fichiers et dossiers).
     auto resolvePath = [&exeDir](const std::string& given) -> std::string {
-        const std::string cands[] = { given, exeDir + "/" + given, exeDir + "/../" + given, "../" + given };
+        // Absolu = déjà résolu (cf. resolveData et util/HostPath) : c'est le cas du
+        // dossier glissé-déposé, qui arrive TOUJOURS en absolu depuis GLFW.
+        if (neost::hostpath::isAbsolute(given)) return given;
+        const std::string cands[] = { given,
+                                      neost::hostpath::join(exeDir, given),
+                                      neost::hostpath::join(exeDir + "/..", given),
+                                      neost::hostpath::join("..", given) };
         std::error_code ec;
         for (const auto& c : cands) if (fs::exists(c, ec)) return c;
         return given;

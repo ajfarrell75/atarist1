@@ -27,6 +27,11 @@ HEADLESS = ROOT / "build" / "neost-headless"
 
 # Étapes par palier : (label, [argv]). Exécutées dans l'ordre ; tout code ≠ 0 = échec.
 FAST = [
+    # Logique PURE, sans machine ni ROM (chemins hôte, parseurs, formats) : le seul
+    # palier qui exerce la sémantique de chemins WINDOWS depuis un Mac ou une CI
+    # Linux. Sans lui, l'issue #37 restait invisible partout où on développe.
+    ("P0 auto-test logique pure (hostpath — sémantiques POSIX ET Windows)",
+     [str(ROOT / "build" / "neost-selftest")]),
     ("P0 auto-tests logique (glue + spec512 + bus + mfp + msa + fuji + enec)",
      [sys.executable, str(TOOLS / "run_etalons.py"), "--only",
       "glue_selftest,spec512_selftest,bus_selftest,mfp_selftest,msa_selftest,fuji_selftest,enec_selftest"]),
