@@ -39,6 +39,11 @@ FAST = [
     # qu'aucun palier ne la voie — ce verdict la rend impossible à reproduire.
     ("Save-state round-trip (config par défaut)",
      [str(HEADLESS), "roms/etos192us.img", "--frames", "30", "--save-state-test"]),
+    # Disquette livrée dans TOUS les paquets : elle avait été écrasée par un test
+    # d'écriture secteur et n'était plus lisible sous TOS (issue #38), sans qu'aucun
+    # palier ne relise jamais cette image.
+    ("Disquette livrée (disks/diskA.st : FAT12 valide, conforme au générateur)",
+     [sys.executable, str(TOOLS / "check_disk_assets.py")]),
 ]
 FULL = FAST + [
     ("P2 provenance des références",

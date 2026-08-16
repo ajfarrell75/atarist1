@@ -23,6 +23,16 @@ issues [#37](https://github.com/habib256/neost/issues/37) et
   reste du fichier comparant déjà en `/` (comme `physicalCanon`). `cleanFileName` ne
   rabote plus « `C:/` » en « `C:` » (racine du lecteur ≠ dossier courant du lecteur).
   Aucun effet sur Unix/macOS (montages absolus, relatifs et `../` revérifiés).
+- **`disks/diskA.st` livrée n'était plus une disquette.** Écrasée par un test d'écriture
+  secteur (commit `828bc87`, juin 2026), elle partait dans **tous** les paquets avec un
+  motif binaire à la place du système de fichiers : BPB absurde, aucun secteur de boot,
+  inutilisable sous TOS. Regénérée par `tools/make_floppy.py` (FAT12 720 Ko, 9x2,
+  `LISEZMOI.TXT` + `NEOST.TXT` + dossier `PROGS`), avec un **numéro de série** non nul
+  (détection de changement de disquette par le TOS). Vérifiée de bout en bout : sur une
+  copie de travail munie d'un `EMUDESK.INF` qui ouvre `A:\*.*` au boot, le bureau EmuTOS
+  liste bien le contenu (« 497 bytes used in 4 items »).
+  Nouveau gate `tools/check_disk_assets.py` au palier **fast** (BPB + chaînes FAT +
+  égalité bit à bit avec le générateur) : l'image ne peut plus être écrasée en silence.
 
 ## Capture souris sans bouton central (2026-08-15)
 
