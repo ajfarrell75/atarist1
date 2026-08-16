@@ -17,6 +17,9 @@
 #  Usage :
 #    python3 tools/check_disk_assets.py            # gate (exit 0/1)
 #    python3 tools/check_disk_assets.py --update   # regénère disks/diskA.st
+#    python3 tools/check_disk_assets.py --image P  # contrôle la copie P (smoke des
+#                                                  # paquets : la disquette LIVRÉE,
+#                                                  # pas celle de l'arbre de travail)
 #
 #  (c) 2026 VERHILLE Arnaud — projet NeoST.
 # =============================================================================
@@ -104,15 +107,25 @@ def check_fat12(data: bytes) -> list[str]:
 
 
 def main() -> int:
-    update = "--update" in sys.argv[1:]
+    argv = sys.argv[1:]
+    update = "--update" in argv
+    # --image PATH : contrôler une COPIE (celle d'un paquet). Mêmes contrôles, y
+    # compris l'égalité avec le générateur — le paquet doit livrer ces octets-là.
+    disk = DISK
+    if "--image" in argv:
+        i = argv.index("--image")
+        if i + 1 >= len(argv):
+            print("ÉCHEC : --image attend un chemin")
+            return 2
+        disk = Path(argv[i + 1])
     if update:
-        rc = subprocess.run([sys.executable, str(GEN), str(DISK)], cwd=ROOT).returncode
+        rc = subprocess.run([sys.executable, str(GEN), str(disk)], cwd=ROOT).returncode
         if rc != 0:
             return rc
-    if not DISK.exists():
-        print(f"ÉCHEC : {DISK} absent (le regénérer : python3 tools/make_floppy.py)")
+    if not disk.exists():
+        print(f"ÉCHEC : {disk} absent (le regénérer : python3 tools/make_floppy.py)")
         return 1
-    data = DISK.read_bytes()
+    data = disk.read_bytes()
 
     errs = check_fat12(data)
     for e in errs:
@@ -127,14 +140,14 @@ def main() -> int:
             return 1
         if ref.read_bytes() != data:
             errs.append("écart avec make_floppy.py")
-            print("  ✗ disks/diskA.st ≠ sortie de tools/make_floppy.py "
+            print(f"  ✗ {disk} ≠ sortie de tools/make_floppy.py "
                   "(image écrasée ? générateur modifié ?)\n"
                   "     → la régénérer : python3 tools/check_disk_assets.py --update")
 
     if errs:
-        print(f"ÉCHEC : disks/diskA.st ({len(errs)} problème(s))")
+        print(f"ÉCHEC : {disk} ({len(errs)} problème(s))")
         return 1
-    print("OK : disks/diskA.st est une FAT12 720 Ko valide, conforme à make_floppy.py")
+    print(f"OK : {disk} est une FAT12 720 Ko valide, conforme à make_floppy.py")
     return 0
 
 

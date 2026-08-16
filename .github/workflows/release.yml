@@ -23,8 +23,14 @@
 #
 #
 #  Chaque job SMOKE-LANCE le paquet via neost-headless (déterministe, sans
-#  affichage) : --version puis boot EmuTOS 500 trames (le bureau apparaît vers
-#  la trame ~400) + capture PPM non uniforme.
+#  affichage) — tools/smoke_package.sh, 4 phases : --version, boot EmuTOS 500
+#  trames (le bureau apparaît vers la trame ~400) + capture PPM non uniforme,
+#  montage de la DISQUETTE LIVRÉE (elle avait été écrasée et livrée illisible
+#  pendant des mois, issue #38) et montage d'un dossier hôte en HD GEMDOS par
+#  chemin ABSOLU (forme native de l'hôte : le lecteur C: était mort sur tous les
+#  paquets Windows, issue #37). Ces deux dernières phases sont la leçon des deux
+#  seuls défauts jamais signalés sur un paquet publié : le binaire démarrait, les
+#  DONNÉES et les MONTAGES n'étaient testés par personne.
 #  Les paquets embarquent la liste autorisée (packaging/stage_free_data.sh :
 #  EmuTOS GPL + tos102uk/tos162uk des profils 520 ST / 1040 STE + diskA.st) —
 #  jamais les autres TOS ni les jeux du dépôt.
@@ -180,28 +186,14 @@ jobs:
           done
           echo "OK : AppImage x86_64 valide (ET_EXEC, glibc <= 2.27)"
 
-      - name: Smoke-launch (boot EmuTOS headless 500 trames + capture)
+      # Smoke du PAQUET, pas du binaire seul : version annoncée, boot EmuTOS,
+      # disquette LIVRÉE (issue #38) et HD GEMDOS sur chemin ABSOLU (issue #37).
+      # Détail et raison d'être de chaque phase → tools/smoke_package.sh.
+      # glibc rétro-compatible : le binaire 2.27 tourne sur le runner.
+      - name: Smoke-launch du paquet (version, boot, disquette, HD GEMDOS)
         env:
           NEOST_VERSION: ${{ needs.version.outputs.neost_version }}
-        run: |
-          set -euo pipefail
-          # glibc rétro-compatible : le binaire 2.27 tourne sur le runner.
-          # neost-headless résout roms/ depuis le cwd → se placer dans usr/.
-          cd squashfs-root/usr
-          # La version ANNONCÉE doit être celle du paquet : le define était figé sur le
-          # project() de CMake, donc tous les paquets d'une release se présentaient
-          # comme « 0.1.0 » et aucun rapport de bug n'était rattachable à une release.
-          bin/neost-headless --version
-          bin/neost-headless --version | grep -qF "$NEOST_VERSION" \
-            || { echo "ERREUR : version binaire ≠ $NEOST_VERSION"; exit 1; }
-          bin/neost-headless roms/etos192us.img --frames 500 --screenshot boot.ppm
-          # Le bureau EmuTOS doit être affiché : capture non uniforme.
-          python3 - <<'EOF'
-          data = open('boot.ppm', 'rb').read()
-          body = data.split(b'\n', 3)[3]          # P6 : 3 lignes d'en-tête
-          assert len(set(body)) > 1, "capture uniforme — le boot EmuTOS a échoué"
-          print(f"OK : capture {len(body)} octets, {len(set(body))} valeurs distinctes")
-          EOF
+        run: bash tools/smoke_package.sh squashfs-root/usr bin/neost-headless "$NEOST_VERSION"
 
       - uses: actions/upload-artifact@v5
         with:
@@ -302,25 +294,12 @@ jobs:
           done
           echo "OK : AppImage aarch64 générique valide (ET_EXEC)"
 
-      - name: Smoke-launch (boot EmuTOS headless 500 trames + capture)
+      # Smoke du PAQUET (cf. tools/smoke_package.sh) : version, boot EmuTOS,
+      # disquette livrée (#38) et HD GEMDOS sur chemin absolu (#37).
+      - name: Smoke-launch du paquet (version, boot, disquette, HD GEMDOS)
         env:
           NEOST_VERSION: ${{ needs.version.outputs.neost_version }}
-        run: |
-          set -euo pipefail
-          cd squashfs-root/usr
-          # La version ANNONCÉE doit être celle du paquet : le define était figé sur le
-          # project() de CMake, donc tous les paquets d'une release se présentaient
-          # comme « 0.1.0 » et aucun rapport de bug n'était rattachable à une release.
-          bin/neost-headless --version
-          bin/neost-headless --version | grep -qF "$NEOST_VERSION" \
-            || { echo "ERREUR : version binaire ≠ $NEOST_VERSION"; exit 1; }
-          bin/neost-headless roms/etos192us.img --frames 500 --screenshot boot.ppm
-          python3 - <<'EOF'
-          data = open('boot.ppm', 'rb').read()
-          body = data.split(b'\n', 3)[3]
-          assert len(set(body)) > 1, "capture uniforme — le boot EmuTOS a échoué"
-          print(f"OK : capture {len(body)} octets, {len(set(body))} valeurs distinctes")
-          EOF
+        run: bash tools/smoke_package.sh squashfs-root/usr bin/neost-headless "$NEOST_VERSION"
 
       - uses: actions/upload-artifact@v5
         with:
@@ -404,27 +383,14 @@ jobs:
           done
           echo "OK : AppImage Raspberry Pi valide (glibc <= 2.36)"
 
-      - name: Smoke-launch (boot EmuTOS headless 500 trames + capture)
+      # Smoke du PAQUET (cf. tools/smoke_package.sh) : version, boot EmuTOS,
+      # disquette livrée (#38) et HD GEMDOS sur chemin absolu (#37).
+      # La glibc est rétro-compatible : le binaire bâti en 2.36 tourne sur le
+      # runner 2.39.
+      - name: Smoke-launch du paquet (version, boot, disquette, HD GEMDOS)
         env:
           NEOST_VERSION: ${{ needs.version.outputs.neost_version }}
-        run: |
-          set -euo pipefail
-          # La glibc est rétro-compatible : le binaire bâti en 2.36 tourne sur
-          # le runner 2.39. neost-headless résout roms/ depuis le cwd.
-          cd squashfs-root/usr
-          # La version ANNONCÉE doit être celle du paquet : le define était figé sur le
-          # project() de CMake, donc tous les paquets d'une release se présentaient
-          # comme « 0.1.0 » et aucun rapport de bug n'était rattachable à une release.
-          bin/neost-headless --version
-          bin/neost-headless --version | grep -qF "$NEOST_VERSION" \
-            || { echo "ERREUR : version binaire ≠ $NEOST_VERSION"; exit 1; }
-          bin/neost-headless roms/etos192us.img --frames 500 --screenshot boot.ppm
-          python3 - <<'EOF'
-          data = open('boot.ppm', 'rb').read()
-          body = data.split(b'\n', 3)[3]
-          assert len(set(body)) > 1, "capture uniforme — le boot EmuTOS a échoué"
-          print(f"OK : capture {len(body)} octets, {len(set(body))} valeurs distinctes")
-          EOF
+        run: bash tools/smoke_package.sh squashfs-root/usr bin/neost-headless "$NEOST_VERSION"
 
       - uses: actions/upload-artifact@v5
         with:
@@ -503,25 +469,15 @@ jobs:
           done
           echo "OK : AppImage Pi 4 / Pi 400 valide (-mcpu=cortex-a72, glibc <= 2.36)"
 
-      - name: Smoke-launch (boot EmuTOS headless 500 trames + capture)
+      # Smoke du PAQUET (cf. tools/smoke_package.sh) : version, boot EmuTOS,
+      # disquette livrée (#38) et HD GEMDOS sur chemin absolu (#37).
+      # Le runner ubuntu-24.04-arm est un Neoverse : il EXÉCUTE du cortex-a72
+      # (même ISA ARMv8-A, -mcpu ne fait qu'ordonnancer et choisir des extensions
+      # déjà présentes). Le smoke est donc réel, pas symbolique.
+      - name: Smoke-launch du paquet (version, boot, disquette, HD GEMDOS)
         env:
           NEOST_VERSION: ${{ needs.version.outputs.neost_version }}
-        run: |
-          set -euo pipefail
-          # Le runner ubuntu-24.04-arm est un Neoverse : il EXÉCUTE du cortex-a72
-          # (même ISA ARMv8-A, -mcpu ne fait qu'ordonnancer et choisir des
-          # extensions déjà présentes). Le smoke est donc réel, pas symbolique.
-          cd squashfs-root/usr
-          bin/neost-headless --version
-          bin/neost-headless --version | grep -qF "$NEOST_VERSION" \
-            || { echo "ERREUR : version binaire ≠ $NEOST_VERSION"; exit 1; }
-          bin/neost-headless roms/etos192us.img --frames 500 --screenshot boot.ppm
-          python3 - <<'EOF'
-          data = open('boot.ppm', 'rb').read()
-          body = data.split(b'\n', 3)[3]
-          assert len(set(body)) > 1, "capture uniforme — le boot EmuTOS a échoué"
-          print(f"OK : capture {len(body)} octets, {len(set(body))} valeurs distinctes")
-          EOF
+        run: bash tools/smoke_package.sh squashfs-root/usr bin/neost-headless "$NEOST_VERSION"
 
       - uses: actions/upload-artifact@v5
         with:
@@ -585,26 +541,16 @@ jobs:
             || { echo "ERREUR : le paquet exige macOS ${MINOS} > 11.0"; exit 1; }
           echo "OK : .app Universal 2 autonome"
 
-      - name: Smoke-launch (boot EmuTOS headless 500 trames + capture)
+      # Smoke du PAQUET (cf. tools/smoke_package.sh) : version, boot EmuTOS,
+      # disquette livrée (#38) et HD GEMDOS sur chemin absolu (#37). Le script
+      # nettoie ses captures et son dossier de test — rien ne reste dans le .app.
+      # Exerce la tranche arm64 (l'arch du runner) ; la tranche x86_64 est
+      # vérifiée structurellement par le garde lipo ci-dessus — les images macOS
+      # arm64 de GitHub n'ont pas Rosetta, on ne peut pas l'exécuter.
+      - name: Smoke-launch du paquet (version, boot, disquette, HD GEMDOS)
         env:
           NEOST_VERSION: ${{ needs.version.outputs.neost_version }}
-        run: |
-          set -euo pipefail
-          # Exerce la tranche arm64 (l'arch du runner) ; la tranche x86_64 est
-          # vérifiée structurellement par le garde lipo ci-dessus — les images
-          # macOS arm64 de GitHub n'ont pas Rosetta, on ne peut pas l'exécuter.
-          cd dist/NeoST.app/Contents
-          MacOS/neost-headless --version
-          MacOS/neost-headless --version | grep -qF "$NEOST_VERSION" \
-            || { echo "ERREUR : version binaire ≠ $NEOST_VERSION"; exit 1; }
-          MacOS/neost-headless roms/etos192us.img --frames 500 --screenshot boot.ppm
-          python3 - <<'EOF'
-          data = open('boot.ppm', 'rb').read()
-          body = data.split(b'\n', 3)[3]
-          assert len(set(body)) > 1, "capture uniforme — le boot EmuTOS a échoué"
-          print(f"OK : capture {len(body)} octets, {len(set(body))} valeurs distinctes")
-          EOF
-          rm boot.ppm    # ne pas laisser la capture dans le .dmg (déjà créé, ceinture)
+        run: bash tools/smoke_package.sh dist/NeoST.app/Contents MacOS/neost-headless "$NEOST_VERSION"
 
       - uses: actions/upload-artifact@v5
         with:
@@ -740,22 +686,15 @@ jobs:
           done
           echo "OK : zip Windows valide (statique, contenu libre)"
 
-      - name: Smoke-launch (boot EmuTOS headless 500 trames + capture)
+      # Smoke du PAQUET (cf. tools/smoke_package.sh) : version, boot EmuTOS,
+      # disquette livrée (#38) et HD GEMDOS sur chemin absolu (#37). C'EST ICI que
+      # le second comptait : le montage GEMDOS reçoit un chemin Windows natif
+      # (cygpath -w), exactement la forme « D:\a\… » qui était prise pour relative
+      # et rendait le lecteur C: inutilisable sur tous les paquets 0.5.x.
+      - name: Smoke-launch du paquet (version, boot, disquette, HD GEMDOS)
         env:
           NEOST_VERSION: ${{ needs.version.outputs.neost_version }}
-        run: |
-          set -euo pipefail
-          cd "$(ls -d _check/*/)"
-          ./neost-headless.exe --version
-          ./neost-headless.exe --version | grep -qF "$NEOST_VERSION" \
-            || { echo "ERREUR : version binaire ≠ $NEOST_VERSION"; exit 1; }
-          ./neost-headless.exe roms/etos192us.img --frames 500 --screenshot boot.ppm
-          python3 - <<'EOF'
-          data = open('boot.ppm', 'rb').read()
-          body = data.split(b'\n', 3)[3]
-          assert len(set(body)) > 1, "capture uniforme — le boot EmuTOS a échoué"
-          print(f"OK : capture {len(body)} octets, {len(set(body))} valeurs distinctes")
-          EOF
+        run: bash tools/smoke_package.sh "$(ls -d _check/*/)" ./neost-headless.exe "$NEOST_VERSION"
 
       - uses: actions/upload-artifact@v5
         with:
