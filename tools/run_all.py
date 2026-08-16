@@ -24,6 +24,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 TOOLS = ROOT / "tools"
 HEADLESS = ROOT / "build" / "neost-headless"
+SELFTEST = ROOT / "build" / "neost-selftest"
 
 # Étapes par palier : (label, [argv]). Exécutées dans l'ordre ; tout code ≠ 0 = échec.
 FAST = [
@@ -31,7 +32,7 @@ FAST = [
     # palier qui exerce la sémantique de chemins WINDOWS depuis un Mac ou une CI
     # Linux. Sans lui, l'issue #37 restait invisible partout où on développe.
     ("P0 auto-test logique pure (hostpath — sémantiques POSIX ET Windows)",
-     [str(ROOT / "build" / "neost-selftest")]),
+     [str(SELFTEST)]),
     ("P0 auto-tests logique (glue + spec512 + bus + mfp + msa + fuji + enec)",
      [sys.executable, str(TOOLS / "run_etalons.py"), "--only",
       "glue_selftest,spec512_selftest,bus_selftest,mfp_selftest,msa_selftest,fuji_selftest,enec_selftest"]),
@@ -117,9 +118,10 @@ def main() -> int:
     if args.install_hook or args.uninstall_hook:
         return install_hook(args.uninstall_hook)
 
-    if not HEADLESS.exists():
-        print(f"Build requis : cmake --build build  ({HEADLESS} absent)", file=sys.stderr)
-        return 2
+    for binary in (HEADLESS, SELFTEST):
+        if not binary.exists():
+            print(f"Build requis : cmake --build build  ({binary} absent)", file=sys.stderr)
+            return 2
 
     return run_tier(FAST if args.tier == "fast" else FULL)
 
