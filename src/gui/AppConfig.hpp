@@ -79,6 +79,14 @@ std::string cfgPath(const std::string& exeDir);
 // « sec,min,hour,wday,day,month,year » → Rtc::DateTime (false si la ligne ment).
 bool parseRtcConfig(const std::string& s, Rtc::DateTime& dt);
 
+// Hygiène d'UNE ligne de neost.cfg, avant toute comparaison de valeur : retire la
+// fin de ligne CRLF et les blancs de queue. Exposée parce que le headless a son
+// PROPRE lecteur du même fichier (--from-cfg) : tant que la règle était recopiée
+// là-bas, les deux pouvaient diverger — et elles divergeaient (le headless ne
+// rognait que le '\r', si bien qu'un « machine=st » suivi d'une espace retombait
+// en silence sur la machine par défaut). Une seule définition, deux appelants.
+void trimConfigLine(std::string& line);
+
 // Applique UNE ligne « clé=valeur » à `c` (partagé par neost.cfg et les profils).
 void parseConfigLine(Config& c, std::string line);
 Config loadConfig(const std::string& exeDir);

@@ -180,6 +180,25 @@ static void testConfigParser() {
         parseConfigLine(c, "machine=ste   ");
         checkStr("espaces de fin", c.machine, "ste");
     }
+    // Le rognage est exposé (trimConfigLine) parce que le HEADLESS lit le même
+    // fichier avec son propre lecteur (--from-cfg). Tant que la règle y était
+    // recopiée, elle a divergé : le headless ne retirait que le '\r', donc un
+    // « machine=st » suivi d'une espace repartait en silence sur la machine par
+    // défaut (STE) — le défaut même que le rognage GUI corrige. Une définition,
+    // deux appelants ; ces cas verrouillent la définition.
+    {
+        auto trimmed = [](std::string s) { trimConfigLine(s); return s; };
+        checkStr("trim : CRLF",            trimmed("machine=st\r"),     "machine=st");
+        checkStr("trim : espaces",         trimmed("machine=st   "),    "machine=st");
+        checkStr("trim : tabulations",     trimmed("machine=st\t\t"),   "machine=st");
+        checkStr("trim : mélange CR+blancs", trimmed("mem=4m \t\r"),    "mem=4m");
+        checkStr("trim : rien à retirer",  trimmed("mem=4m"),           "mem=4m");
+        checkStr("trim : ligne vide",      trimmed(""),                 "");
+        checkStr("trim : que des blancs",  trimmed("  \t\r"),           "");
+        // Un blanc INTERNE appartient à la valeur (un chemin peut en contenir).
+        checkStr("trim : blanc interne gardé",
+                 trimmed("disk=disks/my game.st "), "disk=disks/my game.st");
+    }
     // Valeurs hostiles bornées : une deadzone > 0.95 rendait le menu de la borne
     // incontrôlable, un volume hors [0,1] saturait la sortie.
     {
