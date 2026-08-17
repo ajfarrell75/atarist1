@@ -6,6 +6,39 @@ l'ordre inverse. Version courante : **0.5.2**.
 - « NeoST gère-t-il X ? » → [`docs/IMPLEMENTED.md`](docs/IMPLEMENTED.md) (inventaire par puce)
 - « Que reste-t-il ? » → [`TODO.md`](TODO.md)
 
+## Chasse aux bugs : auto-test EtherNEC dépendant du compilateur, `--from-cfg` amnésique (2026-08-17)
+
+Campagne de recherche de défauts. Deux angles : **ASan+UBSan** sur toute la suite
+(auto-tests, étalons, **51 jeux du corpus × 900 trames**) et **fuzzing** des parseurs
+d'entrée non fiable (4000 mutations de `.stx`, 120 de `.st`/`.msa`/`.dim`). Résultat côté
+mémoire : **aucun défaut** — le cœur d'émulation et les parseurs durcis tiennent. Les
+trois défauts trouvés sont ailleurs, tous du même genre : une règle écrite **deux fois**,
+ou une expression dont le résultat dépend du compilateur.
+
+- **Auto-test EtherNEC : verdict décidé par le compilateur.** La lecture de l'en-tête de
+  paquet tenait en `rd(0x10) | (rd(0x10) << 8)` — or les opérandes de `|` ne sont **pas
+  séquencés** en C++17 et chaque `rd(0x10)` fait AVANCER le Remote DMA. Les deux octets
+  de longueur pouvaient donc être pris à l'envers : l'auto-test lisait `0x2400` au lieu
+  de 36. Vert en Release, **ROUGE** sur la même source compilée avec sanitizers — c'est
+  ainsi qu'il est sorti. Un gate dont le verdict dépend du choix du compilateur ne garde
+  rien : il serait passé rouge sur le premier portage ou la première montée de toolchain.
+  Une lecture par instruction.
+- **`--from-cfg` perdait le lecteur B, le modem et l'EtherNEC.** Le headless a son PROPRE
+  lecteur de `neost.cfg` (dette déjà notée le même jour, ci-dessous) et il ignorait
+  `diskb=`, `modem=` et `ethernec=` — trois clés que le GUI écrit, les deux dernières
+  juste à côté des `fujinet_*` toutes relues, elles. Rejouer une config dans le headless
+  démarrait donc **sans** disquette B ni réseau, sans un mot, alors que `--diskb`,
+  `--modem` et `--ethernec` existent et fonctionnent.
+- **Le rognage de ligne avait divergé.** Le lecteur GUI retire `\r` **et** les blancs de
+  queue (correctif CRLF de la 0.5.2) ; la recopie côté headless ne retirait que le `\r`.
+  Un `machine=st ` suivi d'une espace y retombait donc en silence sur la machine par
+  défaut — exactement le défaut que le rognage GUI corrige, resté vivant dans le second
+  lecteur. La règle devient `appconfig::trimConfigLine`, **une** définition pour deux
+  appelants, verrouillée par 8 cas dans `neost-selftest` (**84 → 92**).
+
+Reste, inchangé : le headless garde son propre *aiguillage* de clés (il résout en plus
+les chemins relatifs au dossier du cfg). Seule la règle de rognage est désormais partagée.
+
 ## Chemins hôte unifiés, logique pure testable, `main.cpp` dégrossi (2026-08-17)
 
 Chantier d'architecture né du constat des issues #37/#38 : la discipline du projet

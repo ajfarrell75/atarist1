@@ -25,6 +25,7 @@
 
 #include "core/Machine.hpp"
 #include "util/HostPath.hpp"   // chemins hôte : UNE définition d'« absolu »
+#include "gui/AppConfig.hpp"   // neost.cfg : UNE définition du rognage de ligne
 #include "net/FujiHost.hpp"
 #include "net/FujiHostReplay.hpp"
 #include "net/MiniJson.hpp"
@@ -379,8 +380,17 @@ int enecSelfTest(Machine& machine) {
     wr(0x08, uint8_t(hdrAddr)); wr(0x09, uint8_t(hdrAddr >> 8));
     wr(0x0A, 4); wr(0x0B, 0);
     wr(0x00, 0x0A);                           // Remote Read
-    const uint8_t rsr = rd(0x10), next = rd(0x10);
-    const uint16_t rlen = uint16_t(rd(0x10) | (rd(0x10) << 8));
+    // ⚠ UN port, QUATRE lectures : chaque rd(0x10) fait AVANCER le Remote DMA. Il faut
+    // donc une lecture par instruction. « rd(0x10) | (rd(0x10) << 8) » ne convient PAS :
+    // l'ordre d'évaluation des opérandes de « | » n'est pas séquencé (C++17), si bien que
+    // les deux octets de longueur pouvaient être pris à l'envers — l'auto-test lisait
+    // alors 0x2400 au lieu de 36 et TOMBAIT, sur le seul choix du compilateur. Constaté :
+    // vert en Release, ROUGE sur la même source compilée avec sanitizers.
+    const uint8_t rsr  = rd(0x10);
+    const uint8_t next = rd(0x10);
+    const uint8_t lenL = rd(0x10);
+    const uint8_t lenH = rd(0x10);
+    const uint16_t rlen = uint16_t(lenL | (lenH << 8));
     (void)next;
     check((rsr & 0x01) && rlen == sizeof frame + 4, "RX ring packet header (status/len)");
 
@@ -671,8 +681,13 @@ int main(int argc, char** argv) {
             std::string ln;
             auto v = [](const std::string& s, std::size_t n) { return s.substr(n); };
             while (std::getline(cf, ln)) {
-                if (!ln.empty() && ln.back() == '\r') ln.pop_back();
+                // MÊME rognage que le lecteur du GUI (appconfig::trimConfigLine) et non
+                // une recopie : ici ne tombait que le '\r', si bien qu'une espace de
+                // queue — « machine=st » suivi d'un blanc — faisait retomber la clé sur
+                // le défaut, exactement le défaut silencieux que le rognage GUI corrige.
+                neost::appconfig::trimConfigLine(ln);
                 if      (ln.rfind("rom=", 0) == 0)     { if (ln.size() > 4) romPath   = resolve(v(ln, 4)); }
+                else if (ln.rfind("diskb=", 0) == 0)   { if (ln.size() > 6) diskBPath = resolve(v(ln, 6)); }
                 else if (ln.rfind("disk=", 0) == 0)    { if (ln.size() > 5) diskPath  = resolve(v(ln, 5)); }
                 else if (ln.rfind("cart=", 0) == 0)    { if (ln.size() > 5) cartPath  = resolve(v(ln, 5)); }
                 else if (ln.rfind("gemdos=", 0) == 0)  { if (ln.size() > 7) gemdosDir = resolve(v(ln, 7)); }
@@ -684,6 +699,11 @@ int main(int argc, char** argv) {
                 else if (ln.rfind("fujinet_hosts=", 0) == 0) {
                     if (ln.size() > 14) fujinetHost = v(ln, 14).substr(0, v(ln, 14).find('|'));
                 }
+                // modem= / ethernec= : le GUI les écrit à côté des clés fujinet_*, toutes
+                // relues ici — sauf ces deux-là. Rejouer une config réseau avec --from-cfg
+                // démarrait donc SANS le modem ni la carte EtherNEC, sans un mot.
+                else if (ln.rfind("modem=", 0) == 0)    modemFlag    = (v(ln, 6) == "1");
+                else if (ln.rfind("ethernec=", 0) == 0) ethernecFlag = (v(ln, 9) == "1");
                 else if (ln.rfind("machine=", 0) == 0) machType   = parseMachine(v(ln, 8).c_str());
                 else if (ln.rfind("mem=", 0) == 0)     ramBytes   = parseRamBytes(v(ln, 4).c_str());
                 else if (ln.rfind("cpu=", 0) == 0)     cpuCore    = Cpu68k::parseCore(v(ln, 4).c_str());

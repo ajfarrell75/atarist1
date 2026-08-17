@@ -29,16 +29,20 @@ bool parseRtcConfig(const std::string& s, Rtc::DateTime& dt) {
 // sous-ensemble des clés, et tout ce qu'il omet garde donc la valeur déjà présente
 // dans `c`. C'est ce qui permet de charger un profil PAR-DESSUS la configuration
 // courante sans tenir à jour une liste de recopie champ par champ.
-void parseConfigLine(Config& c, std::string line) {
-    // Fin de ligne CRLF (fichier passé par Windows, un éditeur, un partage réseau) :
-    // getline ne retire que le \n, et TOUTES les valeurs sont comparées EXACTEMENT
-    // (parseMachine, parseRamBytes, == "1"). Un \r collé faisait donc tomber chaque
-    // clé sur son défaut SILENCIEUX — machine ST demandée, STE démarrée ; 4 Mo
-    // demandés, 512 Ko alloués — et rendait tout chemin introuvable. Pire : saveConfig
-    // réécrivait ensuite le fichier avec les \r intacts, donc la panne était définitive.
-    // Même rognage que SymbolTable (Symbols.cpp). On retire aussi les espaces de fin.
+// Fin de ligne CRLF (fichier passé par Windows, un éditeur, un partage réseau) :
+// getline ne retire que le \n, et TOUTES les valeurs sont comparées EXACTEMENT
+// (parseMachine, parseRamBytes, == "1"). Un \r collé faisait donc tomber chaque
+// clé sur son défaut SILENCIEUX — machine ST demandée, STE démarrée ; 4 Mo
+// demandés, 512 Ko alloués — et rendait tout chemin introuvable. Pire : saveConfig
+// réécrivait ensuite le fichier avec les \r intacts, donc la panne était définitive.
+// Même rognage que SymbolTable (Symbols.cpp). On retire aussi les espaces de fin.
+void trimConfigLine(std::string& line) {
     while (!line.empty() && (line.back() == '\r' || line.back() == ' ' || line.back() == '\t'))
         line.pop_back();
+}
+
+void parseConfigLine(Config& c, std::string line) {
+    trimConfigLine(line);
     if      (line.rfind("rom=", 0)  == 0) c.rom  = line.substr(4);
     else if (line.rfind("disk=", 0) == 0) c.disk = line.substr(5);
     else if (line.rfind("cart=", 0) == 0) c.cart = line.substr(5);
