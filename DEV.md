@@ -9,18 +9,21 @@ Deux idées structurantes : **le `Bus` *est* le plan mémoire** (il ne fait que 
 read8/write8 vers les composants), et **le cœur ne dépend pas du GUI**.
 
 - **`neost_core`** (lib statique, aucune dépendance GUI) = la carte mère : `Bus`, `Cpu68k`
-  (wrapper Moira), `Shifter`, `Mfp`, `Ikbd`, `Fdc`, `YM2149`, `DmaSound`,
-  `Blitter`, `Rtc`, `Glue`, plus `Machine`, `Scheduler` et `Tracer`.
+  (wrapper Moira), `Shifter`, `Mfp`, `Ikbd`, `MidiAcia`, `Fdc`/`StxImage`, `Acsi`, `Scc`,
+  `YM2149`, `DmaSound`/`AudioMix`, `Blitter`, `Rtc`, `Fpu`, `GemdosHd`, `Glue`, plus
+  `Machine`, `Scheduler`, `Tracer`/`Symbols`, `Framing`, `MediaScan`, `HostPath` et
+  `AppConfig` (le format `neost.cfg` est du parsing pur, donc côté cœur).
+- **`neost_net`** (lib statique, HORS cœur) = les backends hôte du FujiNet virtuel :
+  sockets et threads y vivent (`FujiHostReplay`/`MiniJson` toujours ; `FujiHostLive`,
+  `HttpClient`, `HayesModem`, `MidiRing` sous `NEOST_WITH_NET`).
 - **`Machine`** assemble les composants, les branche au `Bus`, encapsule `runFrame()`.
-- **`neost`** (GUI) et **`neost-headless`** partagent `Machine`. Le GUI ajoute
-  GLFW/OpenGL/ImGui/miniaudio et bride à 50 fps réels.
+- **`neost`** (GUI), **`neost-headless`**, **`neost-web`** et l'APK Android partagent
+  `Machine`. Le GUI ajoute GLFW/OpenGL/ImGui/miniaudio et bride à 50 fps réels.
 
 ```
 src/
   main.cpp                  Frontend GUI : GLFW + OpenGL (texture Shifter) + ImGui,
-                            clavier/souris → IKBD, barre résolution, persistance
-                            (neost.cfg + profils nommés profiles/*.cfg, même format :
-                            parseConfigLine / writeConfigKeys / writeConfigAtomic).
+                            clavier/souris → IKBD, barre résolution, débogueur, kiosk.
   core/
     Bus.{hpp,cpp}           Memory map + dispatch MMIO + bus errors (busFault/buildIoFault).
     Cpu68k.{hpp,cpp}        Wrapper Moira (cycle-exact) : accès mémoire, int-ack vectorisé,
@@ -30,20 +33,40 @@ src/
     DmaSound.{hpp,cpp}      Son DMA STE + Microwire/LMC1992.
     Blitter.{hpp,cpp}       Blitter ST : données + partage de bus hog ET non-hog (64/64).
     AudioMix.{hpp,cpp}      Chaîne de mixage d'UNE trame (YM horodaté + DMA STE + LMC1992),
-                            partagée par les TROIS frontends — elle en était la copie
+                            partagée par les frontends — elle en était la copie
                             divergente qui rendait les samples inaudibles en WASM.
+    Framing.{hpp,cpp}       Région de CONTENU de la trame (zoom adaptatif) : une seule
+                            règle pour le kiosk, la fenêtre bureau et le plein écran WASM.
     Machine.{hpp,cpp}       Assemble tout + runFrame() événementiel.
     Scheduler.hpp           Ordonnanceur d'événements datés (cycles).
-    Tracer.{hpp,cpp}        Trace d'instructions/IRQ.
+    Tracer.{hpp,cpp}        Trace d'instructions/IRQ.  Symbols.{hpp,cpp} : .sym / TOS $601A.
+    StateArchive.hpp        Sérialisation des save-states.  MachineType.hpp : profils ST→MegaSTE.
   io/
-    Mfp.{hpp,cpp}           MC68901 : IRQ vectorisées, timers A-D, GPIP.
+    Mfp.{hpp,cpp}           MC68901 : IRQ vectorisées, timers A-D, GPIP, USART.
     Ikbd.{hpp,cpp}          ACIA 6850 clavier + commandes/souris/joystick IKBD.
     MidiAcia.{hpp,cpp}      2e ACIA 6850 (MIDI).
-    Fdc.{hpp,cpp}           WD1772 + DMA disquette + ACSI.
+    Fdc.{hpp,cpp}           WD1772 + DMA disquette + routage ACSI.
+    StxImage.{hpp,cpp}      Images Pasti .stx (jeux protégés).
+    Acsi.{hpp,cpp}          Disque dur ACSI (hdc.c) + rattachement du FujiNet virtuel.
+    GemdosHd.{hpp,cpp}      Disque dur GEMDOS (dossier hôte → C:), cf. § dédié.
+    Scc.{hpp,cpp}           Z85C30 (Mega STE) ; Scu.hpp : gating d'IRQ Mega STE.
+    Fpu.{hpp,cpp}           MC68881 optionnel (SoftFloatX80.hpp).
     Rtc.{hpp,cpp}           RP5C15 (Mega ST/Mega STE).
+    MediaScan.{hpp,cpp}     Inventaire des supports (tri, images « sœurs » d'un même jeu).
+    FujiDevice/Ne2000       Extensions NeoST : FujiNet virtuel, EtherNEC (cf. docs/FUJINET.md).
+  net/                      Backends hôte du réseau (neost_net) : FujiHostLive/Replay,
+                            HttpClient, HayesModem, MidiRing, MiniJson.
+  gui/                      Extraits de main.cpp : AppConfig (neost.cfg + profils
+                            profiles/*.cfg — parseConfigLine / writeConfigKeys /
+                            writeConfigAtomic), MediaPages (pages supports), UiCommon
+                            (pictogrammes), CrtEffectStack + OpenGLShader (passe CRT).
+  util/HostPath.{hpp,cpp}   UNE définition des chemins hôte (sémantiques POSIX ET Windows).
   audio/                    Backend miniaudio (Audio, DriveSound).
   headless/                 Runner déterministe + traces.
   web/main_web.cpp          Frontend WebAssembly (Emscripten + WebGL).
+  android/                  Frontend Android (SDL2 + GLES2) — démarre, pas d'interface.
+tests/                      selftest_logic.cpp (cible neost-selftest, palier fast) +
+                            stx_writetrack_test.cpp (EXCLUDE_FROM_ALL).
 extern/  imgui/ miniaudio/ (sous-modules) · moira/ (VENDORISÉ, cf. NEOST_VENDOR.md) · hatari/ (clone gitignoré)
 extern/hatari/src           SOURCE DE VÉRITÉ matérielle (lue, pas compilée)
 ```
@@ -185,14 +208,17 @@ Sans emsdk sous la main : le job `wasm` téléverse le bundle qu'il vient de con
 script REFUSE le paquet s'il importe une DLL non système : une DLL manquante est
 invisible en CI (MSYS2 les a dans son `PATH`) et fatale au double-clic.
 
-**Paquets de release** — 7 artefacts, cf. `.github/workflows/release.yml`. Le contenu
+**Paquets de release** — 8 artefacts (dont l'APK Android arm64, cf.
+`packaging/android/README.md`), cf. `.github/workflows/release.yml`. Le contenu
 embarqué est une liste EXPLICITE (`packaging/stage_free_data.sh`) avec un garde-fou qui
 refuse toute ROM hors liste.
 
 ## Débogage headless (l'outil n°1)
 
-Pas de « tests » classiques : la validation se fait via `neost-headless` (déterministe, sans
-GUI), qui produit des **traces façon MAME** et des **captures PPM**.
+Pas de framework de test : la validation se fait via `neost-headless` (déterministe, sans
+GUI), qui produit des **traces façon MAME** et des **captures PPM**. Ce qu'il ne peut PAS
+couvrir — les fonctions sans machine ni ROM (chemins hôte, format `neost.cfg`) — l'est par
+`./build/neost-selftest` (`tests/selftest_logic.cpp`), premier pas du palier `fast`.
 
 ```sh
 ./build/neost-headless <rom> --frames N --trace t.txt --regs --irq

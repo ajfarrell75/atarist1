@@ -3,9 +3,12 @@
 #  Cible : compilation croisée CachyOS Linux (x86_64) / macOS Silicon (arm64)
 #  Pile UI : GLFW3 + OpenGL + Dear ImGui (immediate mode), comme POM1/POM2.
 #
-#  Architecture : un cœur SANS GUI (neost_core) partagé par deux frontends :
+#  Architecture : un cœur SANS GUI (neost_core) partagé par tous les frontends :
 #    - neost            : fenêtré (GLFW/OpenGL/ImGui/miniaudio)
 #    - neost-headless   : sans interface, traces déterministes pour diff MAME
+#    - neost-web        : WebAssembly (Emscripten + WebGL), cf. wasm/
+#    - APK Android      : SDL2 + GLES2, cf. packaging/android/
+#  Plus neost_net (backends réseau hôte, hors cœur) et neost-selftest (logique pure).
 #
 #  (c) 2026 VERHILLE Arnaud — code généré dans le cadre du projet NeoST.
 # =============================================================================

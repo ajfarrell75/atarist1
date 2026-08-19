@@ -6,8 +6,9 @@ NeoST — émulateur Atari ST « boîte à hack » pédagogique. C++17, GLFW3 + 
 (immediate mode) + Dear ImGui, miniaudio, Moira (68000 cycle-exact, vendorisé).
 Développé sur **macOS Silicon / CachyOS Linux** ; **Windows x64 est livré** depuis la
 0.5.1 (MinGW-w64, `packaging/windows/`) mais n'est vérifié qu'en CI. Un **APK Android**
-arm64 existe depuis le 2026-08-11 (`packaging/android/`, SDL2 + GLES2) — il démarre et
-sonne, mais n'a **pas d'interface** et n'a jamais tourné sur un appareil réel.
+arm64 existe depuis le 2026-08-11 (`packaging/android/`, SDL2 + GLES2) — il démarre, sonne,
+et a un **menu** (décalqué de la borne : ludothèque, disquette à chaud, page clavier), mais
+n'a **jamais tourné sur un appareil réel** (validé sous QEMU arm64 seulement).
 **Commentaires et documentation en français ; interface et journaux en ANGLAIS.**
 
 Architecture en deux mots : **le `Bus` *est* le plan mémoire** (route read8/write8 vers
@@ -38,7 +39,8 @@ les puces) et **`neost_core` ne dépend pas du GUI**.
 
 ```sh
 cmake -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build -j        # cibles : neost (GUI), neost-headless, neost_core (lib)
+cmake --build build -j        # cibles : neost (GUI), neost-headless, neost-selftest,
+                              #          neost_core / neost_net (libs)
 ./build/neost                 # auto : dernier ROM (neost.cfg) ou EmuTOS US
 ./build/neost <rom> <disk.st>
 ```
@@ -76,11 +78,14 @@ Fichiers Hatari clés (← composant NeoST) — table complète dans `DEV.md` :
 
 ## Tester = le headless (outil n°1)
 
-Pas de tests unitaires classiques : validation par `neost-headless` (déterministe,
-traces façon MAME + captures PPM) et par la suite d'étalons. **Détail → `DEV.md`.**
+Pas de framework de test : validation par `neost-headless` (déterministe, traces façon
+MAME + captures PPM) et par la suite d'étalons. Seule exception, la LOGIQUE PURE
+(chemins hôte, format `neost.cfg`) est couverte par `neost-selftest`
+(`tests/selftest_logic.cpp`), sans machine ni ROM. **Détail → `DEV.md`.**
 
 ```sh
 python3 tools/run_all.py --tier fast   # auto-tests logique + verdicts série + cycle-bench
+                                       # + round-trip save-state + disquette livrée
 python3 tools/run_all.py --tier full   # + étalons PIXEL — le SEUL palier qui compare des images
 ./build/neost-headless <rom> --frames N --trace t.txt --regs --irq
 ./build/neost-headless <rom> --frames N --screenshot s.ppm

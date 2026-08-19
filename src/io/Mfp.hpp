@@ -3,12 +3,14 @@
 //
 //  Le MFP est le contrôleur d'interruptions vectorisées du ST (4 timers, GPIP,
 //  USART). Toutes les IRQ "intelligentes" passent par lui et ressortent en
-//  IPL 6 vers le 68000. NeoST en modélise le strict nécessaire :
-//    - Timer C  (canal 5) : tic système 200 Hz → débloque l'accueil EmuTOS,
-//                           fait avancer l'horloge et le curseur.
-//    - ACIA clavier (canal 6, GPIP4) : réception d'octets IKBD.
-//  Logique d'interruption complète : IER/IPR/IMR/ISR + registre vecteur (VR),
-//  modes auto / "software end-of-interrupt".
+//  IPL 6 vers le 68000. Le modèle est quasi 1:1 avec `mfp.c` d'Hatari :
+//    - les QUATRE timers A-D, en mode délai (datés par le Scheduler) comme en
+//      event-count (Timer A sur XSINT, Timer B sur le Display-Enable vidéo) ;
+//    - le GPIP complet avec sa machine de fronts AER/DDR (gpipSetLine /
+//      gpipUpdateInterrupt = port de MFP_GPIP_Set_Line_Input) ;
+//    - l'USART (RS-232 : débit, RxFull/TxEmpty, injection hôte modem/FujiNet) ;
+//    - la logique d'interruption complète : IER/IPR/IMR/ISR + registre vecteur
+//      (VR), modes auto / "software end-of-interrupt", et le cycle IACK.
 //
 //  Numéro de canal = numéro de source MFP (0..15). Vecteur = (VR & 0xF0) | canal.
 //  Registre A = sources 8..15 (bits 0..7), registre B = sources 0..7 (bits 0..7).

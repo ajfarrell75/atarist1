@@ -443,10 +443,11 @@ namespace {
     struct IoSpan { uint32_t addr; uint32_t span; };
 
     // Octets NON fautifs communs à toutes les machines (registres réellement
-    // décodés). Le blitter ($FF8A00-$FF8A3F) est volontairement ABSENT : NeoST
-    // ne l'émule pas, donc il doit fauter (EmuTOS en conclut « pas de blitter »
-    // et bascule sur le VDI logiciel). Idem le son DMA, ajouté seulement si le
-    // modèle le possède.
+    // décodés). Le blitter ($FF8A00-$FF8A3F) est ABSENT de ces tables communes
+    // parce qu'il dépend du MODÈLE : il n'est dé-fauté que si `machineHasBlitter`
+    // (cf. plus bas, `clear(0xFF8A00, 0x40)`) — sur une machine sans blitter la
+    // plage faute, et EmuTOS en conclut « pas de blitter » puis bascule sur le VDI
+    // logiciel. Idem le son DMA, ajouté seulement si le modèle le possède.
     // -- Modèle ST / Mega ST (table IoMemTabST) ------------------------------
     const IoSpan ST_OK[] = {
         {0xFF8001,1},                                            // config MMU

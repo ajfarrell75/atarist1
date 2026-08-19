@@ -6,6 +6,116 @@ l'ordre inverse. Version courante : **0.5.2**.
 - « NeoST gère-t-il X ? » → [`docs/IMPLEMENTED.md`](docs/IMPLEMENTED.md) (inventaire par puce)
 - « Que reste-t-il ? » → [`TODO.md`](TODO.md)
 
+## Passe de cohérence doc ↔ code, 3ᵉ tour (2026-08-19)
+
+Dernier tour, sur les docs restées hors périmètre (CLOSURE_CHANTIER, MOIRA_WINUAE_CONVERGENCE,
+HATARI_AUTOMATION, empaquetage Raspberry) et sur les affirmations chiffrées, qui vieillissent
+sans prévenir. Palier `fast` vert.
+
+- **La feuille de route disait encore d'attendre l'oracle.** `TODO.md` gardait une section
+  « à reprendre une fois l'oracle Hatari bâti » : l'oracle EST bâti, et **cinq de ses six items
+  sont faits** grâce à lui (V1, V2, S2, S3, M1). La section dit maintenant ce qui a été traité et
+  ce qui reste — beam-sync par-ligne, résidus V3, D3, `UpdateTimers`, arrondi FPU.
+- **Le contrôle négatif mort traînait à un deuxième endroit** : `TODO.md` affirmait aussi
+  « Détection prouvée : `NEOST_ALIGN_OFF=1` → exit 1 ». Corrigé comme dans `TEST_SOFTWARE.md`.
+- **Chiffres re-mesurés plutôt que recopiés** : le palier `fast` était annoncé à ~0,1 s / ~0,3 s
+  dans deux docs — il fait **~3 s** aujourd'hui (il a absorbé le round-trip save-state, le
+  contrôle de la disquette livrée et quatre auto-tests de plus). La liste des auto-tests P0 et
+  celle des clés relues par `--from-cfg` ont été alignées sur le code au même endroit.
+- **Deux sondes d'instrumentation citées comme utilisables n'existent plus** : `NEOST_EXC_DIAG`
+  (NeoST) et `NEOST_HAT_IPLDIAG` (Hatari patché). `MOIRA_WINUAE_CONVERGENCE.md` le dit désormais
+  en tête — les mesures restent valables, les commandes non. Les 27 autres `NEOST_*` du doc ont
+  été vérifiées vivantes une par une.
+- **Dernières ancres ré-ancrées** : `updateGlueState` (Shifter, +600 lignes de dérive),
+  `recordSyncWrite`, `restartVideoCounter`, `dacTable`, les quatre sites `envFlag` de
+  `CLOSURE_CHANTIER.md`, `lineLenOn_`, le latch de bordure gauche dans `TODO.md`. Après quoi le
+  balayage automatique ne remonte plus que des faux positifs (symboles Hatari, homonymes).
+
+## Passe de cohérence doc ↔ code, 2ᵉ tour (2026-08-19)
+
+Suite de la passe du jour, sur ce qu'elle avait explicitement laissé de côté : le reste des
+ancres `fichier:ligne`, et les docs qui n'avaient pas encore été confrontées au code (KIOSK,
+FUJINET, TEST_SOFTWARE, TODO, empaquetage). Palier `fast` vert avant comme après.
+
+- **Cinq divergences CORRIGÉES étaient encore décrites comme des défauts ouverts** dans
+  l'inventaire maître — dont une **HAUTE** et deux **ÉLEVÉES**. `HATARI_DIVERGENCES.md`
+  annonçait leur correction dans le chapeau de la 3ᵉ passe, mais les entrées détaillées, elles,
+  n'avaient jamais été retouchées : SCU jamais réinitialisé (`Scu::reset(bool cold)` existe et
+  est appelé), propagation des NaN FPU (l'opérande réel est renvoyé quiété), SNaN→SNAN
+  (`flag_signaling` distinct → `EXC_SNAN`), INQUIRY ACSI `buf[4]` (valeur fixe 31), masques
+  FPCR/FPSR (`&0xFFF0` / `&0x0FFFFFF8`). Idem plus bas pour **S3** (gain LMC ×2) et **S4**
+  (table DAC mesurée), que le tableau des priorités donnait pourtant ✅. Toutes marquées, avec
+  le *avant* conservé et l'ancre du correctif. Un inventaire qui liste comme à faire ce qui est
+  fait coûte une deuxième fois le travail.
+- **Le compteur `$FF8909/0B/0D` « au cycle » était porté depuis le 2026-08-06** (`liveCounter`
+  ≙ `DmaSnd_GetFrameCount`) mais restait en « Reste » dans `CYCLE_ACCURACY.md` et en TODO. Seule
+  la confrontation à l'oracle de la quantification HBL du refill reste ouverte — c'est ce qui est
+  écrit maintenant.
+- **Un contrôle négatif qui ne contrôlait plus rien** : `TEST_SOFTWARE.md` donnait
+  `NEOST_ALIGN_OFF=1 … --spec512-selftest doit échouer`. La variable a disparu du code —
+  vérifié : le test sort **0**. Le vrai garde-fou est la première vérification du test, qui
+  ÉPINGLE `kSpec512AlignCyc` à −25 ; c'est elle qui est documentée.
+- **Inventaire des étalons refait** : la doc en listait une poignée et disait Union Demo « à
+  rapatrier » alors que `etalons.json` en compte **19** (7 auto-tests + 12 étalons machine,
+  `union_demo` présent mais `optional`). La liste des auto-tests P0 ignorait `--msa-selftest`,
+  `--fuji-selftest`, `--enec-selftest` et `neost-selftest`.
+- **`--fuji-selftest` fait 17 vérifications, pas 11** (`FUJINET.md`) — les cas-limites ACSI
+  (`count=0` ⇒ 256, plafond MODE SENSE, reset) ont été ajoutés sans que le compte suive.
+- **L'APK Android a une interface depuis le 2026-08-11** (menu décalqué de la borne,
+  `src/android/AndroidMenu.cpp`) ; `CLAUDE.md` disait encore « pas d'interface ». Ce qui reste
+  vrai, et qui est conservé : il n'a jamais tourné sur un appareil réel.
+- **Frontends recomptés** : l'en-tête de `CMakeLists.txt` parlait de « deux frontends » et
+  `IMPLEMENTED.md` de `neost` + `neost-headless` — il y en a quatre (plus `neost_net` et
+  `neost-selftest`). Le sélecteur `--cpu musashi|moira` y était encore annoncé comme un choix,
+  dix lignes sous le paragraphe qui explique le retrait de Musashi.
+- **Reste des ancres `fichier:ligne` ré-ancrées** (Scc, Shifter, StxImage, GemdosHd, SoftFloatX80,
+  MidiAcia, DmaSound, Fpu, Acsi…) : plusieurs pointaient à des centaines de lignes de leur sujet.
+- Commentaire du menu borne dans `main.cpp` : « index action 0..4 » pour six actions bouclées
+  modulo 6, et une liste d'actions qui s'était arrêtée à trois.
+
+## Passe de cohérence doc ↔ code (2026-08-19)
+
+Relecture croisée de la documentation et du code, sans changement de comportement
+d'émulation. Méthode : extraction mécanique de ce que la doc AFFIRME (chemins, cibles,
+options, symboles, variables d'environnement, `fichier:ligne`) puis confrontation à
+l'arbre. Le palier `fast` est vert avant comme après.
+
+- **La release livre 8 paquets, la doc en annonçait 7.** `release.yml` construit et
+  attache l'APK Android depuis le 2026-08-11 (son job `publish` COMPTE 8 et échoue
+  sinon), mais `README.md` et `DEV.md` étaient restés à 7 — le tableau public des paquets
+  ne mentionnait même pas l'APK. Ligne ajoutée, avec sa réserve (« pas d'interface »).
+- **L'arborescence `src/` de `DEV.md` datait d'avant le découpage de `main.cpp`.** Elle
+  ignorait `gui/`, `util/`, `net/`, `android/`, `tests/`, et une dizaine de composants
+  `io/` (Acsi, Fpu, GemdosHd, Ne2000, Scc, StxImage, MediaScan) — c'est-à-dire la carte
+  qu'on donne à lire à quelqu'un qui arrive. Refaite sur les listes de sources réelles,
+  `neost_net` incluse.
+- **`neost-selftest` n'était listé nulle part** alors que `run_all.py --tier fast` en
+  fait son PREMIER pas : la ligne de build de `CLAUDE.md` et le « pas de tests unitaires »
+  de `DEV.md` le rendaient invisible.
+- **Commentaires de code qui contredisaient le code.** Les cinq signalés par l'audit
+  `HATARI_MAPPING` du 2026-07-08 — jamais traités depuis — sont corrigés : « préemption
+  DORMANTE » (fausse dans le modèle BLOC, qui est le DÉFAUT ; dormante seulement sous
+  `NEOST_SYNC_DISPATCH`), en-tête `Scheduler.hpp` « Phase 1 : 3 sources, quantum ligne »
+  (une vingtaine de sources, quantum à l'événement), « le blitter est ABSENT : NeoST ne
+  l'émule pas » dans `Bus.cpp` (il l'émule, la plage est dé-fautée selon
+  `machineHasBlitter`), l'intro `Mfp.hpp` « strict nécessaire : Timer C » (le MFP est
+  quasi 1:1 avec `mfp.c`), et le `regs_[7]=0xFF` de `YM2149.hpp` qui laissait croire
+  qu'Hatari fait pareil (micro-écart désormais écrit noir sur blanc). Un commentaire faux
+  coûte plus cher qu'une absence de commentaire : il fait chercher au mauvais endroit.
+- **Huit options du headless étaient analysées mais absentes du `--help`** — `--mono`,
+  `--shot-every`, `--shot-from`, `--keys-at`, `--joy-at`, `--joy-script`, `--mouse-at`,
+  `--version` : documentées dans `DEV.md`, utilisées par l'outillage, invisibles pour qui
+  lance le binaire. Ajoutées (et le commentaire de `--from-cfg`, qui listait les clés
+  relues, remis d'accord avec la boucle qui les lit).
+- **Renvois morts.** `disks/utils/` (c'est `disks/etalons/`), `docs/SOUND_HATARI_DIFF.md`
+  cité comme existant alors qu'il a été supprimé, `NEOST_ALIGN_OFF` retiré du code,
+  `DmaSound::onFrameEnd` et `kioskAreSiblings` qui n'existent pas (`fifoRefill` et
+  `neost::areSiblingImages`), `gemdos/BUILD`, un lien Markdown cassé.
+- **`fichier:ligne` ré-ancrés** dans `CYCLE_ACCURACY.md` et `HATARI_DIVERGENCES.md` là où
+  ils tombaient sur du code sans rapport (Blitter, Bus, Cpu68k, Fdc, Mfp, YM2149,
+  Machine). Ces ancres dérivent à chaque édition : `HATARI_DIVERGENCES.md` le dit
+  maintenant en tête — **c'est le symbole cité qui fait foi**, pas le numéro.
+
 ## Chasse aux bugs : auto-test EtherNEC dépendant du compilateur, `--from-cfg` amnésique (2026-08-17)
 
 Campagne de recherche de défauts. Deux angles : **ASan+UBSan** sur toute la suite

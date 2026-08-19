@@ -13,6 +13,12 @@ Cuddly, Super Hang-On). Décision utilisateur (2026-06-16) : **garder le sync-dr
 >
 > ⚠️ Ce doc CORRIGE plusieurs notes mémoire optimistes/contradictoires. Lire d'abord §3 « Vérités
 > mesurées » avant de rouvrir une piste.
+>
+> ⚠️ **Deux sondes citées ici n'existent plus dans l'arbre** (constaté le 2026-08-19) :
+> `NEOST_EXC_DIAG` (instrumentation NeoST du chemin d'exception → `[EXC]`/`[JTV]`/`[PIN]`) et
+> `NEOST_HAT_IPLDIAG` (gate d'un Hatari PATCHÉ, jamais dans `extern/hatari` tel quel). Les
+> mesures qu'elles ont produites restent valables ; les commandes, non — il faudrait les
+> réinstrumenter. Toutes les autres `NEOST_*` de ce doc sont vivantes dans `src/`.
 
 **État actuel (résumé).** Tout est sur `main`, **build vert** (`run_etalons` 19/0 + TOUS OK).
 - 🎯🎯 **REFONTE COORDONNÉE §8 EXÉCUTÉE (2026-07-02, oracle Hatari 2.6.1-devel bâti dans
@@ -561,7 +567,7 @@ Avec la fondation bloc+PT, plus de deadlock ; EL boote/intro propre. Reste, par 
 
    Synthèse des passes (plusieurs hypothèses falsifiées en chemin) :
 
-   **Ce qui est FIDÈLE (ne pas y toucher).** `updateGlueState` (Shifter.cpp:677-846) est un PORT FIDÈLE
+   **Ce qui est FIDÈLE (ne pas y toucher).** `updateGlueState` (Shifter.cpp:1279-1460) est un PORT FIDÈLE
    de `Video_Update_Glue_State` (video.c:2244-2438) — constantes identiques, branches right-border
    freq=60 (video.c:2782-2800) et res hi-res fin-de-ligne (2683-2800) présentes ; glue-selftest 19/19.
    **AUCUNE branche Glue manquante** (hypothèse réfutée). **Les bordures G/D d'EL S'OUVRENT** (terrain

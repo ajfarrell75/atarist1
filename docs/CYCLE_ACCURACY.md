@@ -138,7 +138,7 @@ C'est le front actif. **Convergence instruction faite** ; reste la **phase d'ent
   → 16 px de plus à gauche (prefetch sans scroll). Absent. *Effort moyen.* Étalon : Obsession,
   Pacemaker.
 - **`RestartVideoCounter` ligne 310/260** : ✅ **PORTÉ (2026-07-02)** — événement
-  `Scheduler::VC_RESTART` (`src/core/Machine.cpp:282-285` callback, `:344-354` planification).
+  `Scheduler::VC_RESTART` (`src/core/Machine.cpp:319-323` callback, `:386-390` planification).
   Reste couplé à la géométrie par-ligne (V3) pour les bascules 50/60 Hz en cours de trame :
   `beginFrame` verrouille encore la géométrie de la trame. Étalon : ULM Dark Side of the Spoon.
 
@@ -147,19 +147,26 @@ C'est le front actif. **Convergence instruction faite** ; reste la **phase d'ent
 ✅ **PORTÉ le 2026-07-07** — le partage de bus non-hog est implémenté : tranches de 64 accès
 bus / 64 accès CPU **réels**, suspension MID-MOT (l'état du mot en cours survit à la coupure),
 et le bug matériel « +1 accès CPU compté blitter » (`busCountError_` → tranche de 63).
-Cf. `src/core/Blitter.cpp:22-26` (constantes) et `:247-304` (tranche + comptage).
+Cf. `src/core/Blitter.cpp:22-27` (constantes), `:257-258` (`busCountError_` → tranche de 63)
+et `:247-310` (tranche + comptage).
 
 **Restent** : pas d'interfoliage `CycInt_Process` par accès bus pendant une tranche (le CPU est
 stallé en bloc, ses cycles internes ne recouvrent pas le blit), et `cpu_bus_rmw`.
 
 ### P2 — Son DMA STE (`dmaSnd.c:737`)
 
-✅ **FIFO 8 octets PORTÉE** (`src/core/DmaSound.cpp:81-94` `fifoRefill`, `:115-122` `fifoPull`),
-ainsi que le gain LMC ×2 (S3, `:366-371`).
+✅ **FIFO 8 octets PORTÉE** (`src/core/DmaSound.cpp:93` `fifoRefill`, `:130` `fifoPull`),
+ainsi que le gain LMC ×2 (S3, `:413-420`).
 
-**Reste** : `$FF8909/0B/0D` doit refléter la position **au cycle** de la lecture (`Sound_Update`,
-`DmaSnd_GetFrameCount`) ; NeoST n'avance le compteur qu'au rythme de la synthèse, et le refill
-FIFO est quantifié différemment. Étalon : STE_Test.
+✅ **Compteur `$FF8909/0B/0D` au cycle PORTÉ (2026-08-06)** : `DmaSound::liveCounter`
+(`DmaSound.cpp:477-488`) est un port de `DmaSnd_GetFrameCount` — il appelle `updateDac`
+(≙ `Sound_Update`) à la lecture, et rend l'adresse de DÉBUT à l'arrêt. Il ne refill PAS la
+FIFO au passage : le refill reste quantifié au HBL (`onHbl`) ou déclenché à vide (`fifoPull`),
+ce qui est le comportement voulu — un poll serré dans une ligne doit voir l'adresse sauter par
+paquets, pas avancer en continu.
+
+**Reste** : confirmer cette quantification à l'oracle (aucun A/B Hatari n'a encore été fait sur
+un poll serré de `$FF8909/0B/0D`). Étalon : STE_Test.
 
 ### P2 — Restes vidéo « plan »
 
@@ -186,7 +193,7 @@ exacte du tic Timer C (au cycle de programmation) ; lecture compteur à cheval s
 - **Fréquences exactes centralisées** (`clocks_timings.c` : CPU 8021248 Hz PAL, VBL ≈ 50,05 Hz) :
   seul impact réel = synchro audio long terme.
 - **Offsets de datation Moira vs Hatari** : `kVideoCounterReadOffsetCyc = −6`
-  (`Shifter.cpp:89`), `kSyncWriteOffsetCyc = +2` (`Shifter.cpp:966`) et
+  (`Shifter.cpp:89`), `kSyncWriteOffsetCyc = +2` (`Shifter.cpp:1113`) et
   `kSpec512AlignCyc = −25` (`Shifter.cpp:34`) ne sont **pas** des constantes empiriques : ce
   sont les valeurs fidèles dérivées de `Video_CalculateAddress` et
   `Cycles_GetInternalCycleOn{Read,Write}Access` (2026-07-03). ⚠ **read et write se déplacent

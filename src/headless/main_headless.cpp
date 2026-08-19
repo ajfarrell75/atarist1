@@ -63,13 +63,20 @@ void usage() {
         "                    the re-serialized state AND the screen must match, then exits\n"
         "  --cpu CORE        68000 core: moira (the only one, cycle-exact)\n"
         "  --machine TYPE    profile: st, megast, ste (default), megaste\n"
+        "  --mono            monochrome monitor (high resolution)\n"
         "  --fpu             populate the Mega STE MC68881 socket ($FFFA40, functional\n"
         "                    emulation — absent by default: Hatari-faithful \"not found\")\n"
         "  --mem SIZE        ST-RAM: 256k, 512k (default), 1m, 2m, 4m\n"
         "  --walk-mouse      after boot, inject a mouse move + click (diagnostic)\n"
         "  --keys STR        after boot, type STR on the keyboard (e.g. diag menus)\n"
-        "  --key-down N C    make ONLY of character C at frame N (key HELD)\n"
-        "  --key-up N C      break ONLY of character C at frame N\n"
+        "  --key-down N C    press key C at frame N and HOLD it (make code only)\n"
+        "  --key-up N C      release key C at frame N (break code only)\n"
+        "  --keys-at N STR   type STR from frame N on (repeatable): 4 frames per char,\n"
+        "                    extended scancodes arrows <>[], Esc =, F1-F5 !@#$%%\n"
+        "  --joy-at N VAL    set the port 1 joystick to VAL at frame N (same bits as --joy)\n"
+        "  --joy-script N S  joystick script from frame N: U/D/L/R/F/. = one frame each\n"
+        "  --mouse-at N S    mouse script from frame N: L/R/U/D = +/-8 px, 1/2 = left/\n"
+        "                    right click, . = idle (one frame each)\n"
         "  --joy P1[,P0]     hold a joystick state (bits up$01 down$02 l$04 r$08 fire$80)\n"
         "  --disk FILE       mount an image in drive A (default disks/diskA.st)\n"
         "  --diskb FILE      mount an image in drive B (second drive)\n"
@@ -108,6 +115,9 @@ void usage() {
         "  --from-cfg F      replay the GUI config (neost.cfg); later options override it\n"
         "  --dump-at N A L F raw dump of L bytes of RAM from $A (hex) after frame N → F\n"
         "  --screenshot PPM  dump the final framebuffer in PPM format\n"
+        "  --shot-every N P  dump a PPM every N frames, named P00000.ppm, P00001.ppm...\n"
+        "  --shot-from N     only start the --shot-every dumps at frame N\n"
+        "  --version         print the build version and exit\n"
         "  rom               TOS image (default roms/etos192us.img)\n");
 }
 
@@ -647,9 +657,11 @@ int main(int argc, char** argv) {
                                                      dumpLen  = (uint32_t)std::strtoul(next(a), nullptr, 0);
                                                      dumpPath = next(a); }
         else if (!std::strcmp(a, "--from-cfg")) {
-            // P3 — pont GUI↔headless : rejoue la config exacte de neost.cfg (machine,
-            // TOS, mem, cpu, disque, cartouche, mono, fastfdc, fpu, gemdos, acsi). Les
-            // options CLI placées APRÈS --from-cfg surchargent (le cfg sert de base).
+            // P3 — pont GUI↔headless : rejoue la config exacte de neost.cfg — machine,
+            // TOS, mem, cpu, mono, fastfdc, fpu, supports (disk, diskb, cart, gemdos,
+            // acsi) ET réseau (fujinet*, modem, ethernec). La liste des clés relues est
+            // celle de la boucle ci-dessous : la tenir à jour avec le lecteur du GUI.
+            // Les options CLI placées APRÈS --from-cfg surchargent (le cfg sert de base).
             const char* p = next(a);
             std::ifstream cf(p);
             // peek() en plus de l'ouverture : sous Linux, ouvrir un RÉPERTOIRE réussit,

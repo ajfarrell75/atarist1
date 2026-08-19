@@ -447,7 +447,12 @@ WS3 tiennent compte de l'arbre de travail.
 
 ### Commentaires code (signalés au passage)
 
-| Fichier:ligne | Problème | Suggestion |
+✅ **Cinq des six sont TRAITÉS (passe de cohérence du 2026-08-19)** ; le sixième
+(`Machine.cpp:298-301`) n'en était plus un : le commentaire de `kHblOff` avait déjà été
+réécrit après le tranchage WS3 (défaut 0, `−4` seulement en A/B WS1). Les `fichier:ligne`
+de la colonne 1 sont ceux de 2026-07-08 et ont dérivé.
+
+| Fichier:ligne (2026-07-08) | Problème | Suggestion |
 |---|---|---|
 | src/core/Machine.cpp:94-96 (+ Scheduler.hpp:107, Cpu68k.cpp:608-609) | « Préemption DORMANTE » — FAUX en mode bloc défaut (beginRun appelé à chaque bloc, la préemption est ACTIVE). | *Corriger les trois commentaires.* |
 | src/core/Machine.cpp:298-301 | Contradiction avec le défaut kHblOff réel (à revalider après le tranchage WS3 de l'arbre). | *Aligner.* |

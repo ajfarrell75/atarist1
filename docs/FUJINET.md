@@ -134,8 +134,10 @@ partout. Trace : `NEOST_FUJI_TRACE=1`.
 
 ## Tests
 
-* `neost-headless --fuji-selftest` — 11 vérifications au niveau **fil** (registres
-  $FF8604/06, marqueur ICD, phases DMA, JSON, INQUIRY intact, garde `$60`).
+* `neost-headless --fuji-selftest` — 17 vérifications au niveau **fil** (registres
+  $FF8604/06, marqueur ICD, phases DMA, JSON, INQUIRY intact, garde `$60`, et les
+  cas-limites ACSI : `count=0` ⇒ 256 en READ(6)/WRITE(6), plafond d'allocation
+  MODE SENSE, reset qui annule commande et données).
   Intégré au palier `fast` (`tools/etalons.json`, type `fuji_selftest`).
 * Bout-en-bout : cf. la commande de démonstration ci-dessus ; validée disquette
   HTTP ↔ montage local **0 px d'écart**.

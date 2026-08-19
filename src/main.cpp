@@ -175,11 +175,12 @@ static bool g_kioskDiskMenu = false;          // menu ouvert
 static int  g_kioskPage     = KIOSK_PAGE_LIST;
 static int  g_kioskDiskSel  = 0;              // index disquette sélectionnée (menu INTÉRIEUR)
 // Page liste = DEUX menus qu'on bascule avec gauche/droite : INTÉRIEUR (liste des
-// jeux) et EXTÉRIEUR (Redémarrer / Clavier / Quitter). g_kioskZone = quel menu a le
-// focus ; le FEU valide l'item surligné du menu focalisé.
+// jeux) et EXTÉRIEUR (Redémarrer / Clavier & souris / Joysticks / Dossiers ROM /
+// Mode bureau / Quitter). g_kioskZone = quel menu a le focus ; le FEU valide l'item
+// surligné du menu focalisé.
 enum { KIOSK_ZONE_LIST = 0, KIOSK_ZONE_ACTIONS = 1 };
 static int  g_kioskZone   = KIOSK_ZONE_LIST;
-static int  g_kioskActSel = 0;                // index action (menu EXTÉRIEUR, 0..4)
+static int  g_kioskActSel = 0;                // index action (menu EXTÉRIEUR, 0..5)
 static int  g_kioskKeySel   = 0;              // page clavier : touche/clic sélectionné
 static int  g_kioskJoySel   = 0;              // page joysticks : manette sélectionnée
 static std::vector<std::string> g_kioskDisks; // chemins listés à l'ouverture

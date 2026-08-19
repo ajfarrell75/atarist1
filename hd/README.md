@@ -17,7 +17,7 @@ GEMDOS (`hd/JEUX/DEMOS/truc.img`) seraient offerts comme disques durs. Les **dos
 eux, ne sont regardés qu'au premier niveau : `hd/JEUX/` est un lecteur, pas `hd/JEUX/AUTO/`.
 
 Le dossier `gemdos/` du dépôt reste proposé en tête de la liste GEMDOS : c'est le lecteur
-livré avec NeoST (`gemdos/BUILD`, `gemdos/DEMOS`, les `DESKTOP.INF`/`NEWDESK.INF`).
+livré avec NeoST (`gemdos/DEMOS`, les `DESKTOP.INF`/`NEWDESK.INF`).
 
 ## Trois choses à savoir
 
