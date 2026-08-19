@@ -6,8 +6,9 @@ NeoST — émulateur Atari ST « boîte à hack » pédagogique. C++17, GLFW3 + 
 (immediate mode) + Dear ImGui, miniaudio, Moira (68000 cycle-exact, vendorisé).
 Développé sur **macOS Silicon / CachyOS Linux** ; **Windows x64 est livré** depuis la
 0.5.1 (MinGW-w64, `packaging/windows/`) mais n'est vérifié qu'en CI. Un **APK Android**
-arm64 existe depuis le 2026-08-11 (`packaging/android/`, SDL2 + GLES2) — il démarre et
-sonne, mais n'a **pas d'interface** et n'a jamais tourné sur un appareil réel.
+arm64 existe depuis le 2026-08-11 (`packaging/android/`, SDL2 + GLES2) — il démarre, sonne,
+et a un **menu** (décalqué de la borne : ludothèque, disquette à chaud, page clavier), mais
+n'a **jamais tourné sur un appareil réel** (validé sous QEMU arm64 seulement).
 **Commentaires et documentation en français ; interface et journaux en ANGLAIS.**
 
 Architecture en deux mots : **le `Bus` *est* le plan mémoire** (route read8/write8 vers

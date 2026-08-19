@@ -223,9 +223,10 @@ verts) — voir `CHANGELOG.md § Frontend`. Les 3 points fonctionnels relevés �
   rognés hors écran en zoom fort) ; contexte GL 2.1 (vieux macOS) → passthrough (pas d'effets).
 
 ### Son DMA STE
-- **FIFO 8 octets + avance HBL** (`DmaSnd_FIFO_*`, S2) + **compteur d'adresse live**
-  (`$FF8909/0B/0D` au cycle) — refinement sous-perceptuel (la timeline horodatée capte déjà les
-  modifs intra-trame à la granularité trame). _Effort moyen, valeur basse._
+- ✅ **FIFO 8 octets + avance HBL** (`DmaSnd_FIFO_*`, S2, 2026-07-07) et **compteur d'adresse
+  live** (`$FF8909/0B/0D`, `DmaSound::liveCounter` ≙ `DmaSnd_GetFrameCount`, 2026-08-06) : **faits**.
+  Reste seulement à confronter la quantification HBL du refill à l'oracle sur un poll serré du
+  compteur (cf. `docs/CYCLE_ACCURACY.md` § Son DMA STE). _Effort faible, valeur basse._
 
 ### Stockage & contrôleurs
 - **SCSI / NCR5380** (MegaSTE/TT) *(gros contrôleur)* — réf. `ncr5380.c`. Non commencé.

@@ -19,11 +19,14 @@ Pour ce qui reste → [`../TODO.md`](../TODO.md).
   `musashi`/`uae` est tolérée — on AVERTIT puis on bascule sur Moira (`Cpu68k::parseCore`).
   Boot EmuTOS 192 → bureau GEM et diagnostics inchangés.
 - `Bus` (memory map ST) + wrapper `Cpu68k` (Moira) + `Shifter` (vidéo).
-- Lib `neost_core` sans dépendance GUI ; frontends `neost` (fenêtré) et `neost-headless`.
+- Lib `neost_core` sans dépendance GUI ; frontends `neost` (fenêtré), `neost-headless`,
+  `neost-web` (WebAssembly) et l'APK Android — plus `neost_net` pour les backends réseau.
 - Boot 68000 : overlay ROM en `$0-$7` (SSP/PC), refermé après reset. TOS auto-détecté
   (192 Ko → `$FC0000`, sinon `$E00000`).
-- **Cœur CPU sélectionnable** (`--cpu musashi|moira`, `neost.cfg`, WASM `?cpu=`).
-  Moira (cycle-exact, sous-module) boote EmuTOS pixel-identique et délivre les IRQ.
+- **Sélecteur de cœur CPU** (`--cpu`, `neost.cfg` `cpu=`, WASM `?cpu=`) : ne vaut plus que
+  `moira` depuis le retrait de Musashi (ci-dessus) — une ancienne valeur avertit et bascule.
+  Moira (cycle-exact, VENDORISÉ dans `extern/moira`) boote EmuTOS pixel-identique et délivre
+  les IRQ.
 - **Erreur d'adresse 68000 émulée** (`MOIRA_EMULATE_ADDRESS_ERROR = true`, appliqué
   comme PRECISE_TIMING sur la copie générée de MoiraConfig.h) : un accès word/long
   à adresse IMPAIRE déclenche l'exception 3, comme Hatari (`exception3_*`). Des

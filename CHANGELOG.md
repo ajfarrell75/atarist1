@@ -6,6 +6,48 @@ l'ordre inverse. Version courante : **0.5.2**.
 - « NeoST gère-t-il X ? » → [`docs/IMPLEMENTED.md`](docs/IMPLEMENTED.md) (inventaire par puce)
 - « Que reste-t-il ? » → [`TODO.md`](TODO.md)
 
+## Passe de cohérence doc ↔ code, 2ᵉ tour (2026-08-19)
+
+Suite de la passe du jour, sur ce qu'elle avait explicitement laissé de côté : le reste des
+ancres `fichier:ligne`, et les docs qui n'avaient pas encore été confrontées au code (KIOSK,
+FUJINET, TEST_SOFTWARE, TODO, empaquetage). Palier `fast` vert avant comme après.
+
+- **Cinq divergences CORRIGÉES étaient encore décrites comme des défauts ouverts** dans
+  l'inventaire maître — dont une **HAUTE** et deux **ÉLEVÉES**. `HATARI_DIVERGENCES.md`
+  annonçait leur correction dans le chapeau de la 3ᵉ passe, mais les entrées détaillées, elles,
+  n'avaient jamais été retouchées : SCU jamais réinitialisé (`Scu::reset(bool cold)` existe et
+  est appelé), propagation des NaN FPU (l'opérande réel est renvoyé quiété), SNaN→SNAN
+  (`flag_signaling` distinct → `EXC_SNAN`), INQUIRY ACSI `buf[4]` (valeur fixe 31), masques
+  FPCR/FPSR (`&0xFFF0` / `&0x0FFFFFF8`). Idem plus bas pour **S3** (gain LMC ×2) et **S4**
+  (table DAC mesurée), que le tableau des priorités donnait pourtant ✅. Toutes marquées, avec
+  le *avant* conservé et l'ancre du correctif. Un inventaire qui liste comme à faire ce qui est
+  fait coûte une deuxième fois le travail.
+- **Le compteur `$FF8909/0B/0D` « au cycle » était porté depuis le 2026-08-06** (`liveCounter`
+  ≙ `DmaSnd_GetFrameCount`) mais restait en « Reste » dans `CYCLE_ACCURACY.md` et en TODO. Seule
+  la confrontation à l'oracle de la quantification HBL du refill reste ouverte — c'est ce qui est
+  écrit maintenant.
+- **Un contrôle négatif qui ne contrôlait plus rien** : `TEST_SOFTWARE.md` donnait
+  `NEOST_ALIGN_OFF=1 … --spec512-selftest doit échouer`. La variable a disparu du code —
+  vérifié : le test sort **0**. Le vrai garde-fou est la première vérification du test, qui
+  ÉPINGLE `kSpec512AlignCyc` à −25 ; c'est elle qui est documentée.
+- **Inventaire des étalons refait** : la doc en listait une poignée et disait Union Demo « à
+  rapatrier » alors que `etalons.json` en compte **19** (7 auto-tests + 12 étalons machine,
+  `union_demo` présent mais `optional`). La liste des auto-tests P0 ignorait `--msa-selftest`,
+  `--fuji-selftest`, `--enec-selftest` et `neost-selftest`.
+- **`--fuji-selftest` fait 17 vérifications, pas 11** (`FUJINET.md`) — les cas-limites ACSI
+  (`count=0` ⇒ 256, plafond MODE SENSE, reset) ont été ajoutés sans que le compte suive.
+- **L'APK Android a une interface depuis le 2026-08-11** (menu décalqué de la borne,
+  `src/android/AndroidMenu.cpp`) ; `CLAUDE.md` disait encore « pas d'interface ». Ce qui reste
+  vrai, et qui est conservé : il n'a jamais tourné sur un appareil réel.
+- **Frontends recomptés** : l'en-tête de `CMakeLists.txt` parlait de « deux frontends » et
+  `IMPLEMENTED.md` de `neost` + `neost-headless` — il y en a quatre (plus `neost_net` et
+  `neost-selftest`). Le sélecteur `--cpu musashi|moira` y était encore annoncé comme un choix,
+  dix lignes sous le paragraphe qui explique le retrait de Musashi.
+- **Reste des ancres `fichier:ligne` ré-ancrées** (Scc, Shifter, StxImage, GemdosHd, SoftFloatX80,
+  MidiAcia, DmaSound, Fpu, Acsi…) : plusieurs pointaient à des centaines de lignes de leur sujet.
+- Commentaire du menu borne dans `main.cpp` : « index action 0..4 » pour six actions bouclées
+  modulo 6, et une liste d'actions qui s'était arrêtée à trois.
+
 ## Passe de cohérence doc ↔ code (2026-08-19)
 
 Relecture croisée de la documentation et du code, sans changement de comportement

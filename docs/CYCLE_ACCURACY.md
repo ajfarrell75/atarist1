@@ -157,9 +157,15 @@ stallé en bloc, ses cycles internes ne recouvrent pas le blit), et `cpu_bus_rmw
 ✅ **FIFO 8 octets PORTÉE** (`src/core/DmaSound.cpp:93` `fifoRefill`, `:130` `fifoPull`),
 ainsi que le gain LMC ×2 (S3, `:413-420`).
 
-**Reste** : `$FF8909/0B/0D` doit refléter la position **au cycle** de la lecture (`Sound_Update`,
-`DmaSnd_GetFrameCount`) ; NeoST n'avance le compteur qu'au rythme de la synthèse, et le refill
-FIFO est quantifié différemment. Étalon : STE_Test.
+✅ **Compteur `$FF8909/0B/0D` au cycle PORTÉ (2026-08-06)** : `DmaSound::liveCounter`
+(`DmaSound.cpp:477-488`) est un port de `DmaSnd_GetFrameCount` — il appelle `updateDac`
+(≙ `Sound_Update`) à la lecture, et rend l'adresse de DÉBUT à l'arrêt. Il ne refill PAS la
+FIFO au passage : le refill reste quantifié au HBL (`onHbl`) ou déclenché à vide (`fifoPull`),
+ce qui est le comportement voulu — un poll serré dans une ligne doit voir l'adresse sauter par
+paquets, pas avancer en continu.
+
+**Reste** : confirmer cette quantification à l'oracle (aucun A/B Hatari n'a encore été fait sur
+un poll serré de `$FF8909/0B/0D`). Étalon : STE_Test.
 
 ### P2 — Restes vidéo « plan »
 

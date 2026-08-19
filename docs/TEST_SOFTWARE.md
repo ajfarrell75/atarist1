@@ -134,27 +134,39 @@ python3 tools/run_etalons.py --only spectrum512_diapo --oracle
 python3 tools/compare_screenshot.py tests/out/foo_neost.ppm tests/reference/foo.png --crop active
 ```
 
-Étalons intégrés aujourd'hui : **glue_selftest**, **spec512_selftest** (P0, logique pure),
-**EmuTOS STE boot**, **Spectrum 512 diapo** (ST) + **spectrum512_diapo_ste** (STE, scramble
-FIDÈLE == oracle Hatari STE), **overscan_top**, **nocooper** (V2, réf. oracle archivée) ; fetch
-auto : **Cuddly Demos** (`disks/etalons/cuddly_demos.msa`), **No Cooper**
-(`disks/etalons/nocooper.msa`). Union Demo et Troed : à rapatrier / calibrer (frames `etalons.json`).
+Étalons intégrés aujourd'hui : **glue_selftest**, **spec512_selftest**, **bus_selftest**,
+**mfp_selftest**, **msa_selftest**, **fuji_selftest**, **enec_selftest** (P0, logique pure),
+**EmuTOS STE boot**, **spectrum512_diapo** + **spectrum512_diapo2** (ST) +
+**spectrum512_diapo_ste** (STE, scramble FIDÈLE == oracle Hatari STE), **overscan_top**,
+**trace_odd**, **scroll_8264** / **scroll_8265** (scroll fin STE), **nocooper** et
+**nocooper_greetings** (V2, réf. oracle archivée) ; fetch auto : **Cuddly Demos**
+(`disks/etalons/cuddly_demos.msa`), **No Cooper** (`disks/etalons/nocooper.msa`),
+**union_demo** (`optional` : SKIP tant que la disquette n'est pas rapatriée).
+Soit **19 entrées** dans `tools/etalons.json` — 7 auto-tests + **12 étalons machine**, dont
+le `_comment` du fichier rappelle la couverture réelle (ni MegaST, ni MegaSTE, ni TOS
+1.00/1.04/1.06/2.06, ni EmuTOS PAL).
 
 ### Auto-tests logique pure (P0 — ms, sans boot ni oracle)
 
 ```sh
+./build/neost-selftest                                        # logique PURE : chemins hôte, neost.cfg
 ./build/neost-headless roms/tos102uk.img --glue-selftest      # machine Glue (bordures)
 ./build/neost-headless roms/tos102uk.img --spec512-selftest   # re-rendu Spectrum 512 (borderless + bordé)
 ./build/neost-headless roms/tos102uk.img --bus-selftest       # whitelist bus error (par octet)
 ./build/neost-headless roms/tos102uk.img --mfp-selftest       # GPIP forcé / fronts AER-DDR / Timer B
+./build/neost-headless roms/tos102uk.img --msa-selftest       # ré-encodage .msa (aller-retour)
+./build/neost-headless roms/tos102uk.img --fuji-selftest      # FujiNet virtuel + cas-limites ACSI
+./build/neost-headless roms/tos102uk.img --enec-selftest      # NE2000/EtherNEC (bouclage)
 python3 tools/run_cyclebench.py [--update]                    # golden du modèle de cycle 68000
 ```
 
 `--spec512-selftest` construit une RAM vidéo synthétique (tous pixels = index 1), injecte des
 écritures palette datées et vérifie **octet-exact** la couleur de chaque pixel contre le modèle
 `f(kSpec512AlignCyc, géométrie)`. Toute dérive d'alignement palette↔pixel (la cause du « scramble
-spec512 ») décale les frontières → exit 1. (Test de détection : `NEOST_ALIGN_OFF=1 … --spec512-selftest`
-doit échouer.) Intégré à la suite via `run_etalons.py` (type `spec512_selftest`).
+spec512 ») décale les frontières → exit 1. La constante elle-même est ÉPINGLÉE par la première
+vérification du test (`chk("kSpec512AlignCyc", …, -25)`) : la changer suffit à faire tomber le
+test — c'est le contrôle négatif. (L'ancien `NEOST_ALIGN_OFF` n'existe plus : le poser ne fait
+plus rien, le test reste vert.) Intégré à la suite via `run_etalons.py` (type `spec512_selftest`).
 
 ### Auto-tests à verdict série (P1 — s, déterministe, sans oracle)
 
