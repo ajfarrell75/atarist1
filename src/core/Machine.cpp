@@ -148,8 +148,11 @@ Machine::Machine(std::size_t ramBytes, CpuCore cpuCore, MachineType machine)
     // L'ordonnanceur est piloté DEPUIS le hook cycle du cœur (sync) : à chaque pas,
     // sync() avance l'horloge puis dispatche les échus → IPL posé au cycle exact.
     cpu.setScheduler(&sched);
-    // Préemption conservée mais DORMANTE (beginRun n'est plus appelé) : le dispatch
-    // se fait au fil de sync(), plus besoin de couper le bloc CPU.
+    // Préemption du bloc CPU : ACTIVE dans le modèle BLOC, qui est le DÉFAUT
+    // (runFrame/stepInstruction arment beginRun avant chaque cpu.run — un événement
+    // planifié avant la cible coupe le bloc). Elle ne devient dormante qu'en mode
+    // piloté par sync (NEOST_SYNC_DISPATCH), où le dispatch se fait au fil de sync()
+    // et où beginRun n'est jamais appelé.
     sched.setEndSlice([this] { cpu.endTimeslice(); });
     // V2 res-switch (opt-in NEOST_V2) : la Glue signale une impulsion hi-res PRÉCOCE
     // (cyc ≤ 56) sur la ligne courante → on raccourcit la ligne (HBL reprogrammé à la
@@ -548,12 +551,19 @@ void Machine::runFrame() {
     // trame — pas de ré-ancrage → aucune dérive d'horloge CPU↔vidéo.
     if (!frameInProgress_) beginFrame_();
     const int64_t frameEnd = frameEnd_;
-    // ORDONNANCEUR PILOTÉ PAR L'HORLOGE (modèle `do_cycles` WinUAE/Hatari) : le CPU
-    // tourne jusqu'à la fin de trame, et c'est NeostMoira::sync() qui dispatche les
-    // événements (HBL, Timer-B, VBL, RENDER, timers MFP) AU FIL de l'exécution, au
-    // cycle exact — l'IPL est posé pendant l'instruction et vu par son POLL_IPL.
-    // Plus de quantum borné à l'événement ni de préemption : le bloc = la trame
-    // entière. cpu.run() termine son instruction et peut dépasser frameEnd de
+    // DEUX modèles d'exécution, choisis par NEOST_SYNC_DISPATCH (cf. g_blockDispatch) :
+    //
+    //  · BLOC (le DÉFAUT, branche ci-dessous) : le bloc CPU est borné au prochain
+    //    événement, dispatché à la frontière via runTo, avec préemption si un
+    //    événement plus proche est planifié en cours de bloc. sync() n'y avance
+    //    QUE l'horloge.
+    //  · PILOTÉ PAR L'HORLOGE (opt-in, modèle `do_cycles` WinUAE/Hatari) : le CPU
+    //    tourne jusqu'à la fin de trame et c'est NeostMoira::sync() qui dispatche les
+    //    événements (HBL, Timer-B, VBL, RENDER, timers MFP) AU FIL de l'exécution, au
+    //    cycle exact — l'IPL est posé pendant l'instruction et vu par son POLL_IPL.
+    //    Ni quantum borné à l'événement, ni préemption : le bloc = la trame entière.
+    //
+    // Dans les deux cas cpu.run() termine son instruction et peut dépasser frameEnd de
     // quelques cycles (carry, comme Hatari) ; la boucle reboucle si nécessaire.
     if (g_blockDispatch) {
         // Modèle BLOC (pré-sync-driven) : run borné au prochain événement, dispatch à la

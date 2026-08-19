@@ -38,7 +38,8 @@ les puces) et **`neost_core` ne dépend pas du GUI**.
 
 ```sh
 cmake -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build -j        # cibles : neost (GUI), neost-headless, neost_core (lib)
+cmake --build build -j        # cibles : neost (GUI), neost-headless, neost-selftest,
+                              #          neost_core / neost_net (libs)
 ./build/neost                 # auto : dernier ROM (neost.cfg) ou EmuTOS US
 ./build/neost <rom> <disk.st>
 ```
@@ -76,11 +77,14 @@ Fichiers Hatari clés (← composant NeoST) — table complète dans `DEV.md` :
 
 ## Tester = le headless (outil n°1)
 
-Pas de tests unitaires classiques : validation par `neost-headless` (déterministe,
-traces façon MAME + captures PPM) et par la suite d'étalons. **Détail → `DEV.md`.**
+Pas de framework de test : validation par `neost-headless` (déterministe, traces façon
+MAME + captures PPM) et par la suite d'étalons. Seule exception, la LOGIQUE PURE
+(chemins hôte, format `neost.cfg`) est couverte par `neost-selftest`
+(`tests/selftest_logic.cpp`), sans machine ni ROM. **Détail → `DEV.md`.**
 
 ```sh
 python3 tools/run_all.py --tier fast   # auto-tests logique + verdicts série + cycle-bench
+                                       # + round-trip save-state + disquette livrée
 python3 tools/run_all.py --tier full   # + étalons PIXEL — le SEUL palier qui compare des images
 ./build/neost-headless <rom> --frames N --trace t.txt --regs --irq
 ./build/neost-headless <rom> --frames N --screenshot s.ppm

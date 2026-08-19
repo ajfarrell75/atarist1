@@ -5,6 +5,11 @@ sous-système, pour prioriser les corrections futures. Chaque écart est ancré 
 des deux côtés, classé par sévérité (**haute** = casse logiciels/boot · **moyenne** = fidélité
 visible · **basse** = cas-limite/cosmétique) avec son impact connu.
 
+⚠ **Les `fichier:ligne` NeoST sont des ANCRES, pas des adresses.** Ils dérivent à chaque
+édition ; c'est le **symbole cité** qui fait foi (`grep`, pas `sed -n`). Passe de
+ré-ancrage : **2026-08-19** (Blitter, Bus, Cpu68k, Fdc, Mfp, YM2149, Machine — les autres
+n'ont pas été revérifiés).
+
 **Méthode.** Comparaison ligne à ligne du code NeoST (`src/`) au source C de Hatari
 (`extern/hatari/src`, gitignoré — l'inventaire ci-dessous a été établi sur le commit
 `c9906f1` mais l'arbre PRÉSENT est `981f291` : ⚠ les numéros de ligne Hatari cités peuvent
@@ -61,24 +66,24 @@ de contradiction avec les sections historiques.
 
 | # | Sous-système | Divergence | Sévérité | NeoST | Hatari |
 |---|---|---|---|---|---|
-| B1 ✅ | Blitter | Compteur X/Y écrit à `0` non interprété comme **65536** (blit avorté au lieu de maximal) | **HAUTE** | `Blitter.cpp:99-101` | `Blitter_WordsPerLine/LinesPerBitblock_WriteWord` `blitter.c:1343-1366` |
+| B1 ✅ | Blitter | Compteur X/Y écrit à `0` non interprété comme **65536** (blit avorté au lieu de maximal) | **HAUTE** | `Blitter.cpp:132-140` | `Blitter_WordsPerLine/LinesPerBitblock_WriteWord` `blitter.c:1343-1366` |
 | V1 ✅ | Vidéo | ~~Branche STE de la Glue absente~~ **portée (2026-07-08)** : table STE (preload MMU 36/40, pal 56, HSync −52/−12) + `LEFT_OFF_2_STE` (+20 o, −8 px) + latch res sans −1 ; Cuddly-STE casse comme le vrai STE (196/250 = oracle) | moyenne | `Shifter.cpp` (`glue::Timing`, phase 1 STE) | `Video_Update_Glue_State` (branche STE) `video.c:2442-2652` |
 | V2 ✅ | Vidéo | ~~Tricks par changement de résolution~~ **portés (2026-07-08)** : overscan med-res (No Cooper greetings **0 px vs oracle**), stab med, scrolls hard 13/9/5/1 px, rendu multi-rés par ligne. Résidus : hardscroll Paulo Simoes, alias $FF8261 | moyenne | `Shifter.cpp` (`updateGlueRes`) | `Video_WriteToGlueRes` `video.c:1618-1820` |
-| V3 ◐ | Vidéo | Géométrie mid-trame : **restart compteur PORTÉ** (VC_RESTART, 2026-07-02) ; restent CyclesPerVBL±4 + attribution ligne fixe (canal `NEOST_LINELEN` existant : moitié Machine ON par défaut, moitié Shifter OFF) | moyenne→basse | `Shifter.cpp:602,1722`, `Machine.cpp:250-254` | `Video_RestartVideoCounter` `video.c:4608`, `video.c:2848-2877` |
+| V3 ◐ | Vidéo | Géométrie mid-trame : **restart compteur PORTÉ** (VC_RESTART, 2026-07-02) ; restent CyclesPerVBL±4 + attribution ligne fixe (canal `NEOST_LINELEN` existant : moitié Machine ON par défaut, moitié Shifter OFF) | moyenne→basse | `Shifter.cpp:602,1722`, `Machine.cpp:319-323` | `Video_RestartVideoCounter` `video.c:4608`, `video.c:2848-2877` |
 | WS ✅ | Vidéo | ~~Hybride WS1/WS3~~ **TRANCHÉ : WS3 complet (2026-07-08)** — positions Glue +1 (`glue::kWsInc`), IRQ HBL à cpl (512/508/224, `kHblOff` 0), VBL 64 ✓. Ancres rendu/compteur/spec512 **fixes** 56/376 (≙ `LINE_START/END_CYCLE_*` hors table WS chez Hatari) ; DE stockés re-normalisés −inc au rendu. `NEOST_WS=1..4` pour A/B. Datations read −6/write +2/spec512 −25 **inchangées** (fidèles-théoriques, WS-indépendantes). Validé : étalons TOUS OK, boot STF 50 Hz 0 px, Cuddly menu == HEAD au px près (190/250 vs oracle, identique baseline) | moyenne (systémique) | `Shifter.cpp` (glue::), `Machine.cpp` | `VIDEO_TIMING_DEFAULT=WS3` `video.c:624`, `video.c:976-1007` |
-| S1 ✅ | Son | **Filtre passe-bas STF (C10) jamais activé** → STF/Mega ST en PWM (code mort) | moyenne | `setStfLowPass` jamais appelé, `YM2149.hpp:165` | `Sound_Update_Filters` `sound.c:1946-1951` |
+| S1 ✅ | Son | **Filtre passe-bas STF (C10) jamais activé** → STF/Mega ST en PWM (code mort) | moyenne | `setStfLowPass` jamais appelé, `YM2149.hpp:168` | `Sound_Update_Filters` `sound.c:1946-1951` |
 | S2 ✅ | Son | ~~DMA STE sans FIFO 8 octets ni avance HBL~~ **corrigé (2026-07-07 soir)** : FIFO 8 octets fetchée par MOTS à chaque HBL (`DmaSound::onHbl` ← `Machine::onHbl`), fin de trame **au fetch** (XSINT/Timer A en avance, HBL-quantifié), octets **capturés au faisceau** pour le rendu (plus de relecture RAM en fin de trame — cas Mental Hangover), réalignement mono→stéréo, compteur $FF8909 = adresse de fetch. Étalon `tools/make_dmasnd_test.py` : 33,3 % d'octets B = oracle Hatari (33,2 %) | moyenne | `DmaSound.cpp` (`fifoRefill`/`updateDac`) | `DmaSnd_FIFO_*` / `DmaSnd_STE_HBL_Update` `dmaSnd.c:342-438,727-741` |
-| D1 | FDC/DMA | **WRITE TRACK STX réinterprété** en secteurs (CRC « nettoyé », statut neutralisé) | moyenne | `StxImage.cpp:254-300`, `Fdc.cpp:986-1008` | `FDC_WriteTrack_STX` (TODO, pas de relecture) `stx.c:2027-2134` |
-| D2 | FDC/DMA | **READ TRACK STX** renvoie la piste réécrite (conséquence de D1) | moyenne | `Fdc.cpp:1050,1062` | `FDC_ReadTrack_STX` `stx.c:1863` |
-| D3 | FDC/DMA | Flush FIFO↔RAM **ne stalle pas le CPU** (wait-state 32 cyc manquant) — cycle-exactness | moyenne *(à confirmer)* | `Fdc.cpp:667-702` (`fifoPush`/`fifoPull`) | `FDC_DMA_FIFO_Push/Pull` `fdc.c:1340,1396` |
-| M1 ✅ | MFP | ~~Lignes GPIP on-chip sans machine de fronts AER/DDR~~ **corrigé (bc15a67)** : `gpipSetLine`/`gpipUpdateInterrupt` = port de `MFP_GPIP_Set_Line_Input`, tous les appelants convertis | moyenne | `Mfp.hpp:303-308`, `Mfp.cpp:493-504` | `MFP_GPIP_Set_Line_Input` `mfp.c:1143-1219` |
+| D1 | FDC/DMA | **WRITE TRACK STX réinterprété** en secteurs (CRC « nettoyé », statut neutralisé) | moyenne | `StxImage.cpp:254-300`, `Fdc.cpp:1486-1550` | `FDC_WriteTrack_STX` (TODO, pas de relecture) `stx.c:2027-2134` |
+| D2 | FDC/DMA | **READ TRACK STX** renvoie la piste réécrite (conséquence de D1) | moyenne | `Fdc.cpp:1553` | `FDC_ReadTrack_STX` `stx.c:1863` |
+| D3 | FDC/DMA | Flush FIFO↔RAM **ne stalle pas le CPU** (wait-state 32 cyc manquant) — cycle-exactness | moyenne *(à confirmer)* | `Fdc.cpp:1073-1105` (`fifoPush`/`fifoPull`) | `FDC_DMA_FIFO_Push/Pull` `fdc.c:1340,1396` |
+| M1 ✅ | MFP | ~~Lignes GPIP on-chip sans machine de fronts AER/DDR~~ **corrigé (bc15a67)** : `gpipSetLine`/`gpipUpdateInterrupt` = port de `MFP_GPIP_Set_Line_Input`, tous les appelants convertis | moyenne | `Mfp.hpp:208-220`, `Mfp.cpp:600-610` | `MFP_GPIP_Set_Line_Input` `mfp.c:1143-1219` |
 | S4 ✅ | Son | ~~Table DAC « model » seul~~ **corrigé (2026-07-07 soir)** : table MESURÉE par défaut (`ym2149_fixed_vol.h` vendorisé + port de `interpolate_volumetable`), modèle conservé sous `NEOST_YM_MIXING=model` | moyenne | `YM2149.cpp` `dacTable()` | `YM_TABLE_MIXING` défaut `configuration.c:807`, `sound.c:505-543` |
 | S3 ✅ | Son | ~~Gain LMC ×2 manquant (YM STE −6 dB)~~ **corrigé (2026-07-07 soir)** : `kLmcMakeup=2.0` dans `gainLeft/Right/masterGain` + `kDmaGain` 0.7→0.375 (= ¾×½). Validé : cloche GEM ST vs STE ratio RMS **1.000** ; ratio DMA 0.75 exact | moyenne (audible) | `DmaSound.cpp` | ×2 `dmaSnd.c:1152-1153,1460-1461` + « 3/4 level » `dmaSnd.c:1146-1158` |
 | MC ✅ | MFP | ~~**Conversion MFP→CPU tronquée par période, sans reste accumulé**~~ **corrigée (2026-08-14)** : échéances absolues ×256, plafond vers le Scheduler, phase sérialisée v11 | moyenne-basse | `Mfp.cpp` (`timerPeriodSubCycles`, `scheduleTimerAt`) | unités internes ×256 `cycInt.c:26-45` |
-| BU1 ✅ | Bus | **Miroir matériel du PSG `$FF8804-$FF88FF`** non routé vers le YM2149 (lit `0xFF`, écritures ignorées) | moyenne | `Bus.cpp:531,623` | `IoMem_Init` shadow PSG `ioMem.c:386-393` |
-| BL2 ✅ | Blitter | Accès **OCTET** aux registres mot/long non rejetés | moyenne | `Blitter.cpp:50-61` | `Blitter_CheckAccess_Byte` `blitter.c:972-989` |
+| BU1 ✅ | Bus | **Miroir matériel du PSG `$FF8804-$FF88FF`** non routé vers le YM2149 (lit `0xFF`, écritures ignorées) | moyenne | `Bus.cpp:501-502` | `IoMem_Init` shadow PSG `ioMem.c:386-393` |
+| BL2 ✅ | Blitter | Accès **OCTET** aux registres mot/long non rejetés | moyenne | `Blitter.cpp:99-105` | `Blitter_CheckAccess_Byte` `blitter.c:972-989` |
 | SC1 | SCC | **TX émis immédiatement** (pas de cadence baud / Zero Count) ; `WR14` bit4 Local Loopback honoré (datasheet, absent d'Hatari) — **tranché : choix délibéré** | volontaire | `Scc.cpp:234,269-274`, reset `Scc.cpp:61` | `SCC_WriteDataReg` / `SCC_Process_TX` `scc.c:1655-1681,1986` |
-| D4 ✖ | FDC | ~~Piste 6268 vs 6250~~ **FAUX POSITIF (5ᵉ passe)** : le `#define FDC_TRACK_BYTES_STANDARD` actif d'Hatari vaut **6268** (la formule 6250 y est commentée) = NeoST | — | `Fdc.cpp:156` | `fdc.c:~410` |
+| D4 ✖ | FDC | ~~Piste 6268 vs 6250~~ **FAUX POSITIF (5ᵉ passe)** : le `#define FDC_TRACK_BYTES_STANDARD` actif d'Hatari vaut **6268** (la formule 6250 y est commentée) = NeoST | — | `Fdc.cpp:161` | `fdc.c:~410` |
 
 ---
 
@@ -89,7 +94,7 @@ Chaîne IRQ (IER/IPR/IMR/ISR/VR, élection priorité + chronologie, délai 4 cyc
 auto/software, antidatage), timers datés, compteur vivant, event-count Timer A/B : **conformes**.
 
 - **[M1 — moyenne] ✅ corrigé (bc15a67, 2026-07-03)** — machine de fronts centralisée :
-  `gpipSetLine`/`gpipUpdateInterrupt` (`Mfp.hpp:303-308`, `Mfp.cpp:493-504`) = port de
+  `gpipSetLine`/`gpipUpdateInterrupt` (`Mfp.hpp:208-220`, `Mfp.cpp:600-610`) = port de
   `MFP_GPIP_Set_Line_Input`/`_Update_Interrupt` (mfp.c:1143-1219), AER/DDR respectés, tous les
   appelants on-chip convertis (Ikbd/MidiAcia wire-OR/Fdc/Blitter). Cf. 5ᵉ passe.
 - **[basse] ✅ corrigé (2026-08-14)** — conversion cycles MFP↔CPU en échéances absolues
@@ -101,7 +106,7 @@ auto/software, antidatage), timers datés, compteur vivant, event-count Timer A/
   wrap uint8 0→255 (`Mfp.cpp:415-432` = `MFP_TimerB_EventCount` mfp.c:1297-1320).
 - **[basse]** Retombée d'IRQ immédiate (`Mfp.cpp:529`) vs TODO Hatari d'un délai mesuré (`mfp.c:789`) — identique aujourd'hui, suivi seulement.
 - *Faux positif écarté :* les wait-states 4 cyc d'accès MFP **sont** appliqués, mais par le
-  `Bus` (`Bus.cpp:540`, `addMfpWaitCycles()`), pas par `Mfp.cpp` → **pas une divergence**.
+  `Bus` (`Bus.cpp:830`, `addMfpWaitCycles()`), pas par `Mfp.cpp` → **pas une divergence**.
 
 ### Vidéo (Shifter + Glue) — `Shifter.cpp` ↔ `video.c`
 Cœur Glue **STF** = transcription quasi ligne-à-ligne (`updateGlueState` ≙ `Video_Update_Glue_State`
@@ -118,7 +123,7 @@ spec512, scroll fin STE de base, masquage palette par machine : **conformes**.
   hi/med/lo, scroll « hardware » 1/5/9/13 px. NeoST verrouille une résolution par trame
   (`frameMode_`). *Impact : No Cooper, Delta Force/PYM, Closure, HighResMode.*
 - **[V3 — moyenne] ◐ partiellement résolu (2026-07-02)** — `RestartVideoCounter` **PORTÉ**
-  (`Shifter.cpp:602/1722`, événement `VC_RESTART` `Machine.cpp:250-254`, check freq live).
+  (`Shifter.cpp:602/1722`, événement `VC_RESTART` `Machine.cpp:319-323`, check freq live).
   Restent : CyclesPerVBL ±4 si la dernière ligne change de freq, géométrie verrouillée à
   `beginFrame` ; le canal par-ligne `HBL_Pos/nCyclesPerLine` existe (gated `NEOST_LINELEN`,
   **ON par défaut depuis 2026-07-08**, cf. 5ᵉ passe).
@@ -167,11 +172,11 @@ byte-compatible : **conformes** (vérifiés ligne à ligne).
   Hatari laisse un TODO (`pDataRead=NULL`, `stx.c:2027`) → lecture inchangée. *Impact :
   protections « formate + relit une piste corrompue » (Copylock/Rob Northen) « nettoyées » par
   NeoST ; mais utilisabilité accrue pour les formateurs ordinaires.*
-- **[D2 — moyenne]** READ TRACK STX renvoie la piste réécrite (conséquence de D1, `Fdc.cpp:1050`).
+- **[D2 — moyenne]** READ TRACK STX renvoie la piste réécrite (conséquence de D1, `Fdc.cpp:1553`).
 - **[D3 — moyenne, à confirmer]** `fifoPush`/`fifoPull` ne stallent pas le CPU (32 cyc manquants,
-  `Fdc.cpp:667-702`) vs `M68000_AddCycles_CE(32)` (`fdc.c:1340,1396`) → contention DMA/CPU non
+  `Fdc.cpp:1073-1105`) vs `M68000_AddCycles_CE(32)` (`fdc.c:1340,1396`) → contention DMA/CPU non
   modélisée (cycle-exactness ; fonctionnel OK).
-- **[D4 — faible-moyenne]** Piste standard de repli **6268** (`Fdc.cpp:156`) vs **6250**
+- **[D4 — faible-moyenne]** Piste standard de repli **6268** (`Fdc.cpp:161`) vs **6250**
   (`FDC_TRACK_BYTES_STANDARD`) → longueur d'un READ TRACK sur piste absente (~0,3 %).
 - **[basse]** Reset DMA force bit0 « no error » (`Fdc.cpp:708`) ; Hatari ne touche `Status`
   qu'au cold reset (`fdc.c:1233`).
@@ -202,7 +207,7 @@ cold/warm reset : **conformes** (l'ancien doc `SOUND_HATARI_DIFF.md`, périmé, 
 
 - **[S1 — moyenne] ✅ corrigé** — `setStfLowPass(!STE)` est désormais appelé (`Machine.cpp`/`Machine.hpp`)
   → ST/Mega ST utilisent `applyLpfStf250`. *Avant :* filtre câblé mais `setStfLowPass()` défini mais
-  **jamais appelé** (`YM2149.hpp:165`) → STF/Mega ST en PWM au lieu de `LPF_STF`
+  **jamais appelé** (`YM2149.hpp:168`) → STF/Mega ST en PWM au lieu de `LPF_STF`
   (`sound.c:1946-1951`). Code `applyLpfStf250` mort. *Impact : timbre YM plus dur sur ST.*
 - **[S2 — moyenne] ✅ corrigé (2026-07-07 soir)** — FIFO 8 octets + capture au faisceau portées
   (cf. tableau des priorités et 5ᵉ passe). *Avant :* lecture RAM directe à la cadence DMA en fin
@@ -267,7 +272,7 @@ halftone, masques de bord, bug « 63 accès », IRQ GPIP3 fin de blit, arbitrati
   blitter.c:1433-1437) ; écrire 0 PUIS démarrer → 65536 lignes (légal).
 - **[BL2 — moyenne] ✅ corrigé** — `write8` ignore désormais un accès octet aux registres MOT
   (`off < 0x3A`, `Blitter.cpp`) ; seuls HOP/LOP/contrôle/skew restent accessibles en octet.
-  *Avant :* accès **octet** aux registres mot/long non rejetés (`Blitter.cpp:50-61`)
+  *Avant :* accès **octet** aux registres mot/long non rejetés (`Blitter.cpp:99-105`)
   vs `Blitter_CheckAccess_Byte` (`blitter.c:972`) qui les ignore.
 - **[basse] ✅ corrigé (audit blitter 2026-07-07)** — Masquage matériel à l'écriture des
   incréments (`&0xFFFE`, `blitter.c:1229`) et des adresses src/dst (`&0x00FFFFFE`,
@@ -359,7 +364,8 @@ même** (primitives non-fautives + filet au site d'appel). Restent trois points 
   phase mi-accès `(c − 2)` appliquée à `chipWait8` le 2026-07-02 — skew structurel
   probable de l'alignement slot RAM en 16 MHz. À trancher par A/B contre l'oracle
   Hatari, pas à corriger à l'aveugle (mode peu validé).
-- **[CPU3 — basse]** `iplDeferred` (NEOST_IPLFETCH=1, opt-in expérimental) n'est pas
+- **[CPU3 — basse]** L'échantillon IPL différé du mode `g_iplFetch` (NEOST_IPLFETCH=1,
+  opt-in expérimental, `Cpu68k.cpp:117-125`) n'est pas
   sérialisé : un échantillon IPL différé armé au save est perdu au load (IRQ reconnue
   une frontière trop tard). Sérialiser = bump de version .state — différé tant que le
   mode reste expérimental.
@@ -621,21 +627,21 @@ MFP, périphériques (FDC/son-statuts/bus/SCC/ACIA), son approfondi (cœur YM + 
 ### Statuts corrigés par cette passe (le détail ↑ dans les sections historiques est PÉRIMÉ)
 
 **Passés à ✅ corrigé (tous dans `bc15a67` sauf mention) :**
-- **M1 fronts GPIP** — `gpipSetLine`/`gpipUpdateInterrupt` (`Mfp.hpp:303-308`, `Mfp.cpp:493-504`)
+- **M1 fronts GPIP** — `gpipSetLine`/`gpipUpdateInterrupt` (`Mfp.hpp:208-220`, `Mfp.cpp:600-610`)
   = port exact de `MFP_GPIP_Set_Line_Input`/`_Update_Interrupt` (mfp.c:1143-1219) : DDR=entrée,
-  GPIP^AER, front actif si `GPIP_new == AER`. Appelants convertis : Ikbd.cpp:965, MidiAcia.cpp:88
-  (wire-OR ACIA ≙ `MFP_Main_Compute_GPIP_LINE_ACIA`), Fdc.cpp:691, Blitter.cpp:203/308.
+  GPIP^AER, front actif si `GPIP_new == AER`. Appelants convertis : Ikbd.cpp:1005, MidiAcia.cpp:104
+  (wire-OR ACIA ≙ `MFP_Main_Compute_GPIP_LINE_ACIA`), Fdc.cpp:1050, Blitter.cpp:217/324.
   L'écriture AER re-déclenche les fronts (Mfp.cpp:115-116 ≙ mfp.c:2787-2790).
 - **Timer B event-count** — wrap uint8 0→255, garde `tbCounter_==0` supprimée (`Mfp.cpp:415-432`
   = `MFP_TimerB_EventCount` mfp.c:1297-1320), antidatage `firingDue()`.
-- **FDC INTRQ** — plus de `raise(SRC_FDC)` doublé : `setFdcLine` seul (Fdc.cpp:684-692).
+- **FDC INTRQ** — plus de `raise(SRC_FDC)` doublé : `setFdcLine` seul (Fdc.cpp:1050).
 - **$FF8264 STE** — relit la valeur brute écrite (`Shifter.cpp:1632/1933` ≙
   `Video_HorScroll_Read_8264`).
 - **VoidRead 0x00 vs 0xFF** — l'entrée était mal cadrée : Hatari n'utilise `VoidRead_00` QUE sur
   `$FF820B/$FF8262-63/$FF8266-7F` STE (ioMemTabSTE.c:98,121,124) ; NeoST rend 0x00 exactement là
   (`Shifter.cpp:1644-1647`), 0xFF ailleurs — couverture exacte (commit 88ec84a).
-- **read32/zone RAM void** — mécanisme `cpuDb` (`Bus.cpp:215-216`) ≙ `VoidMem_wget/lget` (la zone
-  vide rend la dernière valeur du bus), latch `Cpu68k.cpp:261-262`.
+- **read32/zone RAM void** — mécanisme `cpuDb` (`Bus.cpp:256-258`) ≙ `VoidMem_wget/lget` (la zone
+  vide rend la dernière valeur du bus), latch `Cpu68k.cpp:308-311`.
 - **Trou MMU STF bank 128K/2048K** — ⚠ l'entrée précédente (« commit 6df9432 ») était
   FAUSSE : ce hash n'existe pas et aucune révision de `Bus.cpp` n'a jamais porté le trou —
   seuls `mmuXlatSTF/STE` + `ConfToBank` l'étaient. RÉELLEMENT porté le 2026-08-13 (3ᵉ
@@ -647,7 +653,7 @@ MFP, périphériques (FDC/son-statuts/bus/SCC/ACIA), son approfondi (cœur YM + 
   persistant inter-trames ≙ `ShifterFrame.Freq/Res`) — l'entrée « absent » de la 2ᵉ passe est fausse.
 - **V3 partiel : restart du compteur vidéo PORTÉ** (2026-07-02) — `restartVideoCounter`
   (`Shifter.cpp:602-605`, early-return `videoCounter`:1722) + événement `VC_RESTART`
-  (`Machine.cpp:250-254`, ligne 310/260 cycle 56 STF / 60 STE, check freq live) ≙
+  (`Machine.cpp:319-323`, ligne 310/260 cycle 56 STF / 60 STE, check freq live) ≙
   `Video_RestartVideoCounter` + HBL intermédiaire video.c:3262-3286.
 
 **Reclassés FAUX POSITIFS (Hatari fait pareil — NE PAS « corriger ») :**

@@ -56,7 +56,7 @@ gamepad-driven. Point it at a Raspberry Pi and you have a machine for the living
 
 ## Get it
 
-Every release ships **7 packages** with SHA-256 sums:
+Every release ships **8 packages** with SHA-256 sums:
 
 | Package | For |
 |---------|-----|
@@ -67,6 +67,7 @@ Every release ships **7 packages** with SHA-256 sums:
 | `NeoST-<ver>-macOS-universal2.dmg` | macOS **Universal 2** (Apple Silicon + Intel) |
 | `NeoST-<ver>-windows-x86_64.zip` | **Windows 10/11 x64** — unzip and run, everything is linked statically |
 | `NeoST-<ver>-web-wasm.zip` | WebAssembly, to serve from any web server |
+| `NeoST-<ver>-android-arm64-debug.apk` | **Android 5.0+ arm64** — debug-signed, so it installs as is. Boots and plays sound, but **has no interface yet** |
 
 The Windows package is **unsigned**: SmartScreen will warn you on first launch
 (*More info* → *Run anyway*).

@@ -110,7 +110,11 @@ public:
     // regs_ est lu par le thread audio ; le mettre à 0 le rend silencieux aussitôt.
     void reset() {
         regs_.fill(0);
-        regs_[7]    = 0xFF;     // mixeur : tons/bruit désactivés au reset (cf. Sound_Reset → R7=0xff)
+        // Mixeur : tons ET bruit désactivés au reset (bits à 1 = coupé), comme
+        // Sound_Reset chez Hatari, qui coupe la SYNTHÈSE. MICRO-ÉCART assumé : Hatari
+        // laisse `PSGRegisters[7]` à 0, donc une RELECTURE de R7 juste après reset rend
+        // 0x00 chez lui et 0xFF ici (impact quasi nul — le TOS reprogramme R7 au boot).
+        regs_[7]    = 0xFF;
         regs_[14]   = 0xFF;     // port A au repos : lignes I/O (actives bas) toutes inactives — cf. psg.c:223
         selected_   = 0;
         tonePer_.fill(0); toneCnt_.fill(0); toneVal_.fill(0);

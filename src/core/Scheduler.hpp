@@ -7,10 +7,11 @@
 //  proche événement, puis déclenche les callbacks échus (qui peuvent se
 //  replanifier). Voir docs/CYCLE_ACCURACY.md.
 //
-//  Phase 1 (refactor iso-comportement) : seules les sources actuelles existent
-//  (HBL, Timer C, VBL) et le quantum CPU reste la ligne (512 cycles) — le timing
-//  produit est identique au modèle « par blocs » précédent. Les phases suivantes
-//  ajouteront des sources (Timers A/B/D, FDC, DMA…) et affineront le quantum.
+//  Les phases annoncées à la création de ce fichier sont FAITES : l'énumération
+//  `Source` compte une vingtaine de sources (vidéo, timers MFP A-D, FDC, son DMA,
+//  IKBD/MIDI/série, Microwire, blitter, VC_RESTART, HBL, VBL) et le quantum n'est
+//  plus la ligne mais l'ÉVÉNEMENT — le bloc CPU est borné par `nextDue()` et
+//  préempté (`beginRun`/`endSlice`) dès qu'un événement est planifié plus tôt.
 //
 //  (c) 2026 VERHILLE Arnaud — projet NeoST.
 // =============================================================================
@@ -130,7 +131,8 @@ public:
         // Si on est en plein bloc CPU (runTarget_ armé) et que cet événement tombe
         // AVANT la cible du bloc, on préempte : le CPU rend la main à la prochaine
         // frontière d'instruction et la boucle d'horloge ré-évaluera nextDue().
-        // (Dormant dans le modèle piloté par sync() : beginRun n'est plus appelé.)
+        // (Actif dans le modèle BLOC, le défaut ; dormant en mode piloté par sync()
+        //  — NEOST_SYNC_DISPATCH — où beginRun n'est jamais appelé.)
         if (atCycle != kInactive && runTarget_ != kInactive && atCycle < runTarget_ && endSlice_) {
             runTarget_ = atCycle;   // nouvelle cible effective (évite des coupes redondantes)
             ++preemptions;

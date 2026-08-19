@@ -775,8 +775,9 @@ int Cpu68k::run(int cycles) {
             std::fprintf(stderr, "HT %06X d=%-3lld %s\n", htPc, static_cast<long long>(now - g_htPrev), htDis);
             g_htPrev = now; --g_htN;
         }
-        // Préemption (dormante dans le modèle piloté par sync : beginRun n'est plus
-        // appelé) : conservée par sûreté si un chemin arme encore endSlice.
+        // Préemption : ACTIVE dans le modèle BLOC (le défaut — runFrame arme beginRun
+        // à chaque bloc) ; dormante seulement en mode piloté par sync
+        // (NEOST_SYNC_DISPATCH), où beginRun n'est jamais appelé.
         if (g_endSlice) { g_endSlice = false; break; }
         // STOP : aucune instruction ne tournera tant qu'un événement ne change pas
         // l'IPL. Au lieu de simuler l'attente cycle par cycle (≈25× plus lent), on

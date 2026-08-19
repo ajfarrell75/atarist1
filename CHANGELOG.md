@@ -6,6 +6,49 @@ l'ordre inverse. Version courante : **0.5.2**.
 - « NeoST gère-t-il X ? » → [`docs/IMPLEMENTED.md`](docs/IMPLEMENTED.md) (inventaire par puce)
 - « Que reste-t-il ? » → [`TODO.md`](TODO.md)
 
+## Passe de cohérence doc ↔ code (2026-08-19)
+
+Relecture croisée de la documentation et du code, sans changement de comportement
+d'émulation. Méthode : extraction mécanique de ce que la doc AFFIRME (chemins, cibles,
+options, symboles, variables d'environnement, `fichier:ligne`) puis confrontation à
+l'arbre. Le palier `fast` est vert avant comme après.
+
+- **La release livre 8 paquets, la doc en annonçait 7.** `release.yml` construit et
+  attache l'APK Android depuis le 2026-08-11 (son job `publish` COMPTE 8 et échoue
+  sinon), mais `README.md` et `DEV.md` étaient restés à 7 — le tableau public des paquets
+  ne mentionnait même pas l'APK. Ligne ajoutée, avec sa réserve (« pas d'interface »).
+- **L'arborescence `src/` de `DEV.md` datait d'avant le découpage de `main.cpp`.** Elle
+  ignorait `gui/`, `util/`, `net/`, `android/`, `tests/`, et une dizaine de composants
+  `io/` (Acsi, Fpu, GemdosHd, Ne2000, Scc, StxImage, MediaScan) — c'est-à-dire la carte
+  qu'on donne à lire à quelqu'un qui arrive. Refaite sur les listes de sources réelles,
+  `neost_net` incluse.
+- **`neost-selftest` n'était listé nulle part** alors que `run_all.py --tier fast` en
+  fait son PREMIER pas : la ligne de build de `CLAUDE.md` et le « pas de tests unitaires »
+  de `DEV.md` le rendaient invisible.
+- **Commentaires de code qui contredisaient le code.** Les cinq signalés par l'audit
+  `HATARI_MAPPING` du 2026-07-08 — jamais traités depuis — sont corrigés : « préemption
+  DORMANTE » (fausse dans le modèle BLOC, qui est le DÉFAUT ; dormante seulement sous
+  `NEOST_SYNC_DISPATCH`), en-tête `Scheduler.hpp` « Phase 1 : 3 sources, quantum ligne »
+  (une vingtaine de sources, quantum à l'événement), « le blitter est ABSENT : NeoST ne
+  l'émule pas » dans `Bus.cpp` (il l'émule, la plage est dé-fautée selon
+  `machineHasBlitter`), l'intro `Mfp.hpp` « strict nécessaire : Timer C » (le MFP est
+  quasi 1:1 avec `mfp.c`), et le `regs_[7]=0xFF` de `YM2149.hpp` qui laissait croire
+  qu'Hatari fait pareil (micro-écart désormais écrit noir sur blanc). Un commentaire faux
+  coûte plus cher qu'une absence de commentaire : il fait chercher au mauvais endroit.
+- **Huit options du headless étaient analysées mais absentes du `--help`** — `--mono`,
+  `--shot-every`, `--shot-from`, `--keys-at`, `--joy-at`, `--joy-script`, `--mouse-at`,
+  `--version` : documentées dans `DEV.md`, utilisées par l'outillage, invisibles pour qui
+  lance le binaire. Ajoutées (et le commentaire de `--from-cfg`, qui listait les clés
+  relues, remis d'accord avec la boucle qui les lit).
+- **Renvois morts.** `disks/utils/` (c'est `disks/etalons/`), `docs/SOUND_HATARI_DIFF.md`
+  cité comme existant alors qu'il a été supprimé, `NEOST_ALIGN_OFF` retiré du code,
+  `DmaSound::onFrameEnd` et `kioskAreSiblings` qui n'existent pas (`fifoRefill` et
+  `neost::areSiblingImages`), `gemdos/BUILD`, un lien Markdown cassé.
+- **`fichier:ligne` ré-ancrés** dans `CYCLE_ACCURACY.md` et `HATARI_DIVERGENCES.md` là où
+  ils tombaient sur du code sans rapport (Blitter, Bus, Cpu68k, Fdc, Mfp, YM2149,
+  Machine). Ces ancres dérivent à chaque édition : `HATARI_DIVERGENCES.md` le dit
+  maintenant en tête — **c'est le symbole cité qui fait foi**, pas le numéro.
+
 ## Chasse aux bugs : auto-test EtherNEC dépendant du compilateur, `--from-cfg` amnésique (2026-08-17)
 
 Campagne de recherche de défauts. Deux angles : **ASan+UBSan** sur toute la suite

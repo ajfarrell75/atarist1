@@ -80,7 +80,7 @@ Pour ce qui reste → [`../TODO.md`](../TODO.md).
   suivant + dispatch à la frontière via `runTo`, pré-sync-driven) **par DÉFAUT**, en gardant
   PT=true → intro/écrans statiques d'EL propres. Sync-driven en opt-in `NEOST_SYNC_DISPATCH` (reproduit
   le deadlock, A/B). Validé : étalons 19/0, LX inchangé. Reste la corruption EL EN JEU (scroll), chantier
-  vidéo V3 (cf. [`docs/MOIRA_WINUAE_CONVERGENCE.md`](docs/MOIRA_WINUAE_CONVERGENCE.md)).
+  vidéo V3 (cf. [`docs/MOIRA_WINUAE_CONVERGENCE.md`](MOIRA_WINUAE_CONVERGENCE.md)).
 - **Convergence cycle Moira↔WinUAE — beam-sync (DÉFAUT ON depuis 2026-06-17).** Harnais différentiel
   (`NEOST_TRACE_CYC` colonne cycle absolue dans le `Tracer` + `tools/trace_diff.py --periods`) :
   compare les cycles/boucle des deux cœurs. `NEOST_RAM_SLOT` (align créneau bus 4 cyc sur la RAM CHIP16,
@@ -401,14 +401,15 @@ Pour ce qui reste → [`../TODO.md`](../TODO.md).
     STE_Test Timing (« MFP, Glue, Video ») **Pass**, rapport série byte-identique. Vérif :
     `tools/spec512_flicker_check.sh`, oracle `tools/hatari_oracle.sh`.
   - **Étalon — 100 % PIXEL-IDENTIQUE à l'oracle Hatari** : slideshow
-    `disks/utils/spectrum_512_auto_diapo.st` (auto sous TOS 1.00) → les **4** images spec512
+    `disks/etalons/spectrum_512_auto_diapo.st` (auto sous TOS 1.00) → les **4** images spec512
     (**BEE512** l'abeille, **sun** dégradé, **PLANET** sci-fi, **cougar** photo) diffent à
     **0 px** vs Hatari (zone active 320×200, `compare -metric AE`). Méthode : diff pixel par
     image figée (les 9552 écritures palette/trame matchent Hatari écriture-par-écriture, Δcyc
     constant absorbé par `kSpec512AlignCyc`). À l'ancien `−24` il restait 122/54/210/319 px
     (frontières décalées d'1 px). Gaté par le seuil → **zéro régression** (EmuTOS/jeux normaux
     byte-inchangés ; tos104us, Enchanted Land vérifiés). Outils : `--shot-every N PREFIX`,
-    `--screenshot`, `NEOST_SPEC512_TRACE`, `NEOST_VC_OFF`/`NEOST_ALIGN_OFF` (sweep oracle),
+    `--screenshot`, `NEOST_SPEC512_TRACE`, `NEOST_VC_OFF` (sweep oracle ; l'ancien
+    `NEOST_ALIGN_OFF` a disparu — l'alignement est figé dans `kSpec512AlignCyc`),
     `NEOST_DISASM=addr,len` (headless).
 - **Bordures overscan VISIBLES** (Phase 1 — basse rés couleur) : le Shifter rend désormais
   un buffer **416×276** (dimensions visibles Hatari : 48+320+48 px × 29+200+47 lignes,
@@ -874,7 +875,8 @@ Pour ce qui reste → [`../TODO.md`](../TODO.md).
   plus écrêtée par l'effacement CPU du bit PLAY. Le PSG gagne aussi le **read-latch `$FF8800`**
   et le **strobe Centronics** (port B). Chemin mono WASM inchangé. Boot ST/STE non régressé.
 - **Bit PLAY ($FF8901) auto-effacé en fin de trame DMA one-shot** dans le MOTEUR DMA
-  (`DmaSound::onFrameEnd`, port `DmaSnd_EndOfFrameReached` dmaSnd.c:510) et plus
+  (fin de trame détectée AU FETCH dans `DmaSound::fifoRefill`, port
+  `DmaSnd_EndOfFrameReached` dmaSnd.c:510) et plus
   seulement dans le mixeur hôte (qui ne tourne pas en headless). Le handler VBL du TOS
   surveille ce bit (détection moniteur/son) : un PLAY collé déclenchait un RESET en
   boucle — la démo STE **Faster** rebootait au lieu d'entrer en course.
@@ -907,7 +909,8 @@ Pour ce qui reste → [`../TODO.md`](../TODO.md).
   laissait sinon une tonalité bipée. Port A (R14) remis à `0xFF` au reset (lignes I/O actives
   bas toutes inactives, cf. `psg.c:223`) → plus de sélection lecteur/face parasite au boot.
 - **DAC non linéaire + porte ton/bruit + filtres de sortie** (port fidèle de Hatari `sound.c`,
-  suite à l'analyse comparative `docs/SOUND_HATARI_DIFF.md`). Trois corrections dans `synthesize` :
+  suite à l'analyse comparative de l'époque, `SOUND_HATARI_DIFF.md` — doc
+  depuis supprimé, verdicts repris dans [`HATARI_DIVERGENCES.md`](HATARI_DIVERGENCES.md)). Trois corrections dans `synthesize` :
   - **Table DAC 32×32×32 modélisée** (`YM2149_BuildModelVolumeTable`, sound.c:615-678) en
     remplacement de la somme linéaire des 3 voies ÷ 3 : le DAC du YM2149 débite dans une
     résistance de charge commune, la sortie suit la loi non linéaire (2^-¼)^(n-31) → empiler des
@@ -950,7 +953,7 @@ Pour ce qui reste → [`../TODO.md`](../TODO.md).
   - Le modèle push n'est armé que si le frontend pose l'horloge (`setCycleClock`). **Les TROIS
     frontends le posent désormais** : GUI, headless (`--sound-dump`) et WASM (2026-08-11 — il
     était resté sur `synthesize` direct, ce qui aplatissait tous les samples). _Reste
-    (refinement) : FIFO 8 octets du DMA remplie sur HBL (cf. `docs/SOUND_HATARI_DIFF.md`)._
+    (refinement) : FIFO 8 octets du DMA remplie sur HBL (cf. [`HATARI_DIVERGENCES.md`](HATARI_DIVERGENCES.md))._
   - **Chaîne de mixage UNIQUE** (`core/AudioMix.cpp`, 2026-08-11) : YM horodaté → DMA STE
     horodaté → HPF → gains/tonalité LMC1992. Elle était recopiée dans les trois frontends, et
     c'est la copie web qui avait dérivé. Extraction prouvée neutre : `--sound-dump` avant/après
@@ -984,7 +987,8 @@ Pour ce qui reste → [`../TODO.md`](../TODO.md).
   `MFP_TimerA_Set_Line_Input`) : compte sur le front sélectionné par l'AER GPIP4 (défaut
   bit4=0 → fins de trame), recharge à 1 (data reg 0 = 256), IRQ canal 13 — double-buffering
   streamé STE.
-- **Fidélité DMA STE** (port de `dmaSnd.c`, suite à `docs/SOUND_HATARI_DIFF.md`) :
+- **Fidélité DMA STE** (port de `dmaSnd.c`, suite à l'ancien `SOUND_HATARI_DIFF.md`, supprimé —
+  cf. [`HATARI_DIVERGENCES.md`](HATARI_DIVERGENCES.md)) :
   - **Cas `start==end`** (`DmaSnd_StartNewFrame`, dmaSnd.c:471-480) : trame vide + repeat off →
     arrêt SANS lever XSINT (`startNewFrame()`), corrige le GPIP7 figé HAUT (détection moniteur
     faussée, demos start==end type Amberstar cracktro).
@@ -1635,7 +1639,7 @@ Ces fonctionnalités **n'existent pas dans Hatari** (extensions assumées, consi
   (`Shifter::bordersOpen()` = `bordersTrick_` ou overscan V) on montre le buffer entier
   (hystérésis ~0,6 s anti-clignotement). **Menu in-game** (START/F9, jeu en PAUSE) : deux
   menus basculés G/D — liste des jeux triée par proximité (les phases B/C/D du jeu monté en
-  tête via `kioskAreSiblings`, préfixe+suffixe commun) et actions (Redémarrer / Clavier &
+  tête via `neost::areSiblingImages`, `src/io/MediaScan.cpp`, préfixe+suffixe commun) et actions (Redémarrer / Clavier &
   souris / Quitter). Insérer une disquette = **échange à chaud SANS reboot** ; seul
   « Redémarrer » relance. **Page Clavier & souris** (SELECT/K, sans pause) : frappe brève
   (MAKE puis BREAK différé de ~4 trames) injectée au jeu qui tourne dessous. Navigation
