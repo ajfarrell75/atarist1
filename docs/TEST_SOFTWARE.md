@@ -202,7 +202,9 @@ python3 tools/run_selftests.py --list
 ### Orchestration par paliers + hook pre-push
 
 ```sh
-python3 tools/run_all.py --tier fast      # P0 (glue+spec512) + P1 (verdicts série) — ~0,1 s
+python3 tools/run_all.py --tier fast      # P0 (logique pure + 7 auto-tests) + P1 (verdicts série)
+                                          # + cycle-bench + round-trip save-state + disquette
+                                          # livrée — ~3 s (mesuré 2026-08-19)
 python3 tools/run_all.py --tier full      # fast + P2 (étalons pixel + --verify-refs)
 python3 tools/run_all.py --install-hook    # hook git pre-push (opt-in) → lance --tier fast
 python3 tools/run_all.py --uninstall-hook

@@ -110,23 +110,30 @@ aucune divergence ne casse un boot EmuTOS/`.ST`. Le terrain **logique** est épu
 écarts bornés et vérifiables sans oracle sont corrigés) ; ne restent que les écarts
 **cycle-exacts** (ci-dessous) et quelques cas-limites documentés.
 
-### 🔮 À reprendre une fois l'oracle Hatari bâti (session avec SDL2)
+### 🔮 Items qui exigent l'oracle Hatari
 
-> **Pré-requis : bâtir l'oracle headless.** `extern/hatari/` est cloné. Installer SDL2, puis
+> **L'oracle EST bâti** (`extern/hatari/build/src/hatari`, v2.6.1 ; macOS :
+> `/opt/homebrew/bin/hatari`). Le reconstruire au besoin :
 > `cmake -S extern/hatari -B extern/hatari/build -DCMAKE_BUILD_TYPE=Release -DENABLE_SDL2=1 &&
-> cmake --build extern/hatari/build -j` → `extern/hatari/build/src/hatari`. Recette de
-> comparaison cycle-exacte → [`docs/HATARI_AUTOMATION.md`](docs/HATARI_AUTOMATION.md).
+> cmake --build extern/hatari/build -j`. Recette de comparaison cycle-exacte →
+> [`docs/HATARI_AUTOMATION.md`](docs/HATARI_AUTOMATION.md).
 
-Items qui exigent l'oracle pour être traités/validés (par priorité d'impact) :
+Ce qui a été traité GRÂCE à l'oracle depuis que cette liste a été écrite : **V1** (branche STE
+de la Glue) et **V2** (tricks par changement de résolution) portés le 2026-07-08 · **S2** (FIFO
+8 octets DMA + avance HBL) et **S3** (gain LMC ×2) corrigés le 2026-07-07 · **M1** (GPIP on-chip
+via machine de fronts AER/DDR) corrigé (`bc15a67`). Détails et ancres →
+[`docs/HATARI_DIVERGENCES.md`](docs/HATARI_DIVERGENCES.md).
+
+Restent, par priorité d'impact :
 
 1. **[JOUEUR] Beam-sync** — phase CPU↔faisceau **par-ligne** (overscan vertical). Casse EL /
    Cuddly / SHO en jeu. → `docs/MOIRA_WINUAE_CONVERGENCE.md`, `docs/CYCLE_ACCURACY.md` §4.
-2. **[VIDÉO]** V1 branche STE de la Glue · V2 tricks par changement de résolution (overscan
-   med-res, scroll hardware) · V3 géométrie mid-trame (50↔60 Hz, `RestartVideoCounter`).
-3. **[SON]** S2 FIFO 8 octets DMA + avance HBL · S3 gain LMC ½-amplitude (~6 dB) — validables
-   par dump WAV oracle.
+2. **[VIDÉO]** V3 géométrie mid-trame (50↔60 Hz) : le restart du compteur est porté
+   (`VC_RESTART`), restent `CyclesPerVBL`±4 et l'attribution de ligne fixe.
+3. **[SON]** quantification HBL du refill FIFO à confronter à l'oracle sur un poll serré de
+   `$FF8909/0B/0D` — validable par dump WAV + trace.
 4. **[FDC]** D3 stall FIFO 32 cyc · drive/side « push » — validables par trace FDC byte-exacte.
-5. **[MFP]** M1 GPIP on-chip via machine de fronts AER/DDR · `UpdateTimers` avant lecture IPR.
+5. **[MFP]** `UpdateTimers` avant lecture IPR/ISR/TBDR en mode bloc (≤ 1 instruction de retard).
 6. **[FPU]** arrondi de précision FMOVE/FABS/FNEG selon FPCR — validable par ROM de test étendue.
 
 **Faisables sans oracle** : FPU packed decimal bit-exact ; GEMDOS recomposition Unicode NFD→NFC
@@ -197,7 +204,7 @@ densité HD/ED STX (NeoST plus cohérent) ; RTC en temps émulé (déterminisme 
   du retrait **bas** (scroller Cuddly) + lignes EMPTY/BLANK/NO_DE, mode 336 px STE
   (`bSteBorderFlag`), wakeup-state WS3 (sous-pixel).
 - ✅ **Latch couleur bordure GAUCHE (registre 0) par-ligne — CORRIGÉ 2026-07-09.**
-  `Shifter.cpp:585-593` : bord gauche[N] = palette[0] de la ligne N−1 (`leftBorderPal0_`, réamorcé
+  `Shifter.cpp:724-729` (réamorçage `:404`) : bord gauche[N] = palette[0] de la ligne N−1 (`leftBorderPal0_`, réamorcé
   au registre 0 de début de trame), bord droit[N] = courant. Raison HW : les pixels du bord gauche
   sortent cyc ~0-56, AVANT l'écriture palette du handler HBL (cyc 508 « pour la ligne suivante ») →
   latché en fin de ligne précédente ; `renderLine` est appelé 1×/scanline en ordre croissant
@@ -270,7 +277,9 @@ rapides tournent en secondes et **gardent le commit**) :
   (`Shifter::spec512SelfTest`, headless + `run_etalons.py` type `spec512_selftest`) remplit une RAM
   vidéo synthétique (tous pixels = index 1), injecte des écritures palette datées et **assère la
   couleur pixel octet-exact** contre le modèle `f(kSpec512AlignCyc, géométrie)` — garde aussi la
-  constante `-25`. **Détection prouvée** : `NEOST_ALIGN_OFF=1` (dérive 1 cyc) → exit 1 ; propre → exit 0.
+  constante `-25`. **Contrôle négatif** : c'est cette garde sur la constante qui fait tomber le test
+  si l'alignement bouge. (L'ancien `NEOST_ALIGN_OFF=1` n'existe plus dans le code — vérifié
+  2026-08-19 : le poser laisse le test à exit 0.)
   ✅ **P0+ FAIT (2026-07-09)** : `--bus-selftest` (`Bus::busSelfTest` : whitelist bus-error — RAM/ROM/cart
   ne fautent pas, $FF0000-$FF7FFF faute, INVARIANT « word ne faute que si TOUS ses octets fautent » sur une
   frontière IO trouvée dynamiquement ; force le superviseur) et `--mfp-selftest` (`Mfp::mfpSelfTest` :
@@ -306,18 +315,23 @@ rapides tournent en secondes et **gardent le commit**) :
   FIDÈLE). ⚠ Vérifié : ce disque n'a **aucune** image spec512 à bordures ouvertes (scan ST+STE frames
   100-2500 ; les seules frames « fullscreen » ~300-400 = fond de chargement gris uni, IDENTIQUE Hatari).
 - ✅ **P3 — pont config GUI↔headless — FAIT (2026-07-09)** : `--from-cfg neost.cfg` rejoue en headless la
-  config EXACTE du GUI (rom/machine/mem/cpu/disque/cart/mono/fastfdc/fpu/gemdos/acsi ; chemins `./../`
+  config EXACTE du GUI (rom/machine/mem/cpu/mono/fastfdc/fpu, supports disk/diskb/cart/gemdos/acsi et
+  réseau fujinet*/modem/ethernec — `diskb`, `modem` et `ethernec` ajoutées le 2026-08-17 ; chemins `./../`
   du GUI résolus vers la racine ; les options CLI placées après surchargent). Reproduit « ce que
   l'utilisateur a lancé » → `--from-cfg neost.cfg --frames N --screenshot s.ppm` puis diff Hatari.
-- ✅ **Orchestration — FAIT (2026-07-09)** : `tools/run_all.py --tier fast` (P0+P1, ~0,1 s → garde de commit)
+- ✅ **Orchestration — FAIT (2026-07-09)** : `tools/run_all.py --tier fast` (P0+P1 et les gardes
+  ajoutées depuis, ~3 s → garde de commit)
   et `--tier full` (fast + P2 étalons pixel + `--verify-refs`). `--install-hook` / `--uninstall-hook`
   posent un **hook git pre-push** (opt-in) lançant `--tier fast`.
 
-**Pyramide de test COMPLÈTE (2026-07-09)** : **P0** `--spec512-selftest` (borderless + bordé) +
-`--bus-selftest` + `--mfp-selftest` · **P1** verdicts série cartouche (cpu/timing/frame/ipl/fpu) +
-`run_selftests.py` · **cycle-bench** (`run_cyclebench.py`, golden 68000) · **P2** `ref_kind` oracle + diff
-par ligne + `--verify-refs` · **P3** `--from-cfg` · **orchestration** `run_all.py --tier fast|full` + hook
-pre-push. Palier fast complet en ~0,3 s. **Reste (faible priorité)** : gate `trace_diff --periods` vs oracle
+**Pyramide de test COMPLÈTE (2026-07-09, élargie depuis)** : **P0** `neost-selftest` (logique pure :
+chemins hôte, `neost.cfg`) + `--spec512-selftest` (borderless + bordé) + `--bus-selftest` +
+`--mfp-selftest` + `--msa-selftest` + `--fuji-selftest` + `--enec-selftest` · **P1** verdicts série
+cartouche (cpu/timing/frame/ipl/fpu) + `run_selftests.py` · **cycle-bench** (`run_cyclebench.py`,
+golden 68000) · **round-trip save-state** + **contrôle de la disquette livrée**
+(`check_disk_assets.py`) · **P2** `ref_kind` oracle + diff par ligne + `--verify-refs` ·
+**P3** `--from-cfg` · **orchestration** `run_all.py --tier fast|full` + hook pre-push.
+Palier fast complet en ~3 s (mesuré 2026-08-19 ; il a grossi depuis les ~0,3 s d'origine). **Reste (faible priorité)** : gate `trace_diff --periods` vs oracle
 Hatari (le cycle-bench actuel est une auto-régression NeoST) ; self-tests P0 supplémentaires (autres Timers,
 ACIA) ; si une vraie démo spec512 **overscan** (bordures ouvertes) est rapatriée un jour → l'ajouter en
 étalon oracle (l'auto_diapo, lui, est 100 % borderless).

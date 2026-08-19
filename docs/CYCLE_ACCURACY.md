@@ -147,7 +147,8 @@ C'est le front actif. **Convergence instruction faite** ; reste la **phase d'ent
 ✅ **PORTÉ le 2026-07-07** — le partage de bus non-hog est implémenté : tranches de 64 accès
 bus / 64 accès CPU **réels**, suspension MID-MOT (l'état du mot en cours survit à la coupure),
 et le bug matériel « +1 accès CPU compté blitter » (`busCountError_` → tranche de 63).
-Cf. `src/core/Blitter.cpp:22-27` (constantes) et `:247-310` (tranche + comptage).
+Cf. `src/core/Blitter.cpp:22-27` (constantes), `:257-258` (`busCountError_` → tranche de 63)
+et `:247-310` (tranche + comptage).
 
 **Restent** : pas d'interfoliage `CycInt_Process` par accès bus pendant une tranche (le CPU est
 stallé en bloc, ses cycles internes ne recouvrent pas le blit), et `cpu_bus_rmw`.

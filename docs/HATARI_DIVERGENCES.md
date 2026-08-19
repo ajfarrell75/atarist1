@@ -656,10 +656,10 @@ MFP, périphériques (FDC/son-statuts/bus/SCC/ACIA), son approfondi (cœur YM + 
   bank1 = 2 Mo (≙ `memory_map_Standard_RAM`, cpu/memory.c — quirk mesuré sur STF).
 - **Son : bruit ≥/250 kHz** (incrément 125 kHz, comparaison 250 kHz, plancher per=1 retiré —
   `YM2149.cpp:184-193` = sound.c:1050-1058) et **`mode_ &= 0x8F`** (`DmaSound.cpp:434`).
-- **Filtre « écriture redondante » freq/res** — PRÉSENT (`recordSyncWrite`, `Shifter.cpp:871-879`,
+- **Filtre « écriture redondante » freq/res** — PRÉSENT (`recordSyncWrite`, `Shifter.cpp:1115-1160`,
   persistant inter-trames ≙ `ShifterFrame.Freq/Res`) — l'entrée « absent » de la 2ᵉ passe est fausse.
 - **V3 partiel : restart du compteur vidéo PORTÉ** (2026-07-02) — `restartVideoCounter`
-  (`Shifter.cpp:602-605`, early-return `videoCounter`:1722) + événement `VC_RESTART`
+  (`Shifter.cpp:927-935`, consommé au `beginFrame` `:387-389`) + événement `VC_RESTART`
   (`Machine.cpp:319-323`, ligne 310/260 cycle 56 STF / 60 STE, check freq live) ≙
   `Video_RestartVideoCounter` + HBL intermédiaire video.c:3262-3286.
 
@@ -769,7 +769,7 @@ read-latch/PWM/LPF C10/HPF/resampler 16.16 : tous vérifiés 1:1 contre sound.c/
 - **[moyenne] S4 table DAC ✅ corrigé (2026-07-07 soir)** — la table MESURÉE est le DÉFAUT, comme
   le `YM_TABLE_MIXING` d'Hatari (configuration.c:807) : mesures Paulo Simoes 16³ vendorisées
   (`ym2149_fixed_vol.h`) et interpolées en 32³ (port de `interpolate_volumetable`,
-  sound.c:505-543), cf. `YM2149.cpp:72-95` (`dacTable`). *Avant :* seul le modèle circuit
+  sound.c:505-543), cf. `YM2149.cpp:88-160` (`dacTable`, interpolation `:112`). *Avant :* seul le modèle circuit
   (≙ `YM2149_BuildModelVolumeTable`, qu'Hatari ne prend qu'avec `--ym-mixing model`) → timbre et
   balance différents sur accords 2-3 voies, ST ET STE. Le modèle reste accessible par
   `NEOST_YM_MIXING=model` (A/B).

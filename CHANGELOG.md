@@ -6,6 +6,31 @@ l'ordre inverse. Version courante : **0.5.2**.
 - « NeoST gère-t-il X ? » → [`docs/IMPLEMENTED.md`](docs/IMPLEMENTED.md) (inventaire par puce)
 - « Que reste-t-il ? » → [`TODO.md`](TODO.md)
 
+## Passe de cohérence doc ↔ code, 3ᵉ tour (2026-08-19)
+
+Dernier tour, sur les docs restées hors périmètre (CLOSURE_CHANTIER, MOIRA_WINUAE_CONVERGENCE,
+HATARI_AUTOMATION, empaquetage Raspberry) et sur les affirmations chiffrées, qui vieillissent
+sans prévenir. Palier `fast` vert.
+
+- **La feuille de route disait encore d'attendre l'oracle.** `TODO.md` gardait une section
+  « à reprendre une fois l'oracle Hatari bâti » : l'oracle EST bâti, et **cinq de ses six items
+  sont faits** grâce à lui (V1, V2, S2, S3, M1). La section dit maintenant ce qui a été traité et
+  ce qui reste — beam-sync par-ligne, résidus V3, D3, `UpdateTimers`, arrondi FPU.
+- **Le contrôle négatif mort traînait à un deuxième endroit** : `TODO.md` affirmait aussi
+  « Détection prouvée : `NEOST_ALIGN_OFF=1` → exit 1 ». Corrigé comme dans `TEST_SOFTWARE.md`.
+- **Chiffres re-mesurés plutôt que recopiés** : le palier `fast` était annoncé à ~0,1 s / ~0,3 s
+  dans deux docs — il fait **~3 s** aujourd'hui (il a absorbé le round-trip save-state, le
+  contrôle de la disquette livrée et quatre auto-tests de plus). La liste des auto-tests P0 et
+  celle des clés relues par `--from-cfg` ont été alignées sur le code au même endroit.
+- **Deux sondes d'instrumentation citées comme utilisables n'existent plus** : `NEOST_EXC_DIAG`
+  (NeoST) et `NEOST_HAT_IPLDIAG` (Hatari patché). `MOIRA_WINUAE_CONVERGENCE.md` le dit désormais
+  en tête — les mesures restent valables, les commandes non. Les 27 autres `NEOST_*` du doc ont
+  été vérifiées vivantes une par une.
+- **Dernières ancres ré-ancrées** : `updateGlueState` (Shifter, +600 lignes de dérive),
+  `recordSyncWrite`, `restartVideoCounter`, `dacTable`, les quatre sites `envFlag` de
+  `CLOSURE_CHANTIER.md`, `lineLenOn_`, le latch de bordure gauche dans `TODO.md`. Après quoi le
+  balayage automatique ne remonte plus que des faux positifs (symboles Hatari, homonymes).
+
 ## Passe de cohérence doc ↔ code, 2ᵉ tour (2026-08-19)
 
 Suite de la passe du jour, sur ce qu'elle avait explicitement laissé de côté : le reste des

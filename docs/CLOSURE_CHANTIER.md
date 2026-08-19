@@ -88,8 +88,8 @@ l'identique ; (c) le `[TB] pos` du diag est calculé dans le référentiel NOMIN
 et masque un vrai déplacement (recalculer la pos affichée sur glueLineStart_).
 
 **DÉCOUVERTE COLLATÉRALE À INSTRUIRE** : le canal `NEOST_LINELEN` est HYBRIDE —
-défaut **ON côté Machine** (`lineLenOn_`, Machine.cpp:157) mais **OFF aux 4
-sites du Shifter** (`envFlag(..., false)`, Shifter.cpp:445/479/1598/2444 :
+défaut **ON côté Machine** (`lineLenOn_`, Machine.cpp:173) mais **OFF aux 4
+sites du Shifter** (`envFlag(..., false)`, Shifter.cpp:445/491/1669/2554 :
 attribution des écritures, lecture $8209, timerBFrameCycleForLine). La mémoire
 du dépôt (« ON par défaut depuis 2026-07-08 ») ne vaut que pour Machine. À
 trancher : aligner les défauts (risque : re-tester Cuddly menu robot, dont le
