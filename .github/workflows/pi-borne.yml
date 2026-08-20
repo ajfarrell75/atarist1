@@ -90,9 +90,21 @@ jobs:
           test "$TYPE" = "EXEC" || { echo "ERREUR : runtime $TYPE ≠ EXEC"; exit 1; }
           "$APP" --appimage-extract >/dev/null
           readelf -h squashfs-root/usr/bin/neost | grep -q AArch64
-          for rom in tos102uk.img tos162uk.img; do
-            test -s "squashfs-root/usr/roms/$rom" \
-              || { echo "ERREUR : $rom absent de l'AppImage"; exit 1; }
+          # Les TOS Atari ne sont attendus QUE si le paquet a été construit avec eux :
+          # NEOST_PACKAGE_NO_ATARI_TOS=1 produit un paquet 100 % libre (EmuTOS seul), et
+          # cette garde le refusait alors comme un paquet incomplet — le nettoyage
+          # juridique aurait été bloqué par la CI. Cf. packaging/stage_free_data.sh.
+          if [ "${NEOST_PACKAGE_NO_ATARI_TOS:-0}" != "1" ]; then
+            for rom in tos102uk.img tos162uk.img; do
+              test -s "squashfs-root/usr/roms/$rom" \
+                || { echo "ERREUR : $rom absent de l'AppImage"; exit 1; }
+            done
+          fi
+          # Licences : la GPL exige que son texte ACCOMPAGNE le binaire. Aucun paquet
+          # publié n'en contenait avant le 2026-08-19 — rien ne le vérifiait.
+          for lic in GPL-3.0.txt GPL-2.0.txt THIRD-PARTY.txt; do
+            test -s "squashfs-root/usr/licenses/$lic" \
+              || { echo "ERREUR : licence absente du paquet : $lic"; exit 1; }
           done
           # Le runner est ARM64 : l'AppImage s'exécute réellement ici.
           squashfs-root/usr/bin/neost-headless --version
@@ -101,11 +113,21 @@ jobs:
           # ⚠ pas de `tar | grep -q` sous pipefail : grep ferme le pipe tôt →
           # « tar: stdout: write error » et exit 1 faux négatif.
           LIST=$(tar tzf "$TGZ")
-          for rom in tos102uk.img tos162uk.img; do
-            printf '%s\n' "$LIST" | grep -q "roms/$rom" \
-              || { echo "ERREUR : $rom absent du tar.gz"; exit 1; }
+          # Les TOS Atari ne sont attendus QUE si le paquet a été construit avec eux :
+          # NEOST_PACKAGE_NO_ATARI_TOS=1 produit un paquet 100 % libre (EmuTOS seul), et
+          # cette garde le refusait alors comme un paquet incomplet — le nettoyage
+          # juridique aurait été bloqué par la CI. Cf. packaging/stage_free_data.sh.
+          if [ "${NEOST_PACKAGE_NO_ATARI_TOS:-0}" != "1" ]; then
+            for rom in tos102uk.img tos162uk.img; do
+              printf '%s\n' "$LIST" | grep -q "roms/$rom" \
+                || { echo "ERREUR : $rom absent du tar.gz"; exit 1; }
+            done
+          fi
+          for lic in GPL-3.0.txt GPL-2.0.txt THIRD-PARTY.txt; do
+            printf '%s\n' "$LIST" | grep -q "licenses/$lic" \
+              || { echo "ERREUR : licence absente du tar.gz : $lic"; exit 1; }
           done
-          echo "OK : AppImage + tar.gz embarquent tos102uk et tos162uk"
+          echo "OK : AppImage + tar.gz complets (ROM attendues + licences)"
 
       - name: Résumé
         run: |

@@ -38,7 +38,8 @@ le remède est une ROM européenne. Repères d'aire non-noire pour la diapo « c
 soleil » : **0,555 = rendu correct (PAL)**, **0,475 = déchiré (NTSC)**.
 
 **Couverture de la suite** (12 étalons « machine », hors auto-tests) : `st` ×8 et
-`ste` ×4 ; `tos102uk` ×8 (50 Hz), `tos162us` ×3 + `etos256us` ×1 (60 Hz) ; 512 Ko ×10
+`ste` ×4 ; `tos102uk` ×6 (50 Hz) + `tos162us` ×1 (60 Hz) — **ROM Atari propriétaires** —,
+`etos192fr` ×2 (50 Hz) + `etos256us` ×3 (60 Hz) — **ROM libres** ; 512 Ko ×10
 et 1 Mo ×2 ; `fastfdc` ×8. Donc **MegaST, MegaSTE, TOS 1.00/1.04/1.06/2.06 et EmuTOS
 PAL ne sont couverts par AUCUN étalon**. Une suite verte ne prouve rien hors de ces
 configurations : devant un rapport « ça plante dans le GUI », commencer par lire
@@ -46,6 +47,30 @@ configurations : devant un rapport « ça plante dans le GUI », commencer par l
 (+ `--shot-every N PRÉFIXE` pour voir *où* ça casse) avant de soupçonner une
 régression. Vérifié le 2026-08-01 : No Cooper, Cuddly Demos, Enchanted Land et
 Lethal Xcess « en panne » tournaient en `machine=megast` — tous corrects en `st`.
+
+### ROM libres vs ROM propriétaires (depuis le 2026-08-19)
+
+Un étalon dont la ROM est **absente** ne se comporte plus de la même façon selon la ROM
+(`rom_is_free()`, `tools/run_etalons.py`) :
+
+| ROM | Absente ⇒ | Pourquoi |
+|-----|-----------|----------|
+| `roms/etos*.img` (EmuTOS, libre) | **ÉCHEC** | elle est livrée avec le dépôt : son absence est une casse. |
+| toute autre (`tos*.img`, Atari) | **SKIP recensé** | non redistribuable : le dépôt ne peut pas garantir sa présence. |
+
+Le SKIP n'est jamais silencieux — la suite imprime un bloc
+« ⚠ NON EXÉCUTÉS — ROM propriétaire absente (N) : … » et le code de sortie reste 0.
+Sans les deux ROM Atari, il reste **7 auto-tests + 5 étalons machine** (ST ×2, STE ×3).
+
+Les **4 étalons à disque généré** (`overscan_top`, `trace_odd`, `scroll_8264`,
+`scroll_8265`) ont été migrés sur EmuTOS le 2026-08-19 : leur programme est un secteur de
+boot autonome (il pose lui-même résolution, palette et base écran), donc le TOS ne fait que
+le charger. Vérifié plutôt que supposé — capture EmuTOS vs capture TOS propriétaire = 0 px,
+oracle Hatari EmuTOS vs oracle Hatari TOS = 0 px, références inchangées.
+
+⚠ Les **3 étalons Spectrum 512 ne sont PAS migrables** : sous EmuTOS le disque
+`spectrum_512_auto_diapo.st` ne prend pas la main (on retombe sur le bureau GEM). Ils
+restent donc sur `tos102uk` / `tos162us`, et se sautent proprement sans ces ROM.
 
 ## Ordre de débogage affichage conseillé
 
@@ -150,13 +175,13 @@ le `_comment` du fichier rappelle la couverture réelle (ni MegaST, ni MegaSTE, 
 
 ```sh
 ./build/neost-selftest                                        # logique PURE : chemins hôte, neost.cfg
-./build/neost-headless roms/tos102uk.img --glue-selftest      # machine Glue (bordures)
-./build/neost-headless roms/tos102uk.img --spec512-selftest   # re-rendu Spectrum 512 (borderless + bordé)
-./build/neost-headless roms/tos102uk.img --bus-selftest       # whitelist bus error (par octet)
-./build/neost-headless roms/tos102uk.img --mfp-selftest       # GPIP forcé / fronts AER-DDR / Timer B
-./build/neost-headless roms/tos102uk.img --msa-selftest       # ré-encodage .msa (aller-retour)
-./build/neost-headless roms/tos102uk.img --fuji-selftest      # FujiNet virtuel + cas-limites ACSI
-./build/neost-headless roms/tos102uk.img --enec-selftest      # NE2000/EtherNEC (bouclage)
+./build/neost-headless roms/etos256us.img --glue-selftest      # machine Glue (bordures)
+./build/neost-headless roms/etos256us.img --spec512-selftest   # re-rendu Spectrum 512 (borderless + bordé)
+./build/neost-headless roms/etos256us.img --bus-selftest       # whitelist bus error (par octet)
+./build/neost-headless roms/etos256us.img --mfp-selftest       # GPIP forcé / fronts AER-DDR / Timer B
+./build/neost-headless roms/etos256us.img --msa-selftest       # ré-encodage .msa (aller-retour)
+./build/neost-headless roms/etos256us.img --fuji-selftest      # FujiNet virtuel + cas-limites ACSI
+./build/neost-headless roms/etos256us.img --enec-selftest      # NE2000/EtherNEC (bouclage)
 python3 tools/run_cyclebench.py [--update]                    # golden du modèle de cycle 68000
 ```
 
@@ -209,6 +234,16 @@ python3 tools/run_all.py --tier full      # fast + P2 (étalons pixel + --verify
 python3 tools/run_all.py --install-hook    # hook git pre-push (opt-in) → lance --tier fast
 python3 tools/run_all.py --uninstall-hook
 ```
+
+### Étalons qui BOOTENT un disque : `oracle_scan` (2026-08-19)
+
+Hatari sème son RNG sur `time(NULL)` et s'en sert pour la position angulaire initiale de
+la disquette : **la numérotation des trames de son AVI change d'un run à l'autre**. Un
+`frame:` figé ne peut donc pas servir de référence oracle pour un étalon qui boote un
+disque. Les 7 entrées concernées portent `oracle_scan: N` : `--oracle` extrait la fenêtre
+`[frame−N, frame+N]` et retient la trame **identique** à la capture NeoST (jamais la moins
+pire ; aucune correspondance ⇒ échec bruyant = vraie divergence). Détail et mesures →
+`docs/HATARI_AUTOMATION.md`.
 
 ### Provenance des références & diff par ligne (P2)
 

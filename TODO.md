@@ -36,29 +36,49 @@ suit :
 | `wasm/index.data` | **artefact de build commis** qui ré-embarque les 122 fichiers ci-dessus | 73 Mo |
 
 Conséquences : cloner le dépôt (ou télécharger le tarball GitHub) livre une archive de
-logiciels sous copyright. `README.md` affirme par ailleurs que « les TOS Atari d'origine
-… **ne sont pas redistribués** ici » — démenti par le contenu, ce qui aggrave la position
-plutôt que de la protéger.
+logiciels sous copyright.
 
 ✅ **Déjà fait** : `deploy-web.yml` est repassé à `NEOST_WEB_FREE_ONLY=ON`, donc Pages ne
-sert plus que EmuTOS + `diskA.st`. Les paquets bureau étaient déjà propres
-(`stage_free_data.sh` + gardes `STRAY` dans les 4 jobs).
+sert plus que EmuTOS + `diskA.st`.
 
-❌ **Reste à trancher (décision du mainteneur — implique une réécriture d'historique)** :
+✅ **Découplage étalons ↔ ROM propriétaires — FAIT (2026-08-19)**, c'était le verrou qui
+rendait le retrait « impossible sans casser la CI » :
+- les **4 étalons à disque GÉNÉRÉ** (`overscan_top`, `trace_odd`, `scroll_8264`,
+  `scroll_8265`) tournent désormais sur **EmuTOS** (`etos192fr` / `etos256us`). Neutre,
+  vérifié : leur secteur de boot est autonome (il pose lui-même résolution, palette et base
+  écran), capture EmuTOS vs capture TOS propriétaire = **0 px**, références `tests/reference/`
+  **inchangées**, et l'oracle Hatari donne lui aussi **0 px entre les deux ROM** ;
+- `run_etalons.py` distingue maintenant **ROM libre** et **ROM propriétaire**
+  (`rom_is_free()`) : une ROM `etos*` absente reste un ÉCHEC (dépôt cassé), une ROM Atari
+  absente **saute l'étalon et le RECENSE** (bloc « ⚠ NON EXÉCUTÉS — ROM propriétaire
+  absente »), sans faux vert ;
+- vérifié bout-en-bout : `roms/tos102uk.img` et `roms/tos162us.img` retirés → suite
+  **verte** avec 6 étalons explicitement recensés comme non exécutés (spec512 ×3, No Cooper
+  ×2, Union), au lieu de 8 échecs. Couverture qui SURVIT au retrait : 7 auto-tests + 5
+  étalons machine (ST ×2, STE ×3).
+
+✅ **Licences dans les paquets — FAIT (2026-08-19)** : `stage_free_data.sh` copie
+`licenses/{GPL-3.0,GPL-2.0,THIRD-PARTY}.txt` (offre de source incluse), idem pour l'APK
+(`packaging/android/stage_assets.sh`), et les **8 jobs de vérification de paquet** de
+`release.yml` / `pi-borne.yml` échouent désormais si une licence manque.
+
+❌ **Reste à trancher (décision du mainteneur)** :
 1. `git rm --cached` sur `roms/tos*`, `disks/st`, `disks/stx`, `carts/`, `wasm/index.*`,
    les ajouter au `.gitignore`, puis **purger l'historique** (`git filter-repo`) — sans
-   quoi le contenu reste téléchargeable dans les commits antérieurs.
-2. ⚠ **Couplage à traiter EN MÊME TEMPS** : `tools/etalons.json` fait dépendre 8 étalons de
-   `roms/tos102uk.img` et `roms/tos162us.img`, et `run_all.py --tier full` garde les deux
-   jobs Linux de la release. Retirer les ROMs **casse mécaniquement la CI** → basculer ces
-   étalons sur EmuTOS ou les marquer `optional` AVANT le retrait, sinon le correctif
-   juridique sera annulé pour « refaire passer le vert ».
-3. Rendre l'affirmation de `README.md:192` vraie plutôt que de la retoucher.
+   quoi le contenu reste téléchargeable dans les commits antérieurs. **Plus rien ne s'y
+   oppose côté CI** (cf. découplage ci-dessus) ; c'est une réécriture d'historique, donc
+   un choix, pas une tâche.
+2. **Les paquets bureau redistribuent DEUX ROM Atari propriétaires** (`tos102uk.img`,
+   `tos162uk.img`, profils « 520 ST » / « 1040 STE » — `src/main.cpp:1948-1949`). Ce
+   n'était PAS écrit ici : la ligne « les paquets bureau étaient déjà propres » était
+   fausse, la garde `STRAY` les autorise nommément. L'interrupteur existe désormais —
+   `NEOST_PACKAGE_NO_ATARI_TOS=1` produit un paquet 100 % libre (EmuTOS seul), et la CI
+   l'honore — mais le **défaut reste inchangé** : le basculer est une décision.
+3. `README.md` dit maintenant la vérité (« The packages also carry TOS 1.02 UK and TOS
+   1.62 UK ») ; il reste à les faire figurer au **tableau des composants tiers**, qui ne
+   mentionne toujours pas Atari.
 
 Autres points de conformité relevés à la même passe (non bloquants mais à traiter) :
-- Les paquets publiés (AppImage, `.dmg`) n'embarquent **aucun texte de licence** :
-  `stage_free_data.sh` copie EmuTOS (**GPLv2**) et le binaire NeoST (**GPLv3**) sans
-  `LICENSE`, sans COPYING EmuTOS ni offre de source → non-conformité GPL.
 - `dev/` (52 Mo de tiers commis) contient `dev/agt` — dont le `NEOST_VENDOR.md` écrit
   lui-même « aucun fichier LICENSE explicite … vérifier les conditions de l'auteur avant
   toute redistribution » — et `dev/reservoir-gods/` sans licence, avec des `.exe`
@@ -85,6 +105,7 @@ Hatari.
 | **Beyond the Ice Palace** (D-BUG) | Rapport GUI : écran scramblé en jeu. **NON reproduit en headless** : gameplay PROPRE (ST et STE, 1 Mo, boot AUTO). ⚠ Le PRG exige > 512 Ko (BSS dépack 384 Ko → TPA ~471 Ko) : en 512 Ko le TOS skippe l'AUTO — comportement CORRECT (pas un bug). Le chemin GUI = double-clic bureau GEM (Pexec sous AES) ≠ AUTO — à reproduire avec la config GUI exacte. | Recette headless : copier le disque + `mmd ::AUTO` + `mcopy` ; `--mem 1m --keys-at 4000 "n" --keys-at 6200 " " --keys-at 9600 " " --keys-at 12000 "y" --keys-at 14500 "s" --keys-at 16000 " " --keys-at 19600 "y"` → jeu ≈ trame 21000. |
 | **Shadow Warriors** (2Hot2Handle) | Après SPACE : titre + musique OK ; le bouton joystick ne lance pas le jeu. (Castle Warrior, lui, fonctionne.) | À diff'er Hatari. |
 | **Wings of Death** (`.stx`) | Après bouton : titre **corrompu** + son ralenti ; SPACE lance le jeu, qui tourne ensuite très bien. | Corruption titre (vidéo) + son chargement. |
+| **Lethal Xcess sur Mega ST** (`.stx`) | ⛔ **NOUVEAU (2026-08-19)** : le jeu **se bloque** en `machine=megast` alors qu'il va **en jeu** en `machine=st` — MÊME ROM, mêmes disques, mêmes entrées (vérifié avec `etos192fr` ET `tos102uk`). Ce n'est donc pas « le piège megast » côté utilisateur, c'est un écart de NeoST à instruire. | Mesuré : les **796 premières commandes FDC sont IDENTIQUES** aux deux profils (`NEOST_FDC_DEBUG=1`), puis le jeu émet un Force Interrupt (`cmd=d0`) et **cesse de demander des données** ; il tourne alors en boucle sur `$14206 : tst.w $13a16 / btst #5,$fa01` = attente d'IRQ FDC (GPIP bit 5) qui n'arrive plus. En `st` le jeu reprend 40 s plus tard (`cmd=13` puis pistes 49-50) et démarre. IRQ prises identiques (vecteurs $48/$46/$1C) dans la fenêtre. Recette : `--disk Disk_1.STX --diskb Disk_2.STX --keys-at 3000 " " --joy-script 16500 "FFFF" --joy-at 21000 0x80`, écran en jeu ≈ trame 21500 en `st`. ⚠ **Cross-check Hatari BLOQUÉ** : `--cmd-fifo` n'injecte que des scancodes ST, pas de bit joystick — il faut un autre biais pour piloter le tir sous l'oracle. |
 
 Deux suivis mineurs laissés ouverts sur des cas par ailleurs tranchés :
 - **Lethal Xcess** — titre « buggé à ~8 % » constaté en GUI (2026-07-02), probablement la
@@ -112,10 +133,13 @@ aucune divergence ne casse un boot EmuTOS/`.ST`. Le terrain **logique** est épu
 
 ### 🔮 Items qui exigent l'oracle Hatari
 
-> **L'oracle EST bâti** (`extern/hatari/build/src/hatari`, v2.6.1 ; macOS :
-> `/opt/homebrew/bin/hatari`). Le reconstruire au besoin :
-> `cmake -S extern/hatari -B extern/hatari/build -DCMAKE_BUILD_TYPE=Release -DENABLE_SDL2=1 &&
-> cmake --build extern/hatari/build -j`. Recette de comparaison cycle-exacte →
+> **L'oracle se bâtit, il n'arrive pas tout seul** : `extern/hatari` est GITIGNORÉ et n'est
+> PAS un sous-module — sur une machine fraîche il est simplement ABSENT (constaté ici le
+> 2026-08-19). `git clone --depth 1 https://framagit.org/hatari/hatari.git extern/hatari`
+> puis `cmake -S extern/hatari -B extern/hatari/build -DCMAKE_BUILD_TYPE=Release
+> [-DCMAKE_OSX_ARCHITECTURES=arm64 -DENABLE_OSX_BUNDLE=0 sous macOS] && cmake --build
+> extern/hatari/build -j` → `extern/hatari/build/src/hatari` (v2.6.1-devel bâti ce jour-là).
+> Les deux options macOS sont obligatoires, cf. le doc. Recette de comparaison cycle-exacte →
 > [`docs/HATARI_AUTOMATION.md`](docs/HATARI_AUTOMATION.md).
 
 Ce qui a été traité GRÂCE à l'oracle depuis que cette liste a été écrite : **V1** (branche STE

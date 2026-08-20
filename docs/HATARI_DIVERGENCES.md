@@ -1134,6 +1134,40 @@ des chasseurs bien ciblés (code frais de la session) plus que des vérificateur
 chaque correctif ci-dessus a été RE-vérifié à la main contre les sources Hatari avant d'être
 appliqué.
 
+## 11ᵉ passe — deux résidus MESURÉS sur les étalons à disque généré (2026-08-19)
+
+Découverts en migrant les étalons vers EmuTOS (découplage juridique) : leurs références
+sont des **self-captures** (`ref_kind: snapshot`), donc elles gardaient la non-régression
+de NeoST contre lui-même **sans jamais confronter ces étalons à l'oracle**. Confrontation
+faite (Hatari v2.6.1-devel bâti le jour même, même disque, même ROM, même trame) :
+
+| Étalon | NeoST ↔ oracle | Localisation | Nature |
+|--------|----------------|--------------|--------|
+| `overscan_top` | **194 px / 114816 (0,17 %)** | 8 premières lignes du buffer (y=0..7) ; 1ᵉʳ écart (x=32, y=0) NeoST `#000000` vs Hatari `#666666` | ouvert |
+| `trace_odd` | **22 px / 114816 (0,02 %)** | 6 scanlines, 1ᵉʳ écart (x=402, y=2) NeoST `#00EE00` vs Hatari `#00B200` — même teinte, intensité différente | ouvert |
+
+**Ce que le contrôle croisé établit déjà** :
+- l'écart est **indépendant de la ROM** : mesuré identique (194 px) sous `etos192fr` et sous
+  `tos102uk`, et l'oracle lui-même est **byte-identique entre les deux ROM** (0 px) — ces
+  disques sont des secteurs de boot autonomes, le TOS ne fait que les charger ;
+- il est **indépendant du numéro de trame demandé** au sens où les deux étalons capturent une
+  image stable (motif statique) : ce n'est pas un décalage d'une trame ;
+- les deux résidus sont sur les **premières lignes de trame**, ce qui pointe la même famille
+  que les items V3 « attribution de ligne » / `CyclesPerVBL` de `TODO.md`, pas deux bugs sans
+  rapport. `trace_odd` ajoute une composante **d'intensité de couleur** (`#00EE00` vs
+  `#00B200`) qui, elle, ressemble à une conversion de niveau palette et mérite d'être
+  regardée séparément.
+
+**Contre-épreuve utile** : `scroll_8264` et `scroll_8265`, capturés dans les mêmes conditions
+(STE, disque généré), sont à **0 px de l'oracle** — leurs références ont donc été promues en
+`ref_kind: oracle` le même jour. Le rendu STE fin n'est pas en cause : c'est bien le haut de
+trame.
+
+⚠ Tant que ces deux résidus ne sont pas expliqués, leurs références **restent des
+self-captures** : les promouvoir en `oracle` ferait échouer la suite, et les re-baseliner sur
+l'oracle figerait un écart non compris dans l'autre sens. Le chiffre est consigné dans
+`tools/etalons.json` (`ref_note`) pour que le prochain lecteur ne le redécouvre pas.
+
 ## Extensions NeoST sans équivalent Hatari (divergences délibérées, hors fidélité)
 
 Ces fonctionnalités **n'existent pas dans Hatari** et ne sont donc pas des écarts à

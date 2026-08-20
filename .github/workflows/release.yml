@@ -170,9 +170,21 @@ jobs:
             echo "ERREUR : libGL embarquée dans l'AppImage"; exit 1
           fi
           # Liste autorisée : EmuTOS + tos102uk/tos162uk (profils ST/STE).
-          for rom in tos102uk.img tos162uk.img; do
-            test -s "squashfs-root/usr/roms/$rom" \
-              || { echo "ERREUR : $rom absent du paquet"; exit 1; }
+          # Les TOS Atari ne sont attendus QUE si le paquet a été construit avec eux :
+          # NEOST_PACKAGE_NO_ATARI_TOS=1 produit un paquet 100 % libre (EmuTOS seul), et
+          # cette garde le refusait alors comme un paquet incomplet — le nettoyage
+          # juridique aurait été bloqué par la CI. Cf. packaging/stage_free_data.sh.
+          if [ "${NEOST_PACKAGE_NO_ATARI_TOS:-0}" != "1" ]; then
+            for rom in tos102uk.img tos162uk.img; do
+              test -s "squashfs-root/usr/roms/$rom" \
+                || { echo "ERREUR : $rom absent du paquet"; exit 1; }
+            done
+          fi
+          # Licences : la GPL exige que son texte ACCOMPAGNE le binaire. Aucun paquet
+          # publié n'en contenait avant le 2026-08-19 — rien ne le vérifiait.
+          for lic in GPL-3.0.txt GPL-2.0.txt THIRD-PARTY.txt; do
+            test -s "squashfs-root/usr/licenses/$lic" \
+              || { echo "ERREUR : licence absente du paquet : $lic"; exit 1; }
           done
           STRAY=$(find squashfs-root/usr/roms -maxdepth 1 -name '*.img' \
                   ! -name 'etos*' ! -name 'tos102uk.img' ! -name 'tos162uk.img')
@@ -278,9 +290,21 @@ jobs:
           if find squashfs-root -name 'libGL.so*' -o -name 'libOpenGL.so*' | grep -q .; then
             echo "ERREUR : libGL embarquée dans l'AppImage"; exit 1
           fi
-          for rom in tos102uk.img tos162uk.img; do
-            test -s "squashfs-root/usr/roms/$rom" \
-              || { echo "ERREUR : $rom absent du paquet"; exit 1; }
+          # Les TOS Atari ne sont attendus QUE si le paquet a été construit avec eux :
+          # NEOST_PACKAGE_NO_ATARI_TOS=1 produit un paquet 100 % libre (EmuTOS seul), et
+          # cette garde le refusait alors comme un paquet incomplet — le nettoyage
+          # juridique aurait été bloqué par la CI. Cf. packaging/stage_free_data.sh.
+          if [ "${NEOST_PACKAGE_NO_ATARI_TOS:-0}" != "1" ]; then
+            for rom in tos102uk.img tos162uk.img; do
+              test -s "squashfs-root/usr/roms/$rom" \
+                || { echo "ERREUR : $rom absent du paquet"; exit 1; }
+            done
+          fi
+          # Licences : la GPL exige que son texte ACCOMPAGNE le binaire. Aucun paquet
+          # publié n'en contenait avant le 2026-08-19 — rien ne le vérifiait.
+          for lic in GPL-3.0.txt GPL-2.0.txt THIRD-PARTY.txt; do
+            test -s "squashfs-root/usr/licenses/$lic" \
+              || { echo "ERREUR : licence absente du paquet : $lic"; exit 1; }
           done
           STRAY=$(find squashfs-root/usr/roms -maxdepth 1 -name '*.img' \
                   ! -name 'etos*' ! -name 'tos102uk.img' ! -name 'tos162uk.img')
@@ -367,9 +391,21 @@ jobs:
           if find squashfs-root -name 'libGL.so*' -o -name 'libOpenGL.so*' | grep -q .; then
             echo "ERREUR : libGL embarquée dans l'AppImage"; exit 1
           fi
-          for rom in tos102uk.img tos162uk.img; do
-            test -s "squashfs-root/usr/roms/$rom" \
-              || { echo "ERREUR : $rom absent du paquet"; exit 1; }
+          # Les TOS Atari ne sont attendus QUE si le paquet a été construit avec eux :
+          # NEOST_PACKAGE_NO_ATARI_TOS=1 produit un paquet 100 % libre (EmuTOS seul), et
+          # cette garde le refusait alors comme un paquet incomplet — le nettoyage
+          # juridique aurait été bloqué par la CI. Cf. packaging/stage_free_data.sh.
+          if [ "${NEOST_PACKAGE_NO_ATARI_TOS:-0}" != "1" ]; then
+            for rom in tos102uk.img tos162uk.img; do
+              test -s "squashfs-root/usr/roms/$rom" \
+                || { echo "ERREUR : $rom absent du paquet"; exit 1; }
+            done
+          fi
+          # Licences : la GPL exige que son texte ACCOMPAGNE le binaire. Aucun paquet
+          # publié n'en contenait avant le 2026-08-19 — rien ne le vérifiait.
+          for lic in GPL-3.0.txt GPL-2.0.txt THIRD-PARTY.txt; do
+            test -s "squashfs-root/usr/licenses/$lic" \
+              || { echo "ERREUR : licence absente du paquet : $lic"; exit 1; }
           done
           STRAY=$(find squashfs-root/usr/roms -maxdepth 1 -name '*.img' \
                   ! -name 'etos*' ! -name 'tos102uk.img' ! -name 'tos162uk.img')
@@ -458,9 +494,21 @@ jobs:
           if find squashfs-root -name 'libGL.so*' -o -name 'libOpenGL.so*' | grep -q .; then
             echo "ERREUR : libGL embarquée dans l'AppImage"; exit 1
           fi
-          for rom in tos102uk.img tos162uk.img; do
-            test -s "squashfs-root/usr/roms/$rom" \
-              || { echo "ERREUR : $rom absent du paquet"; exit 1; }
+          # Les TOS Atari ne sont attendus QUE si le paquet a été construit avec eux :
+          # NEOST_PACKAGE_NO_ATARI_TOS=1 produit un paquet 100 % libre (EmuTOS seul), et
+          # cette garde le refusait alors comme un paquet incomplet — le nettoyage
+          # juridique aurait été bloqué par la CI. Cf. packaging/stage_free_data.sh.
+          if [ "${NEOST_PACKAGE_NO_ATARI_TOS:-0}" != "1" ]; then
+            for rom in tos102uk.img tos162uk.img; do
+              test -s "squashfs-root/usr/roms/$rom" \
+                || { echo "ERREUR : $rom absent du paquet"; exit 1; }
+            done
+          fi
+          # Licences : la GPL exige que son texte ACCOMPAGNE le binaire. Aucun paquet
+          # publié n'en contenait avant le 2026-08-19 — rien ne le vérifiait.
+          for lic in GPL-3.0.txt GPL-2.0.txt THIRD-PARTY.txt; do
+            test -s "squashfs-root/usr/licenses/$lic" \
+              || { echo "ERREUR : licence absente du paquet : $lic"; exit 1; }
           done
           STRAY=$(find squashfs-root/usr/roms -maxdepth 1 -name '*.img' \
                   ! -name 'etos*' ! -name 'tos102uk.img' ! -name 'tos162uk.img')
@@ -523,9 +571,21 @@ jobs:
           LEAKED=$(otool -L "$BIN" | tail -n +2 | awk '{print $1}' \
                    | grep -E '^(/usr/local|/opt/homebrew|/opt/local)' || true)
           test -z "$LEAKED" || { echo "ERREUR : dylib hors bundle : $LEAKED"; exit 1; }
-          for rom in tos102uk.img tos162uk.img; do
-            test -s "dist/NeoST.app/Contents/roms/$rom" \
-              || { echo "ERREUR : $rom absent du paquet"; exit 1; }
+          # Les TOS Atari ne sont attendus QUE si le paquet a été construit avec eux :
+          # NEOST_PACKAGE_NO_ATARI_TOS=1 produit un paquet 100 % libre (EmuTOS seul), et
+          # cette garde le refusait alors comme un paquet incomplet — le nettoyage
+          # juridique aurait été bloqué par la CI. Cf. packaging/stage_free_data.sh.
+          if [ "${NEOST_PACKAGE_NO_ATARI_TOS:-0}" != "1" ]; then
+            for rom in tos102uk.img tos162uk.img; do
+              test -s "dist/NeoST.app/Contents/roms/$rom" \
+                || { echo "ERREUR : $rom absent du paquet"; exit 1; }
+            done
+          fi
+          # Licences : la GPL exige que son texte ACCOMPAGNE le binaire. Aucun paquet
+          # publié n'en contenait avant le 2026-08-19 — rien ne le vérifiait.
+          for lic in GPL-3.0.txt GPL-2.0.txt THIRD-PARTY.txt; do
+            test -s "dist/NeoST.app/Contents/licenses/$lic" \
+              || { echo "ERREUR : licence absente du paquet : $lic"; exit 1; }
           done
           STRAY=$(find dist/NeoST.app/Contents/roms -maxdepth 1 -name '*.img' \
                   ! -name 'etos*' ! -name 'tos102uk.img' ! -name 'tos162uk.img')
@@ -676,8 +736,20 @@ jobs:
             find "$ROOT" -name '*.dll'; exit 1
           fi
           # Mêmes gardes de contenu que les AppImage : liste autorisée seulement.
-          for rom in tos102uk.img tos162uk.img; do
-            test -s "${ROOT}roms/$rom" || { echo "ERREUR : $rom absent du paquet"; exit 1; }
+          # Les TOS Atari ne sont attendus QUE si le paquet a été construit avec eux :
+          # NEOST_PACKAGE_NO_ATARI_TOS=1 produit un paquet 100 % libre (EmuTOS seul), et
+          # cette garde le refusait alors comme un paquet incomplet — le nettoyage
+          # juridique aurait été bloqué par la CI. Cf. packaging/stage_free_data.sh.
+          if [ "${NEOST_PACKAGE_NO_ATARI_TOS:-0}" != "1" ]; then
+            for rom in tos102uk.img tos162uk.img; do
+              test -s "${ROOT}roms/$rom" || { echo "ERREUR : $rom absent du paquet"; exit 1; }
+            done
+          fi
+          # Licences : la GPL exige que son texte ACCOMPAGNE le binaire. Aucun paquet
+          # publié n'en contenait avant le 2026-08-19 — rien ne le vérifiait.
+          for lic in GPL-3.0.txt GPL-2.0.txt THIRD-PARTY.txt; do
+            test -s "${ROOT}licenses/$lic" \
+              || { echo "ERREUR : licence absente du paquet : $lic"; exit 1; }
           done
           STRAY=$(find "${ROOT}roms" -maxdepth 1 -name '*.img' \
                   ! -name 'etos*' ! -name 'tos102uk.img' ! -name 'tos162uk.img')

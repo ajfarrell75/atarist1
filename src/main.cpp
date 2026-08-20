@@ -1942,24 +1942,42 @@ void drawConfigWindow(ConfigUi& ui) {
     // ── Préréglages : la config matérielle complète en un clic. Codés en dur et
     // limités au MATÉRIEL (ils ne font que garnir les champs « en attente »). Les
     // configurations de l'utilisateur, elles, vivent dans la page « Profiles ».
+    // Chaque préréglage nomme le TOS d'ORIGINE de la machine, PUIS des replis EmuTOS.
+    // Sans repli, un préréglage pointait sur une ROM absente du paquet livré : « Mega STE »
+    // demande tos206fr, qui n'a JAMAIS été empaquetée, et « 520 ST »/« 1040 STE » perdent
+    // la leur dès qu'un paquet est construit sans les TOS Atari
+    // (NEOST_PACKAGE_NO_ATARI_TOS=1, cf. packaging/stage_free_data.sh). Le repli garde le
+    // pays/la fréquence quand il le peut : tos102uk et tos162uk sont PAL → etos*fr (PAL).
     struct Profil { const char* label; const char* machine; const char* mem;
-                    const char* rom; };
+                    const char* rom; const char* rom2; const char* rom3; };
     static const Profil kProfils[] = {
-        { "520 ST",   "st",      "512k", "roms/tos102uk.img" },
-        { "1040 STE", "ste",     "1m",   "roms/tos162uk.img" },
-        { "Mega STE", "megaste", "4m",   "roms/tos206fr.img" },
+        { "520 ST",   "st",      "512k", "roms/tos102uk.img", "roms/etos192fr.img", "roms/etos192us.img" },
+        { "1040 STE", "ste",     "1m",   "roms/tos162uk.img", "roms/etos256fr.img", "roms/etos256us.img" },
+        { "Mega STE", "megaste", "4m",   "roms/tos206fr.img", "roms/etos256fr.img", "roms/etos256us.img" },
+    };
+    // Premier candidat PRÉSENT dans roms/ ; à défaut le premier (message d'erreur explicite
+    // au chargement plutôt qu'un chemin silencieusement faux).
+    auto pickPresetRom = [&](const Profil& p) {
+        std::error_code ec;
+        for (const char* cand : { p.rom, p.rom2, p.rom3 })
+            if (fs::exists(fs::path(ui.romsDir) / fs::path(cand).filename(), ec)) return std::string(cand);
+        return std::string(p.rom);
     };
     ImGui::TextDisabled("Presets:");
     for (const auto& p : kProfils) {
         ImGui::SameLine();
+        const std::string rom = pickPresetRom(p);
         const bool cur = ui.pendMachine == p.machine && ui.pendMem == p.mem
-                      && fs::path(ui.pendRom).filename() == fs::path(p.rom).filename();
+                      && fs::path(ui.pendRom).filename() == fs::path(rom).filename();
         if (cur) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
         if (ImGui::SmallButton(p.label)) {
-            ui.pendMachine = p.machine; ui.pendMem = p.mem; ui.pendRom = p.rom;
+            ui.pendMachine = p.machine; ui.pendMem = p.mem; ui.pendRom = rom;
             ui.pendFpu = false;
         }
         if (cur) ImGui::PopStyleColor();
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("%s, %s, %s%s", p.machine, p.mem, rom.c_str(),
+                              rom == p.rom ? "" : "\n(original TOS not installed - using EmuTOS)");
     }
     ImGui::Separator();
 
