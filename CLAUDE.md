@@ -57,9 +57,10 @@ C++20, aucune génération. Le cœur Musashi a été retiré.
 ## ⭐ Méthode imposée (ordre strict)
 
 `extern/hatari/src` = **la source de vérité matérielle** (sources C complètes, lues et
-PAS compilées). Avec **MAME**, c'est la référence du comportement des puces. Hatari est
-aussi **bâti dans le dépôt** (`extern/hatari/build/src/hatari` ; macOS :
-`/opt/homebrew/bin/hatari`) et s'exécute en **oracle headless** →
+PAS compilées). Avec **MAME**, c'est la référence du comportement des puces. Hatari
+s'exécute aussi en **oracle headless** (`extern/hatari/build/src/hatari`).
+⚠ `extern/hatari` est **gitignoré et n'est pas un sous-module** : rien ne le rapatrie, il
+peut être ABSENT — clone + build (options macOS obligatoires) et recettes →
 [`docs/HATARI_AUTOMATION.md`](docs/HATARI_AUTOMATION.md).
 
 Quand un test/jeu plante, **NE PAS** désassembler ni chercher le point de divergence

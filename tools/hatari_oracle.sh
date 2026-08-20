@@ -52,6 +52,31 @@ if [[ ! -s "$AVI" ]]; then
   tail -20 "$LOG" >&2 || true
   exit 1
 fi
+# HATARI_ORACLE_SCAN=N : au lieu d'UNE image, extrait la FENÊTRE [FRAME-N, FRAME+N]
+# dans "<OUT sans .png>.scan/f_%05d.png" (l'appelant choisit). Indispensable pour les
+# étalons qui BOOTENT UN DISQUE : Hatari fait `Hatari_srand(time(NULL))` (sdl/main_sdl.c)
+# et tire au hasard la POSITION ANGULAIRE INITIALE de la disquette
+# (fdc.c, IndexPulse_Time = ... - Hatari_rand() % ...), donc la durée du boot — et
+# donc la numérotation des trames — CHANGE d'un run à l'autre. Mesuré le 2026-08-19
+# sur cuddly_demos : la même trame NeoST tombait sur la trame Hatari n+61 dans un run
+# et n-2 dans un autre. Un `frame:` figé ne peut pas être juste par construction ;
+# la fenêtre, elle, retrouve l'image.
+if [[ -n "${HATARI_ORACLE_SCAN:-}" ]]; then
+  SCAN_N="$HATARI_ORACLE_SCAN"
+  SCAN_DIR="${OUT%.png}.scan"
+  rm -rf "$SCAN_DIR"; mkdir -p "$SCAN_DIR"
+  LO=$(( FRAME - SCAN_N )); [[ $LO -lt 0 ]] && LO=0
+  HI=$(( FRAME + SCAN_N ))
+  ffmpeg -y -loglevel error -i "$AVI" -vf "select='between(n,$LO,$HI)'" \
+         -vsync 0 -start_number "$LO" "$SCAN_DIR/f_%05d.png"
+  N=$(ls "$SCAN_DIR" | wc -l | tr -d ' ')
+  if [[ "$N" -eq 0 ]]; then
+    echo "fenêtre $LO-$HI hors de l'AVI (${VBLS} VBL demandées)" >&2; exit 1
+  fi
+  echo "oracle fenêtre $LO-$HI ($N images) -> $SCAN_DIR ($MACHINE)"
+  exit 0
+fi
+
 # Extrait la frame demandée (l'AVI a 1 image par VBL avec --frameskips 0).
 # ⚠ OUT est supprimé D'ABORD et vérifié APRÈS : si la frame demandée dépasse la
 # fin de l'AVI (Hatari sorti court), ffmpeg n'écrit RIEN et sort 0 — un PNG

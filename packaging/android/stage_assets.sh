@@ -17,8 +17,17 @@ for f in roms/etos192us.img roms/etos192fr.img roms/etos256us.img roms/etos256fr
     cp "$f" "$DEST/$(basename "$f")"
 done
 cp disks/diskA.st "$DEST/diskA.st"
-# Garde-fou : rien d'autre qu'EmuTOS et diskA ne doit se retrouver dans l'APK.
-BAD=$(find "$DEST" -type f ! -name 'etos*' ! -name 'diskA.st' || true)
+# LICENCES : l'APK embarque EmuTOS (GPLv2) et NeoST (GPLv3) — leur texte doit
+# ACCOMPAGNER le binaire. Ces fichiers ne figurent PAS dans kAssets
+# (src/android/main_android.cpp) : ils voyagent dans l'APK sans être déballés,
+# ce qui suffit à la licence et n'ajoute rien au stockage interne.
+cp LICENSE "$DEST/GPL-3.0.txt"
+cp packaging/licenses/GPL-2.0.txt "$DEST/GPL-2.0.txt"
+cp packaging/licenses/THIRD-PARTY.txt "$DEST/THIRD-PARTY.txt"
+# Garde-fou : rien d'autre qu'EmuTOS, diskA et les licences ne doit se retrouver
+# dans l'APK.
+BAD=$(find "$DEST" -type f ! -name 'etos*' ! -name 'diskA.st' \
+       ! -name 'GPL-*.txt' ! -name 'THIRD-PARTY.txt' || true)
 if [ -n "$BAD" ]; then
     echo "ERREUR : fichier non redistribuable dans les assets :" >&2
     echo "$BAD" >&2

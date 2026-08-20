@@ -6,6 +6,74 @@ l'ordre inverse. Version courante : **0.5.2**.
 - « NeoST gère-t-il X ? » → [`docs/IMPLEMENTED.md`](docs/IMPLEMENTED.md) (inventaire par puce)
 - « Que reste-t-il ? » → [`TODO.md`](TODO.md)
 
+## Cuddly Demos ré-activé : l'oracle Hatari n'est pas déterministe (2026-08-19)
+
+L'étalon `cuddly_demos` était **désactivé depuis le 2026-08-01** au motif que « l'animation
+est à une PHASE différente » (au mieux 16023 px d'écart, jamais 0). Ce verdict est **réfuté**,
+et le coupable n'était pas NeoST.
+
+- **NeoST rend cette démo BYTE-IDENTIQUEMENT à Hatari** : 0 px / 114766 sur **220 trames
+  consécutives** (3300-3519 côté NeoST, 3361-3580 côté oracle).
+- **Ce qui manquait était la bonne trame oracle.** Hatari fait `Hatari_srand(time(NULL))`
+  (`sdl/main_sdl.c`) et tire avec ce RNG la **position angulaire initiale de la disquette**
+  (`fdc.c`) : la durée du boot — donc la numérotation des trames de l'AVI — **change d'un run
+  à l'autre**. Mesuré : la même trame NeoST tombait sur la trame Hatari **n+61** dans un run
+  et **n−2** dans un autre ; deux runs lancés à quelques secondes d'intervalle, eux, sont
+  identiques. Un balayage à `frame:` figé ne pouvait pas converger — il cherchait au mauvais
+  endroit, pas trop court.
+- **Outillage : `oracle_scan: N`.** `hatari_oracle.sh` accepte `HATARI_ORACLE_SCAN` (extrait
+  la fenêtre au lieu d'une image) et `run_etalons.py --oracle` retient la trame **identique**
+  à la capture NeoST — jamais la « moins pire » : installer une image simplement proche
+  figerait un écart au lieu de le signaler. Aucune correspondance ⇒ échec bruyant, et c'est
+  alors une vraie divergence. Les **7 étalons qui bootent un disque** en sont équipés.
+  La capture NeoST passe donc AVANT l'oracle dans `run_one` (elle sert de clé de recherche).
+- Résultat : `cuddly_demos` repasse **actif, `ref_kind: oracle`, `max_diff_px: 0`** — la
+  trame retenue par le scan est à **+60** de la nominale et à **0 px**. Plus aucun étalon
+  désactivé dans la suite ; `--tier full` vert.
+
+## Découplage juridique de la suite d'étalons + licences dans les paquets (2026-08-19)
+
+Le seul point 🚨 du `TODO.md` — 79 Mo de contenu sous copyright suivi par un dépôt public —
+était bloqué par un **couplage technique** : 12 étalons dépendaient de deux ROM Atari, donc
+les retirer « cassait mécaniquement la CI ». Ce couplage est levé, sans perdre un pixel de
+couverture. Paliers `fast` et `full` verts avant comme après.
+
+- **4 étalons migrés sur EmuTOS, à 0 px près.** `overscan_top`, `trace_odd`, `scroll_8264`
+  et `scroll_8265` tournent sur `etos192fr`/`etos256us` au lieu de `tos102uk`/`tos162us`.
+  Leur programme est un **secteur de boot autonome** (il pose lui-même résolution, palette,
+  base écran) : le TOS ne fait que le charger. Vérifié plutôt que supposé — capture EmuTOS
+  vs capture TOS propriétaire = **0 px / 114816**, références `tests/reference/` **inchangées**,
+  et l'**oracle Hatari lui-même est byte-identique entre les deux ROM**.
+- **ROM absente : deux cas, plus un seul.** `run_etalons.py` sépare ROM libre et ROM
+  propriétaire (`rom_is_free()`) : une `etos*` manquante reste un ÉCHEC (dépôt cassé), une
+  `tos*` manquante SAUTE l'étalon et le **recense** dans un bloc dédié. Vérifié bout-en-bout
+  en retirant les deux ROM : suite **verte** avec 6 étalons déclarés non exécutés, au lieu de
+  8 échecs. Reste alors 7 auto-tests + 5 étalons machine (ST ×2, STE ×3).
+- **Ce que la confrontation à l'oracle a révélé au passage** : `scroll_8264`/`scroll_8265`
+  sont à **0 px** de Hatari → leurs références sont promues `ref_kind: oracle` (PNG 832×552
+  commis, `.ppm` supprimés). Mais `overscan_top` est à **194 px (0,17 %)** et `trace_odd` à
+  **22 px (0,02 %)** de l'oracle, **sur les premières lignes de trame** — écarts que leurs
+  références en self-capture ne pouvaient pas voir. Indépendants de la ROM (mesurés
+  identiques sous les deux). Consignés en 11ᵉ passe de `docs/HATARI_DIVERGENCES.md` et dans
+  `etalons.json` ; références laissées en `snapshot`, car ni les promouvoir ni les
+  re-baseliner ne serait honnête tant que l'écart n'est pas expliqué.
+- **Les paquets partaient sans aucune licence.** `stage_free_data.sh` copie désormais
+  `licenses/GPL-3.0.txt` (NeoST), `licenses/GPL-2.0.txt` (EmuTOS) et un `THIRD-PARTY.txt`
+  qui nomme chaque composant, sa licence et **l'offre de source** ; idem dans l'APK. Les
+  **8 vérifications de paquet** de `release.yml`/`pi-borne.yml` échouent maintenant si une
+  licence manque — c'est l'absence de cette garde qui rendait la non-conformité invisible.
+- **`NEOST_PACKAGE_NO_ATARI_TOS=1`** construit un paquet 100 % libre (EmuTOS seul), gardes
+  CI comprises. Le défaut est INCHANGÉ : les paquets bureau continuent d'embarquer
+  `tos102uk`/`tos162uk`. Le `TODO.md` prétendait le contraire (« les paquets bureau étaient
+  déjà propres ») — corrigé, la décision revient au mainteneur.
+- **L'oracle Hatari n'était nulle part.** `extern/hatari` est gitignoré, n'est pas un
+  sous-module, et aucun script ne le rapatrie : sur cette machine il était **absent**, alors
+  que `CLAUDE.md` et `HATARI_AUTOMATION.md` le décrivaient comme « bâti dans le dépôt ».
+  Cloné, bâti (v2.6.1-devel) et la recette écrite — avec les deux options macOS sans
+  lesquelles le build échoue : `-DCMAKE_OSX_ARCHITECTURES=arm64` (sinon édition de liens
+  x86_64 contre des bibliothèques arm64) et `-DENABLE_OSX_BUNDLE=0` (sinon `ibtool` part en
+  `Abort trap: 6` et make **supprime le binaire déjà lié**).
+
 ## Passe de cohérence doc ↔ code, 3ᵉ tour (2026-08-19)
 
 Dernier tour, sur les docs restées hors périmètre (CLOSURE_CHANTIER, MOIRA_WINUAE_CONVERGENCE,

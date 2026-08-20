@@ -5,21 +5,75 @@ lecture des sources (`extern/hatari/src`), on peut **exécuter** Hatari de faço
 déterministe et **sans affichage** pour comparer son comportement à NeoST (boot, écran,
 détection HW, IRQ). Ce doc note la recette vérifiée (Hatari v2.6.1, macOS Silicon, juin 2026).
 
+## Se procurer l'oracle (rien ne le fait à votre place)
+
+⚠ `extern/hatari` est **gitignoré et n'est PAS un sous-module** : `git clone` du dépôt
+NeoST ne le ramène pas, `git submodule update` non plus, et **aucun script d'installation
+ne s'en occupe**. Sur une machine fraîche (ou après un ménage), il est simplement ABSENT —
+c'était le cas ici le 2026-08-19, alors que `CLAUDE.md` et ce document le décrivaient
+comme « bâti dans le dépôt ». Le récupérer et le bâtir :
+
+```sh
+git clone --depth 1 https://framagit.org/hatari/hatari.git extern/hatari
+cmake -S extern/hatari -B extern/hatari/build -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_OSX_ARCHITECTURES=arm64 -DENABLE_OSX_BUNDLE=0        # macOS Silicon
+cmake --build extern/hatari/build -j                                # → build/src/hatari
+```
+
+Les deux options macOS ne sont pas cosmétiques (mesuré le 2026-08-19, Hatari
+v2.6.1-devel, macOS 15 / Silicon) :
+- **sans `-DCMAKE_OSX_ARCHITECTURES=arm64`**, la configuration vise **x86_64** et l'édition
+  de liens échoue sur `_png_write_row… symbol(s) not found for architecture x86_64` (les
+  bibliothèques Homebrew sont arm64) ;
+- **sans `-DENABLE_OSX_BUNDLE=0`**, la cible est un `Hatari.app` dont l'étape finale lance
+  `ibtool` sur un XIB : celui-ci part en `Abort trap: 6` (« A required plugin failed to
+  load »), et make **supprime le binaire déjà lié**. Avec `=0`, on obtient exactement le
+  chemin qu'attend l'outillage : `extern/hatari/build/src/hatari`.
+
+Sous Linux (CachyOS / Ubuntu) les deux options sont inutiles ; dépendance : `libsdl2-dev`.
+`ffmpeg` et `imagemagick` sont requis pour extraire les images (`tools/hatari_oracle.sh`).
+
 Binaire selon la machine :
-- **macOS** : `/opt/homebrew/bin/hatari` (Homebrew). ⚠ Pas de `timeout` — on s'appuie sur
-  `--run-vbls` qui fait sortir Hatari tout seul.
-- **Linux (CachyOS / Ubuntu)** : **le clone `extern/hatari` (gitignoré, ce n'est PAS un
-  sous-module) est déjà compilé** → `extern/hatari/build/src/hatari` (v2.6.1, aligné sur la
+- **macOS** : `extern/hatari/build/src/hatari` (recette ci-dessus), ou
+  `/opt/homebrew/bin/hatari` si le paquet Homebrew est installé — il ne l'est PAS par
+  défaut. ⚠ Pas de `timeout` — on s'appuie sur `--run-vbls` qui fait sortir Hatari seul.
+- **Linux (CachyOS / Ubuntu)** : `extern/hatari/build/src/hatari` (v2.6.1, aligné sur la
   source de vérité du repo, plus récent que le `hatari` d'apt en 2.4.1).
-  ⚠ **Le symlink `~/.local/bin/hatari` est CASSÉ** (il pointe sur un ancien chemin
-  `src/NeoST/…`, avec une casse différente) : `hatari` n'est donc PAS sur le PATH et les
-  recettes ci-dessous doivent invoquer le binaire **par son chemin**. Pour le réparer :
+  ⚠ Un ancien symlink `~/.local/bin/hatari` a pu rester CASSÉ (chemin `src/NeoST/…`, casse
+  différente) : invoquer le binaire **par son chemin**, ou le réparer avec
   `ln -sf "$PWD/extern/hatari/build/src/hatari" ~/.local/bin/hatari`.
-  `timeout` est disponible et conseillé comme garde-fou en plus de
-  `--run-vbls`. Recompiler au besoin : `cmake -B extern/hatari/build extern/hatari &&
-  cmake --build extern/hatari/build -j` (dépendances : `libsdl2-dev`, déjà présentes).
+  `timeout` y est disponible et conseillé en plus de `--run-vbls`.
   💡 `tools/hatari_oracle.sh` fait cette découverte de binaire toute seule — le préférer
   aux invocations manuelles.
+
+## ⚠ Hatari n'est PAS déterministe d'un run à l'autre (et ça change la méthode)
+
+`sdl/main_sdl.c` fait `Hatari_srand(time(NULL))`. Ce RNG alimente notamment :
+
+| Site Hatari | Ce qui est tiré au hasard |
+|-------------|---------------------------|
+| `fdc.c` (`IndexPulse_Time = … - Hatari_rand() % FdcCyclesPerRev`) | **position angulaire initiale de la disquette** au démarrage |
+| `video.c:1155` | wakeup state MMU/GLUE **si** `--video-timing random` (défaut : `ws3`, donc figé) |
+| `mfp.c:1392` | jitter de timer (« for wod2 ») |
+| `ikbd.c` | délai de réponse de l'IKBD à l'ACIA |
+
+Conséquence pratique, mesurée le 2026-08-19 sur `cuddly_demos` : **deux runs avec la
+MÊME ligne de commande ne donnent pas la même image au même numéro de trame** dès que le
+programme boote d'une disquette — la durée du boot varie, et tout le film glisse. Mesure :
+la trame NeoST 3499 tombait sur la trame Hatari **3560** dans un run et **3497** dans un
+autre (deux runs lancés à quelques secondes d'écart sont, eux, identiques : le sel est
+l'horloge en secondes). C'est ce qui avait fait conclure à tort, le 2026-08-01, que
+NeoST rendait Cuddly « à une phase d'animation différente » : le balayage à `frame:` figé
+ne pouvait pas converger. En réalité NeoST rend cette démo **byte-identique** à Hatari
+(0 px sur 220 trames consécutives).
+
+**Règle** : pour tout étalon qui boote un disque, ne JAMAIS épingler un numéro de trame
+oracle. Utiliser `oracle_scan: N` dans `tools/etalons.json` — `run_etalons.py --oracle`
+extrait alors la fenêtre `[frame-N, frame+N]` (via `HATARI_ORACLE_SCAN` que comprend
+`hatari_oracle.sh`) et retient la trame **identique** à la capture NeoST, jamais la moins
+pire ; s'il n'y en a aucune, il le dit et échoue — c'est alors une vraie divergence.
+Côté NeoST rien de tout ceci ne se pose : l'émulation est déterministe, et une référence
+une fois commise se compare de façon reproductible.
 
 ## Recette headless : boot → image PNG
 

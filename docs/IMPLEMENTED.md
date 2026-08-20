@@ -365,7 +365,9 @@ Pour ce qui reste → [`../TODO.md`](../TODO.md).
   - **Étalons permanents** : `tools/make_scroll_test.py` (motif 1 colonne/64 px sur
     remplissage contigu — rend visibles décalage ET pas du compteur) → disques générés
     `scroll_8265.st`/`scroll_8264.st`, références verrouillées à **0 px d'écart**
-    (`etalons.json`), conformes à l'oracle Hatari ligne par ligne.
+    (`etalons.json`), conformes à l'oracle Hatari ligne par ligne. Depuis le 2026-08-19 la
+    référence EST l'oracle (`ref_kind: oracle`, PNG Hatari 832×552 commis, ROM EmuTOS) :
+    NeoST y était déjà à 0 px, la self-capture n'ajoutait rien.
 - **Spectrum 512 — palette intra-ligne PIXEL-PERFECT vs Hatari** (port `spec512.c` + alignement
   bus `m68000.c`). Chaque écriture palette `$FF824x` est **datée au cycle live de Moira**
   (`recordColorWrite`) ; une trame qui réécrit la palette **> 512 fois** (image Spectrum 512,

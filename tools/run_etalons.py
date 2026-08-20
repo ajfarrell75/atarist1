@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -121,11 +122,69 @@ def run_hatari_oracle(entry: dict, out_png: Path) -> int:
     return subprocess.run(cmd, cwd=ROOT).returncode
 
 
-def compare_shots(neost: Path, ref: Path, entry: dict) -> int:
+def oracle_scan_pick(entry: dict, out_png: Path, neost_ppm: Path, scan: int) -> bool:
+    """Régénère une référence oracle pour un étalon qui BOOTE UN DISQUE.
+
+    Pourquoi une FENÊTRE et pas une trame : Hatari sème son RNG sur l'horloge hôte
+    (`Hatari_srand(time(NULL))`, sdl/main_sdl.c) et s'en sert notamment pour la
+    POSITION ANGULAIRE INITIALE de la disquette (fdc.c). La durée du boot varie donc
+    d'un run à l'autre, et avec elle la numérotation des trames de l'AVI : mesuré le
+    2026-08-19 sur cuddly_demos, la même trame NeoST tombait sur n+61 dans un run et
+    n-2 dans un autre. On extrait donc [frame-scan, frame+scan] et on RETIENT la trame
+    qui correspond à la capture NeoST — en s'arrêtant à la PREMIÈRE correspondance
+    EXACTE, jamais à la « moins pire » : installer une image simplement proche
+    figerait un écart au lieu de le signaler.
+    """
+    env = dict(os.environ, HATARI_ORACLE_SCAN=str(scan))
+    rom = str(ROOT / entry.get("rom", "roms/etos192us.img"))
+    disk = str(ROOT / entry["disk"])
+    frames = int(entry.get("frames", 400))
+    frame = int(entry.get("frame", frames - 10))
+    vbls = str(max(frames, frame + scan + 25))
+    memTxt = str(entry.get("mem", "512k")).lower()
+    memArg = "0" if memTxt.startswith("512") else memTxt.rstrip("m")
+    cmd = ["bash", str(HATARI_ORACLE), rom, disk, vbls, str(frame), str(out_png),
+           entry.get("machine", "st"),
+           "fastfdc" if entry.get("oracle_fastfdc") else "-", memArg]
+    print("  $ HATARI_ORACLE_SCAN=%d %s" % (scan, " ".join(cmd)))
+    if subprocess.run(cmd, cwd=ROOT, env=env).returncode != 0:
+        return False
+    scan_dir = Path(str(out_png)[:-4] + ".scan")
+    shots = sorted(scan_dir.glob("f_*.png"))
+    if not shots:
+        print(f"  [oracle] fenêtre vide : {scan_dir}", file=sys.stderr)
+        return False
+    # Ordre d'essai : la trame nominale d'abord, puis en s'écartant — le décalage est
+    # petit dans la plupart des runs, inutile de comparer 2×scan images à chaque fois.
+    by_num = {int(p.stem[2:]): p for p in shots}
+    order = [frame] + [frame + d for k in range(1, scan + 1) for d in (k, -k)]
+    tried = 0
+    for n in order:
+        p = by_num.get(n)
+        if p is None:
+            continue
+        tried += 1
+        if compare_shots(neost_ppm, p, entry, quiet=True) == 0:
+            shutil.copy2(p, out_png)
+            print(f"  [oracle] trame {n} retenue (décalage {n - frame:+d} vs « frame », "
+                  f"{tried} image(s) comparée(s)) — identique à la capture NeoST")
+            return True
+    print(f"  [oracle] AUCUNE des {tried} trames de la fenêtre "
+          f"[{frame - scan}, {frame + scan}] ne correspond à la capture NeoST — "
+          f"c'est une VRAIE divergence, pas un décalage de numérotation", file=sys.stderr)
+    return False
+
+
+def compare_shots(neost: Path, ref: Path, entry: dict, quiet: bool = False) -> int:
     crop = entry.get("crop", "active")
     mx = entry.get("max_diff_px", 0)
     cmd = [sys.executable, str(COMPARE), str(neost), str(ref),
-           "--crop", crop, "--max", str(mx), "--report"]
+           "--crop", crop, "--max", str(mx)]
+    if quiet:
+        # Balayage de fenêtre : une centaine de diffs, dont on ne veut QUE le verdict.
+        return subprocess.run(cmd, cwd=ROOT, stdout=subprocess.DEVNULL,
+                              stderr=subprocess.DEVNULL).returncode
+    cmd.append("--report")
     print("  $", " ".join(cmd))
     return subprocess.run(cmd, cwd=ROOT).returncode
 
@@ -156,6 +215,17 @@ def resolve_ref(entry: dict, ref_ppm: Path, ref_png: Path):
 # Étalons dont la comparaison n'a PAS eu lieu (référence absente) : recensés pour
 # que « TOUS OK » ne puisse jamais masquer une couverture creuse.
 SKIPPED = []
+# Étalons NON EXÉCUTÉS faute de ROM propriétaire (roms/tos*.img). Même règle : recensés,
+# jamais fondus dans le vert. Cf. rom_is_free().
+SKIPPED_ROM = []
+
+
+def rom_is_free(rom: str) -> bool:
+    """Une ROM LIBRE (EmuTOS, `roms/etos*.img`) est livrée avec le dépôt : son absence
+    est une CASSE du dépôt, pas une config utilisateur. Les TOS Atari, eux, sont
+    propriétaires — le dépôt ne peut pas garantir leur présence (et ne devrait pas les
+    redistribuer), donc un étalon qui en dépend se SAUTE au lieu d'échouer."""
+    return Path(rom).name.startswith("etos")
 
 
 def run_one(entry: dict, args) -> bool:
@@ -177,6 +247,19 @@ def run_one(entry: dict, args) -> bool:
         print(f"  OK {entry['type']}")
         return True
 
+    # ROM absente : distinguer les deux cas AVANT de lancer quoi que ce soit. Sans cela,
+    # retirer les TOS propriétaires du dépôt faisait ÉCHOUER 8 étalons (neost-headless
+    # sort en erreur sur une ROM introuvable) — c'est ce couplage qui rendait le nettoyage
+    # juridique « impossible sans casser la CI ».
+    rom = entry.get("rom")
+    if rom and not (ROOT / rom).exists():
+        if rom_is_free(rom):
+            print(f"  ROM LIBRE absente : {rom} — dépôt incomplet", file=sys.stderr)
+            return False
+        print(f"  ROM propriétaire absente : {rom} (SKIP — non redistribuable)")
+        SKIPPED_ROM.append(eid)
+        return True
+
     if entry.get("disk") and not ensure_disk(entry):
         msg = f"  disque manquant : {entry['disk']}"
         if entry.get("optional"):
@@ -190,19 +273,26 @@ def run_one(entry: dict, args) -> bool:
     ref_ppm = REF_DIR / f"{eid}.ppm"
     ref_png = REF_DIR / f"{eid}.png"
 
-    if args.oracle and entry.get("disk"):
-        REF_DIR.mkdir(parents=True, exist_ok=True)
-        tmp_png = OUT_DIR / f"{eid}_oracle.png"
-        if run_hatari_oracle(entry, tmp_png) != 0:
-            return False
-        shutil.copy2(tmp_png, ref_png)
-        print(f"  référence oracle → {ref_png.relative_to(ROOT)}")
-
+    # La capture NeoST vient EN PREMIER : le mode « scan » de l'oracle (ci-dessous) en a
+    # besoin pour choisir, dans la fenêtre Hatari, la trame qui correspond.
     rc = run_headless_capture(entry, neost_ppm)
     if rc != 0 or not neost_ppm.exists():
         print(f"  ÉCHEC capture NeoST (exit {rc})")
         return False
     print(f"  capture → {neost_ppm.relative_to(ROOT)}")
+
+    if args.oracle and entry.get("disk"):
+        REF_DIR.mkdir(parents=True, exist_ok=True)
+        tmp_png = OUT_DIR / f"{eid}_oracle.png"
+        scan = int(entry.get("oracle_scan", 0) or 0)
+        if scan:
+            found = oracle_scan_pick(entry, tmp_png, neost_ppm, scan)
+            if not found:
+                return False
+        elif run_hatari_oracle(entry, tmp_png) != 0:
+            return False
+        shutil.copy2(tmp_png, ref_png)
+        print(f"  référence oracle → {ref_png.relative_to(ROOT)}")
 
     if args.update_ref:
         # Un étalon « oracle » ne compare JAMAIS la self-capture : y copier un .ppm
@@ -426,6 +516,11 @@ def main() -> int:
     if SKIPPED:
         print(f"\n⚠ NON COMPARÉS ({len(SKIPPED)}) : " + ", ".join(SKIPPED)
               + "\n  (capture faite, mais aucune référence — ces étalons ne valident RIEN)")
+    if SKIPPED_ROM:
+        print(f"\n⚠ NON EXÉCUTÉS — ROM propriétaire absente ({len(SKIPPED_ROM)}) : "
+              + ", ".join(SKIPPED_ROM)
+              + "\n  (ces étalons ne valident RIEN dans cette installation ; les ROM Atari"
+                "\n   ne sont pas redistribuables — les déposer dans roms/ pour les activer)")
     print("\n" + ("TOUS OK" if ok else "ÉCHECS — voir ci-dessus"))
     return 0 if ok else 1
 
