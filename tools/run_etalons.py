@@ -238,7 +238,9 @@ def run_one(entry: dict, args) -> bool:
                      "mfp_selftest": "--mfp-selftest",
                      "msa_selftest": "--msa-selftest",
                      "fuji_selftest": "--fuji-selftest",
-                     "enec_selftest": "--enec-selftest"}.get(entry.get("type"))
+                     "enec_selftest": "--enec-selftest",
+                     "usatan_selftest": "--usatan-selftest",
+                     "netusbee_selftest": "--netusbee-selftest"}.get(entry.get("type"))
     if selftest_flag:
         rc = run_selftest(selftest_flag, entry.get("cpu", "moira"))
         if rc != 0:

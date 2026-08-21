@@ -44,3 +44,8 @@ Reference emulators
 Hatari (GPLv2+, https://framagit.org/hatari/hatari) and MAME are used as behavioural
 *references* — read as sources, and run as an oracle during development. No part of
 either is redistributed in this package.
+
+--- stb_image (extern/stb/stb_image.h) ---
+stb_image v2.30 — Sean Barrett et contributeurs. Double licence au choix : MIT ou domaine
+public (Unlicense). Utilisé par le GUI pour décoder la photo du clavier (pic/).
+https://github.com/nothings/stb

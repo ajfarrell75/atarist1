@@ -74,3 +74,6 @@ packaging/android/.gradle/
 packaging/android/app/build/
 packaging/android/app/.cxx/
 packaging/android/build/
+
+# Carte SD UltraSatan générée (16 Mo, déterministe) : tools/make_usatan_hd.py la recrée à la demande
+disks/etalons/usatan_sd.img

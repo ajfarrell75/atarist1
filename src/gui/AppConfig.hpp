@@ -46,6 +46,9 @@ struct Config { std::string rom; std::string disk; std::string diskb; std::strin
                 std::string fujinetHosts;    // host slots, séparés par '|' (slot 0 en tête)
                 bool modem = false;   // modem Hayes sur l'USART (pont AT → TCP)
                 bool ethernec = false; // NE2000/EtherNEC sur le port cartouche
+                bool netusbee = false; // NetUSBee : NE2000 + ISP1160 USB sur le port cartouche (exclusif d'ethernec)
+                bool ultrasatan = false; // UltraSatan sur les cibles ACSI 0-1 (slot 1 = acsi, slot 2 = sd2)
+                std::string sd2;       // image SD du slot 2 de l'UltraSatan (cible 1 ; vide = slot vide)
                 std::string cpu = "moira"; std::string machine = "st";
                 std::string mem = "512k"; bool fpu = false;   // MC68881 Mega STE (cf. Fpu.hpp)
                 int joyport = 1;
@@ -59,6 +62,7 @@ struct Config { std::string rom; std::string disk; std::string diskb; std::strin
                 bool driveSound = true;  // bruits mécaniques du lecteur (roms/drivesound/, cf. DriveSound)
                 bool showHex = true, showCpu = true;
                 bool showJoy = false;
+                bool showKbd = false;          // fenêtre clavier virtuel (photo pic/, touches cliquables)
                 bool showCfg = true;           // fenêtre des réglages matériels
                 bool showFloppy = true;        // fenêtre indépendante des disquettes
                 // Version de la DISPOSITION d'interface. Quand elle change, on resème la

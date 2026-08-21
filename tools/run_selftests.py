@@ -49,7 +49,8 @@ def load_manifest():
 def ensure_rom_asset(entry) -> bool:
     # Génère la cartouche/disque de test si un générateur est fourni et le fichier absent.
     for key, gen_key in (("cart", "cart_generate"), ("disk", "disk_generate"),
-                         ("rom", "rom_generate")):
+                         ("rom", "rom_generate"), ("sd1", "sd1_generate"),
+                         ("sd2", "sd2_generate")):
         path = entry.get(key)
         gen = entry.get(gen_key)
         if not path:
@@ -87,6 +88,16 @@ def run_one(entry, args) -> bool:
         cmd.append("--fastfdc")
     if entry.get("fpu"):
         cmd.append("--fpu")
+    # Extensions NeoST (UltraSatan sur le bus ACSI, NetUSBee sur le port cartouche) :
+    # le programme de test leur parle comme les logiciels d'époque (cf. make_usatan_test.py).
+    if entry.get("ultrasatan"):
+        cmd.append("--ultrasatan")
+    if entry.get("sd1"):
+        cmd += ["--sd1", str(ROOT / entry["sd1"])]
+    if entry.get("sd2"):
+        cmd += ["--sd2", str(ROOT / entry["sd2"])]
+    if entry.get("netusbee"):
+        cmd.append("--netusbee")
     print("  $", " ".join(cmd))
     # Le dump série n'est écrit qu'À LA FIN de main() côté headless : s'il reste celui
     # du run PRÉCÉDENT, un émulateur qui segfaute (ou qui sort tôt) laisse le runner

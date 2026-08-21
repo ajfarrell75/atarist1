@@ -29,13 +29,15 @@ void drawCartPage(const std::string& cartsDir, const std::string& mounted,
 void drawHardDiskPage(const std::string& hdDir, const std::string& gemdosDefault,
                       const std::string& curGemdos, bool gemdosActive,
                       const std::string& curAcsi, bool acsiActive, int acsiParts,
+                      bool usatanOn, const std::string& curSd2,
                       std::string& reqMountGemdos, bool& reqEjectGemdos,
-                      std::string& reqMountAcsi,  bool& reqEjectAcsi);
+                      std::string& reqMountAcsi,  bool& reqEjectAcsi,
+                      int& reqUltraSatan, std::string& reqMountSd2, bool& reqEjectSd2);
 
 void drawNetworkPage(bool fujiOn, int fujiTarget, const char* backendName,
                      const FujiDevice& fuji, FujiHost* host, bool modemOn, bool etherOn,
-                     bool cartMounted,
+                     bool netusbeeOn, bool cartMounted,
                      int& reqFujinet, int& reqFujinetTarget,
                      std::string& reqFujinetMount,
                      std::string& reqFujinetHosts, bool& reqFujinetHostsSet,
-                     int& reqModem, int& reqEther);
+                     int& reqModem, int& reqEther, int& reqNetUsbee);

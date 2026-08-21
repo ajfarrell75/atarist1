@@ -1561,6 +1561,21 @@ Ces fonctionnalités **n'existent pas dans Hatari** (extensions assumées, consi
   `$FA0000+n*512+d*2`. Fait tourner les pilotes STinG/MiNTnet/MagiCNet **sans modif**.
   Backend `NetBackend` (boucle locale ; SLIRP/pcap = point d'extension). **Exclusif d'une
   cartouche** ($FA0000). Auto-test fil : `--enec-selftest` (palier `fast`).
+- **UltraSatan — interface SD sur le bus ACSI** (`io/UltraSatan`, `--ultrasatan`, 2026-08-21) :
+  le vrai boîtier de Jookie — **2 slots** = 2 cibles (IDs 0-1), INQUIRY `JOOKIE  UltraSatan`
+  (RMB, n° de slot, v1.20), slot vide = **NOT READY / medium not present**, **horloge propre**
+  sur les cycles émulés, et les **paquets ICD `$20 'US…'`** du firmware v1.20 (`CurntFW`,
+  `RdCl`/`WrCl`, `RdINQRN`/`WrINQRN`, `RdSt`/`WrSt` avec magies, `RdLog` ; flash refusée).
+  EmuTOS monte **C:** depuis une image SD générée sans pilote (`tools/make_usatan_hd.py`).
+  Auto-tests : `--usatan-selftest` (fil, 15 checks) + verdict série `usatan_netusbee`
+  (programme ST, séquence LongRW de `US_CONF`). Save-states **v12**.
+- **NetUSBee — NE2000 + ISP1160 USB sur le port cartouche** (`io/Isp1160` + `io/Ne2000`,
+  `--netusbee`, 2026-08-21) : la NE2000 de l'EtherNEC (inchangée) + le contrôleur hôte USB
+  décodé aux adresses du pilote FreeMiNT (`$FA0000` latch, `$FA8000` lecture, `$FB8000`/`$FBC000`
+  données/commande, mots 16 bits) — ID `$6120`, reset logiciel, registres OHCI/ISP, **hub racine
+  vide**, ATL achevée en `DeviceNotResponding`. Les pilotes s'initialisent, rien n'est énuméré
+  (périphérique USB hôte = point d'extension). Auto-tests : `--netusbee-selftest` (11 checks)
+  + verdict série. ⚠ fenêtre LSB partagée avec le CR NE2000 (cf. `docs/FUJINET.md`).
 - **Anneau MIDI réseau** (`net/MidiRing`, `--midi-net H:P[:L]`) : **MIDIMaze en ligne** —
   MIDI OUT → UDP → pair aval, datagrammes amont → MIDI IN (`MidiAcia::setMidiSink`/
   `receiveExternal`, tampon de gigue respectant les 2 octets du 6850). Vérifié

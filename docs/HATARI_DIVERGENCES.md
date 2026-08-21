@@ -1174,6 +1174,17 @@ Ces fonctionnalités **n'existent pas dans Hatari** et ne sont donc pas des éca
 corriger : ce sont des extensions NeoST, **inactives par défaut** et **sans effet sur
 les étalons de fidélité** (réseau OFF pendant `run_all.py --tier fast/full`).
 
+- **[EXTENSION] UltraSatan sur le bus ACSI** (`src/io/UltraSatan.*`, `Acsi::attachUltraSatan`,
+  2026-08-21). Hatari n'émule qu'un disque ACSI générique ; NeoST ajoute, SUR DEMANDE, les
+  2 slots, l'INQUIRY `JOOKIE  UltraSatan`, l'état « slot vide = NOT READY » et les paquets
+  ICD `$20 'US…'` du firmware v1.20 (source : atarijookie/ce-atari). Garde-fou : ces paquets ne
+  sont routés que sur les cibles UltraSatan ; une cible ordinaire reste byte-identique à `hdc.c`.
+  Spec : `docs/FUJINET.md` § UltraSatan.
+- **[EXTENSION] NetUSBee — ISP1160 USB sur le port cartouche** (`src/io/Isp1160.*`, `Bus::read8Slow`,
+  2026-08-21). La moitié NE2000 est l'EtherNEC existant ; l'ISP1160 est décodé aux adresses du
+  pilote FreeMiNT. Hub racine vide (aucun périphérique USB). ⚠ La fenêtre LSB `$FA0000-$FA01FF`
+  est partagée avec le registre CR de la NE2000 : sans schéma, NeoST laisse les DEUX puces voir
+  l'accès — à corriger si le matériel gate l'une d'elles. Spec : `docs/FUJINET.md` § NetUSBee.
 - **[EXTENSION] FujiNet virtuel sur le bus ACSI** (`src/io/FujiDevice.*`,
   `src/net/*`, cible ACSI dédiée). Périphérique WiFi de déport de protocole (HTTP/TCP/
   JSON, montage d'images distantes) attaché via un **opcode vendeur ACSI `$60`**. La

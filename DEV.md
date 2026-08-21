@@ -54,6 +54,8 @@ src/
     Rtc.{hpp,cpp}           RP5C15 (Mega ST/Mega STE).
     MediaScan.{hpp,cpp}     Inventaire des supports (tri, images « sœurs » d'un même jeu).
     FujiDevice/Ne2000       Extensions NeoST : FujiNet virtuel, EtherNEC (cf. docs/FUJINET.md).
+    UltraSatan/Isp1160      Extensions NeoST : interface SD UltraSatan (ACSI, paquets 'US'), hôte USB
+                            ISP1160 du NetUSBee (port cartouche, avec Ne2000). Cf. docs/FUJINET.md.
   net/                      Backends hôte du réseau (neost_net) : FujiHostLive/Replay,
                             HttpClient, HayesModem, MidiRing, MiniJson.
   gui/                      Extraits de main.cpp : AppConfig (neost.cfg + profils

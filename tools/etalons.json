@@ -51,6 +51,20 @@
    "max_diff_px": 0
   },
   {
+   "id": "usatan_selftest",
+   "name": "UltraSatan — protocole fil ACSI (INQUIRY JOOKIE, paquets ICD 'US', RTC, slot vide)",
+   "subsystem": "acsi/ultrasatan",
+   "type": "usatan_selftest",
+   "max_diff_px": 0
+  },
+  {
+   "id": "netusbee_selftest",
+   "name": "NetUSBee — ISP1160 port cartouche (ID, registres, ATL) + NE2000 en coexistence",
+   "subsystem": "cart/netusbee",
+   "type": "netusbee_selftest",
+   "max_diff_px": 0
+  },
+  {
    "id": "etos_ste_boot",
    "name": "Boot EmuTOS STE (bureau)",
    "subsystem": "integration",

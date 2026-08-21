@@ -10,7 +10,7 @@ jamais quitter le plein écran.
 ./build/neost --kiosk --kiosk-monitor 1 roms/tos162uk.img   # sur le 2ᵉ écran
 ```
 
-`F8` fait l'aller-retour bureau ⇄ borne à chaud : la machine traverse la bascule par
+`F8` (ou le chord **Ctrl+Alt+F**, 2026-08-21) fait l'aller-retour bureau ⇄ borne à chaud : la machine traverse la bascule par
 instantané, le jeu en cours continue.
 
 | Option | Effet |
@@ -103,7 +103,7 @@ et la borne se figerait plusieurs minutes à chaque ouverture du menu.
 | **F12** / SELECT | Ouvre/ferme le bandeau Clavier & souris |
 | **L1 / R1** (Page↑/↓) | Défilement rapide par page dans la liste des jeux |
 | **F5** / **F7** | Sauver / charger l'état (slot `neost.state`) |
-| **F8** | Bascule borne ⇄ bureau |
+| **F8** / **Ctrl+Alt+F** | Bascule borne ⇄ bureau |
 | **F10** | (dés)active le zoom adaptatif |
 | **F11** | (dés)active l'émulation joystick clavier |
 | A·B / Entrée·Échap | Valider / revenir |

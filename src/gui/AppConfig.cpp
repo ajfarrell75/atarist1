@@ -53,6 +53,9 @@ void parseConfigLine(Config& c, std::string line) {
     else if (line.rfind("fujinet_hosts=", 0) == 0) c.fujinetHosts = line.substr(14);
     else if (line.rfind("modem=", 0) == 0) c.modem = (line.substr(6) == "1");
     else if (line.rfind("ethernec=", 0) == 0) c.ethernec = (line.substr(9) == "1");
+    else if (line.rfind("netusbee=", 0) == 0) c.netusbee = (line.substr(9) == "1");
+    else if (line.rfind("ultrasatan=", 0) == 0) c.ultrasatan = (line.substr(11) == "1");
+    else if (line.rfind("sd2=", 0) == 0) c.sd2 = line.substr(4);
     else if (line.rfind("mono=", 0) == 0) c.mono = (line.substr(5) == "1");
     else if (line.rfind("cpu=", 0)  == 0) c.cpu  = line.substr(4);
     else if (line.rfind("machine=", 0) == 0) c.machine = line.substr(8);
@@ -81,6 +84,7 @@ void parseConfigLine(Config& c, std::string line) {
     else if (line.rfind("showHex=", 0) == 0) c.showHex = (line.substr(8) == "1");
     else if (line.rfind("showCpu=", 0) == 0) c.showCpu = (line.substr(8) == "1");
     else if (line.rfind("showJoy=", 0) == 0) c.showJoy = (line.substr(8) == "1");
+    else if (line.rfind("showKbd=", 0) == 0) c.showKbd = (line.substr(8) == "1");
     else if (line.rfind("showCfg=", 0) == 0) c.showCfg = (line.substr(8) == "1");
     else if (line.rfind("showFloppy=", 0) == 0) c.showFloppy = (line.substr(11) == "1");
     else if (line.rfind("uiVersion=", 0) == 0) c.uiVersion = std::atoi(line.c_str() + 10);
@@ -133,6 +137,9 @@ void writeConfigKeys(std::ostream& f, const Config& w, bool full) {
       << "\nfujinet_hosts=" << w.fujinetHosts
       << "\nmodem=" << (w.modem ? 1 : 0)
       << "\nethernec=" << (w.ethernec ? 1 : 0)
+      << "\nnetusbee=" << (w.netusbee ? 1 : 0)
+      << "\nultrasatan=" << (w.ultrasatan ? 1 : 0)
+      << "\nsd2=" << w.sd2
       << "\nmono=" << (w.mono ? 1 : 0)
       << "\ncpu=" << w.cpu << "\nmachine=" << w.machine << "\nmem=" << w.mem
       << "\nfpu=" << (w.fpu ? 1 : 0)
@@ -146,6 +153,7 @@ void writeConfigKeys(std::ostream& f, const Config& w, bool full) {
         f << "showHex=" << (w.showHex ? 1 : 0)
           << "\nshowCpu=" << (w.showCpu ? 1 : 0)
           << "\nshowJoy=" << (w.showJoy ? 1 : 0)
+          << "\nshowKbd=" << (w.showKbd ? 1 : 0)
           << "\nshowCfg=" << (w.showCfg ? 1 : 0)
           << "\nshowFloppy=" << (w.showFloppy ? 1 : 0)
           << "\nuiVersion=" << w.uiVersion

@@ -87,6 +87,10 @@ public:
     void attachFujiNet(FujiDevice* dev, int target) { acsi_.attachFujiNet(target, dev); }
     void detachFujiNet() { acsi_.detachFujiNet(); }
     int  fujiTarget() const { return acsi_.fujiTarget(); }
+    // UltraSatan (extension NeoST, cf. io/UltraSatan.hpp) : 2 slots SD sur 2 cibles.
+    void attachUltraSatan(UltraSatan* dev, int firstTarget) { acsi_.attachUltraSatan(firstTarget, dev); }
+    void detachUltraSatan() { acsi_.detachUltraSatan(); }
+    int  usatanFirstTarget() const { return acsi_.usatanFirstTarget(); }
     bool inserted(int drive = 0) const { return drive_[drive & 1].present(); }
     const std::string& mountedPath(int drive = 0) const { return drive_[drive & 1].path; }
 

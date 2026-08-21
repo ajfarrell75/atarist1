@@ -167,7 +167,7 @@ python3 tools/compare_screenshot.py tests/out/foo_neost.ppm tests/reference/foo.
 **nocooper_greetings** (V2, réf. oracle archivée) ; fetch auto : **Cuddly Demos**
 (`disks/etalons/cuddly_demos.msa`), **No Cooper** (`disks/etalons/nocooper.msa`),
 **union_demo** (`optional` : SKIP tant que la disquette n'est pas rapatriée).
-Soit **19 entrées** dans `tools/etalons.json` — 7 auto-tests + **12 étalons machine**, dont
+Soit **21 entrées** dans `tools/etalons.json` — 9 auto-tests + **12 étalons machine**, dont
 le `_comment` du fichier rappelle la couverture réelle (ni MegaST, ni MegaSTE, ni TOS
 1.00/1.04/1.06/2.06, ni EmuTOS PAL).
 
@@ -182,6 +182,8 @@ le `_comment` du fichier rappelle la couverture réelle (ni MegaST, ni MegaSTE, 
 ./build/neost-headless roms/etos256us.img --msa-selftest       # ré-encodage .msa (aller-retour)
 ./build/neost-headless roms/etos256us.img --fuji-selftest      # FujiNet virtuel + cas-limites ACSI
 ./build/neost-headless roms/etos256us.img --enec-selftest      # NE2000/EtherNEC (bouclage)
+./build/neost-headless roms/etos256us.img --usatan-selftest    # UltraSatan (fil ACSI : INQUIRY, paquets 'US', RTC)
+./build/neost-headless roms/etos256us.img --netusbee-selftest  # NetUSBee (ISP1160 + NE2000 en coexistence)
 python3 tools/run_cyclebench.py [--update]                    # golden du modèle de cycle 68000
 ```
 
@@ -223,6 +225,21 @@ python3 tools/run_selftests.py --list
 `NEOST-TEST: fpu PASS|FAIL` sur le série (en plus de `D7` pour la trace). Le runner
 `tools/run_selftests.py` (manifeste `tools/selftests.json`) lance le headless avec `--cart`/rom +
 `--serial-dump`, scanne les verdicts et sort 0/1.
+
+- **`usatan_netusbee`** (2026-08-21) — carte SD `disks/etalons/usatan_sd.img` (générée par
+  `tools/make_usatan_hd.py` : 16 Mo, partition GEM FAT16 portant `AUTO\USTEST.PRG`), EmuTOS
+  192 Ko, `--ultrasatan --sd1 … --netusbee`. EmuTOS amorce sur la carte, monte C: et lance le
+  PRG (`tools/make_usatan_test.py`, relogeable, `Super()`), qui parle à l'UltraSatan **comme
+  `US_CONF.TOS`** (séquence LongRW, attente IRQ GPIP5) et au NetUSBee **comme le pilote FreeMiNT**
+  (lectures MOT, primitives raw). ⚠ Règles EmuTOS apprises ici : disque dur présent ⇒ disquette
+  non amorcée ; secteur racine exécuté seulement sans partition reconnue ; FAT12/16 par le
+  nombre de clusters (> 4084 ⇒ FAT16), d'où 16 Mo. Variante disquette (`A:\AUTO`, même PRG) :
+  `tools/make_usatan_test.py OUT.st`, à utiliser SANS carte SD.
+  **Contrôle négatif Hatari** (vérifié 2026-08-21) : la même carte sous l'oracle —
+  `hatari --machine st --tos roms/etos192us.img --acsi disks/etalons/usatan_sd.img --rs232-in
+  /dev/null --rs232-out OUT --run-vbls 900` — monte C: et lance le PRG (`uscdrv PASS`) mais rend
+  **FAIL** sur les six verdicts matériels : Hatari n'a ni UltraSatan ni NetUSBee. Le test
+  discrimine donc bien l'émulation des cartes, il ne passe pas « par construction ».
 
 ### Orchestration par paliers + hook pre-push
 

@@ -185,8 +185,10 @@ void drawCartPage(const std::string& cartsDir, const std::string& mounted,
 void drawHardDiskPage(const std::string& hdDir, const std::string& gemdosDefault,
                       const std::string& curGemdos, bool gemdosActive,
                       const std::string& curAcsi, bool acsiActive, int acsiParts,
+                      bool usatanOn, const std::string& curSd2,
                       std::string& reqMountGemdos, bool& reqEjectGemdos,
-                      std::string& reqMountAcsi,  bool& reqEjectAcsi) {
+                      std::string& reqMountAcsi,  bool& reqEjectAcsi,
+                      int& reqUltraSatan, std::string& reqMountSd2, bool& reqEjectSd2) {
     // Scan mis en cache 2 s, comme la page Disquettes : la fenêtre peut rester ouverte
     // et un parcours de dossier par trame coûte le budget PAL entier sur une grosse
     // ludothèque (cf. la note de drawFloppyPage).
@@ -291,6 +293,37 @@ void drawHardDiskPage(const std::string& hdDir, const std::string& gemdosDefault
     if (gemCands.empty() && acsiCands.empty())
         ImGui::TextDisabled("(nothing in %s/ — drop a folder or an image there)", hdDir.c_str());
 
+    // UltraSatan (extension NeoST) : l'interface SD de Jookie sur les IDs 0-1. Le
+    // slot 1 EST l'image ACSI ci-dessus (ID 0) ; le slot 2 (ID 1) se monte ici.
+    // Sans carte, un slot répond quand même (INQUIRY « JOOKIE  UltraSatan »).
+    ImGui::Separator();
+    bool us = usatanOn;
+    if (ImGui::Checkbox("UltraSatan (2 SD slots on ACSI IDs 0-1, JOOKIE INQUIRY, RTC, 'US' commands)", &us))
+        reqUltraSatan = us ? 1 : 0;
+    if (usatanOn) {
+        ImGui::TextDisabled("slot 1 = the ACSI image above (ID 0) — slot 2 (ID 1):");
+        if (!curSd2.empty()) {
+            if (IconButton(ICON_FA_EJECT, "Eject the slot 2 card")) reqEjectSd2 = true;
+            ImGui::SameLine();
+            ImGui::Text("slot 2: %s", fs::path(curSd2).filename().string().c_str());
+        } else {
+            ImGui::TextDisabled("(slot 2 empty)");
+        }
+        for (const auto& c : acsiCands) {
+            ImGui::PushID(("sd2" + c.path).c_str());
+            if (!curSd2.empty() && samePath(c.path, curSd2)) ImGui::TextDisabled("●");
+            else if (ImGui::SmallButton("Slot 2")) reqMountSd2 = c.path;
+            ImGui::SameLine();
+            ImGui::TextUnformatted(c.label.c_str());
+            ImGui::PopID();
+        }
+        static char g_sd2Buf[512] = "";
+        ImGui::SetNextItemWidth(-70.0f);
+        ImGui::InputTextWithHint("##sd2Path", "path to a raw SD image for slot 2…", g_sd2Buf, sizeof g_sd2Buf);
+        ImGui::SameLine();
+        if (ImGui::Button("Mount##sd2Free") && g_sd2Buf[0]) reqMountSd2 = g_sd2Buf;
+    }
+
     // Les deux montés : NeoST ne décale pas le lecteur GEMDOS derrière les partitions
     // ACSI (contrairement à Hatari) → les deux revendiquent C:.
     if (gemdosActive && acsiActive)
@@ -305,11 +338,11 @@ void drawHardDiskPage(const std::string& hdDir, const std::string& gemdosDefault
 // Discipline habituelle : données en entrée, requêtes en sortie, AUCUNE E/S ici.
 void drawNetworkPage(bool fujiOn, int fujiTarget, const char* backendName,
                      const FujiDevice& fuji, FujiHost* host, bool modemOn, bool etherOn,
-                     bool cartMounted,
+                     bool netusbeeOn, bool cartMounted,
                      int& reqFujinet, int& reqFujinetTarget,
                      std::string& reqFujinetMount,
                      std::string& reqFujinetHosts, bool& reqFujinetHostsSet,
-                     int& reqModem, int& reqEther) {
+                     int& reqModem, int& reqEther, int& reqNetUsbee) {
     ImGui::TextDisabled("FujiNet — virtual network device (NeoST extension)");
     ImGui::TextWrapped("Protocol offloading for the ST: mount disk images from URLs, "
                        "give 68000 programs HTTP/TCP/JSON without a TCP/IP stack. "
@@ -323,11 +356,18 @@ void drawNetworkPage(bool fujiOn, int fujiTarget, const char* backendName,
         reqModem = mdm ? 1 : 0;
 
     // EtherNEC : NE2000 sur le port cartouche → pilotes STinG/MiNTnet historiques.
-    bool eth = etherOn;
-    if (cartMounted && !etherOn) {
-        ImGui::TextDisabled("EtherNEC (NE2000): free the cartridge port to enable");
-    } else if (ImGui::Checkbox("EtherNEC (NE2000 on the cartridge port)", &eth)) {
-        reqEther = eth ? 1 : 0;
+    // NetUSBee : la MÊME NE2000 + un hôte USB ISP1160 — les deux sont exclusifs
+    // (un seul montage sur le port cartouche).
+    bool eth = etherOn && !netusbeeOn;
+    bool nub = netusbeeOn;
+    if (cartMounted && !etherOn && !netusbeeOn) {
+        ImGui::TextDisabled("EtherNEC / NetUSBee: free the cartridge port to enable");
+    } else {
+        if (netusbeeOn) ImGui::TextDisabled("EtherNEC (NE2000): included in the NetUSBee below");
+        else if (ImGui::Checkbox("EtherNEC (NE2000 on the cartridge port)", &eth))
+            reqEther = eth ? 1 : 0;
+        if (ImGui::Checkbox("NetUSBee (NE2000 + ISP1160 USB host on the cartridge port)", &nub))
+            reqNetUsbee = nub ? 1 : 0;
     }
     ImGui::Separator();
 

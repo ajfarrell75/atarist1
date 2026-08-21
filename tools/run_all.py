@@ -33,9 +33,10 @@ FAST = [
     # Linux. Sans lui, l'issue #37 restait invisible partout où on développe.
     ("P0 auto-test logique pure (hostpath — sémantiques POSIX ET Windows)",
      [str(SELFTEST)]),
-    ("P0 auto-tests logique (glue + spec512 + bus + mfp + msa + fuji + enec)",
+    ("P0 auto-tests logique (glue + spec512 + bus + mfp + msa + fuji + enec + usatan + netusbee)",
      [sys.executable, str(TOOLS / "run_etalons.py"), "--only",
-      "glue_selftest,spec512_selftest,bus_selftest,mfp_selftest,msa_selftest,fuji_selftest,enec_selftest"]),
+      "glue_selftest,spec512_selftest,bus_selftest,mfp_selftest,msa_selftest,fuji_selftest,enec_selftest,"
+      "usatan_selftest,netusbee_selftest"]),
     ("P1 verdicts série (cartouche diagnostic)",
      [sys.executable, str(TOOLS / "run_selftests.py")]),
     ("Cycle-bench (auto-régression du modèle de cycle 68000)",

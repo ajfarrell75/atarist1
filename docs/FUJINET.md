@@ -171,8 +171,11 @@ Chaîne : `dev/fujinet/build.sh` (vbcc/vasm, cf. `dev/etalons/build.sh`).
 
 # Autres extensions réseau NeoST
 
-Ces trois extensions partagent la même philosophie (backend hôte hors du cœur, OFF par
-défaut, `NEOST_WITH_NET`) et le même statut « extension assumée » que FujiNet.
+Ces extensions partagent la même philosophie (backend hôte hors du cœur, OFF par
+défaut, `NEOST_WITH_NET` pour celles qui ouvrent des sockets) et le même statut
+« extension assumée » que FujiNet. Les deux dernières — **UltraSatan** et **NetUSBee** —
+sont les périphériques que l'écosystème ST a RÉELLEMENT adoptés pour le stockage et le
+réseau : un vrai matériel, de vrais pilotes, pas un binding de référence.
 
 ## Modem Hayes sur RS-232 (`--modem`, GUI Network)
 
@@ -212,6 +215,116 @@ que 2 octets → `MidiRing` a un **tampon de gigue** et n'injecte que lorsque l'
 la place (fidèle au matériel). C'est exactement ce que fait FujiNet côté 8 bits
 (mozzwald/FujiNet-MIDIMaze). Vérifié : `MIDITEST.TOS` — 10 octets OUT→UDP→pair (ordre
 exact) et round-trip complet OUT→réseau→IN→ACIA. `src/net/MidiRing.cpp`.
+
+## UltraSatan — interface SD/MMC sur le bus ACSI (`--ultrasatan`, GUI Hard Disks)
+
+C'est **la** réponse historique de l'écosystème ST au stockage moderne (Jookie, 2009) :
+un boîtier ACSI à **deux slots SD/MMC** — chaque slot est une cible ACSI (IDs *n* et
+*n+1*, usine 0-1) — et une **horloge temps réel** sauvegardée par pile. Les pilotes
+d'époque (HDDRIVER, ICD PRO, AHDI, **EmuTOS sans pilote**) le voient comme deux disques
+SCSI ordinaires ; l'outil `US_CONF.TOS` lui parle par des **paquets ICD propres** :
+
+```
+octet 0 : (ID << 5) | $1F         marqueur ICD
+octet 1 : $20                     groupe 1 (10 octets) — jamais un opcode SCSI utile
+octets 2-3 : 'U','S'              signature UltraSatan
+octets 4-7 : code ASCII           CurntFW · RdCl/WrCl · RdINQRN/WrINQRN · RdSt/WrSt · RdLog · RdFW/WrFW
+octets 8-10 : 3 paramètres        magie 'RTC' (WrCl), $83 $03 $17 (WrSt)
+puis UN secteur (512 octets) par DMA, dans le sens de la commande
+```
+
+| Élément | NeoST (`src/io/UltraSatan.*`, `Acsi`) | Source de vérité |
+|---------|----------------------------------------|------------------|
+| INQUIRY | `JOOKIE  ` + nom (10 car., défaut `UltraSatan`) + n° de slot `'1'`/`'2'` + `1.20` + date, bit **RMB** | `scsi6.c SCSI_Inquiry` |
+| Slot sans carte | TEST UNIT READY / READ CAPACITY / READ / WRITE → CHECK CONDITION, clé **NOT READY**, ASC `$3A` (medium not present) ; INQUIRY répond quand même | `ReturnStatusAccordingToIsInit` |
+| `USCurntFW` | secteur = `UltraSatan v1.20 (NeoST emulation)`, 0-terminé | `special.c` |
+| `USRdClRTC` / `USWrClRTC` | `'R','T','C'` + `{année−2000, mois, jour, h, min, s}` binaires ; écriture = magie `RTC` dans le **paquet ET le secteur** | `special.c`, `rtc.c` |
+| `USRdINQRN` / `USWrINQRN` | nom INQUIRY (10 octets ; `$00`/`$FF` en tête = nom d'usine) | `special.c` |
+| `USRdSt` / `USWrSt` | page de réglages 512 octets (opaque, octet 1 = firmware amorcé) ; écriture **refusée sans la magie** `$83 $03 $17` | `special.c` |
+| `USRdLog` | journal de commandes (vide) | `special.c` |
+| `USRdFW` / `USWrFW` | **refusés** (CHECK CONDITION) : NeoST n'émule pas la dataflash — impossible de briquer l'appareil | — |
+| Horloge | pile propre, **indépendante** du RP5C15 Mega : seedée sur l'hôte, avance avec les **cycles émulés** (comme `Rtc`) | `rtc.c` (année base 2000) |
+
+Sources : firmware v1.20 ([atarijookie/ce-atari `ultrasatan/`](https://github.com/atarijookie/ce-atari/tree/master/ultrasatan)).
+Hatari n'a aucun équivalent (disque ACSI générique « Hatari Emulated Harddisk »). Toute
+cible qui n'est pas un slot UltraSatan reste **byte-identique** au port de `hdc.c`.
+
+| Où | Comment |
+|----|---------|
+| Headless | `--ultrasatan` (IDs 0-1), `--ultrasatan-id N`, `--sd1 IMG`, `--sd2 IMG` (`--acsi IMG` = slot 1 quand l'ID est 0) |
+| GUI | Configuration → **Hard Disks** : case UltraSatan, slot 1 = l'image ACSI, slot 2 à monter ; `neost.cfg` : `ultrasatan=`, `sd2=` |
+| Code | `machine.enableUltraSatan(firstTarget); machine.fdc.mountAcsi(path, firstTarget + slot);` |
+
+Image de carte SD : n'importe quel dump brut partitionné (Atari ou DOS). `tools/make_usatan_hd.py`
+en génère une minimale (2 Mo, une partition GEM FAT16) qu'EmuTOS monte en **C:** sans pilote.
+
+## NetUSBee — NE2000 + hôte USB ISP1160 sur le port cartouche (`--netusbee`, GUI Network)
+
+Le [NetUSBee](https://hardware.atari.org/netusbee/netus.htm) = une **RTL8019AS câblée
+exactement comme l'EtherNEC** (pilotes rétro-compatibles — NeoST réutilise `io/Ne2000`
+tel quel) + un **ISP1160** (hôte USB 1.1, deux ports) sur le même port cartouche. Le port
+étant en lecture seule, 16 bits, sans A0, le pilote FreeMiNT (`sys/usb/src.km/ucd/netusbee/
+isp116x.h`) encode tout dans l'adresse :
+
+```
+$FA0000 + (b << 1)   LSB_WRITE      : verrouille l'octet b
+$FB8000 + (b << 1)   MSB_DATA_WRITE : écrit le MOT (b << 8) | latch dans le port DONNÉES
+$FBC000              MSB_CMD_WRITE  : écrit le MOT latch dans le port COMMANDE (index | $80 = écriture)
+$FA8000              DATA_READ      : lit un mot 16 bits du port DONNÉES (registres 32 bits : bas puis haut)
+```
+
+`src/io/Isp1160.*` modélise le contrôleur : `HcChipID` = `$6120` (masque `$FF00` = `$6100`),
+`HcSoftwareReset` (`$F6`) et `HcCommandStatus.HCR` auto-effacé, registres OHCI (`HcControl`,
+`HcFmInterval`, `HcRhDescriptorA` avec **NDP = 2 figé**, `HcRhPortStatus1/2`…), registres ISP
+(`HcHardwareConfiguration`, `HcuPInterrupt`/`Enable`, `HcScratch`, `HcITL/ATLBufferLength`,
+`HcBufferStatus`), **FIFO ATL** : les PTD écrits sont « exécutés » à chaque trame et relus avec
+**CC = 5 (DeviceNotResponding)**, `Active = 0` — c'est un **hub racine vide** : les pilotes
+(FreeMiNT `netusbee.ucd`, NetUSBee TOS) s'initialisent, n'énumèrent rien. Ligne IRQ modélisée
+(`irqAsserted()`), non câblée (les pilotes ST tournent en polling).
+
+⚠ **Divergence possible, consignée** : la fenêtre `LSB_WRITE` (`$FA0000-$FA01FF`) est AUSSI
+celle des écritures du registre 0 (CR) de la NE2000. Sans schéma du NetUSBee, NeoST applique
+ce que les adresses publiées impliquent : **les deux puces voient l'accès**. Si le vrai
+matériel gate l'une des deux, ce point est à corriger ici (`Bus::read8Slow`).
+
+| Où | Comment |
+|----|---------|
+| Headless | `--netusbee` (backend boucle locale ; exclusif de `--cart`) |
+| GUI | Configuration → **Network** : case NetUSBee (exclusive d'EtherNEC) ; `neost.cfg` : `netusbee=` |
+| Code | `machine.enableNetUsbee()` (= `enableEtherNec()` + ISP1160) |
+
+Point d'extension suivant : brancher un périphérique USB hôte (clavier/souris/stockage) —
+l'ATL/ITL et le hub racine sont là, il manque un « device » derrière `HcRhPortStatus`.
+
+## Tests UltraSatan + NetUSBee
+
+* `neost-headless --usatan-selftest` — 15 vérifications au niveau **fil** ($FF8604/06, séquence
+  **LongRW** de `US_CONF` : A1 bas/haut, bascule R/W + compteur de secteurs AVANT le dernier
+  octet, statut après transfert) : INQUIRY des deux slots, slot vide (NOT READY), slot avec
+  carte (TEST UNIT READY, READ CAPACITY, READ(6)), `CurntFW`, `RdCl`/`WrCl` (horloge figée),
+  `RdINQRN`/`WrINQRN`, `RdSt`/`WrSt`, refus flash/inconnu, **verrouillage** du paquet `'US'`
+  aux cibles UltraSatan. Palier `fast` (`tools/etalons.json`, type `usatan_selftest`).
+* `neost-headless --netusbee-selftest` — 11 vérifications : les primitives **exactes** du pilote
+  FreeMiNT (`raw_read/write_data16/32`, lectures MOT), ID de puce, scratch, reset logiciel,
+  registres 32 bits, hub racine vide, ATL → CC = 5, IRQ, NE2000 toujours décodée, save-state.
+  Palier `fast` (type `netusbee_selftest`).
+* `tools/selftests.json` → **`usatan_netusbee`** (palier `fast`, verdict série) : une carte SD
+  générée (`tools/make_usatan_hd.py`, 16 Mo, partition GEM FAT16) qu'EmuTOS monte en **C:** sans
+  pilote et dont il lance **`AUTO\USTEST.PRG`** — le programme de test 68000 RELOGEABLE de
+  `tools/make_usatan_test.py` (table de relocation TOS générée, `Super()` puis `Pterm0`), qui parle
+  à l'UltraSatan **comme `US_CONF`** (séquence LongRW, attente IRQ GPIP5) et au NetUSBee **comme le
+  pilote FreeMiNT** (lectures MOT, primitives raw), et vérifie `_drvbits` bit 2. Verdicts `usfw
+  usinq usrtc uscdrv nubid nubscr nubnic`. Trois règles EmuTOS apprises en construisant ce test
+  (`bios/blkdev.c`, `bios/disk.c`) : dès qu'un disque dur existe, la **disquette n'est plus
+  amorcée** ; un **secteur racine exécutable n'est lancé que sur un disque SANS partition
+  reconnue** (`disk_try_dmaboot`) ; et le type de FAT suit la **règle Microsoft** (≤ 4084 clusters
+  = FAT12 — une partition de 2 Mo y était lue en FAT12, d'où 16 Mo), là où Atari TOS suppose un
+  FAT16 sur tout disque dur. `make_usatan_test.py OUT.st` produit la **disquette** équivalente
+  (`A:\AUTO`) pour tester SANS carte SD : `uscdrv` échoue alors, c'est attendu. **Contrôle
+  négatif** : la même carte sous Hatari (`--acsi`, `--rs232-out`) donne `uscdrv PASS` et les six
+  verdicts matériels **FAIL** — le test ne passe pas par construction.
+* Save-states : **v12** (UltraSatan + ISP1160 sérialisés ; drapeaux d'en-tête bit3 = UltraSatan,
+  bit4 = NetUSBee — les configs save/load doivent concorder).
 
 ## Pont vers FujiNet-PC (point d'extension)
 
