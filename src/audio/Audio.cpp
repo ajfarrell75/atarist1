@@ -11,6 +11,7 @@
 
 #include "audio/Audio.hpp"
 #include "audio/DriveSound.hpp"
+#include "audio/Mt32Synth.hpp"
 #include "core/AudioMix.hpp"
 #include "core/YM2149.hpp"
 #include "core/DmaSound.hpp"
@@ -66,7 +67,7 @@ void Audio::render(float* out, uint32_t frames, uint32_t /*sampleRate*/) {
 // pousse dans l'anneau. Le PSG est synthétisé en REJOUANT ses écritures horodatées
 // (synthesizeFrame → modulations sous-buffer : digidrums, sync-buzzer), puis on mixe le
 // son DMA STE, le volume/tonalité LMC1992 et les bruits de lecteur, avant clamp.
-void Audio::produceFrame(int64_t frameCycles) {
+void Audio::produceFrame(int64_t frameCycles, int64_t frameEndCycle) {
     if (!started_) {                                  // pas de périphérique : on draine juste les événements
         psg_.clearEvents();
         if (dma_) dma_->clearEvents();
@@ -114,14 +115,20 @@ void Audio::produceFrame(int64_t frameCycles) {
     // session STE (reconfigure à chaud) colorerait le ST.
     const bool dmaOn = dma_ && (!dmaGate_ || dmaGate_());
     float* st = neost::mixEmulatedFrame(psg_, dma_, dmaOn,
-                                        uint32_t(n), rate_, frameCycles, mixBuf_);
+                                        uint32_t(n), rate_, frameCycles, mixBuf_, gainYm_, gainDma_);
     if (!st) return;
     if (drive_) {                                          // (5) bruits lecteur (mono, hors LMC1992) → centrés
         if (int(driveScratch_.size()) < n) driveScratch_.assign(n, 0.0f);
         float* dv = driveScratch_.data();
         std::fill(dv, dv + n, 0.0f);
         drive_->mix(dv, uint32_t(n));
-        for (int i = 0; i < n; ++i) { st[2 * i] += dv[i]; st[2 * i + 1] += dv[i]; }
+        const float g = gainDrive_;
+        for (int i = 0; i < n; ++i) { st[2 * i] += dv[i] * g; st[2 * i + 1] += dv[i] * g; }
+    }
+    // (6) Roland MT-32/CM-32L (Munt) : événements MIDI datés de la trame → rendu → mix.
+    if (mt32_ && mt32_->isOpen()) {
+        mt32_->setGain(0.9f * gainMt32_);
+        mt32_->render(st, n, frameEndCycle >= 0 ? frameEndCycle - frameCycles : 0, frameCycles);
     }
     // Volume maître utilisateur (menu), appliqué en RAMPE linéaire sur le bloc depuis la
     // valeur effective du bloc précédent : un saut instantané (mute 1→0 en plein signal,

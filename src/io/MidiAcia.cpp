@@ -4,6 +4,9 @@
 //  (c) 2026 VERHILLE Arnaud — projet NeoST.
 // =============================================================================
 #include "io/MidiAcia.hpp"
+
+#include <cstdio>
+#include <cstdlib>
 #include "io/Mfp.hpp"
 
 // Bits du registre de statut ACIA 6850.
@@ -68,9 +71,15 @@ void MidiAcia::write8(uint32_t addr, uint8_t v) {
     }
     // Pont MIDI RÉSEAU actif : l'octet part vers l'anneau au lieu de reboucler
     // (sinon on s'entendrait soi-même). Les octets de l'anneau reviennent par
-    // receiveExternal (cf. MidiRing). Sans sink : bouclage interne (défaut).
+    // receiveExternal (cf. MidiRing). Sans sink : bouclage interne SI la fiche est
+    // branchée (setLoopback) — débranchée par défaut, comme sur un vrai ST.
+    // NEOST_MIDI_TRACE=1 : chaque octet émis, daté au cycle (diagnostic tempo/gigue).
+    static const bool traceOut = std::getenv("NEOST_MIDI_TRACE") != nullptr;
+    if (traceOut) std::fprintf(stderr, "[midi] %lld %02X\n",
+                               static_cast<long long>(sched_ ? sched_->now() : 0), v);
+    if (midiSinkTimed_) { midiSinkTimed_(v, sched_ ? sched_->now() : 0); return; }
     if (midiSink_) { midiSink_(v); return; }
-    pushRx(v);                       // bouclage OUT→IN (câble physique)
+    if (loopback_) pushRx(v);        // bouclage OUT→IN (câble physique, optionnel)
 }
 
 void MidiAcia::pushRx(uint8_t v) {

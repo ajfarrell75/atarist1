@@ -45,6 +45,14 @@ struct Config { std::string rom; std::string disk; std::string diskb; std::strin
                 int  fujinetTarget = 6;      // cible ACSI du FujiNet (0-7)
                 std::string fujinetHosts;    // host slots, séparés par '|' (slot 0 en tête)
                 bool modem = false;   // modem Hayes sur l'USART (pont AT → TCP)
+                bool midiLoopback = false; // fiche de bouclage MIDI OUT→IN (diagnostics ; OFF = vrai ST)
+                bool midiOutGm = false;    // MIDI OUT → synthé General MIDI intégré (macOS)
+                bool midiOutPort = false;  // MIDI OUT → port CoreMIDI virtuel « NeoST MIDI OUT » (macOS)
+                bool midiOutMt32 = false;  // MIDI OUT → Roland MT-32/CM-32L émulé (Munt), mixé dans la sortie
+                std::string mt32Roms = "roms/mt32"; // dossier des ROM Roland (MT32_*/CM32L_*)
+                std::string mt32Model = "auto";     // auto | mt32 | cm32l (page Sound)
+                // Mixeur (page Sound) : gains par source, 0..2, 1 = neutre.
+                float mixYm = 1.0f, mixDma = 1.0f, mixDrive = 1.0f, mixMt32 = 1.0f;
                 bool ethernec = false; // NE2000/EtherNEC sur le port cartouche
                 bool netusbee = false; // NetUSBee : NE2000 + ISP1160 USB sur le port cartouche (exclusif d'ethernec)
                 bool ultrasatan = false; // UltraSatan sur les cibles ACSI 0-1 (slot 1 = acsi, slot 2 = sd2)

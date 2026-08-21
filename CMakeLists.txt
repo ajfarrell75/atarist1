@@ -347,6 +347,12 @@ endif()
 #  on construit quand même neost_core + neost-headless (l'outil de debug n°1).
 # =============================================================================
 find_package(glfw3 QUIET)
+# Munt (libmt32emu, LGPL 2.1) : Roland MT-32/CM-32L sur le MIDI OUT du GUI. Optionnel
+# (brew install mt32emu / libmt32emu-dev) ; sans lui, l'option reste grisée.
+if(APPLE AND EXISTS "/opt/homebrew/lib/cmake/MT32Emu")
+    list(APPEND CMAKE_PREFIX_PATH "/opt/homebrew")
+endif()
+find_package(MT32Emu CONFIG QUIET)
 find_package(OpenGL QUIET)
 find_package(Threads QUIET)
 
@@ -367,9 +373,18 @@ add_executable(neost
     src/gui/MediaPages.cpp
     src/gui/CrtEffectStack.cpp
     src/gui/KeyboardWindow.cpp
-    src/gui/StbImage.cpp)
+    src/gui/StbImage.cpp
+    src/audio/MidiOutMac.cpp
+    src/audio/Mt32Synth.cpp)
 # stb_image (extern/stb, domaine public) : décodage de la photo du clavier (pic/).
 target_include_directories(neost PRIVATE "${CMAKE_SOURCE_DIR}/extern/stb")
+if(MT32Emu_FOUND)
+    target_compile_definitions(neost PRIVATE NEOST_WITH_MT32=1)
+    target_link_libraries(neost PRIVATE MT32Emu::mt32emu)
+    message(STATUS "NeoST: libmt32emu found — Roland MT-32/CM-32L output enabled")
+else()
+    message(STATUS "NeoST: libmt32emu not found — MT-32 output disabled")
+endif()
 # ${CMAKE_DL_LIBS} : miniaudio charge sa backend par dlopen ; avant la glibc
 # 2.34 (bionic — l'image release Linux), libdl est séparée et doit être liée
 # explicitement. Vide sur les systèmes où dlopen vit dans libc → sans effet.
@@ -406,7 +421,7 @@ if(APPLE)
     target_compile_definitions(neost PRIVATE GL_SILENCE_DEPRECATION=)  # vide, comme imgui (évite la redéfinition)
     target_link_libraries(neost PRIVATE
         "-framework CoreFoundation" "-framework CoreAudio"
-        "-framework AudioToolbox"   "-framework AudioUnit")
+        "-framework AudioToolbox"   "-framework AudioUnit"   "-framework CoreMIDI")
 endif()
 
 # --- Dear ImGui (activé par défaut, GUI uniquement) ------------------------

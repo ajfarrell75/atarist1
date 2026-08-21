@@ -48,8 +48,11 @@ struct FrameMixBuffers {
 //
 // Renvoie le pointeur sur la sortie entrelacée (== buf.st.data()), ou nullptr si
 // `frames` est nul.
+//   ymGain/dmaGain : gains du MIXEUR utilisateur (GUI, page Sound), appliqués AVANT la
+//                  chaîne LMC1992 — comme des faders en amont de l'ampli. 1.0 = neutre
+//                  (headless/web : toujours neutre, l'image sonore de référence ne bouge pas).
 float* mixEmulatedFrame(YM2149& psg, DmaSound* dma, bool dmaOn,
                         uint32_t frames, uint32_t sampleRate, int64_t frameCycles,
-                        FrameMixBuffers& buf);
+                        FrameMixBuffers& buf, float ymGain = 1.0f, float dmaGain = 1.0f);
 
 }  // namespace neost

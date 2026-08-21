@@ -6,6 +6,43 @@ l'ordre inverse. Version courante : **0.5.2**.
 - « NeoST gère-t-il X ? » → [`docs/IMPLEMENTED.md`](docs/IMPLEMENTED.md) (inventaire par puce)
 - « Que reste-t-il ? » → [`TODO.md`](TODO.md)
 
+## Page Sound : mixeur par source + choix MT-32 / CM-32L (2026-08-21)
+
+Configuration → Sound : **faders** YM2149, son DMA (STE), bruits du lecteur, MT-32 (0-200 %,
+100 % = matériel), appliqués à chaud et persistés (`mix_ym=`, `mix_dma=`, `mix_drive=`,
+`mix_mt32=`). YM et DMA sont dosés **en amont du LMC1992** (`neost::mixEmulatedFrame` reçoit
+deux gains optionnels ; headless et web restent neutres, l'image sonore de référence ne
+bouge pas — la voie DMA est rendue seule, dosée, puis le YM rejoint le mix). Même page :
+sorties MIDI (GM, CoreMIDI, MT-32) et **modèle Roland Auto / MT-32 / CM-32L** (`mt32_model=`,
+réouverture de Munt à chaud ; le chargeur ne retient que les ROM complètes et préfère
+CM-32L 1.02, jamais la variante CM-32LN).
+
+## Sorties MIDI hôte : synthé GM, port CoreMIDI, Roland MT-32/CM-32L (Munt) — livraison sans gigue (2026-08-21)
+
+Le MIDI OUT de l'ACIA a enfin des oreilles côté hôte (`src/audio/MidiOutMac.*`, macOS) :
+**synthé General MIDI intégré** (DLSMusicDevice) et **port CoreMIDI virtuel « NeoST MIDI OUT »**
+(GarageBand, Logic, synthés logiciels). Mesure sur Cubase Lite : tempo exact (pente hôte/ST
+1,0007) mais livraison au fil de l'exécution = **gigue ±60 ms** (σ 28 ms), le « bizarre » —
+l'émulation avance par rafales de trames. Correctif : **livraison horodatée** — chaque octet est
+daté de son cycle 68000 (`MidiAcia::setMidiSinkTimed`), ancré sur l'heure réelle de sa trame
+(`emuNext`) + 30 ms d'avance fixe, et délivré par un thread à l'heure dite.
+Et l'expandeur que visaient les morceaux d'époque : **Roland MT-32 / CM-32L** via
+**libmt32emu (Munt, LGPL 2.1)**, optionnel au configure (`brew install mt32emu`), ROM Roland à
+déposer dans `roms/mt32/`. Rendu DANS la sortie audio de NeoST, événements datés à
+l'échantillon (`Synth::playMsg(msg, timestamp)`) : l'horloge est l'audio, gigue nulle par
+construction (`src/audio/Mt32Synth.*`, `Audio::produceFrame(frameCycles, frameEndCycle)`).
+Menu *Machine → MIDI OUT → …* ; `neost.cfg` : `midi_out_gm=`, `midi_out_port=`, `midi_out_mt32=`,
+`mt32_roms=`. Traces : `NEOST_MIDI_TRACE` (cycle ST par octet), `NEOST_MIDIOUT_TRACE` (heure hôte).
+
+## Câble de bouclage MIDI débranché par défaut — Cubase Lite charge ses morceaux (2026-08-21)
+
+L'ACIA MIDI rebouclait en permanence OUT→IN (câble de test du diagnostic Atari). Avec le
+MIDI Thru de Cubase/MROS, chaque octet émis revenait et repartait : larsen infini, « gel » au
+chargement de `JAMMER.ALL` (73 IRQ RX pour 73 TX dans le save-state du gel). La fiche devient
+**optionnelle et débranchée par défaut** (`MidiAcia::setLoopback`, `--loopback` branche RS-232
+ET MIDI, menu *Machine → MIDI loopback cable*, `midi_loopback=`). Cas détaillé dans
+`docs/CASE_STUDIES.md`. Le test « M MIDI » du diagnostic exige donc `--loopback`.
+
 ## Fenêtre « Keyboard » : le clavier ST en photo, toutes ses touches cliquables (2026-08-21)
 
 Menu *Windows → Keyboard* (`showKbd=` dans `neost.cfg`) : la photo `pic/Black_Keyboard_AtariST.jpeg`

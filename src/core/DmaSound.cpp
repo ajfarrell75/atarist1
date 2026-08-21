@@ -662,7 +662,7 @@ void DmaSound::mix(float* out, uint32_t frames, uint32_t sampleRate) {
 // qu'il avance en CONSOMMANT le flux capturé (cap_) — les octets ont été figés au
 // fetch par le cœur (FIFO au faisceau), l'audio ne relit plus la RAM. `ym` est aligné
 // sur le 1er échantillon du segment. DMA inactif ET flux drainé → YM recopié L=R.
-void DmaSound::mixSegment(float* st, const float* ym, uint32_t count, uint32_t sampleRate) {
+void DmaSound::mixSegment(float* st, const float* ym, uint32_t count, uint32_t sampleRate, float dmaGain) {
     if ((!aPlaying_ && capAvail() == 0) || sampleRate == 0) { // DMA inactif → YM seul (L=R)
         for (uint32_t i = 0; i < count; ++i) { st[2 * i] = ym[i]; st[2 * i + 1] = ym[i]; }
         return;
@@ -681,8 +681,8 @@ void DmaSound::mixSegment(float* st, const float* ym, uint32_t count, uint32_t s
                 aHaveCur_ = true;
             }
         }
-        const float dl = (dmaCurL_ / 4.0f / 128.0f) * kDmaGain;
-        const float dr = (dmaCurR_ / 4.0f / 128.0f) * kDmaGain;
+        const float dl = (dmaCurL_ / 4.0f / 128.0f) * kDmaGain * dmaGain;
+        const float dr = (dmaCurR_ / 4.0f / 128.0f) * kDmaGain * dmaGain;
         if (addYm) { st[2 * i] = ym[i] + dl; st[2 * i + 1] = ym[i] + dr; }
         else       { st[2 * i] = dl;         st[2 * i + 1] = dr; }
         aPhase_ += inc;
@@ -711,10 +711,10 @@ void DmaSound::mixSegment(float* st, const float* ym, uint32_t count, uint32_t s
 // Version stéréo « push » : rejoue les transitions PLAY/STOP de la trame à leur cycle
 // exact (segments entre événements), comme YM2149::synthesizeFrame. Sans horloge
 // câblée : repli sur un segment unique aligné sur l'état CPU live (ancien comportement).
-void DmaSound::mixStereo(float* st, const float* ym, uint32_t frames, uint32_t sampleRate, int64_t frameCycles) {
+void DmaSound::mixStereo(float* st, const float* ym, uint32_t frames, uint32_t sampleRate, int64_t frameCycles, float dmaGain) {
     if (!cycleClock_) {                                       // repli legacy (pas de timeline)
         syncAudioFromCpu();
-        mixSegment(st, ym, frames, sampleRate);
+        mixSegment(st, ym, frames, sampleRate, dmaGain);
         return;
     }
     if (frameCycles <= 0) frameCycles = 1;
@@ -722,7 +722,7 @@ void DmaSound::mixStereo(float* st, const float* ym, uint32_t frames, uint32_t s
     for (const DmaEvent& e : events_) {
         uint32_t off = uint32_t(int64_t(e.cycle) * frames / frameCycles);
         if (off > frames) off = frames;
-        if (off > pos) { mixSegment(st + 2 * pos, ym + pos, off - pos, sampleRate); pos = off; }
+        if (off > pos) { mixSegment(st + 2 * pos, ym + pos, off - pos, sampleRate, dmaGain); pos = off; }
         if (e.kind == 0) {                                    // PLAY start (0→1) : recale la cadence
             aPlaying_ = true; aMode_ = e.mode;
             aPhase_ = 0.0; aHaveCur_ = false;                 // ≙ DmaInitSample : 1er octet frais
@@ -732,6 +732,6 @@ void DmaSound::mixStereo(float* st, const float* ym, uint32_t frames, uint32_t s
             aMode_ = e.mode;
         }
     }
-    if (pos < frames) mixSegment(st + 2 * pos, ym + pos, frames - pos, sampleRate);
+    if (pos < frames) mixSegment(st + 2 * pos, ym + pos, frames - pos, sampleRate, dmaGain);
     events_.clear();
 }

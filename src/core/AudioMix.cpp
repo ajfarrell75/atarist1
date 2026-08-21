@@ -13,7 +13,7 @@ namespace neost {
 
 float* mixEmulatedFrame(YM2149& psg, DmaSound* dma, bool dmaOn,
                         uint32_t frames, uint32_t sampleRate, int64_t frameCycles,
-                        FrameMixBuffers& buf) {
+                        FrameMixBuffers& buf, float ymGain, float dmaGain) {
     if (frames == 0) {                      // rien à rendre : on DRAINE quand même les
         psg.clearEvents();                  // horodatages, sinon ils s'empilent sans fin
         if (dma) dma->clearEvents();
@@ -28,9 +28,13 @@ float* mixEmulatedFrame(YM2149& psg, DmaSound* dma, bool dmaOn,
     //     modulations sous-trame — digidrums (volume écrit à plusieurs kHz) et
     //     sync-buzzer. Lire les registres « en direct » les aplatit.
     psg.synthesizeFrame(ym, frames, sampleRate, frameCycles);
+    if (ymGain != 1.0f) for (uint32_t i = 0; i < frames; ++i) ym[i] *= ymGain;   // fader YM
 
     if (dmaOn && dma) {
-        dma->mixStereo(st, ym, frames, sampleRate, frameCycles);  // (2) DMA STE horodaté → L/R
+        // (2) DMA STE horodaté → L/R ; le fader DMA est appliqué DANS mixSegment, sur la
+        //     seule voie DMA — le YM et le bit de mixage LMC (YM+DMA / DMA seul) restent
+        //     fidèles (un « YM ajouté après coup » l'aurait réveillé quand le LMC le coupe).
+        dma->mixStereo(st, ym, frames, sampleRate, frameCycles, dmaGain);
         dma->applyHpfStereo(st, frames);                          // (2b) HPF sous-sonique du MIX
         const float gL = dma->gainLeft(), gR = dma->gainRight();  // (3) volume maître × G/D
         if (gL != 1.0f || gR != 1.0f)

@@ -16,8 +16,11 @@
 //  « transmetteur prêt » dont les séquenceurs MIDI cadencent leur sortie.
 //  Hors TIE, TDRE reste câblé à 1 (modèle simplifié, comme l'ACIA clavier).
 //
-//  Hors diagnostic, aucun logiciel ST courant ne dépend de l'absence de bouclage
-//  MIDI ; on garde le câble toujours « branché » par simplicité.
+//  ⚠ Le câble est DÉBRANCHÉ par défaut (2026-08-21) : Cubase Lite (MROS) avec son
+//  MIDI Thru ré-émet tout ce qu'il reçoit — bouclé, chaque octet sorti revenait et
+//  repartait, larsen MIDI infini, « gel » au chargement d'un morceau. Sur un vrai ST
+//  rien n'est branché par défaut ; la fiche de bouclage se pose comme celle du
+//  RS-232 : setLoopback(true) (--loopback en headless, menu Machine dans le GUI).
 //
 //  (c) 2026 VERHILLE Arnaud — projet NeoST.
 // =============================================================================
@@ -45,7 +48,13 @@ public:
     // MIDI) au lieu de reboucler, et les octets de l'anneau reviennent par
     // receiveExternal — exactement le câblage d'un anneau MIDI physique.
     void setMidiSink(std::function<void(uint8_t)> fn) { midiSink_ = std::move(fn); }
-    bool midiNetworked() const { return static_cast<bool>(midiSink_); }
+    // Variante DATÉE : reçoit aussi le cycle CPU d'émission — pour une sortie hôte qui
+    // replace chaque octet à son instant ST réel (cf. audio/MidiOutMac, gigue de trame).
+    void setMidiSinkTimed(std::function<void(uint8_t, int64_t)> fn) { midiSinkTimed_ = std::move(fn); }
+    // Câble de bouclage MIDI OUT→IN (diagnostics). Config, hors save-state.
+    void setLoopback(bool plugged) { loopback_ = plugged; }
+    bool loopback() const { return loopback_; }
+    bool midiNetworked() const { return static_cast<bool>(midiSink_) || static_cast<bool>(midiSinkTimed_); }
     // Injecte un octet reçu du réseau dans MIDI IN (comme le bouclage, mais depuis
     // l'extérieur). Lève l'IRQ ACIA si RIE est armé.
     void receiveExternal(uint8_t b);
@@ -105,5 +114,7 @@ private:
     bool    tdre_ = true;                    // Transmit Data Register Empty (0 en émission sous TIE)
     // Pont MIDI réseau (cf. setMidiSink). Non sérialisé (liaison frontend).
     std::function<void(uint8_t)> midiSink_;
+    std::function<void(uint8_t, int64_t)> midiSinkTimed_;
+    bool loopback_ = false;                  // fiche de bouclage OUT→IN branchée ?
     void pushRx(uint8_t v);                  // ajoute un octet à MIDI IN (RDR + shift)
 };

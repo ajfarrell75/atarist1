@@ -23,6 +23,26 @@ Ce qui reste OUVERT est dans [`../TODO.md`](../TODO.md).
 | **Blood Money (1989)** (Psygnosis) | ✅ **PAS UN BUG — manque de RAM (2026-08-07)** : « plante après le cracktro » = écran noir définitif en **512 Ko**, sur les DEUX cracks. **Oracle Hatari : même écran noir** (même ROM/disque/SPACE, jusqu'à 7000 VBL) → fidèle. Trace : recopie emballée à `$E26` avec `D2=$FFCC0484` (compteur négatif ≈ 4,3 G d'itérations) et `A0` déjà à `$34CA84` alors que `phystop` (D5) = `$00080000` — le dépaqueteur du crack calcule une taille bidon faute de RAM ; Hatari logge le même emballement (`Bus Error writing at address $400000, PC=$e28`). En **`--mem 1m`** : ça charge et ça joue. | ✅ Jouable en **1 Mo** avec `[cr Delight][m Superior][t]` (version « file », mono-disquette) : jeu ≈ trame 4800. `[cr Replicants][t]` démarre aussi mais réclame la **disquette 2** (non présente dans `disks/st/`). Recette : `--mem 1m --fastfdc --key-down 900 " " --key-up 906 " " --shot-every 600`. |
 | **HotPot (2002)** (Reservoir Gods, notre build `build.sh --game`) | ✅ **RÉSOLU (2026-07-09)** : front-end JOUABLE (menu « DOUBLE JUGGLE », INFO/OPTIONS/PLAY/EXIT) sur STE 1 Mo/tos162fr et tos106uk 4m. Le « noir après l'intro » N'était **PAS** une divergence d'émulation (identique dans Hatari) mais un **bug toolchain** : `build.sh` ignorait les `-D` du `.PRJ`, donc `-DdGODLIB_FADE` jamais défini → `Fade_Init()` (dans `#ifdef dGODLIB_FADE` de PLATFORM.C) compilé hors → callback VBL `Fade_Vbl` jamais installé → **fade-in de palette jamais armé** (palette figée noire alors que le front-end était bien dessiné). | Fix : `build.sh` collecte les `-D` actifs du `.PRJ` (`GAME_DEFS`) → toutes les compilations `vc`. Diag : symboles DRI du `.TOS` + `--dump-at` (`$FFFF8240`, `gFade`, `mfCalls`) + oracle Hatari `--harddrive/--avirecord`. Renvoi mémoire `hotpot-jouable-divergence`. |
 
+## Cubase Lite « figé » au chargement d'un morceau : le câble MIDI de bouclage (2026-08-21)
+
+Cubase Lite (CB_LITE.PRG 1996, MROS) démarre et fonctionne sous TOS 1.04 (sous EmuTOS il
+panique : MROS s'accroche à des internes non documentés du TOS — incompatibilité EmuTOS
+connue, pas un bug NeoST). Mais charger `JAMMER.ALL` **figeait** l'écran.
+
+Recette : save-state au gel (F5), rechargé en headless (`--load-state … --trace --irq`). Le CPU
+n'était pas bloqué : **vecteur `$46` (ACIA) toutes les ~300 instructions**, et dans le handler
+MROS **73 passages RX (statut `$83`) pour 73 TX** — chaque octet MIDI émis revenait aussitôt en
+MIDI IN. Cause : NeoST émulait **en permanence** un câble de bouclage MIDI OUT→IN (pour le test
+« M MIDI » du diagnostic Atari) ; avec le **MIDI Thru** de Cubase, tout octet reçu est ré-émis →
+larsen infini, l'interface n'a plus de temps CPU. Sur un vrai ST rien n'est branché par défaut.
+
+Correctif : fiche de bouclage **débranchée par défaut**, optionnelle (`MidiAcia::setLoopback`,
+`--loopback` en headless — qui branche aussi celle du RS-232 —, menu *Machine → MIDI loopback
+cable* et `midi_loopback=` dans le GUI). Vérifié : le même save-state rechargé câble débranché
+→ 28 IRQ ACIA en 300 trames (la file TX se vide), 0 réception, MROS et le TOS retombent dans
+leurs boucles d'attente. Leçon : un « gel » avec IRQ qui pleuvent = chercher la **source**
+externe (ici un câble virtuel), pas le CPU.
+
 ## Le réflexe qui tranche le plus de cas : la RAM (puis la ROM)
 
 Beaucoup de titres 1989+ et la plupart des cracks/dépaqueteurs exigent **1 Mo** ; en

@@ -49,3 +49,8 @@ either is redistributed in this package.
 stb_image v2.30 — Sean Barrett et contributeurs. Double licence au choix : MIT ou domaine
 public (Unlicense). Utilisé par le GUI pour décoder la photo du clavier (pic/).
 https://github.com/nothings/stb
+
+--- libmt32emu / Munt (optional, dynamically linked) ---
+Munt MT-32/CM-32L emulator, LGPL 2.1 (https://github.com/munt/munt). Used by the macOS GUI
+when present at build time (brew install mt32emu) to render the ST's MIDI OUT through a
+Roland MT-32/CM-32L. The Roland ROMs are NOT included: the user provides them (roms/mt32/).

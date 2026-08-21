@@ -444,7 +444,9 @@ divergence HAUTE**, les 4 correctifs sont CORRECTS. La passe remonte surtout des
 - **MIDI M-MIDI ✅ corrigé** — l'ACIA MIDI a désormais un `rdrf_` **distinct** de `!rx_.empty()`
   (`MidiAcia.cpp/.hpp`) : le master reset l'efface (SR → TDRE seul, conforme `ACIA_MasterReset`)
   **sans purger la file** → l'octet reste relisible via RDR, et RDRF retombe correctement. Le
-  bouclage « M MIDI » reste fonctionnel (file vide au reset du diagnostic).
+  bouclage « M MIDI » reste fonctionnel (file vide au reset du diagnostic) — mais il faut
+  désormais **brancher la fiche** (`--loopback`) : depuis le 2026-08-21 le câble OUT→IN est
+  débranché par défaut, comme chez Hatari et sur un vrai ST (cf. CASE_STUDIES § Cubase Lite).
 
 ### 🟡 Nouveaux — BASSES (cas-limites/cosmétiques)
 - **Vidéo** : filtre « écriture redondante » absent (freq/res rejouées même inchangées) ;

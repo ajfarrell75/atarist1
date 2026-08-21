@@ -385,6 +385,11 @@ ACIA) ; si une vraie démo spec512 **overscan** (bordures ouvertes) est rapatri�
   pluggable — c'est un simple ajout de backend, hérite de tous les protocoles amont.
 - **FujiNet — lib ST** : proposer le dossier `atarist/` en amont à `fujinet-lib` pour cadrer le
   binding ACSI tôt ; device slots 0-7 différenciés ; montage lecteur B.
+- **MT-32 (Munt) — paquet macOS** (2026-08-21) : `libmt32emu.dylib` vient de Homebrew ; le `.app`
+  livré doit l'embarquer (copie dans Frameworks + `install_name_tool`) ou compiler Munt en
+  statique (sous-module `extern/munt`), sinon l'option n'existe que sur une machine avec brew.
+- **MIDI OUT Linux/Windows** : `MidiOutMac` est CoreMIDI/AudioToolbox ; ALSA sequencer + FluidSynth
+  (Linux) et winmm (Windows) restent à écrire — le MT-32 (Munt), lui, est portable.
 - **NetUSBee — périphériques USB hôte** (2026-08-21) : l'ISP1160 (`io/Isp1160`) est un hub racine
   VIDE ; brancher un clavier/souris HID puis un stockage de masse derrière `HcRhPortStatus` (PTD
   ATL → réponses du device). Les pilotes FreeMiNT `netusbee.ucd` + `usb.km` sont le banc d'essai.

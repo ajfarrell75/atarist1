@@ -81,7 +81,8 @@ void usage() {
         "  --disk FILE       mount an image in drive A (default disks/diskA.st)\n"
         "  --diskb FILE      mount an image in drive B (second drive)\n"
         "  --fastfdc         fast FDC (delays /10) — speeds up disk access\n"
-        "  --loopback        \"plug in\" the RS232 loopback connector (serial S test)\n"
+        "  --loopback        \"plug in\" the RS232 and MIDI OUT->IN loopback connectors\n"
+        "                    (diagnostic serial S / MIDI M tests; MIDI is unplugged by default)\n"
         "  --cart FILE       mount a cartridge ($FA0000): diagnostic Test Kit, etc.\n"
         "  --gemdos DIR      GEMDOS hard disk: map DIR onto C: (GEMDOS calls redirected\n"
         "                    to the host, Hatari-style; exclusive with --cart)\n"
@@ -1573,7 +1574,7 @@ int main(int argc, char** argv) {
         // s'il était branché plus tôt, l'écho du rapport série imprimé en console au
         // boot reviendrait en réception et serait lu comme entrée terminal → le test
         // clavier échouerait. Le technicien le branche juste avant de lancer le test S.
-        if (loopback) machine.mfp.setLoopback(true);
+        if (loopback) { machine.mfp.setLoopback(true); machine.midi.setLoopback(true); }
         idle(frames);   // laisse les tests déclenchés s'exécuter
         std::fprintf(stderr, "[headless] keys injected: \"%s\"\n", keys.c_str());
     }

@@ -103,6 +103,7 @@ you are actually running.
 | <kbd>F5</kbd> / <kbd>F7</kbd> | Save / load state |
 | <kbd>F8</kbd> / <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>F</kbd> | Toggle kiosk (cabinet) mode |
 | *Windows → Keyboard* | On-screen ST keyboard (photo): click any key, sticky Shift/Control/Alternate |
+| *Machine → MIDI OUT* | macOS: built-in GM synth, CoreMIDI virtual port, or Roland MT-32/CM-32L (Munt, ROMs in `roms/mt32/`) |
 | <kbd>F11</kbd> | Keyboard joystick (arrows + right Ctrl) |
 | <kbd>F12</kbd> | Kiosk: keyboard & mouse overlay |
 | <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>G</kbd> | Capture / release the mouse |

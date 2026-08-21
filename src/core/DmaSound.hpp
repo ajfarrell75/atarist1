@@ -64,7 +64,9 @@ public:
     // cycle EXACT — un bruitage one-shot très court (démarré ET fini dans la même trame
     // émulée) n'est plus avalé, et la queue d'un sample n'est plus écrêtée par l'effacement
     // CPU du bit PLAY. `frameCycles` = durée de la trame en cycles CPU (mappe cycle→échantillon).
-    void    mixStereo(float* st, const float* ym, uint32_t frames, uint32_t sampleRate, int64_t frameCycles);
+    // `dmaGain` : fader utilisateur sur la SEULE voie DMA (1 = neutre) ; le YM et le bit de
+    // mixage LMC (YM+DMA / DMA seul) gardent leur sémantique matérielle.
+    void    mixStereo(float* st, const float* ym, uint32_t frames, uint32_t sampleRate, int64_t frameCycles, float dmaGain = 1.0f);
 
     // Branche l'horloge frame-relative (cycles CPU depuis le début de la trame), posée
     // par le frontend audio « push » (cf. main.cpp, comme YM2149::setCycleClock). Tant
@@ -175,7 +177,7 @@ private:
     bool    capPullLR(bool stereo, int& l, int& r);
     // Rend `count` échantillons stéréo dans `st` (entrelacé) à partir de l'état audio
     // (aPlaying_/aMode_…) en consommant le flux capturé ; `ym` aligné sur le 1er échantillon.
-    void    mixSegment(float* st, const float* ym, uint32_t count, uint32_t sampleRate);
+    void    mixSegment(float* st, const float* ym, uint32_t count, uint32_t sampleRate, float dmaGain);
     // Enregistre un événement de trame DMA daté (si l'horloge push est câblée).
     void    recordEvent(uint8_t kind);
     // Synchronise l'état audio (aXxx_) sur l'état CPU live (repli sans horloge push).

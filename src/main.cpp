@@ -250,6 +250,8 @@ static void saveConfig(const std::string& exeDir, Config& c, Machine* machine = 
 #include "imgui_internal.h"   // gestionnaire de réglages personnalisé (ImGuiSettingsHandler)
 #include "imgui_impl_glfw.h"
 #include "gui/KeyboardWindow.hpp"
+#include "audio/MidiOutMac.hpp"
+#include "audio/Mt32Synth.hpp"
 #include "imgui_impl_opengl2.h"
 #include "gui/UiCommon.hpp"    // pictogrammes Font Awesome + IconButton
 #include "gui/MediaPages.hpp"  // pages Disquettes / Cartouche / Disque dur / Réseau
@@ -1899,6 +1901,12 @@ struct ConfigUi {
     bool reqFujinetHostsSet = false;
     int  reqModem = -1;                   // modem Hayes RS-232 (0/1)
     int  reqEther = -1;                   // EtherNEC NE2000 (0/1)
+    // Sorties MIDI (page Sound) : synthé GM, port CoreMIDI, MT-32 (0/1) ; modèle 0 auto/1 MT-32/2 CM-32L.
+    int  reqMidiOutGm = -1, reqMidiOutPort = -1, reqMidiOutMt32 = -1, reqMt32Model = -1;
+    std::string mt32Status;               // lecture : modèle chargé ou erreur
+    // Mixeur (page Sound) : édité EN PLACE par la page ; mixDirty = appliquer, mixDone = persister.
+    float mixYm = 1.0f, mixDma = 1.0f, mixDrive = 1.0f, mixMt32 = 1.0f;
+    bool  mixInit = false, mixDirty = false, mixDone = false;
     int  reqNetUsbee = -1;                // NetUSBee NE2000 + ISP1160 (0/1)
     int  reqUltraSatan = -1;              // UltraSatan sur les IDs ACSI 0-1 (0/1)
     std::string reqMountSd2;              // image SD du slot 2 (ID 1)
@@ -2166,6 +2174,52 @@ void drawConfigWindow(ConfigUi& ui) {
         ImGui::TextDisabled("in neost.cfg): changing it live would rebuild the audio");
         ImGui::TextDisabled("ring mid-playback.");
         ImGui::Text("Target cushion: %d ms", cfg.audioLatencyMs);
+        // --- Mixeur : un fader par source de NeoST ---------------------------------
+        ImGui::Separator();
+        ImGui::TextDisabled("Mixer (per-source gains, 100 %% = as on the hardware)");
+        {
+            auto fader = [&](const char* label, float& v, bool enabled, const char* why) {
+                int pct = int(v * 100.0f + 0.5f);
+                ImGui::BeginDisabled(!enabled);
+                ImGui::SetNextItemWidth(220.0f);
+                if (ImGui::SliderInt(label, &pct, 0, 200, "%d %%")) { v = float(pct) / 100.0f; ui.mixDirty = true; }
+                if (ImGui::IsItemDeactivatedAfterEdit()) ui.mixDone = true;
+                ImGui::EndDisabled();
+                if (!enabled && why) { ImGui::SameLine(); ImGui::TextDisabled("%s", why); }
+            };
+            const bool isSte = ui.machine && (ui.machine->machineType() == MachineType::Ste
+                                               || ui.machine->machineType() == MachineType::MegaSte);
+            fader("YM2149 (PSG)", ui.mixYm, true, nullptr);
+            fader("DMA sound (STE)", ui.mixDma, isSte, "(ST: no DMA sound)");
+            fader("Floppy drive", ui.mixDrive, ui.driveSoundAvail, "(no samples)");
+            fader("Roland MT-32 / CM-32L", ui.mixMt32, Mt32Synth::available(), "(no libmt32emu)");
+            if (ImGui::SmallButton("Reset mixer")) {
+                ui.mixYm = ui.mixDma = ui.mixDrive = ui.mixMt32 = 1.0f; ui.mixDirty = ui.mixDone = true;
+            }
+        }
+        // --- MIDI OUT (ACIA 6850 → hôte) -----------------------------------------
+        ImGui::Separator();
+        ImGui::TextDisabled("MIDI OUT of the ST (ACIA 6850)");
+        if (MidiOutMac::available()) {
+            bool gm = cfg.midiOutGm, port = cfg.midiOutPort;
+            if (ImGui::Checkbox("Built-in General MIDI synth (macOS)", &gm)) ui.reqMidiOutGm = gm ? 1 : 0;
+            if (ImGui::Checkbox("CoreMIDI virtual port \"NeoST MIDI OUT\"", &port)) ui.reqMidiOutPort = port ? 1 : 0;
+        }
+        if (Mt32Synth::available()) {
+            bool mt = cfg.midiOutMt32;
+            if (ImGui::Checkbox("Roland MT-32 / CM-32L (Munt)", &mt)) ui.reqMidiOutMt32 = mt ? 1 : 0;
+            const int cur = cfg.mt32Model == "mt32" ? 1 : cfg.mt32Model == "cm32l" ? 2 : 0;
+            ImGui::TextDisabled("Model:"); ImGui::SameLine();
+            if (ImGui::RadioButton("Auto", cur == 0))   ui.reqMt32Model = 0; ImGui::SameLine();
+            if (ImGui::RadioButton("MT-32", cur == 1))  ui.reqMt32Model = 1; ImGui::SameLine();
+            if (ImGui::RadioButton("CM-32L", cur == 2)) ui.reqMt32Model = 2;
+            ImGui::TextDisabled("ROMs: %s  -  %s", cfg.mt32Roms.c_str(),
+                                ui.mt32Status.empty() ? "(off)" : ui.mt32Status.c_str());
+            ImGui::TextDisabled("Auto = CM-32L when its ROMs are present, else MT-32. Song-era patches");
+            ImGui::TextDisabled("(Cubase .ALL from 1991) were written for these units, not for GM.");
+        } else {
+            ImGui::TextDisabled("Roland MT-32 / CM-32L: libmt32emu missing at build time (brew install mt32emu).");
+        }
         break;
     }
     case kCfgInput: {
@@ -2648,6 +2702,30 @@ int main(int argc, char** argv) {
     };
     if (cfg.netusbee) netUsbeeApply(true);
     if (cfg.ethernec) etherApply(true);
+    machine.midi.setLoopback(cfg.midiLoopback);   // fiche MIDI OUT→IN (OFF par défaut)
+    // Sortie MIDI hôte (macOS) : synthé GM intégré et/ou port CoreMIDI virtuel. Dès
+    // qu'une sortie est ouverte, l'ACIA y envoie MIDI OUT (au lieu du bouclage).
+    MidiOutMac midiOut;
+    // Roland MT-32/CM-32L (Munt) : rendu DANS la sortie audio, daté au cycle (pas de gigue).
+    Mt32Synth mt32;
+    auto midiOutApply = [&]() {
+        if (cfg.midiOutGm)   { if (!midiOut.openSynth()) cfg.midiOutGm = false; } else midiOut.closeSynth();
+        if (cfg.midiOutPort) { if (!midiOut.openVirtualPort()) cfg.midiOutPort = false; } else midiOut.closeVirtualPort();
+        if (cfg.midiOutMt32) {
+            if (!mt32.isOpen() && !mt32.open(resolveData(cfg.mt32Roms, exeDir), 48000, cfg.mt32Model)) {
+                g_stateMsg = "MT-32: " + mt32.lastError(); g_stateMsgFrames = 300;
+                std::fprintf(stderr, "[mt32] %s\n", mt32.lastError().c_str());
+                cfg.midiOutMt32 = false;
+            }
+        } else mt32.close();
+        if (midiOut.anyOpen() || mt32.isOpen())
+            machine.midi.setMidiSinkTimed([&midiOut, &mt32](uint8_t b, int64_t c) {
+                if (midiOut.anyOpen()) midiOut.byteAt(b, c);
+                mt32.byteAt(b, c);
+            });
+        else machine.midi.setMidiSinkTimed({});
+    };
+    midiOutApply();
     machine.mfp.setColorMonitor(!cfg.mono);   // moniteur mémorisé (avant le reset)
     machine.fdc.setFastFdc(cfg.fastfdc);      // FDC rapide mémorisé (accès disque ÷10)
     // Socket MC68881 (Mega STE uniquement, cf. Fpu.hpp) : sonde + trapping.
@@ -2671,6 +2749,8 @@ int main(int argc, char** argv) {
     bool driveSoundOn = driveSoundAvail && cfg.driveSound;
     drive.setEnabled(driveSoundOn);
     Audio audio(machine.psg, driveSoundAvail ? &drive : nullptr, &machine.dmasnd);
+    audio.setMt32(&mt32);                // Roland MT-32/CM-32L (Munt) mixé dans la sortie
+    audio.setMixGains(cfg.mixYm, cfg.mixDma, cfg.mixDrive, cfg.mixMt32);   // mixeur (page Sound)
     audio.setLatencyMs(uint32_t(cfg.audioLatencyMs < 0 ? 0 : cfg.audioLatencyMs));  // AVANT start (borné dans Audio)
     audio.start();   // échec silencieux possible (CI / pas de carte son)
     // Sink FdcSound armé SEULEMENT si la sortie audio existe : sans elle, produceFrame ne
@@ -3153,7 +3233,7 @@ int main(int argc, char** argv) {
                 g_dbgStepFrame = false;
                 machine.cpu.clearBreakpointHit();
                 machine.runFrame();
-                audio.produceFrame(machine.frameCycles());
+                audio.produceFrame(machine.frameCycles(), machine.sched.now());
             }
             // Pas-à-pas INSTRUCTION : une seule instruction, ordonnanceur en lockstep
             // (pas de produceFrame — trop court, le son reste muet en pas-à-pas).
@@ -3177,8 +3257,10 @@ int main(int argc, char** argv) {
 #endif
                 if (machine.ne2000.enabled()) machine.ne2000.poll();   // trames RX → anneau
                 if (machine.isp1160.enabled()) machine.isp1160.poll(); // trame USB (ATL → done)
+                // Sortie MIDI horodatée : cette trame DOIT commencer à emuNext (temps réel).
+                if (midiOut.anyOpen()) midiOut.anchor(machine.sched.now(), emuNext);
                 machine.runFrame();                          // une trame (timing + décodage)
-                audio.produceFrame(machine.frameCycles());   // son de la trame → anneau (push)
+                audio.produceFrame(machine.frameCycles(), machine.sched.now());   // son de la trame → anneau (push)
                 emuNext += std::chrono::nanoseconds(
                     static_cast<int64_t>(double(machine.frameCycles()) * 1e9 / kCpuHz));
                 ++ran;
@@ -3259,6 +3341,27 @@ int main(int argc, char** argv) {
         if (ImGui::BeginMainMenuBar()) {
             menuH = ImGui::GetWindowSize().y;
             if (ImGui::BeginMenu(ICON_FA_MICROCHIP " Machine")) {
+                // Fiche de bouclage MIDI OUT→IN : débranchée par défaut (un vrai ST n'a
+                // rien de branché ; branchée, Cubase/MROS avec MIDI Thru part en larsen).
+                if (ImGui::MenuItem("MIDI loopback cable (OUT" "\xe2\x86\x92" "IN)", nullptr, &cfg.midiLoopback)) {
+                    machine.midi.setLoopback(cfg.midiLoopback);
+                    saveConfig(exeDir, cfg, &machine);
+                }
+                if (MidiOutMac::available()) {
+                    if (ImGui::MenuItem("MIDI OUT " "\xe2\x86\x92" " built-in General MIDI synth", nullptr, &cfg.midiOutGm)) {
+                        midiOutApply(); saveConfig(exeDir, cfg, &machine);
+                    }
+                    if (ImGui::MenuItem("MIDI OUT " "\xe2\x86\x92" " CoreMIDI port \"NeoST MIDI OUT\"", nullptr, &cfg.midiOutPort)) {
+                        midiOutApply(); saveConfig(exeDir, cfg, &machine);
+                    }
+                }
+                if (Mt32Synth::available()) {
+                    if (ImGui::MenuItem("MIDI OUT " "\xe2\x86\x92" " Roland MT-32 / CM-32L (Munt, roms/mt32/)", nullptr, &cfg.midiOutMt32)) {
+                        midiOutApply(); saveConfig(exeDir, cfg, &machine);
+                    }
+                } else {
+                    ImGui::MenuItem("MIDI OUT " "\xe2\x86\x92" " Roland MT-32 (needs libmt32emu at build)", nullptr, false, false);
+                }
                 if (ImGui::MenuItem(ICON_FA_REDO " Reset"))            reqReset = true;
                 if (ImGui::MenuItem(ICON_FA_POWER_OFF " Hard Reset"))  reqHardReset = true;
                 ImGui::Separator();
@@ -3493,6 +3596,11 @@ int main(int argc, char** argv) {
         cfgUi.curGemdos = cfg.gemdos.empty() ? std::string() : resolvePath(cfg.gemdos);
         cfgUi.curAcsi   = cfg.acsi.empty()   ? std::string() : resolvePath(cfg.acsi);
         cfgUi.curSd2    = cfg.sd2.empty()    ? std::string() : resolvePath(cfg.sd2);
+        cfgUi.mt32Status = mt32.isOpen() ? (mt32.model() + " running") : mt32.lastError();
+        if (!cfgUi.mixInit) {            // sème les faders depuis la config (une fois)
+            cfgUi.mixYm = cfg.mixYm; cfgUi.mixDma = cfg.mixDma;
+            cfgUi.mixDrive = cfg.mixDrive; cfgUi.mixMt32 = cfg.mixMt32; cfgUi.mixInit = true;
+        }
 
         if (g_showFloppy) drawFloppyWindow(cfgUi);
         if (g_showCfg) {
@@ -3608,6 +3716,22 @@ int main(int argc, char** argv) {
                 saveConfig(exeDir, cfg, &machine);
                 reqHardReset = true;             // le pilote sonde la carte au boot
                 cfgUi.reqEther = -1;
+            }
+            if (cfgUi.mixDirty) {
+                cfg.mixYm = cfgUi.mixYm; cfg.mixDma = cfgUi.mixDma;
+                cfg.mixDrive = cfgUi.mixDrive; cfg.mixMt32 = cfgUi.mixMt32;
+                audio.setMixGains(cfg.mixYm, cfg.mixDma, cfg.mixDrive, cfg.mixMt32);
+                cfgUi.mixDirty = false;
+            }
+            if (cfgUi.mixDone) { saveConfig(exeDir, cfg, &machine); cfgUi.mixDone = false; }
+            if (cfgUi.reqMidiOutGm >= 0)   { cfg.midiOutGm   = cfgUi.reqMidiOutGm   == 1; cfgUi.reqMidiOutGm   = -1; midiOutApply(); saveConfig(exeDir, cfg, &machine); }
+            if (cfgUi.reqMidiOutPort >= 0) { cfg.midiOutPort = cfgUi.reqMidiOutPort == 1; cfgUi.reqMidiOutPort = -1; midiOutApply(); saveConfig(exeDir, cfg, &machine); }
+            if (cfgUi.reqMidiOutMt32 >= 0) { cfg.midiOutMt32 = cfgUi.reqMidiOutMt32 == 1; cfgUi.reqMidiOutMt32 = -1; midiOutApply(); saveConfig(exeDir, cfg, &machine); }
+            if (cfgUi.reqMt32Model >= 0) {
+                cfg.mt32Model = cfgUi.reqMt32Model == 1 ? "mt32" : cfgUi.reqMt32Model == 2 ? "cm32l" : "auto";
+                cfgUi.reqMt32Model = -1;
+                mt32.close();                    // rouvre avec le modèle demandé
+                midiOutApply(); saveConfig(exeDir, cfg, &machine);
             }
             if (cfgUi.reqNetUsbee >= 0) {
                 cfg.netusbee = (cfgUi.reqNetUsbee == 1);
@@ -3728,6 +3852,13 @@ int main(int argc, char** argv) {
 #endif
                     netUsbeeApply(cfg.netusbee);
                     etherApply(cfg.ethernec);
+                    // Son/MIDI du profil : sorties (GM/CoreMIDI/MT-32 + modèle), câble de
+                    // bouclage, faders — rejoués ici, et la page Sound ressème ses faders.
+                    mt32.close();
+                    midiOutApply();
+                    machine.midi.setLoopback(cfg.midiLoopback);
+                    audio.setMixGains(cfg.mixYm, cfg.mixDma, cfg.mixDrive, cfg.mixMt32);
+                    cfgUi.mixInit = false;
                     saveConfig(exeDir, cfg, &machine);
                     reqRebuild = true;        // modèle/RAM/FPU/ROM/cartouche/HD/moniteur/FDC (+ UltraSatan)
                     cfgUi.pendInit = false;   // resème les champs « en attente »
@@ -4370,6 +4501,10 @@ int main(int argc, char** argv) {
     ImGui_ImplGlfw_Shutdown();
     ImGui::DestroyContext();
 #endif
+    // Arrêt : plus aucun octet MIDI vers des objets en cours de destruction (sink → midiOut/mt32).
+    machine.midi.setMidiSinkTimed({});
+    audio.setMt32(nullptr);
+    mt32.close();
     glfwDestroyWindow(window);
     glfwTerminate();
     return 0;

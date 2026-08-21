@@ -21,6 +21,8 @@ class YM2149;
 class DriveSound;
 class DmaSound;
 
+class Mt32Synth;
+
 class Audio {
 public:
     // drive / dma peuvent être nuls — seul le PSG sort alors.
@@ -50,7 +52,17 @@ public:
     // + LMC1992 + bruits lecteur, clampé) et le pousse dans l'anneau. `frameCycles` = durée
     // de la trame en cycles CPU (pour dater les écritures PSG et calibrer le nombre
     // d'échantillons). À appeler APRÈS Machine::runFrame.
-    void produceFrame(int64_t frameCycles);
+    // `frameEndCycle` (cycle CPU à la fin de la trame) date les événements MIDI du MT-32.
+    void produceFrame(int64_t frameCycles, int64_t frameEndCycle = -1);
+
+    // Synthé MT-32/CM-32L (Munt) mixé dans la sortie — nul = absent (cf. audio/Mt32Synth).
+    void setMt32(Mt32Synth* s) { mt32_ = s; }
+
+    // Mixeur utilisateur (page Sound) : gains par source, 0..2 (1 = neutre). YM et DMA
+    // s'appliquent en amont du LMC1992, lecteur et MT-32 à leur entrée dans le mix.
+    void setMixGains(float ym, float dma, float drive, float mt32) {
+        gainYm_ = ym; gainDma_ = dma; gainDrive_ = drive; gainMt32_ = mt32;
+    }
 
     // Volume maître de la SORTIE (0..1) — réglage utilisateur (barre de menu, persisté
     // dans neost.cfg), appliqué au mix final avant clamp. Indépendant du LMC1992 ÉMULÉ
@@ -68,6 +80,8 @@ private:
     YM2149&     psg_;
     DriveSound* drive_   = nullptr;
     DmaSound*   dma_     = nullptr;
+    Mt32Synth*  mt32_    = nullptr;
+    float gainYm_ = 1.0f, gainDma_ = 1.0f, gainDrive_ = 1.0f, gainMt32_ = 1.0f;   // cf. setMixGains
     bool        started_ = false;
     void*       device_  = nullptr;   // ma_device opaque (évite d'inclure miniaudio ici)
 
