@@ -35,6 +35,7 @@ class MidiAcia;
 class GemdosHd;
 class Scc;
 class Ne2000;
+class Isp1160;
 // -----------------------------------------------------------------------------
 //  Plan mémoire de l'Atari ST (bus d'adresses 24 bits → 16 Mo adressables).
 //  Les constantes documentent le POURQUOI de chaque zone.
@@ -288,6 +289,10 @@ public:
     // Non nul + activée = les lectures dans $FA0000-$FBFFFF sont décodées comme
     // accès EtherNEC AVANT la ROM cartouche. Posé par Machine. Cf. io/Ne2000.hpp.
     Ne2000*  ne2000 = nullptr;
+    // Contrôleur hôte USB ISP1160 du NetUSBee (extension NeoST) : fenêtres
+    // $FA0000/$FA8000/$FB8000/$FBC000 décodées AVANT la NE2000 — qui peut voir le
+    // même accès (latch LSB = registre CR, cf. io/Isp1160.hpp). Posé par Machine.
+    Isp1160* isp1160 = nullptr;
 
     // Profil machine : décide quel matériel optionnel répond (son DMA STE, etc.)
     // et où une bus error se produit. Posé par Machine. Défaut : 1040 STE.

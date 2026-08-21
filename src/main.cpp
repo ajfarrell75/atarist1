@@ -249,6 +249,7 @@ static void saveConfig(const std::string& exeDir, Config& c, Machine* machine = 
 #include "imgui.h"
 #include "imgui_internal.h"   // gestionnaire de réglages personnalisé (ImGuiSettingsHandler)
 #include "imgui_impl_glfw.h"
+#include "gui/KeyboardWindow.hpp"
 #include "imgui_impl_opengl2.h"
 #include "gui/UiCommon.hpp"    // pictogrammes Font Awesome + IconButton
 #include "gui/MediaPages.hpp"  // pages Disquettes / Cartouche / Disque dur / Réseau
@@ -368,6 +369,7 @@ static std::string joymapSerialize() {
 }
 bool  g_showHex = true, g_showCpu = true;   // fenêtres d'inspection masquables
 bool  g_showJoy = false;               // fenêtre joystick (visualisation live)
+bool  g_showKbd = false;               // fenêtre clavier virtuel (photo pic/, touches cliquables)
 bool  g_showCfg = true;                // fenêtre Configuration
 bool  g_showFloppy = true;             // fenêtre indépendante des disquettes
 std::vector<std::string> g_dropped;    // chemins glissés-déposés, consommés dans la boucle
@@ -803,6 +805,21 @@ void onKey(GLFWwindow*, int key, int scancode, int action, int mods) {
     if (key == GLFW_KEY_F8) {
         if (action == GLFW_PRESS) g_kioskSwitchReq = g_kiosk ? 2 : 1;
         return;
+    }
+    // Ctrl+Alt+F : même bascule bureau ⇄ borne que F8, sous forme de chord hôte
+    // (même discipline que Ctrl+Alt+G : F SEUL continue vers l'IKBD, le latch
+    // absorbe le BREAK du chord si Ctrl/Alt sont relâchés avant F).
+    static bool kioskChordHeld = false;
+    if (key == GLFW_KEY_F) {
+        if (action == GLFW_PRESS && (mods & GLFW_MOD_CONTROL) && (mods & GLFW_MOD_ALT)) {
+            kioskChordHeld = true;
+            g_kioskSwitchReq = g_kiosk ? 2 : 1;
+            return;
+        }
+        if (action == GLFW_RELEASE && kioskChordHeld) {
+            kioskChordHeld = false;
+            return;
+        }
     }
     // F5/F7 : latchés ICI comme F8 (même justification anti-scrutation — un appui
     // bref entre deux tours de boucle était perdu, l'utilisateur croyait l'état
@@ -1865,6 +1882,7 @@ struct ConfigUi {
     bool  driveSound = false;     // son du lecteur de disquettes
     bool  driveSoundAvail = false;    // échantillons roms/drivesound/ chargés (sinon : réglage sans effet)
     std::string curGemdos, curAcsi;   // chemins RÉSOLUS des disques durs montés
+    std::string curSd2;               // image du slot 2 de l'UltraSatan (résolue)
 
     // Réglages matériels EN ATTENTE (cf. « Appliquer et redémarrer »).
     std::string pendMachine, pendMem, pendRom;
@@ -1881,6 +1899,10 @@ struct ConfigUi {
     bool reqFujinetHostsSet = false;
     int  reqModem = -1;                   // modem Hayes RS-232 (0/1)
     int  reqEther = -1;                   // EtherNEC NE2000 (0/1)
+    int  reqNetUsbee = -1;                // NetUSBee NE2000 + ISP1160 (0/1)
+    int  reqUltraSatan = -1;              // UltraSatan sur les IDs ACSI 0-1 (0/1)
+    std::string reqMountSd2;              // image SD du slot 2 (ID 1)
+    bool reqEjectSd2 = false;
     const char* fujiBackendName = "";     // lecture : nom du backend actif
     FujiHost* fujiHost = nullptr;         // lecture : statut des canaux N:
     bool reqApply  = false;       // appliquer les réglages matériels en attente
@@ -2084,8 +2106,10 @@ void drawConfigWindow(ConfigUi& ui) {
                          ui.curGemdos, ui.machine->gemdos.active(),
                          ui.curAcsi, ui.machine->fdc.acsiActive(),
                          ui.machine->fdc.acsiPartitionCount(),
+                         ui.machine->ultraSatanEnabled(), ui.curSd2,
                          ui.reqMountGemdos, ui.reqEjectGemdos,
-                         ui.reqMountAcsi,   ui.reqEjectAcsi);
+                         ui.reqMountAcsi,   ui.reqEjectAcsi,
+                         ui.reqUltraSatan, ui.reqMountSd2, ui.reqEjectSd2);
         break;
     case kCfgCart:
         drawCartPage(ui.cartsDir, ui.machine->bus.mountedCartPath(),
@@ -2096,10 +2120,11 @@ void drawConfigWindow(ConfigUi& ui) {
                         ui.cfg ? ui.cfg->fujinetTarget : 6,
                         ui.fujiBackendName, ui.machine->fuji, ui.fujiHost,
                         ui.cfg && ui.cfg->modem, ui.machine->ne2000.enabled(),
+                        ui.machine->netUsbeeEnabled(),
                         !ui.machine->bus.mountedCartPath().empty(),
                         ui.reqFujinet, ui.reqFujinetTarget,
                         ui.reqFujinetMount, ui.reqFujinetHosts, ui.reqFujinetHostsSet,
-                        ui.reqModem, ui.reqEther);
+                        ui.reqModem, ui.reqEther, ui.reqNetUsbee);
         break;
     case kCfgScreen: {
         ImGui::TextDisabled("Atari monitor");
@@ -2349,6 +2374,7 @@ int main(int argc, char** argv) {
     g_cfgPristine = cfg;      // référence figée pour le mode borne (cf. saveConfig)
     g_showHex = cfg.showHex; g_showCpu = cfg.showCpu;
     g_showJoy = cfg.showJoy; g_showCfg = cfg.showCfg; g_showFloppy = cfg.showFloppy;
+    g_showKbd = cfg.showKbd;
     // Disposition ancrée : un imgui.ini écrit par une version antérieure garde des
     // nœuds pour des fenêtres qui n'existent plus (Disk/Cart Library) et ne connaît
     // pas la fenêtre Configuration — qui flotterait alors au-dessus de l'écran ST.
@@ -2521,6 +2547,22 @@ int main(int argc, char** argv) {
             std::fprintf(stderr, "[main] ACSI : %d partition(s)\n", machine.fdc.acsiPartitionCount());
         else cfg.acsi.clear();                 // image invalide → idem
     }
+    // UltraSatan (ultrasatan=/sd2= dans neost.cfg) : interface SD sur les IDs 0-1 —
+    // slot 1 = l'image acsi= (ID 0), slot 2 = sd2= (ID 1). À rejouer après TOUT
+    // montage/démontage ACSI : unmountAcsi() vide toutes les cibles, slot 2 compris.
+    auto usatanApply = [&]() {
+        if (!cfg.ultrasatan) {
+            if (machine.ultraSatanEnabled()) machine.disableUltraSatan();
+            return;
+        }
+        if (!machine.ultraSatanEnabled()) machine.enableUltraSatan(0);
+        if (!cfg.sd2.empty()) {
+            const std::string want = resolvePath(cfg.sd2);
+            if (machine.fdc.acsiMountedPath(1) != want && !machine.fdc.mountAcsi(want, 1))
+                cfg.sd2.clear();               // image invalide → on ne la mémorise pas
+        }
+    };
+    usatanApply();
     // FujiNet virtuel (fujinet= dans neost.cfg) : cible ACSI dédiée + backend hôte
     // (sockets si le build les a — cf. NEOST_WITH_NET). Extension NeoST, OFF par défaut.
     std::unique_ptr<FujiHost> fujiHost;
@@ -2570,6 +2612,8 @@ int main(int argc, char** argv) {
     // par défaut = boucle locale (NetBackendNull une fois un pont SLIRP/pcap
     // absent) : la carte est DÉTECTÉE par le pilote, sans trafic hôte v1.
     NetBackendNull etherNull;
+    // NetUSBee (netusbee=) = la même NE2000 + l'hôte USB ISP1160 ; exclusif d'EtherNEC
+    // (un seul montage sur le port cartouche) — netusbee= prime sur ethernec=.
     auto etherApply = [&](bool on) {
         if (on) {
             if (!machine.bus.cart.empty()) {
@@ -2578,12 +2622,31 @@ int main(int argc, char** argv) {
                 cfg.ethernec = false;
                 return;
             }
+            if (machine.netUsbeeEnabled()) return;   // la NE2000 est déjà là (NetUSBee)
             machine.ne2000.setBackend(&etherNull);
             machine.enableEtherNec();
-        } else {
+        } else if (!machine.netUsbeeEnabled()) {
             machine.disableEtherNec();
         }
     };
+    auto netUsbeeApply = [&](bool on) {
+        if (on) {
+            if (!machine.bus.cart.empty()) {
+                g_stateMsg = "NetUSBee needs the cartridge port free";
+                g_stateMsgFrames = 150;
+                cfg.netusbee = false;
+                return;
+            }
+            if (machine.netUsbeeEnabled()) return;
+            machine.disableEtherNec();                 // la NE2000 repart avec le NetUSBee
+            machine.ne2000.setBackend(&etherNull);
+            machine.enableNetUsbee();
+        } else if (machine.netUsbeeEnabled()) {
+            machine.disableNetUsbee();
+            if (cfg.ethernec) etherApply(true);        // EtherNEC seul reprend la NE2000
+        }
+    };
+    if (cfg.netusbee) netUsbeeApply(true);
     if (cfg.ethernec) etherApply(true);
     machine.mfp.setColorMonitor(!cfg.mono);   // moniteur mémorisé (avant le reset)
     machine.fdc.setFastFdc(cfg.fastfdc);      // FDC rapide mémorisé (accès disque ÷10)
@@ -2667,6 +2730,7 @@ int main(int argc, char** argv) {
             if (!machine.fdc.acsiActive() || machine.fdc.acsiMountedPath() != want)
                 machine.fdc.mountAcsi(want);
         }
+        usatanApply();                         // slot 2 + attache (unmountAcsi a tout vidé)
         machine.mfp.setColorMonitor(!cfg.mono);
         machine.fdc.setFastFdc(cfg.fastfdc);   // ré-applique le FDC rapide après reconfig
         machine.bus.setFpuPresent(cfg.fpu && machTypeR == MachineType::MegaSte);
@@ -2812,6 +2876,7 @@ int main(int argc, char** argv) {
     // on capturerait true et la sortie vers le bureau avalerait les flèches + Ctrl
     // droit du ST sans rien afficher. La branche GUI→KIOSK le rafraîchit ensuite.
     auto switchKioskMode = [&, kbdJoyDesk = (g_kiosk ? false : g_kbdJoy)](bool on) mutable {
+        keyboardWindowReleaseAll(machine.ikbd);   // rien ne reste enfoncé à travers la bascule
         if (on == g_kiosk) return;
         std::vector<uint8_t> snap;
         machine.saveState(snap);                 // (1) instantané
@@ -2824,6 +2889,7 @@ int main(int argc, char** argv) {
             cfg.mono = !machine.mfp.colorMonitor();
             cfg.showHex  = g_showHex;
             cfg.showCpu  = g_showCpu;  cfg.showJoy  = g_showJoy;  cfg.dock = g_dockOn;
+            cfg.showKbd  = g_showKbd;
             cfg.showCfg  = g_showCfg;  cfg.showFloppy = g_showFloppy;
             saveConfig(exeDir, cfg, &machine);
             // ⚠ La référence PRISTINE doit devenir CE qui vient d'être persisté, pas la
@@ -3110,6 +3176,7 @@ int main(int argc, char** argv) {
                 if (hayesModem) hayesModem->poll();   // TCP entrant → file RX du MFP
 #endif
                 if (machine.ne2000.enabled()) machine.ne2000.poll();   // trames RX → anneau
+                if (machine.isp1160.enabled()) machine.isp1160.poll(); // trame USB (ATL → done)
                 machine.runFrame();                          // une trame (timing + décodage)
                 audio.produceFrame(machine.frameCycles());   // son de la trame → anneau (push)
                 emuNext += std::chrono::nanoseconds(
@@ -3260,6 +3327,7 @@ int main(int argc, char** argv) {
                 ImGui::MenuItem(ICON_FA_MEMORY " Memory (hex)", nullptr, &g_showHex);
                 ImGui::MenuItem(ICON_FA_MICROCHIP " CPU 68000",  nullptr, &g_showCpu);
                 ImGui::MenuItem(ICON_FA_GAMEPAD " Joystick",     nullptr, &g_showJoy);
+                ImGui::MenuItem(ICON_FA_KEYBOARD " Keyboard",     nullptr, &g_showKbd);
                 ImGui::MenuItem(ICON_FA_BUG " Debugger",        nullptr, &g_showDbg);
                 ImGui::EndMenu();
             }
@@ -3272,7 +3340,7 @@ int main(int argc, char** argv) {
                 static const Key keys[] = {
                     { "F5",  "save the machine state" },
                     { "F7",  "reload the state" },
-                    { "F8",  "kiosk mode (toggle)" },
+                    { "F8",  "kiosk mode (toggle) — also Ctrl+Alt+F" },
                     { "F11", "keyboard joystick emulation" },
                     // F12 n'a JAMAIS eu de handler bureau (historique vérifié) : il
                     // n'existe qu'en kiosque — documenter la réalité, pas l'intention.
@@ -3424,6 +3492,7 @@ int main(int argc, char** argv) {
         cfgUi.driveSoundAvail = driveSoundAvail;
         cfgUi.curGemdos = cfg.gemdos.empty() ? std::string() : resolvePath(cfg.gemdos);
         cfgUi.curAcsi   = cfg.acsi.empty()   ? std::string() : resolvePath(cfg.acsi);
+        cfgUi.curSd2    = cfg.sd2.empty()    ? std::string() : resolvePath(cfg.sd2);
 
         if (g_showFloppy) drawFloppyWindow(cfgUi);
         if (g_showCfg) {
@@ -3440,6 +3509,35 @@ int main(int argc, char** argv) {
             if (cfgUi.reqEjectCart)   { reqEjectCart   = true; cfgUi.reqEjectCart = false; }
             if (cfgUi.reqEjectGemdos) { reqEjectGemdos = true; cfgUi.reqEjectGemdos = false; }
             if (cfgUi.reqEjectAcsi)   { reqEjectAcsi   = true; cfgUi.reqEjectAcsi = false; }
+            // UltraSatan : bascule + slot 2, appliqués ici (même discipline qu'EtherNEC :
+            // le TOS ne sonde le bus ACSI qu'au boot → hard reset).
+            if (cfgUi.reqUltraSatan >= 0) {
+                cfg.ultrasatan = (cfgUi.reqUltraSatan == 1);
+                usatanApply();
+                saveConfig(exeDir, cfg, &machine);
+                reqHardReset = true;
+                cfgUi.reqUltraSatan = -1;
+            }
+            if (!cfgUi.reqMountSd2.empty()) {
+                if (machine.fdc.mountAcsi(resolvePath(cfgUi.reqMountSd2), 1)) {
+                    cfg.sd2 = cfgUi.reqMountSd2; saveConfig(exeDir, cfg, &machine);
+                    reqHardReset = true;
+                } else {
+                    g_stateMsg = "Unreadable SD image"; g_stateMsgFrames = 120;
+                }
+                cfgUi.reqMountSd2.clear();
+            }
+            if (cfgUi.reqEjectSd2) {
+                cfg.sd2.clear();
+                // Pas d'éjection d'une seule cible dans Acsi : on vide tout et on remonte
+                // ce que la config garde (image ACSI du slot 1).
+                machine.fdc.unmountAcsi();
+                if (!cfg.acsi.empty()) machine.fdc.mountAcsi(resolvePath(cfg.acsi));
+                usatanApply();
+                saveConfig(exeDir, cfg, &machine);
+                reqHardReset = true;
+                cfgUi.reqEjectSd2 = false;
+            }
             if (cfgUi.reqMonitor >= 0) { reqMonitor = cfgUi.reqMonitor; cfgUi.reqMonitor = -1; }
             if (cfgUi.reqKiosk)       { g_kioskSwitchReq = 1; cfgUi.reqKiosk = false; }
             if (cfgUi.reqVolume >= 0.0f) {
@@ -3510,6 +3608,13 @@ int main(int argc, char** argv) {
                 saveConfig(exeDir, cfg, &machine);
                 reqHardReset = true;             // le pilote sonde la carte au boot
                 cfgUi.reqEther = -1;
+            }
+            if (cfgUi.reqNetUsbee >= 0) {
+                cfg.netusbee = (cfgUi.reqNetUsbee == 1);
+                netUsbeeApply(cfg.netusbee);     // peut refuser (cartouche)
+                saveConfig(exeDir, cfg, &machine);
+                reqHardReset = true;
+                cfgUi.reqNetUsbee = -1;
             }
             if (cfgUi.driveSound != driveSoundOn) {
                 driveSoundOn = cfgUi.driveSound; drive.setEnabled(driveSoundOn);
@@ -3621,9 +3726,10 @@ int main(int argc, char** argv) {
 #ifdef NEOST_WITH_NET
                     modemApply(cfg.modem);
 #endif
+                    netUsbeeApply(cfg.netusbee);
                     etherApply(cfg.ethernec);
                     saveConfig(exeDir, cfg, &machine);
-                    reqRebuild = true;        // modèle/RAM/FPU/ROM/cartouche/HD/moniteur/FDC
+                    reqRebuild = true;        // modèle/RAM/FPU/ROM/cartouche/HD/moniteur/FDC (+ UltraSatan)
                     cfgUi.pendInit = false;   // resème les champs « en attente »
                     g_stateMsg = missing.empty()
                         ? "\xef\x80\x9e Profile loaded: " + cfgUi.reqLoadProfile
@@ -3654,6 +3760,9 @@ int main(int argc, char** argv) {
         if (g_showHex)  drawHexViewer(machine.bus);
         if (g_showCpu)  drawCpuState(machine.cpu, reqReset);
         if (g_showJoy)  drawJoystickWindow(window, g_lastJoy0, g_lastJoy1);
+        if (g_showKbd)  drawKeyboardWindow(&g_showKbd, machine.ikbd,
+                                           resolveData("pic/Black_Keyboard_AtariST.jpeg", exeDir));
+        else            keyboardWindowReleaseAll(machine.ikbd);   // fenêtre masquée : rien d'enfoncé
         if (g_showDbg)  drawDebugger(machine);
         if (g_showCrt) {                     // fenêtre de réglages CRT
             bool crtChanged = false;
@@ -4208,8 +4317,9 @@ int main(int argc, char** argv) {
             }
         }
         if (reqEjectAcsi) {
-            machine.fdc.unmountAcsi();
+            machine.fdc.unmountAcsi();          // vide TOUTES les cibles (slot 2 compris)
             cfg.acsi.clear(); saveConfig(exeDir, cfg, &machine);
+            usatanApply();                      // ré-attache l'UltraSatan + remonte le slot 2
             reqHardReset = true;
         }
 #else
@@ -4249,6 +4359,7 @@ int main(int argc, char** argv) {
     cfg.mono = !machine.mfp.colorMonitor();
     cfg.showHex = g_showHex; cfg.showCpu = g_showCpu;
     cfg.showJoy = g_showJoy; cfg.showCfg = g_showCfg; cfg.showFloppy = g_showFloppy;
+    cfg.showKbd = g_showKbd;
     saveConfig(exeDir, cfg, &machine);
 
 #if defined(NEOST_WITH_IMGUI)

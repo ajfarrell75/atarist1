@@ -35,6 +35,8 @@ cp "$SRC/disks/diskA.st" "$DEST/disks/"
 # breakpoint/watchpoint) qui n'ont alors plus aucun libellé. Invisible en CI
 # (le smoke est headless), très visible chez l'utilisateur.
 cp -r "$SRC/fonts" "$DEST/"
+# Photo du clavier ST (fenêtre « Keyboard » : touches cliquables sur l'image).
+cp -r "$SRC/pic" "$DEST/"
 
 # LICENCES — obligatoire, pas décoratif. Le paquet embarque du GPLv3 (NeoST) et du
 # GPLv2 (EmuTOS) : la GPL exige que le texte de licence ACCOMPAGNE le binaire, et

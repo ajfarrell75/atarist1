@@ -32,7 +32,7 @@ les puces) et **`neost_core` ne dépend pas du GUI**.
 | [`docs/MOIRA_WINUAE_CONVERGENCE.md`](docs/MOIRA_WINUAE_CONVERGENCE.md) | **Beam-sync** : convergence Moira↔WinUAE, mesures, pistes éliminées. |
 | [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md) | Recette callgrind, points chauds, build PGO+LTO et son piège. |
 | [`docs/KIOSK.md`](docs/KIOSK.md) | Mode borne : options, menu manette, zoom adaptatif, Raspberry Pi. |
-| [`docs/FUJINET.md`](docs/FUJINET.md) | **Réseau (extensions NeoST)** : FujiNet virtuel (ACSI $60), modem Hayes, EtherNEC, anneau MIDI. OFF par défaut, sans effet sur les étalons. |
+| [`docs/FUJINET.md`](docs/FUJINET.md) | **Extensions NeoST (stockage/réseau)** : FujiNet virtuel (ACSI $60), modem Hayes, EtherNEC, anneau MIDI, **UltraSatan** (SD sur ACSI, paquets `'US'`), **NetUSBee** (NE2000 + ISP1160 USB). OFF par défaut, sans effet sur les étalons. |
 | [`packaging/android/README.md`](packaging/android/README.md) | **Paquet Android** : build, pièges (jlink, Gradle/JDK), validation ARM64 sous QEMU. |
 
 ## Build & run

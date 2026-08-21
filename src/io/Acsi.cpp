@@ -17,6 +17,7 @@
 #include <cstdint>
 
 #include "io/FujiDevice.hpp"
+#include "io/UltraSatan.hpp"
 
 namespace {
 // Opcodes (hdc.h)
@@ -30,6 +31,9 @@ constexpr int HD_STATUS_OK = 0x00, HD_STATUS_ERROR = 0x02;
 constexpr uint8_t HD_REQSENS_OK = 0x00, HD_REQSENS_NOSECTOR = 0x01, HD_REQSENS_WRITEERR = 0x03,
     HD_REQSENS_OPCODE = 0x20, HD_REQSENS_INVADDR = 0x21, HD_REQSENS_INVARG = 0x24,
     HD_REQSENS_INVLUN = 0x25;
+// Hors Hatari : slot UltraSatan SANS carte — ASC $3A « medium not present »
+// (firmware ReturnStatusAccordingToIsInit), rendu avec la clé NOT READY (2).
+constexpr uint8_t HD_REQSENS_NOMEDIA = 0x3A;
 
 const uint8_t inquiry_bytes[] = {
     0, 0, 1, 0, 31, 0, 0, 0,
@@ -62,9 +66,13 @@ bool Acsi::mount(int target, const std::string& path) {
     // surcharge à error_code ne LANCE pas sur un chemin illisible.
     std::error_code ec;
     const std::uintmax_t sz = std::filesystem::file_size(path, ec);
+    // Un slot UltraSatan / la cible FujiNet restent PEUPLÉS même si l'image est
+    // refusée (appareil présent, carte absente) — comme après unmountAll().
+    const bool devicePopulated = usatanSlot(target) >= 0 || (target == fujiTarget_ && fuji_);
     if (ec || sz == 0 || (sz & 511)) {
         std::fprintf(stderr, "[acsi] invalid image (zero size or not a multiple of 512): %s\n",
                      path.c_str());
+        d.enabled = devicePopulated;
         return false;
     }
     bool ro = false;
@@ -72,6 +80,7 @@ bool Acsi::mount(int target, const std::string& path) {
     if (!fp) { fp = fopen(path.c_str(), "rb"); ro = true; }
     if (!fp) {
         std::fprintf(stderr, "[acsi] cannot open: %s\n", path.c_str());
+        d.enabled = devicePopulated;
         return false;
     }
     d.fp = fp;
@@ -92,7 +101,8 @@ void Acsi::unmountAll() {
         Dev& d = devs_[i];
         if (d.fp) fclose(d.fp);
         d.fp = nullptr;
-        d.enabled = (i == fujiTarget_ && fuji_);   // la cible FujiNet reste peuplée
+        // Les cibles FujiNet et UltraSatan restent peuplées (appareil sans carte).
+        d.enabled = (i == fujiTarget_ && fuji_) || usatanSlot(i) >= 0;
     }
 }
 
@@ -106,6 +116,7 @@ void Acsi::reset() {
     dataLen_ = 0;
     dmaWrite_ = false;
     fujiPending_ = false;
+    usatanPending_ = false;
 }
 
 // -----------------------------------------------------------------------------
@@ -155,6 +166,57 @@ void Acsi::executeFuji() {
     dev.lastError = HD_REQSENS_OK;
 }
 
+// -----------------------------------------------------------------------------
+//  UltraSatan (extension NeoST — cf. io/UltraSatan.hpp)
+// -----------------------------------------------------------------------------
+void Acsi::attachUltraSatan(int firstTarget, UltraSatan* dev) {
+    if (firstTarget < 0 || firstTarget >= MAX_DEVS || !dev) return;
+    usatan_ = dev;
+    usatanTarget_ = firstTarget;
+    for (int s = 0; s < UltraSatan::kSlots && firstTarget + s < MAX_DEVS; ++s) {
+        devs_[firstTarget + s].enabled = true;      // slot peuplé → IRQ ACSI, INQUIRY répond
+        devs_[firstTarget + s].lastError = HD_REQSENS_OK;
+    }
+    std::fprintf(stderr, "[usatan] UltraSatan attached on ACSI targets %d-%d\n",
+                 firstTarget, std::min(firstTarget + 1, MAX_DEVS - 1));
+}
+
+void Acsi::detachUltraSatan() {
+    if (usatanTarget_ >= 0)
+        for (int s = 0; s < UltraSatan::kSlots && usatanTarget_ + s < MAX_DEVS; ++s)
+            devs_[usatanTarget_ + s].enabled = (devs_[usatanTarget_ + s].fp != nullptr)
+                                             || (usatanTarget_ + s == fujiTarget_ && fuji_);
+    usatan_ = nullptr;
+    usatanTarget_ = -1;
+    usatanPending_ = false;
+}
+
+// Paquet ICD $20 'US…' complet (10 octets après le marqueur) : délègue à
+// l'appareil et rapatrie le résultat dans le contrat Acsi↔Fdc, comme executeFuji.
+void Acsi::executeUltraSatan() {
+    Dev& dev = devs_[target_];
+    dataLen_ = 0;
+    dmaWrite_ = false;
+    usatanPending_ = false;
+    const int st = usatan_->execute(command_);
+    if (st != 0) {
+        status_ = HD_STATUS_ERROR;
+        dev.lastError = HD_REQSENS_INVARG;
+        return;
+    }
+    if (usatan_->isWrite()) {                   // 'Wr…' : le secteur ST→appareil suit (DMA write)
+        dataLen_ = usatan_->dataLen();
+        prepRespBuf(dataLen_);
+        dmaWrite_ = true;
+        usatanPending_ = true;
+    } else if (usatan_->dataLen() > 0) {        // 'Rd…' : un secteur appareil→ST (DMA read)
+        uint8_t* b = prepRespBuf(usatan_->dataLen());
+        memcpy(b, usatan_->readBuffer(), std::size_t(usatan_->dataLen()));
+    }
+    status_ = HD_STATUS_OK;
+    dev.lastError = HD_REQSENS_OK;
+}
+
 bool Acsi::anyEnabled() const {
     for (const auto& d : devs_) if (d.enabled) return true;
     return false;
@@ -190,7 +252,16 @@ uint8_t* Acsi::prepRespBuf(int size) {
 // -----------------------------------------------------------------------------
 //  Commandes (port des HDC_Cmd_*)
 // -----------------------------------------------------------------------------
-void Acsi::cmdTestUnitReady() { status_ = HD_STATUS_OK; }
+void Acsi::cmdTestUnitReady() {
+    Dev& dev = devs_[target_];
+    // Slot UltraSatan sans carte : « not ready, medium not present » (firmware
+    // ReturnStatusAccordingToIsInit) — le TOS passe alors au disque suivant.
+    if (!dev.fp && usatanSlot(target_) >= 0) {
+        status_ = HD_STATUS_ERROR; dev.lastError = HD_REQSENS_NOMEDIA; dev.setLastBlockAddr = false;
+        return;
+    }
+    status_ = HD_STATUS_OK;
+}
 
 void Acsi::cmdInquiry() {
     Dev& dev = devs_[target_];
@@ -201,6 +272,16 @@ void Acsi::cmdInquiry() {
     // la longueur demandée par l'invité.
     uint8_t* buf = prepRespBuf(std::max(n, 1));
     dataLen_ = n;
+    // Slot UltraSatan : réponse « JOOKIE  UltraSatan » du firmware (RMB, slot, version,
+    // date aux octets 36-43) — AVANT le rognage à 36 octets propre au disque Hatari,
+    // sinon une allocation de 44 (TOS) perdait la date.
+    if (const int slot = usatanSlot(target_); slot >= 0 && usatan_) {
+        usatan_->buildInquiry(slot, buf, std::max(n, 1), lun() == 0);
+        status_ = HD_STATUS_OK;
+        dev.lastError = HD_REQSENS_OK;
+        dev.setLastBlockAddr = false;
+        return;
+    }
     if (n > (int)sizeof(inquiry_bytes)) {
         memset(buf + sizeof(inquiry_bytes), 0, n - sizeof(inquiry_bytes));
         n = sizeof(inquiry_bytes);
@@ -251,6 +332,7 @@ void Acsi::cmdRequestSense() {
         case HD_REQSENS_INVADDR:
         case HD_REQSENS_INVARG:
         case HD_REQSENS_INVLUN: b[2] = 5; break;
+        case HD_REQSENS_NOMEDIA: b[2] = 2; break;      // NOT READY (slot SD vide)
         default:                b[2] = 4; break;
         }
         b[7] = 14;
@@ -300,6 +382,10 @@ void Acsi::cmdModeSense() {
 
 void Acsi::cmdReadCapacity() {
     Dev& dev = devs_[target_];
+    if (!dev.fp && usatanSlot(target_) >= 0) {      // slot SD vide : pas de capacité
+        status_ = HD_STATUS_ERROR; dev.lastError = HD_REQSENS_NOMEDIA; dev.setLastBlockAddr = false;
+        return;
+    }
     uint32_t nSectors = dev.hdSize - 1;
     uint8_t* b = prepRespBuf(8);
     b[0] = nSectors >> 24; b[1] = nSectors >> 16; b[2] = nSectors >> 8; b[3] = nSectors;
@@ -314,7 +400,8 @@ void Acsi::cmdReadSector() {
     dev.lastBlockAddr = lba();
     // Cible FujiNet sans image montée : dev.fp est nul (la cible n'est peuplée
     // que pour l'opcode $60) → secteur introuvable, sans toucher au fichier.
-    if (!dev.fp) { status_ = HD_STATUS_ERROR; dev.lastError = HD_REQSENS_NOSECTOR;
+    if (!dev.fp) { status_ = HD_STATUS_ERROR;
+                   dev.lastError = usatanSlot(target_) >= 0 ? HD_REQSENS_NOMEDIA : HD_REQSENS_NOSECTOR;
                    dev.setLastBlockAddr = true; return; }
     // Borne sur lba ET lba+count (cf. écriture) : le dernier secteur lu doit
     // exister aussi, sinon INVADDR — pas une lecture courte requalifiée.
@@ -335,7 +422,8 @@ void Acsi::cmdReadSector() {
 void Acsi::cmdWriteSector() {
     Dev& dev = devs_[target_];
     dev.lastBlockAddr = lba();
-    if (!dev.fp) { status_ = HD_STATUS_ERROR; dev.lastError = HD_REQSENS_WRITEERR;
+    if (!dev.fp) { status_ = HD_STATUS_ERROR;
+                   dev.lastError = usatanSlot(target_) >= 0 ? HD_REQSENS_NOMEDIA : HD_REQSENS_WRITEERR;
                    dev.setLastBlockAddr = true; return; }
     // Borne sur lba ET lba+count : un WRITE à lba = hdSize-1 avec count = 128
     // passait le test du seul secteur de départ puis faisait GRANDIR le fichier
@@ -362,6 +450,13 @@ void Acsi::writeToDisk(const uint8_t* src, int len) {
     if (fujiPending_ && fuji_ && target_ == fujiTarget_) {   // payload d'une commande FujiNet
         fujiPending_ = false;
         const int st = fuji_->writeData(src, len);
+        status_ = st ? HD_STATUS_ERROR : HD_STATUS_OK;
+        dev.lastError = st ? HD_REQSENS_INVARG : HD_REQSENS_OK;
+        return;
+    }
+    if (usatanPending_ && usatan_ && usatanSlot(target_) >= 0) {   // secteur d'un 'USWr…'
+        usatanPending_ = false;
+        const int st = usatan_->writeData(src, len);
         status_ = st ? HD_STATUS_ERROR : HD_STATUS_OK;
         dev.lastError = st ? HD_REQSENS_INVARG : HD_REQSENS_OK;
         return;
@@ -453,7 +548,13 @@ bool Acsi::feedByte(uint8_t b) {
     if ((opcode_ < 0x20 && byteCount_ == 6) ||
         (opcode_ >= 0x20 && opcode_ < 0x60 && byteCount_ == 10) ||
         (opcode_ == HD_REPORT_LUNS && byteCount_ == 12)) {
-        if (lun() == 0 || opcode_ == HD_INQUIRY) {
+        // Cible UltraSatan : un paquet ICD $20 signé 'US' est une commande propre à
+        // l'appareil (version, horloge, nom…) — jamais un opcode SCSI utile.
+        if (usatan_ && usatanSlot(target_) >= 0 && opcode_ == UltraSatan::kIcdOpcode
+            && command_[1] == 'U' && command_[2] == 'S') {
+            executeUltraSatan();
+            didCmd = true;
+        } else if (lun() == 0 || opcode_ == HD_INQUIRY) {
             emulateCommand();
             didCmd = true;
         } else {

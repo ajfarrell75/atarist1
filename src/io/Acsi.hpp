@@ -25,6 +25,7 @@
 #include "core/StateArchive.hpp"
 
 class FujiDevice;
+class UltraSatan;
 
 class Acsi {
 public:
@@ -45,6 +46,21 @@ public:
     void attachFujiNet(int target, FujiDevice* dev);
     void detachFujiNet();
     int  fujiTarget() const { return fujiTarget_; }
+
+    // --- UltraSatan (extension NeoST, cf. io/UltraSatan.hpp) -----------------
+    // Attache l'interface SD UltraSatan : ses DEUX slots occupent les cibles
+    // `firstTarget` et `firstTarget+1` (peuplées même sans carte : INQUIRY
+    // « JOOKIE  UltraSatan », TEST UNIT READY « medium not present »). Les images
+    // SD se montent avec mount() sur ces cibles. Les paquets ICD $20 'US…' sont
+    // routés vers l'appareil ; toute autre cible reste STRICTEMENT inchangée.
+    void attachUltraSatan(int firstTarget, UltraSatan* dev);
+    void detachUltraSatan();
+    int  usatanFirstTarget() const { return usatanTarget_; }
+    // Slot UltraSatan (0/1) porté par `target`, ou -1.
+    int  usatanSlot(int target) const {
+        return (usatan_ && usatanTarget_ >= 0 && target >= usatanTarget_
+                && target < usatanTarget_ + 2 && target < MAX_DEVS) ? target - usatanTarget_ : -1;
+    }
 
     // Reset complet (statut + paquet) — hors toggle DMA, cf. resetCommand.
     void reset();
@@ -106,6 +122,7 @@ public:
         }
         ar(dataLen_); ar(dmaWrite_);
         ar(fujiPending_);   // v10 : commande FujiNet dir=2 en attente de payload DMA
+        ar(usatanPending_); // v12 : paquet UltraSatan 'Wr…' en attente de son secteur DMA
         // Invariants : byteCount_ indexe command_[16], dataLen_ borne la lecture de
         // buf_ par le DMA, target_ indexe devs_ — des valeurs restaurées hors bornes
         // (négatives comprises) liraient/écriraient hors du tas.
@@ -147,6 +164,12 @@ private:
     int  fujiTarget_  = -1;
     bool fujiPending_ = false;          // CDB $60 dir=2 en attente du payload DMA
     void executeFuji();
+
+    // UltraSatan (cf. attachUltraSatan) : appareil + première cible (2 slots).
+    UltraSatan* usatan_ = nullptr;
+    int  usatanTarget_  = -1;
+    bool usatanPending_ = false;        // paquet 'US' en écriture, secteur DMA attendu
+    void executeUltraSatan();
 
     // Helpers (port des HDC_*).
     unsigned lun() const  { return (command_[1] & 0xE0) >> 5; }

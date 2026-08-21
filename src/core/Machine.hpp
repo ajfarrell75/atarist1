@@ -32,6 +32,8 @@
 #include "io/Scc.hpp"
 #include "io/FujiDevice.hpp"
 #include "io/Ne2000.hpp"
+#include "io/UltraSatan.hpp"
+#include "io/Isp1160.hpp"
 
 class Machine {
 public:
@@ -211,6 +213,12 @@ public:
     // INACTIVE par défaut). Le backend physique (NetBackend) est posé par le
     // frontend. Exclusive d'une cartouche montée (mêmes adresses $FA0000).
     Ne2000    ne2000;
+    // Interface SD UltraSatan sur le bus ACSI (extension NeoST, INACTIVE par
+    // défaut) : 2 slots = 2 cibles, horloge propre, paquets ICD 'US…'. Cf. io/UltraSatan.hpp.
+    UltraSatan usatan;
+    // Contrôleur hôte USB ISP1160 du NetUSBee (extension NeoST, INACTIF par défaut).
+    // NetUSBee = ne2000 (RTL8019AS, câblage EtherNEC) + isp1160, même port cartouche.
+    Isp1160   isp1160;
     Scheduler sched;
 
     // Active la NE2000/EtherNEC. Refuse si une cartouche est montée (conflit de
@@ -226,6 +234,28 @@ public:
     }
     void disableEtherNec() { bus.ne2000 = nullptr; ne2000.setEnabled(false); }
 
+    // Active le NetUSBee : la NE2000 (exactement l'EtherNEC) + l'ISP1160 USB, sur
+    // le port cartouche. Même exclusivité qu'EtherNEC vis-à-vis d'une cartouche.
+    bool enableNetUsbee() {
+        if (!enableEtherNec()) return false;
+        isp1160.setEnabled(true);
+        isp1160.reset();
+        bus.isp1160 = &isp1160;
+        return true;
+    }
+    void disableNetUsbee() { bus.isp1160 = nullptr; isp1160.setEnabled(false); disableEtherNec(); }
+    bool netUsbeeEnabled() const { return isp1160.enabled(); }
+
+    // Active l'UltraSatan sur les cibles ACSI `firstTarget` et `firstTarget+1`
+    // (défaut 0-1 : c'est l'ID d'usine, le TOS y boote). Les images SD se montent
+    // ensuite avec fdc.mountAcsi(path, firstTarget + slot). Survit au reset/hardReset.
+    void enableUltraSatan(int firstTarget = 0) {
+        fdc.attachUltraSatan(&usatan, firstTarget);
+        usatanOn_ = true;
+    }
+    void disableUltraSatan() { fdc.detachUltraSatan(); usatanOn_ = false; }
+    bool ultraSatanEnabled() const { return usatanOn_; }
+
     // Active le FujiNet virtuel sur la cible ACSI `target` (défaut 6 — laisse
     // les cibles basses aux images disque de l'utilisateur). N'est PAS remis à
     // zéro par reset()/hardReset() : un FujiNet réel survit au reboot de l'ST.
@@ -238,6 +268,7 @@ public:
     void disableFujiNet() { fdc.detachFujiNet(); fuji.setEnabled(false); }
 
 private:
+    bool usatanOn_ = false;    // UltraSatan attaché (config, hors snapshot — cf. flags d'état)
     // Câble les callbacks de l'ordonnanceur (appelé une fois, au constructeur).
     void installSchedulerCallbacks();
     // Arme le premier événement de chaque source pour la trame courante.

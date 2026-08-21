@@ -100,6 +100,13 @@ void usage() {
         "                    serial port to real TCP (ATDT host:port -> CONNECT)\n"
         "  --ethernec        NE2000/EtherNEC on the cartridge port (loopback backend;\n"
         "                    for STinG/MiNTnet drivers — exclusive with --cart)\n"
+        "  --netusbee        NetUSBee on the cartridge port: NE2000 (as EtherNEC) +\n"
+        "                    ISP1160 USB host controller (empty root hub; exclusive with --cart)\n"
+        "  --ultrasatan      UltraSatan SD interface on the ACSI bus: 2 slots on targets\n"
+        "                    N and N+1 (default 0-1), JOOKIE INQUIRY, RTC, 'US' commands\n"
+        "  --ultrasatan-id N first ACSI ID of the UltraSatan (0-6, default 0)\n"
+        "  --sd1 IMG, --sd2 IMG  raw image in UltraSatan slot 1 / slot 2 (--acsi IMG\n"
+        "                    also lands in slot 1 when the UltraSatan sits on ID 0)\n"
         "  --midi-net H:P[:L]  MIDI ring over UDP (MIDI Maze online): send MIDI OUT to\n"
         "                    peer H:P, receive MIDI IN on local port L (default 6820)\n"
         "  --glue-selftest   self-test of the Glue machine (borders) then exit\n"
@@ -111,6 +118,10 @@ void usage() {
         "                    deterministic replay backend) then exit\n"
         "  --enec-selftest   self-test of the NE2000/EtherNEC (cartridge-port wire\n"
         "                    protocol, loopback backend) then exit\n"
+        "  --usatan-selftest self-test of the UltraSatan (ACSI wire protocol: INQUIRY,\n"
+        "                    ICD 'US' packets, RTC, empty slot) then exit\n"
+        "  --netusbee-selftest self-test of the NetUSBee ISP1160 (cartridge-port wire\n"
+        "                    protocol, chip ID, registers, ATL) + NE2000 coexistence, then exit\n"
         "  --serial-dump F   write the raw RS-232 serial bytes into F (NEOST-TEST verdicts)\n"
         "  --from-cfg F      replay the GUI config (neost.cfg); later options override it\n"
         "  --dump-at N A L F raw dump of L bytes of RAM from $A (hex) after frame N → F\n"
@@ -408,6 +419,294 @@ int enecSelfTest(Machine& machine) {
     return failed == 0 ? 0 : 1;
 }
 
+// =============================================================================
+//  --usatan-selftest — auto-test DÉTERMINISTE de l'UltraSatan au niveau FIL : on
+//  pilote $FF8604/06 comme l'outil US_CONF (marqueur ICD, paquet $20 'US…', un
+//  secteur DMA) à travers le VRAI plan mémoire (Bus → Fdc → Acsi → UltraSatan),
+//  plus les commandes SCSI que le TOS envoie au boot (INQUIRY, TEST UNIT READY,
+//  READ CAPACITY, READ(6)) sur un slot vide puis sur un slot avec carte.
+// =============================================================================
+int usatanSelfTest(Machine& machine) {
+    namespace fs = std::filesystem;
+    int passed = 0, failed = 0;
+    auto check = [&](bool ok, const char* what) {
+        std::fprintf(stderr, "[usatan-selftest] %-36s %s\n", what, ok ? "OK" : "FAIL");
+        (ok ? passed : failed)++;
+    };
+
+    // Carte SD synthétique pour le slot 2 : 300 secteurs, motif reconnaissable.
+    std::error_code ec;
+    const fs::path dir = fs::temp_directory_path(ec) / "neost-usatan-selftest";
+    fs::create_directories(dir, ec);
+    const fs::path sdPath = dir / "sd2.img";
+    {
+        std::ofstream f(sdPath, std::ios::binary | std::ios::trunc);
+        std::vector<char> sec(512, 0);
+        for (int s = 0; s < 300; ++s) {
+            for (int i = 0; i < 512; ++i) sec[std::size_t(i)] = char((s * 7 + i) & 0xFF);
+            f.write(sec.data(), 512);
+        }
+    }
+
+    machine.enableUltraSatan(2);                            // IDs 2 et 3 (cas non trivial)
+    const bool mounted = machine.fdc.mountAcsi(sdPath.string(), 3);
+    UltraSatan::DateTime fixed; fixed.year = 2026; fixed.month = 8; fixed.day = 21;
+    fixed.hour = 10; fixed.min = 30; fixed.sec = 15;
+    machine.usatan.setDateTime(fixed);
+
+    Bus& bus = machine.bus;
+    constexpr uint32_t kDmaBuf = 0x8000;
+    auto w16 = [&](uint32_t a, uint16_t v) { bus.write16(a, v); };
+    auto setDmaAddr = [&](uint32_t addr) {
+        w16(0xFF8608, uint16_t((addr >> 16) & 0xFF));
+        w16(0xFF860A, uint16_t((addr >> 8) & 0xFF));
+        w16(0xFF860C, uint16_t(addr & 0xFF));
+    };
+    // Séquence EXACTE de LongRW (outil US_CONF, dma.h) : 1er octet A1 bas, octets
+    // suivants A1 haut, puis — AVANT le dernier octet — bascule du bit R/W (reset
+    // DMA), compteur de secteurs = 1, dernier octet, MODE=0/$100 (transfert), et
+    // lecture du statut en mode $8A/$18A. `pkt` = octets du paquet, marqueur
+    // ICD compris pour les commandes de 10 octets ; le statut est RENVOYÉ.
+    auto longRw = [&](int id, std::vector<uint8_t> pkt, bool write) -> uint8_t {
+        setDmaAddr(kDmaBuf);
+        const uint16_t wr = write ? 0x0100 : 0x0000;
+        w16(0xFF8606, 0x0088);
+        w16(0xFF8604, uint16_t((id << 5) | pkt[0]));
+        w16(0xFF8606, 0x008A);
+        for (std::size_t i = 1; i + 1 < pkt.size(); ++i) { w16(0xFF8604, pkt[i]); w16(0xFF8606, 0x008A); }
+        w16(0xFF8606, uint16_t(0x0090 ^ 0x0100 ^ wr));      // bascule R/W → reset DMA
+        w16(0xFF8606, uint16_t(0x0090 | wr));               // sélection compteur de secteurs
+        w16(0xFF8604, 1);                                   // 1 secteur
+        w16(0xFF8606, uint16_t(0x008A | wr));
+        w16(0xFF8604, pkt.back());                          // dernier octet → la commande part
+        w16(0xFF8606, wr);                                  // démarre le DMA
+        w16(0xFF8606, uint16_t(0x008A | wr));               // endcmd : statut
+        return uint8_t(bus.read16(0xFF8604) & 0xFF);
+    };
+    // Paquet 'US' (marqueur ICD, $20 'US', code, 3 paramètres). Un secteur DMA.
+    auto sendUs = [&](int id, const char* code7, uint8_t p0, uint8_t p1, uint8_t p2, bool write) -> uint8_t {
+        std::vector<uint8_t> pkt = {0x1F, 0x20, 'U', 'S', ' ', ' ', ' ', ' ', p0, p1, p2};
+        for (int i = 0; i < 7 && code7[i]; ++i) pkt[std::size_t(4 + i)] = uint8_t(code7[i]);
+        return longRw(id, pkt, write);
+    };
+    // Commande SCSI classe 0 (6 octets : opcode dans le 1er octet) ou classe 1
+    // (10 octets derrière le marqueur ICD), comme le ferait un pilote.
+    auto sendScsi = [&](int id, std::initializer_list<uint8_t> cdb, bool write = false) -> uint8_t {
+        std::vector<uint8_t> pkt(cdb);
+        if (pkt.size() > 6) pkt.insert(pkt.begin(), 0x1F);
+        return longRw(id, pkt, write);
+    };
+    auto ramStr = [&](uint32_t at, const char* s) {
+        for (std::size_t i = 0; s[i]; ++i) if (bus.ram[at + i] != uint8_t(s[i])) return false;
+        return true;
+    };
+
+    // --- 1. INQUIRY des deux slots : « JOOKIE  UltraSatan », n° de slot, RMB -----
+    uint8_t st = sendScsi(2, {0x12, 0, 0, 0, 44, 0});
+    check(st == 0 && ramStr(kDmaBuf + 8, "JOOKIE  UltraSatan")
+          && bus.ram[kDmaBuf + 27] == '1' && bus.ram[kDmaBuf + 1] == 0x80
+          && ramStr(kDmaBuf + 32, "1.20") && ramStr(kDmaBuf + 36, "01/28/14"),
+          "INQUIRY slot 1 (JOOKIE/UltraSatan/RMB/date)");
+    st = sendScsi(3, {0x12, 0, 0, 0, 44, 0});
+    check(st == 0 && ramStr(kDmaBuf + 8, "JOOKIE  UltraSatan")
+          && bus.ram[kDmaBuf + 27] == '2', "INQUIRY slot 2 (slot digit)");
+
+    // --- 2. Slot vide : TEST UNIT READY / READ(6) → NOT READY, medium not present -
+    const bool turEmpty = sendScsi(2, {0x00, 0, 0, 0, 0, 0}) == 2;
+    st = sendScsi(2, {0x03, 0, 0, 0, 22, 0});                  // REQUEST SENSE étendu
+    check(turEmpty && st == 0 && (bus.ram[kDmaBuf + 2] & 0x0F) == 2
+          && bus.ram[kDmaBuf + 12] == 0x3A, "empty slot: NOT READY / medium not present");
+    check(sendScsi(2, {0x08, 0, 0, 0, 1, 0}) == 2, "empty slot: READ(6) fails");
+
+    // --- 3. Slot avec carte : TEST UNIT READY, READ CAPACITY, READ(6) -------------
+    const bool turOk = sendScsi(3, {0x00, 0, 0, 0, 0, 0}) == 0;
+    st = sendScsi(3, {0x25, 0, 0, 0, 0, 0, 0, 0, 0, 0});       // READ CAPACITY (classe 1, ICD)
+    const uint32_t last = (uint32_t(bus.ram[kDmaBuf]) << 24) | (uint32_t(bus.ram[kDmaBuf + 1]) << 16)
+                        | (uint32_t(bus.ram[kDmaBuf + 2]) << 8) | bus.ram[kDmaBuf + 3];
+    check(mounted && turOk && st == 0 && last == 299, "SD slot: TEST UNIT READY + READ CAPACITY");
+    st = sendScsi(3, {0x08, 0, 0, 5, 1, 0});                   // READ(6) secteur 5
+    bool pat = st == 0;
+    for (int i = 0; pat && i < 512; ++i) pat = bus.ram[kDmaBuf + i] == uint8_t((5 * 7 + i) & 0xFF);
+    check(pat, "SD slot: READ(6) sector contents");
+
+    // --- 4. 'USCurntFW' : nom du firmware, un secteur --------------------------
+    st = sendUs(2, "CurntFW", 0, 0, 0, false);
+    check(st == 0 && ramStr(kDmaBuf, "UltraSatan v1.20"), "USCurntFW (firmware name)");
+
+    // --- 5. 'USRdClRTC' : 'RTC' + {année-2000, mois, jour, h, min, s} ----------
+    st = sendUs(3, "RdClRTC", 0, 0, 0, false);                 // répond sur les DEUX slots
+    check(st == 0 && ramStr(kDmaBuf, "RTC") && bus.ram[kDmaBuf + 3] == 26
+          && bus.ram[kDmaBuf + 4] == 8 && bus.ram[kDmaBuf + 5] == 21 && bus.ram[kDmaBuf + 6] == 10
+          && bus.ram[kDmaBuf + 7] == 30 && bus.ram[kDmaBuf + 8] == 15, "USRdClRTC (deterministic clock)");
+
+    // --- 6. 'USWrClRTC' : magie 'RTC' dans le paquet ET le secteur ---------------
+    for (int i = 0; i < 512; ++i) bus.ram[kDmaBuf + i] = 0;
+    bus.ram[kDmaBuf] = 'R'; bus.ram[kDmaBuf + 1] = 'T'; bus.ram[kDmaBuf + 2] = 'C';
+    bus.ram[kDmaBuf + 3] = 30; bus.ram[kDmaBuf + 4] = 12; bus.ram[kDmaBuf + 5] = 31;
+    bus.ram[kDmaBuf + 6] = 23; bus.ram[kDmaBuf + 7] = 59; bus.ram[kDmaBuf + 8] = 58;
+    const bool wrOk = sendUs(2, "WrCl", 'R', 'T', 'C', true) == 0;
+    st = sendUs(2, "RdClRTC", 0, 0, 0, false);
+    check(wrOk && st == 0 && bus.ram[kDmaBuf + 3] == 30 && bus.ram[kDmaBuf + 4] == 12
+          && bus.ram[kDmaBuf + 5] == 31 && bus.ram[kDmaBuf + 8] == 58, "USWrClRTC round-trip");
+    check(sendUs(2, "WrCl", 0, 0, 0, true) == 2, "USWrClRTC without 'RTC' magic refused");
+
+    // --- 7. Nom INQUIRY : 'USWrINQRN' puis INQUIRY + 'USRdINQRN' ----------------
+    for (int i = 0; i < 512; ++i) bus.ram[kDmaBuf + i] = 0;
+    std::memcpy(&bus.ram[kDmaBuf], "NeoST-SD  ", 10);
+    const bool nmOk = sendUs(2, "WrINQRN", 0, 0, 0, true) == 0;
+    st = sendScsi(3, {0x12, 0, 0, 0, 44, 0});
+    const bool inqNew = st == 0 && ramStr(kDmaBuf + 16, "NeoST-SD");
+    st = sendUs(3, "RdINQRN", 0, 0, 0, false);
+    check(nmOk && inqNew && st == 0 && ramStr(kDmaBuf, "NeoST-SD"),
+          "USWrINQRN/USRdINQRN + INQUIRY updated");
+    for (int i = 0; i < 512; ++i) bus.ram[kDmaBuf + i] = 0;
+    bus.ram[kDmaBuf] = 0xFF;                                   // $FF en tête = nom d'usine
+    st = sendUs(2, "WrINQRN", 0, 0, 0, true);
+    check(st == 0 && machine.usatan.inquiryName() == "UltraSatan", "USWrINQRN $FF restores default");
+
+    // --- 8. Réglages : 'USWrSt' exige la magie $83 $03 $17, 'USRdSt' relit ------
+    for (int i = 0; i < 512; ++i) bus.ram[kDmaBuf + i] = uint8_t(i);
+    const bool noMagic = sendUs(2, "WrSt", 0, 0, 0, true) == 2;
+    for (int i = 0; i < 512; ++i) bus.ram[kDmaBuf + i] = uint8_t(i);
+    const bool stOk = sendUs(2, "WrSt", 0x83, 0x03, 0x17, true) == 0;
+    st = sendUs(2, "RdSt", 0, 0, 0, false);
+    check(noMagic && stOk && st == 0 && bus.ram[kDmaBuf + 5] == 5
+          && bus.ram[kDmaBuf + 1] == 0 && bus.ram[kDmaBuf + 300] == 0, "USWrSt magic + USRdSt round-trip");
+
+    // --- 9. Flash refusée, 'US' inconnu refusé, 'RdLog' vide ---------------------
+    const bool fwRefused  = sendUs(2, "RdFW", 1, 0, 0, false) == 2;
+    const bool unkRefused = sendUs(2, "Zzzz", 0, 0, 0, false) == 2;
+    check(fwRefused && unkRefused && sendUs(2, "RdLog", 0, 0, 0, false) == 0,
+          "RdFW/unknown refused, RdLog answers");
+
+    // --- 10. Un paquet $20 'US' vers une cible NON UltraSatan reste rejeté ------
+    machine.enableFujiNet(6);                                  // cible peuplée, non UltraSatan
+    st = sendUs(6, "CurntFW", 0, 0, 0, false);
+    check(st == 2 && !ramStr(kDmaBuf, "UltraSatan v1.20"), "'US' packet gated to UltraSatan targets");
+    machine.disableFujiNet();
+
+    machine.fdc.unmountAcsi();
+    machine.disableUltraSatan();
+    fs::remove(sdPath, ec);
+    std::fprintf(stderr, "[usatan-selftest] %d passed, %d failed\n", passed, failed);
+    return failed == 0 ? 0 : 1;
+}
+
+// =============================================================================
+//  --netusbee-selftest — auto-test DÉTERMINISTE de l'ISP1160 du NetUSBee au niveau
+//  FIL : séquences d'accès EXACTES du pilote FreeMiNT (isp116x.h — LSB latch,
+//  MSB data/cmd, DATA_READ en mot 16 bits) à travers le VRAI plan mémoire, puis
+//  coexistence avec la NE2000 (registres EtherNEC toujours décodés).
+// =============================================================================
+int netusbeeSelfTest(Machine& machine) {
+    int passed = 0, failed = 0;
+    auto check = [&](bool ok, const char* what) {
+        std::fprintf(stderr, "[netusbee-selftest] %-36s %s\n", what, ok ? "OK" : "FAIL");
+        (ok ? passed : failed)++;
+    };
+    NetBackendLoop loop;
+    machine.ne2000.setBackend(&loop);
+    if (!machine.enableNetUsbee()) { std::fprintf(stderr, "[netusbee-selftest] enable failed\n"); return 1; }
+
+    Bus& bus = machine.bus;
+    // Primitives du pilote (isp116x.h), en LECTURES MOT comme raw_readw.
+    auto rawReadw = [&](uint32_t a) -> uint16_t { return bus.read16(a); };
+    auto writeAddr = [&](uint8_t reg) {
+        (void)rawReadw(Isp1160::LSB_WRITE + (uint32_t(reg) << 1));
+        (void)rawReadw(Isp1160::MSB_CMD_WRITE);
+    };
+    // isp116x_raw_write_data16 / raw_read_data16 — CE SONT les primitives des
+    // accès registre du pilote NetUSBee (isp116x_read/write_reg16/32 n'utilisent
+    // que les variantes raw) : LSB ← octet bas, MSB ← octet haut, lecture telle quelle.
+    auto writeData16 = [&](uint16_t v) {
+        (void)rawReadw(Isp1160::LSB_WRITE + (uint32_t(v & 0xFF) << 1));
+        (void)rawReadw(Isp1160::MSB_DATA_WRITE + ((uint32_t(v) >> 8) << 1));
+    };
+    auto readData16 = [&]() -> uint16_t { return rawReadw(Isp1160::DATA_READ); };
+    // raw_write_data32 / raw_read_data32 (registres 32 bits, sans swap).
+    auto writeData32 = [&](uint32_t v) {
+        (void)rawReadw(Isp1160::LSB_WRITE + ((v & 0xFF) << 1));
+        (void)rawReadw(Isp1160::MSB_DATA_WRITE + (((v >> 8) & 0xFF) << 1));
+        (void)rawReadw(Isp1160::LSB_WRITE + (((v >> 16) & 0xFF) << 1));
+        (void)rawReadw(Isp1160::MSB_DATA_WRITE + (((v >> 24) & 0xFF) << 1));
+    };
+    auto readData32 = [&]() -> uint32_t {
+        const uint32_t lo = rawReadw(Isp1160::DATA_READ);
+        const uint32_t hi = rawReadw(Isp1160::DATA_READ);
+        return lo | (hi << 16);
+    };
+    auto rd16 = [&](uint8_t reg) { writeAddr(reg); return readData16(); };
+    auto wr16 = [&](uint8_t reg, uint16_t v) { writeAddr(uint8_t(reg | 0x80)); writeData16(v); };
+    auto rd32 = [&](uint8_t reg) { writeAddr(reg); return readData32(); };
+    auto wr32 = [&](uint8_t reg, uint32_t v) { writeAddr(uint8_t(reg | 0x80)); writeData32(v); };
+
+    // --- 1. ID de puce (isp116x_check_id) ----------------------------------------
+    check((rd16(Isp1160::HCCHIPID) & 0xFF00) == 0x6100, "chip ID $61xx (ISP1160)");
+    // --- 2. Scratch 16 bits : round-trip avec la convention d'octets du pilote ----
+    wr16(Isp1160::HCSCRATCH, 0xA55A);
+    check(rd16(Isp1160::HCSCRATCH) == 0xA55A, "HcScratch 16-bit round-trip");
+    wr16(Isp1160::HCSCRATCH, 0x1234);
+    check(rd16(Isp1160::HCSCRATCH) == 0x1234, "HcScratch asymmetric value (byte order)");
+    // --- 3. Reset logiciel : HCSWRES $F6 + HCR auto-effacé -----------------------
+    wr16(Isp1160::HCSWRES, 0x00F6);
+    wr32(Isp1160::HCCMDSTAT, 1);
+    check((rd32(Isp1160::HCCMDSTAT) & 1) == 0 && rd16(Isp1160::HCSCRATCH) == 0x1234,
+          "sw reset: HCR self-clears, scratch kept");
+    // --- 4. Registres 32 bits : HcRhDescriptorA (NDP=2 figé), HcControl ----------
+    wr32(Isp1160::HCRHDESCA, 0x19000000u | 0x200u | 0x1000u);
+    const uint32_t desca = rd32(Isp1160::HCRHDESCA);
+    check((desca & 0xFF) == 2 && (desca & 0x19001200u) == 0x19001200u, "HcRhDescriptorA 32-bit + NDP=2");
+    wr32(Isp1160::HCCONTROL, 0x80);                            // USB_OPER
+    check((rd32(Isp1160::HCCONTROL) & 0xC0) == 0x80, "HcControl operational");
+    // --- 5. Hub racine vide : CCS=0 sur les deux ports, RHSC sur PRS ----------
+    wr32(Isp1160::HCRHPORT1, 0x100);                           // SetPortPower
+    const uint32_t p1 = rd32(Isp1160::HCRHPORT1);
+    check((p1 & 1) == 0 && (p1 & 0x100) != 0 && (rd32(Isp1160::HCRHPORT2) & 1) == 0,
+          "root hub: no device, port power");
+    // --- 6. ATL : écrire un PTD, poll → ATL_DONE, CC = DeviceNotResponding -------
+    wr16(Isp1160::HCATLBUFLEN, 16);
+    writeAddr(uint8_t(Isp1160::HCATLPORT | 0x80));
+    // PTD : w0 Active=1, w1 MPS=8, w2 total=8 (SETUP), w3 addr 0 ; puis 8 octets
+    for (uint16_t w : {uint16_t(0x0800), uint16_t(0x0008), uint16_t(0x0008), uint16_t(0x0000),
+                       uint16_t(0x0680), uint16_t(0x0100), uint16_t(0x0000), uint16_t(0x0008)})
+        writeData16(w);
+    const bool full = (rd16(Isp1160::HCBUFSTAT) & 0x04) != 0;
+    machine.isp1160.poll();
+    const uint16_t bs = rd16(Isp1160::HCBUFSTAT);
+    writeAddr(Isp1160::HCATLPORT);
+    const uint16_t w0 = rawReadw(Isp1160::DATA_READ);          // mot 0 du PTD
+    check(full && (bs & 0x20) && ((w0 >> 12) & 0xF) == 5 && !(w0 & 0x800),
+          "ATL: done after poll, CC=5, inactive");
+    // --- 7. IRQ : OPR via HcInterrupt RHSC + HWCFG INT_ENABLE --------------------
+    wr32(Isp1160::HCINTENB, 0x80000040u);                      // MIE | RHSC
+    wr16(Isp1160::HCuPINTENB, 0x10);                           // OPR
+    wr16(Isp1160::HCHWCFG, 0x0009);                            // DBWIDTH(1) | INT_ENABLE
+    wr32(Isp1160::HCRHPORT1, 0x10);                            // SetPortReset sans device → CSC → RHSC
+    check(machine.isp1160.irqAsserted() && (rd32(Isp1160::HCRHPORT1) & 0x10000),
+          "IRQ line on RHSC (port reset w/o device = CSC)");
+    // --- 8. NE2000 toujours décodée (registres EtherNEC, page 0) ------------------
+    (void)bus.read8(Ne2000::WRITE_BASE + 0u * 512u + 0x21u * 2u);   // CR = page 0, stop
+    (void)bus.read8(Ne2000::WRITE_BASE + 3u * 512u + 0x46u * 2u);   // BNRY = $46
+    check(bus.read8(Ne2000::READ_BASE + 3u * 512u) == 0x46, "NE2000 BNRY round-trip in NetUSBee mode");
+    // --- 9. Save-state round-trip de l'ISP1160 (registres + FIFO) ----------------
+    {
+        std::vector<uint8_t> blob;
+        StateArchive out = StateArchive::saver(blob);
+        machine.isp1160.serialize(out);
+        Isp1160 copy;
+        StateArchive in = StateArchive::loader(blob.data(), blob.size());
+        copy.serialize(in);
+        std::vector<uint8_t> blob2;
+        StateArchive out2 = StateArchive::saver(blob2);
+        copy.serialize(out2);
+        check(!blob.empty() && in.ok() && blob == blob2, "ISP1160 serialize round-trip");
+    }
+
+    machine.disableNetUsbee();
+    std::fprintf(stderr, "[netusbee-selftest] %d passed, %d failed\n", passed, failed);
+    return failed == 0 ? 0 : 1;
+}
+
 // Dump du framebuffer décodé en PPM binaire (P6) — comparable visuellement.
 bool writePpm(const char* path, const uint32_t* px, int w, int h) {
     std::FILE* f = std::fopen(path, "wb");
@@ -505,6 +804,10 @@ int main(int argc, char** argv) {
     bool        fujinetOffline = false;          // --fujinet-offline : backend nul
     bool        modemFlag      = false;          // --modem : modem Hayes sur l'USART
     bool        ethernecFlag   = false;          // --ethernec : NE2000 port cartouche
+    bool        netusbeeFlag   = false;          // --netusbee : NE2000 + ISP1160 port cartouche
+    bool        ultrasatan     = false;          // --ultrasatan : interface SD sur le bus ACSI
+    int         ultrasatanId   = 0;              // --ultrasatan-id N : première cible (0-6)
+    std::string sd1Img, sd2Img;                  // --sd1/--sd2 IMG : images des slots SD
     std::string midiNetPeer;                     // --midi-net host:port[:listen] : anneau MIDI UDP
     int         midiNetListen  = 6820;           // port d'écoute par défaut
     std::string soundDumpPath;                   // --sound-dump F : WAV 48 kHz de la boucle --frames
@@ -536,6 +839,8 @@ int main(int argc, char** argv) {
     bool        msaSelfTest  = false;  // auto-test déterministe du ré-encodage .msa
     bool        fujiSelfTestFlag = false; // auto-test déterministe du FujiNet (protocole fil)
     bool        enecSelfTestFlag = false; // auto-test déterministe NE2000/EtherNEC (fil)
+    bool        usatanSelfTestFlag = false;   // auto-test déterministe UltraSatan (fil ACSI)
+    bool        netusbeeSelfTestFlag = false; // auto-test déterministe NetUSBee/ISP1160 (fil)
     int         shotEvery   = 0;      // --shot-every N : dump une capture toutes les N trames
     std::string shotPrefix;           // --shot-every PREFIX : préfixe des captures périodiques
     int         shotFrom    = 0;      // --shot-from N : ne capture qu'à partir de la trame N
@@ -613,6 +918,11 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(a, "--fujinet-offline")) { fujinet = true; fujinetOffline = true; }
         else if (!std::strcmp(a, "--modem"))           modemFlag = true;
         else if (!std::strcmp(a, "--ethernec"))        ethernecFlag = true;
+        else if (!std::strcmp(a, "--netusbee"))        netusbeeFlag = true;
+        else if (!std::strcmp(a, "--ultrasatan"))      ultrasatan = true;
+        else if (!std::strcmp(a, "--ultrasatan-id"))   { ultrasatan = true; ultrasatanId = std::atoi(next(a)); }
+        else if (!std::strcmp(a, "--sd1"))             { ultrasatan = true; sd1Img = next(a); }
+        else if (!std::strcmp(a, "--sd2"))             { ultrasatan = true; sd2Img = next(a); }
         else if (!std::strcmp(a, "--midi-net")) {
             // "host:port" ou "host:port:listen" (le port d'écoute par défaut est 6820).
             std::string s = next(a);
@@ -639,6 +949,8 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(a, "--msa-selftest")) msaSelfTest = true;
         else if (!std::strcmp(a, "--fuji-selftest")) fujiSelfTestFlag = true;
         else if (!std::strcmp(a, "--enec-selftest")) enecSelfTestFlag = true;
+        else if (!std::strcmp(a, "--usatan-selftest")) usatanSelfTestFlag = true;
+        else if (!std::strcmp(a, "--netusbee-selftest")) netusbeeSelfTestFlag = true;
         else if (!std::strcmp(a, "--shot-every"))  {
             shotEvery = std::atoi(next(a)); shotPrefix = next(a);
             if (shotEvery <= 0)             // le préfixe a été consommé pour rien : le dire
@@ -760,6 +1072,8 @@ int main(int argc, char** argv) {
     if (msaSelfTest) return machine.fdc.msaSelfTest() ? 0 : 1;
     if (fujiSelfTestFlag) return fujiSelfTest(machine);
     if (enecSelfTestFlag) return enecSelfTest(machine);
+    if (usatanSelfTestFlag) return usatanSelfTest(machine);
+    if (netusbeeSelfTestFlag) return netusbeeSelfTest(machine);
     std::fprintf(stderr, "[headless] CPU core: %s | machine: %s | RAM: %s\n",
                  Cpu68k::coreName(machine.cpu.core()), machineName(machType), ramLabel(ramBytes));
     if (!machine.loadTos(romPath)) {
@@ -790,6 +1104,21 @@ int main(int argc, char** argv) {
     if (!acsiImg.empty() && machine.fdc.mountAcsi(acsiImg))
         std::fprintf(stderr, "[headless] ACSI: %d partition(s) detected\n",
                      machine.fdc.acsiPartitionCount());
+    // UltraSatan (--ultrasatan…) : 2 slots SD sur les cibles N/N+1. Une image --acsi
+    // déjà montée sur la cible 0 reste en place (= slot 1 quand N = 0).
+    if (ultrasatan) {
+        if (ultrasatanId < 0 || ultrasatanId > 6) {
+            std::fprintf(stderr, "[headless] --ultrasatan-id must be 0-6\n");
+            return 2;
+        }
+        machine.enableUltraSatan(ultrasatanId);
+        if (!sd1Img.empty() && machine.fdc.mountAcsi(sd1Img, ultrasatanId))
+            std::fprintf(stderr, "[headless] UltraSatan slot 1: %s\n", sd1Img.c_str());
+        if (!sd2Img.empty() && machine.fdc.mountAcsi(sd2Img, ultrasatanId + 1))
+            std::fprintf(stderr, "[headless] UltraSatan slot 2: %s\n", sd2Img.c_str());
+        std::fprintf(stderr, "[headless] UltraSatan on ACSI targets %d-%d (%d partition(s))\n",
+                     ultrasatanId, ultrasatanId + 1, machine.fdc.acsiPartitionCount());
+    }
     // FujiNet virtuel (--fujinet…) : cible ACSI dédiée + backend hôte. Le backend
     // vit ici (frontend) — le cœur ne voit que l'interface FujiHost.
     std::unique_ptr<FujiHost> fujiHost;
@@ -850,12 +1179,15 @@ int main(int argc, char** argv) {
     // EtherNEC (--ethernec) : NE2000 sur le port cartouche, backend boucle locale
     // (aucune E/S réseau). Exclusif d'une cartouche montée.
     NetBackendLoop enecLoop;
-    if (ethernecFlag) {
+    if (ethernecFlag || netusbeeFlag) {
         machine.ne2000.setBackend(&enecLoop);
-        if (machine.enableEtherNec())
-            std::fprintf(stderr, "[headless] EtherNEC (NE2000) on the cartridge port\n");
+        const bool ok = netusbeeFlag ? machine.enableNetUsbee() : machine.enableEtherNec();
+        if (ok)
+            std::fprintf(stderr, "[headless] %s on the cartridge port\n",
+                         netusbeeFlag ? "NetUSBee (NE2000 + ISP1160 USB)" : "EtherNEC (NE2000)");
         else
-            std::fprintf(stderr, "[headless] --ethernec refused: the cartridge port is in use\n");
+            std::fprintf(stderr, "[headless] --%s refused: the cartridge port is in use\n",
+                         netusbeeFlag ? "netusbee" : "ethernec");
     }
     // Anneau MIDI réseau (--midi-net) : MIDI OUT → UDP → pair aval ; datagrammes
     // de l'amont → MIDI IN. Débranche le bouclage interne de l'ACIA MIDI.
@@ -1040,6 +1372,7 @@ int main(int argc, char** argv) {
         if (modem) modem->poll();   // pompe le TCP entrant vers la file RX du MFP
 #endif
         if (machine.ne2000.enabled()) machine.ne2000.poll();   // trames RX → anneau
+        if (machine.isp1160.enabled()) machine.isp1160.poll(); // trame USB (ATL → done)
 #ifdef NEOST_WITH_NET
         if (midiRing) midiRing->poll([&](uint8_t b) {
             if (!machine.midi.rxCanAccept()) return false;

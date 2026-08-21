@@ -18,6 +18,7 @@
 #include "io/MidiAcia.hpp"
 #include "io/Scc.hpp"
 #include "io/Ne2000.hpp"
+#include "io/Isp1160.hpp"
 
 #include <algorithm>
 #include <cassert>
@@ -393,10 +394,21 @@ uint8_t Bus::read8Slow(uint32_t addr) {
     // les lectures $FA0000-$FBFFFF encodent les accès registre (cf. Ne2000.hpp).
     // Décodée AVANT la ROM cartouche ; les deux sont mutuellement exclusives
     // (Machine::enableEtherNec refuse si une cartouche est montée).
+    // NetUSBee : l'ISP1160 partage la fenêtre. Il est décodé D'ABORD (effets de
+    // bord une fois par accès CPU : octet pair d'un mot, ou accès octet), puis la
+    // NE2000 voit l'accès à son tour — la fenêtre LSB ($FA0000-$FA01FF) est aussi
+    // son registre CR, et sans schéma on ne suppose aucun décodage exclusif.
+    bool ispHit = false;
+    uint8_t ispVal = 0xFF;
+    if (isp1160 && addr >= stmap::CART_BASE && addr < stmap::CART_END) {
+        const bool first = ioAccessWidth_ < 2 || (addr & 1) == 0;
+        ispHit = isp1160->cartRead(addr, ispVal, first);
+    }
     if (ne2000 && addr >= stmap::CART_BASE && addr < stmap::CART_END) {
         uint8_t v;
-        if (ne2000->cartRead(addr, v)) return v;
+        if (ne2000->cartRead(addr, v)) return ispHit ? ispVal : v;
     }
+    if (ispHit) return ispVal;
 
     // Port cartouche ($FA0000-$FBFFFF) : si une cartouche est montée, on expose
     // sa ROM ; le TOS lit le magic à $FA0000 et amorce (diagnostic/applicative).

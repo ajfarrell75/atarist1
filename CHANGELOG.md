@@ -6,6 +6,57 @@ l'ordre inverse. Version courante : **0.5.2**.
 - « NeoST gère-t-il X ? » → [`docs/IMPLEMENTED.md`](docs/IMPLEMENTED.md) (inventaire par puce)
 - « Que reste-t-il ? » → [`TODO.md`](TODO.md)
 
+## Fenêtre « Keyboard » : le clavier ST en photo, toutes ses touches cliquables (2026-08-21)
+
+Menu *Windows → Keyboard* (`showKbd=` dans `neost.cfg`) : la photo `pic/Black_Keyboard_AtariST.jpeg`
+(décodée par `stb_image`, nouveau `extern/stb`, domaine public) avec une zone par touche →
+scancode IKBD (`Ikbd::keyEvent`) : appui tenu tant que la souris l'est, Shift/Control/
+Alternate/CapsLock collants (armés d'un clic, relâchés après la touche suivante), surbrillance
+et info-bulle `nom ($scancode)`. Les libellés fantaisistes de la photo sont mappés à leur
+position sur un vrai ST (grande touche à gauche de Z = Shift gauche, « Splift » = Shift droit,
+« Ne » = Insert, « Rel » = Clr/Home, « PgDn » = Delete, vierge sous Tab = `~, pavé
+« Num Lock / × ÷ » = ( ) / *). `src/gui/KeyboardWindow.cpp` ; `pic/` est livré par
+`stage_free_data.sh`.
+
+## Ctrl+Alt+F : bascule bureau ⇄ borne au clavier (2026-08-21)
+
+Même action que `F8`, sous forme de chord hôte (discipline de `Ctrl+Alt+G` : `F` seul va
+toujours à l'IKBD, le relâchement du chord est absorbé). `onKey` dans `src/main.cpp`.
+
+## UltraSatan + NetUSBee : le vrai couple stockage/réseau du ST (2026-08-21)
+
+Le FujiNet virtuel est un binding de référence sans matériel ; l'écosystème ST, lui, a tranché
+autrement : **UltraSatan** (SD sur ACSI) et **NetUSBee** (Ethernet + USB sur le port cartouche).
+Les deux sont maintenant émulés, OFF par défaut, sans effet sur les étalons.
+
+- **UltraSatan** (`src/io/UltraSatan.*`, hooks dans `Acsi`) : 2 slots = cibles ACSI 0-1 (ID
+  réglable en headless), INQUIRY `JOOKIE  UltraSatan` (RMB, n° de slot, v1.20), slot vide =
+  NOT READY / medium not present, horloge propre sur les cycles émulés, et les **paquets ICD
+  `$20 'US…'`** portés du firmware v1.20 (atarijookie/ce-atari) : `CurntFW`, `RdCl`/`WrCl`
+  (magie `RTC`), `RdINQRN`/`WrINQRN`, `RdSt`/`WrSt` (magie `$83 $03 $17`), `RdLog` ; `RdFW`/`WrFW`
+  refusés (pas de dataflash émulée). Garde-fou : les paquets `'US'` ne sont routés que sur les
+  slots — toute autre cible reste byte-identique à `hdc.c`. **EmuTOS monte C:** depuis une image
+  SD générée (`tools/make_usatan_hd.py`, partition GEM FAT16) sans un octet de pilote.
+- **NetUSBee** (`src/io/Isp1160.*` + `io/Ne2000` inchangé) : contrôleur hôte USB ISP1160 décodé
+  aux adresses du pilote FreeMiNT (`isp116x.h`) — latch `$FA0000`, lecture `$FA8000`, données
+  `$FB8000`, commande `$FBC000`, accès MOT avec effets de bord une fois par accès CPU. ID `$6120`,
+  reset logiciel, registres OHCI/ISP, hub racine **vide** (2 ports), ATL achevée en
+  `DeviceNotResponding`. ⚠ Fenêtre LSB partagée avec le CR de la NE2000, consigné.
+- **Tests** : `--usatan-selftest` (15 checks, séquence **LongRW** exacte de `US_CONF` — la première
+  version lisait le statut APRÈS la bascule R/W, que le matériel efface : le harnais avait tort,
+  pas le cœur) et `--netusbee-selftest` (11 checks, primitives **raw** du pilote — idem : le
+  harnais utilisait la variante swappée que le pilote n'emploie pas pour les registres), tous
+  deux au palier `fast`. Verdict série **`usatan_netusbee`** : une carte SD générée (16 Mo, GEM
+  FAT16) qu'EmuTOS monte en C: et dont il lance `AUTO\USTEST.PRG` — programme 68000 relogeable
+  qui pilote les deux cartes comme les logiciels d'époque. Trois règles EmuTOS apprises en chemin
+  (`bios/blkdev.c`, `bios/disk.c`) : disque dur présent ⇒ la disquette n'est plus amorcée ; un
+  secteur racine exécutable n'est lancé que sur un disque SANS partition reconnue ; FAT12/16 par
+  le nombre de clusters (> 4084 ⇒ FAT16) — une partition de 2 Mo était lue en FAT12 et la chaîne
+  du PRG cassait. (Et Rwabs ne revient jamais depuis un secteur de boot : Floprd.) Save-states **v12**.
+- GUI : case UltraSatan + slot 2 (page Hard Disks), case NetUSBee exclusive d'EtherNEC (page
+  Network) ; `neost.cfg` : `ultrasatan=`, `sd2=`, `netusbee=`. Headless : `--ultrasatan`,
+  `--ultrasatan-id N`, `--sd1/--sd2 IMG`, `--netusbee`.
+
 ## Cuddly Demos ré-activé : l'oracle Hatari n'est pas déterministe (2026-08-19)
 
 L'étalon `cuddly_demos` était **désactivé depuis le 2026-08-01** au motif que « l'animation

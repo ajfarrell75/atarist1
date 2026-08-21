@@ -385,6 +385,15 @@ ACIA) ; si une vraie démo spec512 **overscan** (bordures ouvertes) est rapatri�
   pluggable — c'est un simple ajout de backend, hérite de tous les protocoles amont.
 - **FujiNet — lib ST** : proposer le dossier `atarist/` en amont à `fujinet-lib` pour cadrer le
   binding ACSI tôt ; device slots 0-7 différenciés ; montage lecteur B.
+- **NetUSBee — périphériques USB hôte** (2026-08-21) : l'ISP1160 (`io/Isp1160`) est un hub racine
+  VIDE ; brancher un clavier/souris HID puis un stockage de masse derrière `HcRhPortStatus` (PTD
+  ATL → réponses du device). Les pilotes FreeMiNT `netusbee.ucd` + `usb.km` sont le banc d'essai.
+- **NetUSBee — fenêtre LSB partagée** : `$FA0000-$FA01FF` = latch ISP1160 ET registre CR NE2000 ;
+  NeoST laisse les deux puces voir l'accès faute de schéma. À trancher sur le schéma du NetUSBee
+  (hardware.atari.org) ou sur un test matériel, puis ajuster `Bus::read8Slow`.
+- **UltraSatan — `US_CONF.TOS` réel** : l'outil de Jookie (ce-atari/ultrasatan/config) compile avec
+  Pure C ; le passer sur NeoST (écran de config, lecture FW/horloge/nom) pour valider au-delà du
+  programme de test maison. Idem HDDRIVER/ICD PRO sur une image 2 slots.
 - **EtherNEC — backend réel** : `SlirpNat` (NAT mode utilisateur, `libslirp` — seul le runtime
   est présent ici, pas le `-dev`) ou pcap/TAP ; puis **valider STinG + `ENEC.STX` sous TOS 1.04**
   (DHCP + ping/GET) et consigner dans `docs/CASE_STUDIES.md`. Livrer les pilotes libres GPL.

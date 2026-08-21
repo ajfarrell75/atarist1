@@ -10,7 +10,12 @@
    "frames": 40,
    "cart": "disks/etalons/selftest_cart.bin",
    "cart_generate": "tools/make_selftest_cart.py",
-   "expect": ["cpu", "timing", "frame", "ipl"]
+   "expect": [
+    "cpu",
+    "timing",
+    "frame",
+    "ipl"
+   ]
   },
   {
    "id": "fpu_cir",
@@ -21,7 +26,30 @@
    "mem": "512k",
    "fpu": true,
    "frames": 30,
-   "expect": ["fpu"]
+   "expect": [
+    "fpu"
+   ]
+  },
+  {
+   "id": "usatan_netusbee",
+   "name": "UltraSatan (C: depuis la carte SD, AUTO\\\\USTEST.PRG, LongRW) + NetUSBee (ISP1160/NE2000) — verdict série",
+   "rom": "roms/etos192us.img",
+   "machine": "st",
+   "mem": "512k",
+   "frames": 600,
+   "ultrasatan": true,
+   "sd1": "disks/etalons/usatan_sd.img",
+   "sd1_generate": "tools/make_usatan_hd.py",
+   "netusbee": true,
+   "expect": [
+    "usfw",
+    "usinq",
+    "usrtc",
+    "uscdrv",
+    "nubid",
+    "nubscr",
+    "nubnic"
+   ]
   }
  ]
 }
