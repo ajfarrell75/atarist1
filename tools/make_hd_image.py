@@ -14,27 +14,33 @@
 #  bureau n'affiche que A: et B: — exactement comme un UltraSatan sans pilote sur
 #  du matériel réel.
 #
-#  ⚠ LA GREFFE (--driver-from) NE PRODUIT PAS UN DISQUE AMORÇABLE — expérimental.
-#  Mesuré : sur un disque préparé par HDDRIVER, le code du secteur racine lit le
-#  secteur 0, le secteur 2, puis le secteur 242 (FAT/racine) et charge le pilote.
-#  Sur une image fabriquée ici, il lit le secteur 0, le secteur 2… et s'arrête. Le
-#  SECOND ÉTAGE (du code 68000 vit aussi dans le secteur d'amorçage de la partition,
-#  là où mformat écrit un secteur DOS) sait lire le système de fichiers TEL QUE
-#  l'installeur HDDRIVER l'a formaté — secteurs logiques de 8192 octets, 512 entrées
-#  racine, 7 secteurs par FAT sur le disque observé. Recopier le code sans reproduire
-#  cette géométrie ne suffit pas ; le reproduire, c'est rétro-concevoir l'installeur
-#  d'un logiciel commercial. Pour un vrai TOS, la voie qui marche est de copier ses
-#  fichiers SUR un disque déjà préparé par HDDRIVER/HDDRUTIL.
+#  ── LES DEUX ÉTAGES, ET LEURS DEUX SOMMES DE CONTRÔLE ─────────────────────────
+#  L'amorçage HDDRIVER se fait en DEUX étages, chacun gardé par une somme $1234 :
+#    · étage 1 = secteur racine du disque. Le TOS ne l'exécute que si ses 256 mots
+#      totalisent $1234. Il choisit la partition dont le drapeau, masqué par $F8,
+#      vaut $80 (donc « amorçable »), lit son PREMIER secteur, et — désassemblé —
+#      refait la même somme dessus : `add.w (a0)+,d0 / dbra / cmp.w #$1234,d0 /
+#      bne → abandon` avant `jmp (a4)`.
+#    · étage 2 = secteur d'amorçage de la PARTITION, qui sait lire le FAT et charger
+#      HDDRIVER.SYS par son nom.
+#  D'où les deux pièges, tous deux payés ici :
+#    1. mformat écrit un secteur DOS dont la somme est quelconque : l'étage 1 refuse
+#       de l'exécuter et le boot s'arrête juste après l'avoir lu (symptôme : la trace
+#       ACSI montre les secteurs 0 et 2, puis plus rien). On rétablit $1234 avec un
+#       mot d'ajustement en $1FE — là où DOS met sa signature $55AA, et où le disque
+#       donneur met déjà le sien.
+#    2. le code de l'étage 2 commence à $34, cible du BRA.S de tête, ce qui EMPIÈTE
+#       sur les 2 derniers octets du champ « nom de volume ». Le copier à partir de
+#       $36 (l'offset « propre » d'après le BPB) laisse ces 2 octets s'exécuter et
+#       fait dérailler l'étage 2 en silence.
+#  Vérifié : image produite ici, montée en C: sous TOS 1.04 ET TOS 2.06
+#  (_drvbits $00000007), pilote chargé depuis la partition comme sur le disque
+#  d'origine.
 #
-#  ⚠ Ne PAS déduire de là que NeoST ne monte pas les disques durs sous vrai TOS : il
-#  les monte. Une version antérieure de ce commentaire l'affirmait, à tort, sur la
-#  foi d'un protocole de test fautif — `--keys` tape APRÈS le boot, or TOS 2.06
-#  attend une touche sur son écran mémoire et ne l'avait donc jamais reçue. Avec
-#  `--keys-at 700 " "`, TOS 2.06 monte A à I depuis le disque d'origine (_drvbits
-#  $000001FF, hdv_bpb en RAM), et TOS 1.04, qui n'attend aucune touche, y arrive
-#  sans rien de particulier. Leçon de méthode : mesurer sur _drvbits ($4C2) et les
-#  vecteurs hdv_* ($472), jamais sur les icônes du bureau (elles viennent des lignes
-#  #M de NEWDESK.INF et s'affichent sans lecteur monté).
+#  ⚠ Piège de méthode, à ne pas refaire : `--keys` tape APRÈS le boot, or TOS 2.06
+#  attend une touche sur son écran mémoire — utiliser `--keys-at 700 " "`. Et juger
+#  sur _drvbits ($4C2) / les vecteurs hdv_* ($472), JAMAIS sur les icônes du bureau :
+#  elles viennent des lignes #M de NEWDESK.INF et s'affichent sans lecteur monté.
 #
 #  Ce script NE FOURNIT PAS de pilote : HDDRIVER est un logiciel commercial (Uwe
 #  Seimet) et rien de tel n'est vendorisable. Il en GREFFE un depuis un disque
@@ -83,8 +89,13 @@ MIN_MB = 6
 # rembourrage qui suit le code (les installeurs de pilotes font pareil ; sur le
 # donneur observé, code jusqu'à $1A1 puis des zéros).
 CODE_END = 0x1C2
-SUM_FIX = 0x1BC         # mot libre où l'on rattrape la somme $1234
+SUM_FIX = 0x1BC         # mot libre où l'on rattrape la somme $1234 (secteur racine)
 BOOT_MAGIC = 0x1234
+# Secteur d'amorçage de la PARTITION (étage 2). Son code commence à $34 — la cible du
+# BRA.S de tête, qui empiète donc sur les 2 derniers octets du champ « nom de volume ».
+# Copier à partir de $36 laisse ces 2 octets s'exécuter et fait dérailler l'étage 2.
+STAGE2_CODE = 0x34
+STAGE2_SUM_FIX = 0x1FE  # là où DOS met $55AA ; le donneur y met son ajustement
 
 # Noms de pilotes reconnus à la racine de la première partition d'un donneur.
 DRIVER_NAMES = ('HDDRIVER.SYS', 'SHDRIVER.SYS', 'AHDI.SYS', 'ICDBOOT.SYS', 'PPDRIVER.SYS')
@@ -157,9 +168,14 @@ def probe_donor(disk: str):
     # On INTERROGE mdir fichier par fichier plutôt que de parser son tableau : sa
     # colonne 8.3 sépare nom et extension par une espace (« HDDRIVER SYS »), et
     # chercher « HDDRIVERSYS » dans la sortie ne trouve donc jamais rien.
+    with open(disk, 'rb') as f:                  # étage 2 : secteur d'amorçage de la partition
+        f.seek(off)
+        sec2 = f.read(SECT)
+    if len(sec2) < SECT or word_sum(sec2) != BOOT_MAGIC:
+        return None                              # étage 2 absent ou non exécutable
     for name in DRIVER_NAMES:
         if run(['mdir', '-i', f'{disk}@@{off}', f'::{name}'], check=False).returncode == 0:
-            return sec0[:CODE_END], name, off
+            return sec0[:CODE_END], sec2, name, off
     return None
 
 
@@ -192,10 +208,10 @@ def main() -> int:
     ap.add_argument('--size-mb', type=int, default=16, help="taille du disque en Mo (défaut 16)")
     ap.add_argument('--label', default='NEOST', help="nom de volume (11 car. max)")
     ap.add_argument('--driver-from', metavar='DISQUE',
-                    help="EXPÉRIMENTAL : greffer l'amorçage + le pilote TOS depuis ce "
-                         "disque donneur. Le disque obtenu N'AMORCE PAS (cf. en-tête).")
+                    help="disque donneur d'où greffer l'amorçage + le pilote TOS "
+                         "(défaut : premier disque amorçable trouvé dans hd/)")
     ap.add_argument('--no-driver', action='store_true',
-                    help="(défaut, conservé pour compatibilité) image de DONNÉES")
+                    help="image de DONNÉES non amorçable (EmuTOS la monte quand même)")
     args = ap.parse_args()
 
     if not os.path.isdir(args.src):
@@ -212,16 +228,20 @@ def main() -> int:
 
     # Défaut = image de DONNÉES. La greffe ne devient active que si on la demande
     # explicitement, puisqu'elle ne donne pas (encore) un disque amorçable.
-    donor = find_donor(args.driver_from) if args.driver_from else None
-    if args.driver_from:
-        sys.stderr.write("ATTENTION: --driver-from est expérimental — le disque produit "
-                         "ne s'amorce pas sous vrai TOS (cf. en-tête du script).\n")
+    donor = None if args.no_driver else find_donor(args.driver_from)
+    if donor is None and not args.no_driver:
+        sys.stderr.write(
+            "ERREUR: aucun disque donneur amorçable trouvé dans hd/.\n"
+            "        Le TOS Atari n'a pas de pilote de disque dur en ROM : sans greffe,\n"
+            "        seul EmuTOS montera l'image. Options : --driver-from <disque>, ou\n"
+            "        --no-driver pour assumer une image de données.\n")
+        return 1
 
     total = args.size_mb * 1024 * 1024 // SECT
     part_size = total - PART_START
 
     # 1) Le disque brut + sa table de partitions Atari (amorçable si greffe).
-    code = donor[1] if donor else b''
+    code = donor[1] if donor else b''      # étage 1 (secteur racine)
     with open(args.out, 'wb') as f:
         f.write(root_sector(total, PART_START, part_size, code))
         f.truncate(total * SECT)
@@ -240,7 +260,7 @@ def main() -> int:
 
     # 3) Le pilote À LA RACINE — le code d'amorçage l'y cherche par son nom.
     if donor:
-        donor_path, _, drv, doff = donor
+        donor_path, _, stage2, drv, doff = donor
         # -m des DEUX côtés : sans lui le pilote recopié porte l'heure courante, et
         # deux exécutions ne rendent plus la même image (constaté : premier écart à
         # l'octet 67087, dans le répertoire racine).
@@ -255,10 +275,27 @@ def main() -> int:
         run(['mcopy', '-i', at, '-s', '-Q', '-m']
             + [os.path.join(args.src, e) for e in entries] + ['::'])
 
-    kind = (f"pilote {donor[2]} greffé depuis {os.path.basename(donor[0])} — "
-            f"NE S'AMORCE PAS sous vrai TOS (expérimental)"
-            if donor else "image de données : EmuTOS la monte ; sous vrai TOS il faut "
-                          "un disque déjà préparé par HDDRIVER")
+    # 5) L'ÉTAGE 2. L'étage 1 lit ce secteur puis EXIGE que ses 256 mots totalisent
+    #    $1234 avant de l'exécuter (cmp.w #$1234,d0 / bne → abandon) : sans ce
+    #    rattrapage il refuse, et le boot s'arrête juste après la lecture du secteur.
+    #    On garde NOTRE BPB ($03..$33) — l'étage 2 sait lire un FAT16 ordinaire — et on
+    #    greffe le saut de tête plus le code à partir de STAGE2_CODE.
+    if donor:
+        with open(args.out, 'r+b') as f:
+            f.seek(PART_START * SECT)
+            boot = bytearray(f.read(SECT))
+            boot[0:3] = stage2[0:3]
+            boot[STAGE2_CODE:STAGE2_SUM_FIX] = stage2[STAGE2_CODE:STAGE2_SUM_FIX]
+            boot[STAGE2_SUM_FIX:STAGE2_SUM_FIX + 2] = b'\x00\x00'
+            fix = (BOOT_MAGIC - word_sum(boot)) & 0xFFFF
+            boot[STAGE2_SUM_FIX:STAGE2_SUM_FIX + 2] = fix.to_bytes(2, 'big')
+            assert word_sum(boot) == BOOT_MAGIC
+            f.seek(PART_START * SECT)
+            f.write(boot)
+
+    kind = (f"AMORÇABLE — pilote {donor[3]} greffé depuis {os.path.basename(donor[0])}"
+            if donor else "image de données : EmuTOS la monte, un vrai TOS non "
+                          "(--driver-from pour greffer un pilote)")
     print(f"{args.out} : {args.size_mb} Mo, 1 partition {part_type(part_size).decode()} "
           f"FAT16, {len(entries)} entrée(s) à la racine de C: — {kind}")
     return 0

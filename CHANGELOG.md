@@ -6,6 +6,39 @@ l'ordre inverse. Version courante : **0.5.2**.
 - « NeoST gère-t-il X ? » → [`docs/IMPLEMENTED.md`](docs/IMPLEMENTED.md) (inventaire par puce)
 - « Que reste-t-il ? » → [`TODO.md`](TODO.md)
 
+## Cartes SD UltraSatan amorçables : `tools/make_hd_image.py` (2026-08-22)
+
+Un dossier hôte devient une carte SD que le **vrai TOS** monte en C:, pilote compris.
+`make_hd_image.py SRC OUT.img` écrit la table de partitions Atari AHDI à la main
+(aucun outil hôte ne la connaît : ce n'est pas un MBR DOS), délègue le FAT16 à mtools,
+et **greffe automatiquement le pilote** depuis un disque donneur détecté dans `hd/`.
+Aucun pilote n'est embarqué dans le dépôt — HDDRIVER est commercial ; on reprend celui
+que l'utilisateur possède déjà. Vérifié `drvbits=$00000007` (A B C) sous **TOS 1.04,
+TOS 2.06 et EmuTOS**.
+
+**L'amorçage HDDRIVER est en deux étages, chacun gardé par une somme `$1234`** — et
+c'est là que tout se joue. L'étage 1 (secteur racine, que le TOS n'exécute que si sa
+somme vaut `$1234`) choisit la partition dont le drapeau masqué par `$F8` vaut `$80`,
+lit son premier secteur, **refait la même somme dessus** (`cmp.w #$1234,d0` / `bne` →
+abandon) et seulement alors saute dedans. Deux conséquences, toutes deux constatées en
+échec avant d'être comprises au désassembleur :
+
+- `mformat` écrit un secteur DOS de somme quelconque ⇒ l'étage 1 refuse de l'exécuter,
+  et la trace ACSI s'arrête pile après les secteurs 0 et 2. On rétablit `$1234` par un
+  mot d'ajustement en `$1FE`, là où DOS met `$55AA`.
+- le code de l'étage 2 commence à **`$34`**, cible du `BRA.S` de tête, donc il empiète
+  sur les 2 derniers octets du champ « nom de volume ». Le copier depuis `$36` laisse
+  ces 2 octets s'exécuter et fait dérailler l'étage 2 **en silence**.
+
+Le BPB de mformat (FAT16, 512 o/secteur) convient tel quel : l'étage 2 sait le lire,
+il n'y a pas à reproduire la géométrie du donneur.
+
+**Piège de méthode consigné** : `--keys` tape APRÈS le boot, or TOS 2.06 attend une
+touche sur son écran mémoire — utiliser `--keys-at 700 " "`, faute de quoi aucun disque
+dur ne se monte et l'on croit à une divergence d'émulation. Et juger sur `_drvbits`
+(`$4C2`) et les vecteurs `hdv_*` (`$472`), jamais sur les icônes du bureau : elles
+viennent des lignes `#M` de `NEWDESK.INF` et s'affichent sans lecteur monté.
+
 ## libmt32emu vendorisé — le MT-32 cesse d'être une option de machine (2026-08-22)
 
 **Munt (`libmt32emu` 2.8.3) passe de dépendance système à copie vendorisée**, dans
