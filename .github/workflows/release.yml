@@ -38,6 +38,12 @@
 #  Déclencheurs : chaque push/PR vérifie que la génération des 8 artefacts
 #  passe ; un tag de version (v1.0.0 ou 1.0.0) les attache en plus à la Release.
 #
+#  GitHub Pages : le job `pages` publie la démo WebAssembly à partir de l'artefact
+#  que le job `wasm` vient de construire (push sur main uniquement). Le dossier
+#  wasm/ n'est donc PLUS commité — c'est le déploiement lui-même qui garantit que
+#  la démo suit les sources, là où la garde de fraîcheur précédente ne faisait que
+#  rendre la CI rouge quand on oubliait de reconstruire (cf. DEV.md § WebAssembly).
+#
 #  Planchers glibc : x86_64 = 2.27 (image bionic gelée neost-bionic-builder,
 #  dérivée du pom1-bionic-builder — gcc-11 car Moira exige C++20) ;
 #  Raspberry et pi400 = 2.36 (conteneur debian:bookworm = Pi OS) ; arm64
@@ -661,26 +667,72 @@ jobs:
           mkdir -p dist
           (cd wasm && zip -9 "../dist/NeoST-$NEOST_VERSION-web-wasm.zip" index.html index.js index.wasm index.data)
 
-      # Téléversé AVANT la garde ci-dessous, donc téléversé MÊME quand elle
-      # échoue : quand elle se déclenche, le zip qu'on vient de produire EST le
-      # bundle à recommiter. On peut donc le récupérer ici et le déposer dans
-      # wasm/ sans installer emsdk sur le poste de dev.
       - uses: actions/upload-artifact@v5
         with:
           name: NeoST-web-wasm
           path: dist/*.zip
           if-no-files-found: error
 
-      # GARDE DE FRAÎCHEUR — depuis que Pages est repassé en « deploy from a
-      # branch » (build_type=legacy, main/(root)), la démo en ligne EST le
-      # dossier wasm/ COMMITÉ : ce job le reconstruit pour le paquet, mais ce
-      # n'est plus lui qui déploie. Un oubli de reconstruction mettrait donc en
-      # ligne une démo périmée, en silence — c'est ce qui avait laissé
-      # wasm/index.html sur une coque française pendant des semaines.
-      # On compare les SOURCES et non le bundle : emcc n'est pas reproductible
-      # d'une version d'emsdk à l'autre, un diff octet échouerait pour rien.
-      - name: wasm/ commité à jour ?
-        run: tools/wasm_stamp.sh --check
+      # --- Site GitHub Pages ------------------------------------------------
+      # La démo en ligne EST ce bundle-ci (déploiement par ARTEFACT, cf. le job
+      # `pages`) : plus rien à commiter, donc plus de démo périmée possible ni
+      # de garde de fraîcheur à satisfaire (c'était la cause de CI rouges à
+      # répétition — 2026-08-19, puis 2026-08-21).
+      #
+      # Le bundle est placé sous `wasm/` pour que l'URL publiée depuis toujours
+      # — habib256.github.io/neost/wasm/ — continue de fonctionner ; la racine
+      # y redirige. Le site ne contient QUE ça : l'ancien déploiement « depuis
+      # la branche » servait le dépôt ENTIER, donc aussi les ROM et jeux sous
+      # copyright (cf. TODO.md § contenu propriétaire).
+      - name: Préparer le site Pages (démo à /wasm/, racine → redirection)
+        run: |
+          set -euo pipefail
+          mkdir -p site/wasm
+          cp wasm/index.html wasm/index.js wasm/index.wasm wasm/index.data site/wasm/
+          cat > site/index.html <<'HTML'
+          <!doctype html>
+          <html lang="en">
+          <head>
+            <meta charset="utf-8">
+            <title>NeoST — Atari ST emulator</title>
+            <meta http-equiv="refresh" content="0; url=wasm/">
+            <link rel="canonical" href="wasm/">
+          </head>
+          <body>
+            <p>NeoST runs in your browser: <a href="wasm/">open the emulator</a>.</p>
+          </body>
+          </html>
+          HTML
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  # ------------------------------------------------------- GitHub Pages ------
+  # Déploiement de la démo. Il remplace le mode « deploy from a branch » : le
+  # site publié est l'artefact que le job `wasm` vient de construire, donc
+  # toujours à jour avec les sources du commit — le dossier wasm/ n'est plus
+  # commité (cf. DEV.md § WebAssembly).
+  #
+  # Seulement sur push de main : une PR construit et vérifie le bundle, mais ne
+  # publie pas. `concurrency: pages` (sans annulation) suit la recommandation
+  # GitHub — deux déploiements ne doivent pas se marcher dessus.
+  pages:
+    needs: wasm
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
 
   # ------------------------------------------------------ Windows x86_64 -----
   # MSYS2/MINGW64 et non MSVC : le code est écrit pour GCC/Clang (options -W…,

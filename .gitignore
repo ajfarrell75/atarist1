@@ -82,3 +82,8 @@ disks/etalons/usatan_sd.img
 roms/mt32/*.ROM
 roms/mt32/*.rom
 roms/mt32/*.bin
+
+# Bundle WebAssembly : artefact de BUILD (cmake --build build-web --target neost-web
+# y écrit). Depuis le 2026-08-22, GitHub Pages le déploie depuis l'ARTEFACT de CI —
+# il n'a plus à être commité (cf. DEV.md § WebAssembly).
+wasm/

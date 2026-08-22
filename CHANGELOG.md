@@ -6,6 +6,31 @@ l'ordre inverse. Version courante : **0.5.2**.
 - « NeoST gère-t-il X ? » → [`docs/IMPLEMENTED.md`](docs/IMPLEMENTED.md) (inventaire par puce)
 - « Que reste-t-il ? » → [`TODO.md`](TODO.md)
 
+## GitHub Pages déployé par artefact — `wasm/` n'est plus commité (2026-08-22)
+
+La démo en ligne était le dossier `wasm/` **commité**, servi par Pages en « deploy from a
+branch ». Conséquence : toute modification de `src/**` périmait le bundle, et une garde de
+fraîcheur (`tools/wasm_stamp.sh --check`) rendait la CI **rouge** jusqu'à sa reconstruction
+manuelle — arrivé le 2026-08-19, puis à nouveau le 2026-08-21 (chantier UltraSatan/NetUSBee).
+La garde faisait son travail (sans elle, la démo restait périmée en silence), mais elle
+traitait le symptôme.
+
+Pages passe en `build_type=workflow` : le job **`pages`** de `release.yml` déploie
+l'artefact que le job `wasm` vient de construire (`actions/upload-pages-artifact@v3` →
+`actions/deploy-pages@v4`, push sur `main` seulement, `concurrency: pages` sans annulation).
+La démo suit donc les sources **par construction** — plus de bundle à commiter, plus de
+garde, plus de CI rouge pour cette raison. `wasm/` devient un dossier de build gitignoré et
+`tools/wasm_stamp.sh` est supprimé.
+
+Deux effets de bord, tous deux souhaitables :
+- l'URL publiée **ne change pas** — le bundle est déposé sous `wasm/` dans l'artefact
+  ([habib256.github.io/neost/wasm/](https://habib256.github.io/neost/wasm/)), et la racine
+  y redirige (elle affichait le README rendu par Jekyll) ;
+- le site ne contient plus QUE la démo. L'ancien mode servait le dépôt **entier** : les ROM
+  Atari et les jeux sous copyright étaient donc téléchargeables depuis le web, ce que
+  `TODO.md` § contenu propriétaire signalait pour le dépôt sans voir ce prolongement.
+  Le point « `git rm --cached` sur `wasm/index.*` » de ce TODO est réglé du même coup.
+
 ## Page Sound : mixeur par source + choix MT-32 / CM-32L (2026-08-21)
 
 Configuration → Sound : **faders** YM2149, son DMA (STE), bruits du lecteur, MT-32 (0-200 %,
