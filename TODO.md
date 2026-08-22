@@ -381,7 +381,7 @@ ACIA) ; si une vraie démo spec512 **overscan** (bordures ouvertes) est rapatri�
   DD/HD, mono/couleur.
 - Capturer des **traces Hatari de référence** pour `trace_diff` (Arkanoid & co).
 
-### Réseau (extensions NeoST — base livrée 2026-08-12, cf. `docs/FUJINET.md`)
+### Réseau (extensions NeoST — base livrée 2026-08-12, cf. `docs/EXTENSIONS.md`)
 - **FujiNet — TLS/HTTPS** : brancher mbedTLS (dépendance optionnelle, `NEOST_WITH_TLS`) — v1
   refuse `https://`. Puis POST/headers custom côté N:, UDP, **TNFS**, FTP, imprimante P: (PDF).
 - **FujiNet — `FujiHostBridge`** : backend UDP relayant vers le **vrai firmware FujiNet-PC**
@@ -389,6 +389,49 @@ ACIA) ; si une vraie démo spec512 **overscan** (bordures ouvertes) est rapatri�
   pluggable — c'est un simple ajout de backend, hérite de tous les protocoles amont.
 - **FujiNet — lib ST** : proposer le dossier `atarist/` en amont à `fujinet-lib` pour cadrer le
   binding ACSI tôt ; device slots 0-7 différenciés ; montage lecteur B.
+- 🔴 **PRIORITÉ AU REDÉMARRAGE — `NetBackendSlirp` : finir le dernier pas** (2026-08-22).
+  Le backend Internet réel de la NE2000 (NetUSBee/EtherNEC) est **écrit, compilé, câblé et
+  aux trois quarts prouvé** : `src/net/SlirpBackend.{hpp,cpp}`, option CMake `NEOST_WITH_SLIRP`
+  (pkg-config `slirp` ; libslirp 4.9.3 présente sur le poste), drapeaux headless `--slirp` /
+  `--slirp-restricted`, auto-test `--slirp-selftest`.
+
+  **État : 3 vérifications sur 4 passent.**
+  ```
+  ARP: la passerelle 10.0.2.2 repond        OK
+  DHCP: OFFER attribue 10.0.2.15            OK
+  compteurs TX/RX du backend                OK
+  SORTIE REELLE : DNS resout theoldnet.com  FAIL   <- reste a finir
+  ```
+  Les trois premières sont **déterministes et hors ligne** (servies par SLIRP lui-même) : ce
+  sont elles qui iront en CI. La quatrième est **opt-in** (`NEOST_SLIRP_ONLINE=1`), la règle
+  du projet interdisant qu'un étalon dépende du réseau.
+
+  **Trois pièges déjà trouvés ET corrigés** (ne pas les re-chercher) :
+  1. `register_poll_fd`/`unregister_poll_fd` sont marqués *deprecated* mais libslirp les
+     appelle **sans tester leur nullité**, dès la première socket sortante -> SIGSEGV qui
+     n'apparaissait qu'en ligne. Des no-ops suffisent.
+  2. `clock_get_ns` doit partir de **~0**. libslirp fixe l'expiration d'une socket avec son
+     `curtime` interne (encore nul avant le premier poll) puis la compare à cette horloge :
+     avec le temps depuis le démarrage de la machine, toute socket UDP naissait « expirée »
+     et était détruite au premier tour -> rien ne sortait jamais. Corrigé par `kEpoch`.
+  3. SLIRP **ARPe l'invité** avant de livrer un paquet entrant (« qui a 10.0.2.15 ? »). Sur
+     un vrai ST c'est STinG qui répond ; l'auto-test doit le faire lui-même. La réponse ARP
+     est écrite dans `slirpSelfTest`.
+
+  **Ce qui reste à diagnostiquer** : le datagramme sortant part bien — PROUVÉ, un serveur UDP
+  local visé via 10.0.2.2 a reçu la charge utile et la socket hôte s'est liée — et SLIRP nous
+  ARPe, mais la réponse DNS n'atteint pas encore l'anneau de réception. Pistes, dans l'ordre :
+  a) vérifier que la réponse ARP fabriquée par l'auto-test est bien formée/acceptée ;
+  b) `NEOST_SLIRP_TRACE=1` pour voir si `slirp->guest` porte enfin un IPv4/UDP ;
+  c) sinon, regarder le filtre MAC de `Ne2000::deliverFrame` et l'anneau — l'auto-test
+     n'avance JAMAIS `BNRY`, donc au-delà de ~58 pages la carte refuse les trames.
+  Un banc minimal hors NeoST isole libslirp du reste (`scratchpad/slirptest.c`, non versionné,
+  à recréer : ~80 lignes, il lit une trame en hexa et boucle sur fill/poll).
+
+  **Ensuite seulement** : câbler `--slirp` dans le GUI (page Network), documenter dans
+  `docs/EXTENSIONS.md` § NetUSBee, puis vérifier de bout en bout avec **STinG + ENEC.STX**
+  côté ST (freeware, à récupérer) et un navigateur (CAB) sur theoldnet.com.
+
 - **MT-32 (Munt) — paquet macOS** (2026-08-21) : `libmt32emu.dylib` vient de Homebrew ; le `.app`
   livré doit l'embarquer (copie dans Frameworks + `install_name_tool`) ou compiler Munt en
   statique (sous-module `extern/munt`), sinon l'option n'existe que sur une machine avec brew.

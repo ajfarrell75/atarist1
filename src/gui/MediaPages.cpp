@@ -334,7 +334,7 @@ void drawHardDiskPage(const std::string& hdDir, const std::string& gemdosDefault
     ImGui::TextDisabled("the machine (TOS only probes disks at boot).");
 }
 
-// Page « Network » : le FujiNet virtuel (extension NeoST — cf. docs/FUJINET.md).
+// Page « Network » : le FujiNet virtuel (extension NeoST — cf. docs/EXTENSIONS.md).
 // Discipline habituelle : données en entrée, requêtes en sortie, AUCUNE E/S ici.
 void drawNetworkPage(bool fujiOn, int fujiTarget, const char* backendName,
                      const FujiDevice& fuji, FujiHost* host, bool modemOn, bool etherOn,
@@ -346,7 +346,7 @@ void drawNetworkPage(bool fujiOn, int fujiTarget, const char* backendName,
     ImGui::TextDisabled("FujiNet — virtual network device (NeoST extension)");
     ImGui::TextWrapped("Protocol offloading for the ST: mount disk images from URLs, "
                        "give 68000 programs HTTP/TCP/JSON without a TCP/IP stack. "
-                       "Attached to the ACSI bus (vendor opcode $60 — docs/FUJINET.md).");
+                       "Attached to the ACSI bus (vendor opcode $60 — docs/EXTENSIONS.md).");
     ImGui::Separator();
 
     // Modem Hayes : indépendant du FujiNet (le logiciel d'époque — terminaux,

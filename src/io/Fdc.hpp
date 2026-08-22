@@ -83,7 +83,7 @@ public:
     bool acsiActive() const { return acsi_.anyEnabled(); }
     const std::string& acsiMountedPath(int target = 0) const { return acsi_.mountedPath(target); }
     int  acsiPartitionCount() const { return acsi_.partitionCount(); }
-    // FujiNet virtuel sur le bus ACSI (extension NeoST, cf. docs/FUJINET.md).
+    // FujiNet virtuel sur le bus ACSI (extension NeoST, cf. docs/EXTENSIONS.md).
     void attachFujiNet(FujiDevice* dev, int target) { acsi_.attachFujiNet(target, dev); }
     void detachFujiNet() { acsi_.detachFujiNet(); }
     int  fujiTarget() const { return acsi_.fujiTarget(); }

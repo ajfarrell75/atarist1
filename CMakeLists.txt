@@ -103,8 +103,25 @@ set_source_files_properties(
 # =============================================================================
 add_library(neost_net STATIC
     src/net/FujiHostReplay.cpp
-    src/net/MiniJson.cpp)
+    src/net/MiniJson.cpp
+    src/net/SlirpBackend.cpp)
 target_link_libraries(neost_net PUBLIC neost_core)
+
+# libslirp (LGPL 2.1+) : NAT en espace utilisateur — l'accès Internet RÉEL de la
+# NE2000 émulée (NetUSBee/EtherNEC), sans root ni pcap. Optionnel : sans lui,
+# SlirpBackend compile en coquille vide et l'option reste grisée.
+find_package(PkgConfig QUIET)
+if(PkgConfig_FOUND)
+    pkg_check_modules(SLIRP QUIET slirp)
+endif()
+if(SLIRP_FOUND)
+    target_compile_definitions(neost_net PUBLIC NEOST_WITH_SLIRP=1)
+    target_include_directories(neost_net PUBLIC ${SLIRP_INCLUDE_DIRS})
+    target_link_libraries(neost_net PUBLIC ${SLIRP_LINK_LIBRARIES})
+    message(STATUS "NeoST: libslirp ${SLIRP_VERSION} trouvée — Internet réel pour la NE2000")
+else()
+    message(STATUS "NeoST: libslirp absente — NE2000 en boucle locale seulement")
+endif()
 set(NEOST_NET_SRC src/net/FujiHostReplay.cpp src/net/MiniJson.cpp)
 if(NEOST_WITH_NET)
     target_sources(neost_net PRIVATE src/net/FujiHostLive.cpp src/net/HttpClient.cpp

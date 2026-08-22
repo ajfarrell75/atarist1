@@ -20,7 +20,7 @@
 //  registre 0 (CR) de la NE2000 ($FA0000 + 0*512 + d*2). Sans schéma du NetUSBee,
 //  NeoST ne peut pas prouver qu'un décodage matériel sépare les deux : il applique
 //  ce que les adresses publiées impliquent — les DEUX puces voient l'accès.
-//  Divergence potentielle consignée dans docs/FUJINET.md § NetUSBee.
+//  Divergence potentielle consignée dans docs/EXTENSIONS.md § NetUSBee.
 //
 //  Périmètre v1 : le contrôleur est PRÉSENT et FONCTIONNEL (ID de puce, reset
 //  logiciel, registres OHCI, hub racine à deux ports, FIFO ATL/ITL) mais aucun

@@ -38,7 +38,7 @@ public:
     bool mount(int target, const std::string& path);
     void unmountAll();
 
-    // --- FujiNet (extension NeoST, cf. docs/FUJINET.md) ----------------------
+    // --- FujiNet (extension NeoST, cf. docs/EXTENSIONS.md) ----------------------
     // Attache le périphérique FujiNet virtuel sur `target` : la cible devient
     // peuplée (IRQ ACSI au boot) et accepte l'opcode vendeur $60 en plus des
     // commandes SCSI standard (une image montée sur la MÊME cible reste

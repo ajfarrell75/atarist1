@@ -1,7 +1,7 @@
 // =============================================================================
 //  FujiDevice.cpp — Périphérique FujiNet virtuel : décodage des commandes.
 //
-//  Le CDB de 10 octets (opcode vendeur ACSI $60, cf. docs/FUJINET.md) porte
+//  Le CDB de 10 octets (opcode vendeur ACSI $60, cf. docs/EXTENSIONS.md) porte
 //  l'abstraction de commande UNIVERSELLE du firmware fujinet, identique sur
 //  tous ses bus (SIO, SmartPort, RS-232…) :
 //      { device, commande, aux1, aux2, direction, longueur } + payload DMA.
@@ -144,7 +144,7 @@ int FujiDevice::doFujiCommand(const uint8_t* cdb) {
         return ok();
     }
 
-    case FUJI_GET_ADAPTER_CFG: {                 // AdapterConfig (140 octets, cf. docs/FUJINET.md)
+    case FUJI_GET_ADAPTER_CFG: {                 // AdapterConfig (140 octets, cf. docs/EXTENSIONS.md)
         uint8_t* b = prepResp(140);
         std::snprintf(reinterpret_cast<char*>(b), 32, "%s", host_ ? host_->name() : "");
         std::snprintf(reinterpret_cast<char*>(b + 32), 64, "neost");

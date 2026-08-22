@@ -120,7 +120,7 @@ void Acsi::reset() {
 }
 
 // -----------------------------------------------------------------------------
-//  FujiNet (extension NeoST — cf. docs/FUJINET.md)
+//  FujiNet (extension NeoST — cf. docs/EXTENSIONS.md)
 // -----------------------------------------------------------------------------
 void Acsi::attachFujiNet(int target, FujiDevice* dev) {
     if (target < 0 || target >= MAX_DEVS || !dev) return;

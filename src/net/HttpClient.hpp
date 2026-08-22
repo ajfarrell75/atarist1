@@ -4,7 +4,7 @@
 //  Volontairement petit : sockets bloquants avec timeout, Connection: close,
 //  décodage chunked, redirections 301/302/307/308 suivies (5 max). PAS de TLS —
 //  https:// est refusé avec un message clair (mbedTLS optionnel viendra plus
-//  tard, cf. docs/FUJINET.md § Limites).
+//  tard, cf. docs/EXTENSIONS.md § Limites).
 //
 //  (c) 2026 VERHILLE Arnaud — projet NeoST.
 // =============================================================================
