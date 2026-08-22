@@ -5,11 +5,46 @@
 #include "audio/Mt32Synth.hpp"
 
 #include <algorithm>
+#include <cstdarg>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 
 #ifdef NEOST_WITH_MT32
 #include <mt32emu/mt32emu.h>
+
+namespace {
+// Munt écrit ses messages sur stderr SANS préfixe (Synth.cpp, printDebug par défaut) :
+// ils se mêlaient au journal de NeoST sans qu'on sache d'où ils venaient — visible dès
+// que le MT-32 est passé actif par défaut. On les récupère pour les préfixer.
+//
+// Cas particulier du « Header not intended for this device manufacturer » : un SysEx
+// adressé à un AUTRE fabricant que Roland ($41) n'est pas une anomalie — c'est le
+// fonctionnement normal d'un anneau MIDI où le ST parle à plusieurs appareils. On le
+// signale UNE fois, pour informer, puis on se tait plutôt que de noyer le journal.
+class NeostReport : public MT32Emu::ReportHandler {
+public:
+    void printDebug(const char* fmt, va_list list) override {
+        char buf[512];
+        std::vsnprintf(buf, sizeof buf, fmt, list);
+        if (std::strstr(buf, "not intended for this device manufacturer")) {
+            if (foreignSysexSeen_) return;
+            foreignSysexSeen_ = true;
+            std::fprintf(stderr, "[mt32] %s (SysEx destiné à un autre fabricant — "
+                                 "ignoré ; répétitions tues)\n", buf);
+            return;
+        }
+        std::fprintf(stderr, "[mt32] %s\n", buf);
+    }
+    void showLCDMessage(const char* message) override {
+        std::fprintf(stderr, "[mt32] LCD: %s\n", message);
+    }
+private:
+    bool foreignSysexSeen_ = false;
+};
+
+NeostReport& report() { static NeostReport r; return r; }
+}  // namespace
 #endif
 
 Mt32Synth::Mt32Synth() { sysex_.reserve(256); }
@@ -98,7 +133,7 @@ bool Mt32Synth::open(const std::string& romDir, uint32_t outputRate, const std::
         return false;
     }
     for (const Found& f : found) if (f.img != ctl && f.img != pcm) freeRom(f.img);
-    auto* synth = new MT32Emu::Synth();
+    auto* synth = new MT32Emu::Synth(&report());   // journal préfixé [mt32]
     if (!synth->open(*ctl, *pcm)) {
         delete synth;
         freeRom(ctl); freeRom(pcm);

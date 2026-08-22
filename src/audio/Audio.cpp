@@ -158,8 +158,12 @@ void Audio::produceFrame(int64_t frameCycles, int64_t frameEndCycle) {
     const uint32_t u = underruns_.load(std::memory_order_relaxed);
     if (u != underrunsSeen_ && underrunMuteFrames_ <= 0) {
         const double secs = std::chrono::duration<double>(dclock::now() - t0).count();
+        // ⚠ « 50/60 » était FAUX en haute résolution : le mode mono tourne à 71,2 Hz,
+        // et l'on y lisait « 71.4 real frames/s (expected ~50/60) » comme un emballement
+        // alors que la boucle était À L'HEURE. Les trois cadences nominales sont donc
+        // citées ; ce qui signale un vrai problème, c'est l'underrun lui-même.
         std::fprintf(stderr, "[Audio] ring underrun (total %u) — emulation loop: %.1f real frames/s "
-                             "(expected ~50/60), ring %zu\n",
+                             "(nominal 50 PAL / 60 NTSC / 71 mono), ring %zu\n",
                      u, secs > 0 ? calls / secs : 0.0, ring_.available());
         underrunsSeen_ = u;
         underrunMuteFrames_ = 250;                        // ≈ 5 s à 50 trames/s
