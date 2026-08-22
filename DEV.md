@@ -188,22 +188,21 @@ python3 -m http.server -d wasm 8000
 la CI). La page hôte est `web/shell.html` ; `wasm/index.html` est l'artefact GÉNÉRÉ, pas
 la source.
 
-⚠ **La démo en ligne EST le dossier `wasm/` commité** : Pages sert la branche
-(`build_type=legacy`, `main/(root)`), plus aucun workflow ne la déploie. Toute
-modification de `src/**`, `web/shell.html` ou `CMakeLists.txt` oblige donc à
-reconstruire le bundle ET à le commiter, sinon la démo reste figée sur l'ancienne
-version. `tools/wasm_stamp.sh` empreinte ces sources dans `wasm/SOURCE_STAMP` et le job
-`wasm` de `release.yml` échoue si les deux divergent :
+✅ **`wasm/` n'est PAS commité** (depuis le 2026-08-22) : c'est un dossier de BUILD,
+gitignoré. La démo en ligne est déployée par le job `pages` de `release.yml`, à partir
+de l'artefact que le job `wasm` vient de construire (`actions/upload-pages-artifact` →
+`actions/deploy-pages`, Pages en `build_type=workflow`). Elle est donc **toujours à jour
+avec les sources du commit** — rien à reconstruire ni à commiter à la main.
 
-```sh
-emcmake cmake -B build-web -DCMAKE_BUILD_TYPE=Release -DNEOST_WEB_FREE_ONLY=ON
-cmake --build build-web -j --target neost-web
-tools/wasm_stamp.sh --write && git add wasm/
-```
+Le site publié ne contient QUE la démo : le bundle sous `wasm/` (l'URL historique
+[habib256.github.io/neost/wasm/](https://habib256.github.io/neost/wasm/) est préservée)
+et une racine qui y redirige. L'ancien mode « deploy from a branch » servait le dépôt
+ENTIER, ROM et jeux sous copyright compris (cf. `TODO.md`).
 
-Sans emsdk sous la main : le job `wasm` téléverse le bundle qu'il vient de construire
-(artefact `NeoST-web-wasm`) **même quand la garde échoue** — dézipper les quatre
-`index.*` dans `wasm/`, puis `--write`.
+Historique : le bundle a été commité de mars à août 2026, avec une garde de fraîcheur
+(`tools/wasm_stamp.sh`, supprimée) qui rendait la CI rouge à chaque chantier touchant
+`src/**` tant que le bundle n'était pas reconstruit — deux fois en trois jours
+(2026-08-19, 2026-08-21). Le déploiement par artefact supprime la classe de problème.
 
 **Windows** — MinGW-w64 dans un shell MSYS2/MINGW64,
 `NEOST_VERSION=<ver> packaging/windows/build_mingw.sh`. Tout est lié en statique et le
