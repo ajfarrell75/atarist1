@@ -1,0 +1,107 @@
+# =============================================================================
+#  Tests — ce que les jobs de PACKAGING ne couvrent pas.
+#
+#  `release.yml` lance déjà `run_all.py --tier full` dans ses jobs Linux, mais il
+#  ne compile QUE ce que la release livre, en Release, sans libslirp. Deux zones
+#  restaient donc hors CI :
+#
+#   1. `slirp`      — `src/net/SlirpBackend.cpp` ne se compilait NULLE PART :
+#                     absent de la CI (libslirp-dev jamais installé, donc coquille
+#                     vide) et cassé sur toute machine en libslirp 4.7 (Debian 12
+#                     bookworm = Raspberry Pi OS, Ubuntu 24.04). Ce job installe
+#                     la bibliothèque, force NEOST_WITH_SLIRP=ON — la configuration
+#                     ÉCHOUE si elle manque, plus de repli silencieux — et exécute
+#                     l'auto-test hors ligne (ARP + DHCP + compteurs).
+#
+#   2. `sanitizers` — aucun build Debug n'existait dans le projet, donc les quatre
+#                     `assert()` du dépôt (cache O(1) de Scheduler, chemin rapide
+#                     MMU de Bus — les deux optimisations dont PERFORMANCE.md dit
+#                     que la désynchronisation est « la seule faute possible de ce
+#                     montage ») étaient retirés par NDEBUG et n'ont JAMAIS tourné.
+#                     Ce job les active, et ajoute ASan+UBSan sur le palier fast :
+#                     les campagnes de durcissement mémoire étaient jusqu'ici des
+#                     passes manuelles dont rien ne restait.
+#
+#  Volontairement séparé de `release.yml` : le casser n'empêche pas de publier, et
+#  un contributeur voit un job qui s'appelle « tests ».
+# =============================================================================
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------- libslirp --
+  slirp:
+    name: libslirp (NE2000 vers l'Internet réel)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Dépendances
+        run: |
+          sudo apt-get update
+          # ubuntu-24.04 fournit libslirp 4.7.0 : c'est EXACTEMENT la version qui
+          # ne compilait pas, donc c'est la bonne à tester.
+          sudo apt-get install -y --no-install-recommends \
+            cmake g++ libglfw3-dev libgl1-mesa-dev libslirp-dev
+          pkg-config --modversion slirp
+
+      - name: Configurer (NEOST_WITH_SLIRP=ON — échoue si la lib manque)
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DNEOST_WITH_SLIRP=ON
+
+      - name: Compiler
+        run: cmake --build build -j"$(nproc)" --target neost-headless neost-selftest
+
+      - name: Auto-test SLIRP (hors ligne — ARP, DHCP, compteurs)
+        # La 4ᵉ vérification (sortie DNS réelle) reste opt-in via
+        # NEOST_SLIRP_ONLINE=1 : la règle du projet interdit qu'un test de CI
+        # dépende du réseau.
+        run: ./build/neost-headless roms/etos192us.img --slirp-selftest
+
+      - name: Palier fast (le reste du filet, avec SLIRP compilé)
+        run: python3 tools/run_all.py --tier fast
+
+  # -------------------------------------------------------------- sanitizers --
+  sanitizers:
+    name: Debug + ASan/UBSan (palier fast)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Dépendances
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake g++ libglfw3-dev libgl1-mesa-dev
+
+      - name: Configurer (Debug — les assert() sont ACTIFS ici, et nulle part ailleurs)
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Debug \
+                -DCMAKE_CXX_FLAGS="-O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined" \
+                -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
+
+      - name: Compiler
+        run: cmake --build build -j"$(nproc)" --target neost-headless neost-selftest
+
+      - name: Palier fast sous sanitizers
+        env:
+          # halt_on_error : un dépassement doit FAIRE ÉCHOUER le job, pas se noyer
+          # dans la sortie. detect_leaks=0 : les objets de durée de vie processus
+          # (ma_device, contexte Moira) sont libérés par l'OS et ne sont pas des
+          # fuites utiles — le sujet ici est la corruption mémoire.
+          ASAN_OPTIONS: halt_on_error=1:detect_leaks=0:abort_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: python3 tools/run_all.py --tier fast

@@ -6,6 +6,28 @@ l'ordre inverse. Version courante : **0.5.2**.
 - « NeoST gère-t-il X ? » → [`docs/IMPLEMENTED.md`](docs/IMPLEMENTED.md) (inventaire par puce)
 - « Que reste-t-il ? » → [`TODO.md`](TODO.md)
 
+## libmt32emu vendorisé — le MT-32 cesse d'être une option de machine (2026-08-22)
+
+**Munt (`libmt32emu` 2.8.3) passe de dépendance système à copie vendorisée**, dans
+`extern/mt32emu`, liée en **statique**. Le `find_package(MT32Emu CONFIG QUIET)` exigeait
+`brew install mt32emu` / `libmt32emu-dev` : aucun runner de CI ni aucune image de release
+ne l'installait, donc le Roland MT-32/CM-32L n'existait **dans aucun binaire livré** — et
+son absence ne se signalait que par une ligne de configuration. Le TODO du 2026-08-21
+(« embarquer le `.dylib` ou compiler Munt en statique ») est fermé par cette seconde voie.
+
+Code d'amont **intact** ; seul le `CMakeLists.txt` du dossier est de NeoST — il remplace
+les 578 lignes d'amont (installation d'en-têtes, export de paquet CMake, `.pc`) par ce que
+NeoST utilise : API C++ seule, statique, rééchantillonneur interne, aucune dépendance
+externe. Les en-têtes sont recopiés dans `build/generated/mt32emu/mt32emu/` — les sources
+d'amont s'incluent à plat (`"Synth.h"`) alors que NeoST écrit `<mt32emu/mt32emu.h>` —
+même schéma que Moira. `add_subdirectory` est placé **après** le garde-fou GLFW : seul le
+GUI s'en sert, inutile de le compiler pour les cibles headless, Android et WASM.
+
+Licence : LGPL 2.1+, compatible avec la GPL 3 de NeoST (§ 3 de la LGPL), et l'édition de
+liens statique est couverte puisque NeoST publie ses sources, cette copie comprise.
+Détails et marche à suivre pour une mise à jour : `extern/mt32emu/NEOST_VENDOR.md`.
+⚠ Les ROM Roland ne sont toujours pas incluses (`roms/mt32/`, à fournir).
+
 ## FujiNet retiré : NeoST n'émule plus que du matériel qui a existé (2026-08-22)
 
 **Le FujiNet virtuel est supprimé du projet.** Il n'a jamais existé de FujiNet pour

@@ -425,9 +425,6 @@ ACIA) ; si une vraie démo spec512 **overscan** (bordures ouvertes) est rapatri�
   `docs/EXTENSIONS.md` § NetUSBee, puis vérifier de bout en bout avec **STinG + ENEC.STX**
   côté ST (freeware, à récupérer) et un navigateur (CAB) sur theoldnet.com.
 
-- **MT-32 (Munt) — paquet macOS** (2026-08-21) : `libmt32emu.dylib` vient de Homebrew ; le `.app`
-  livré doit l'embarquer (copie dans Frameworks + `install_name_tool`) ou compiler Munt en
-  statique (sous-module `extern/munt`), sinon l'option n'existe que sur une machine avec brew.
 - **MIDI OUT Linux/Windows** : `MidiOutMac` est CoreMIDI/AudioToolbox ; ALSA sequencer + FluidSynth
   (Linux) et winmm (Windows) restent à écrire — le MT-32 (Munt), lui, est portable.
 - **NetUSBee — périphériques USB hôte** (2026-08-21) : l'ISP1160 (`io/Isp1160`) est un hub racine

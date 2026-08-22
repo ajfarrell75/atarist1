@@ -45,7 +45,12 @@ struct Config { std::string rom; std::string disk; std::string diskb; std::strin
                 bool midiLoopback = false; // fiche de bouclage MIDI OUT→IN (diagnostics ; OFF = vrai ST)
                 bool midiOutGm = false;    // MIDI OUT → synthé General MIDI intégré (macOS)
                 bool midiOutPort = false;  // MIDI OUT → port CoreMIDI virtuel « NeoST MIDI OUT » (macOS)
-                bool midiOutMt32 = false;  // MIDI OUT → Roland MT-32/CM-32L émulé (Munt), mixé dans la sortie
+                // ACTIF PAR DÉFAUT depuis que Munt est vendorisé (extern/mt32emu) : la
+                // bibliothèque est toujours là, il n'y a plus de raison d'attendre que
+                // l'utilisateur découvre l'option. Sans ROM Roland dans mt32Roms,
+                // l'ouverture échoue proprement et main.cpp remet le drapeau à false
+                // en affichant l'erreur — aucun silence, aucune casse.
+                bool midiOutMt32 = true;   // MIDI OUT → Roland MT-32/CM-32L émulé (Munt), mixé dans la sortie
                 std::string mt32Roms = "roms/mt32"; // dossier des ROM Roland (MT32_*/CM32L_*)
                 std::string mt32Model = "auto";     // auto | mt32 | cm32l (page Sound)
                 // Mixeur (page Sound) : gains par source, 0..2, 1 = neutre.

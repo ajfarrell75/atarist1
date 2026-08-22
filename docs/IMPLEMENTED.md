@@ -1328,7 +1328,8 @@ Pour ce qui reste → [`../TODO.md`](../TODO.md).
   **Sorties hôte** (GUI macOS, 2026-08-21) : synthé GM intégré, port CoreMIDI virtuel
   « NeoST MIDI OUT » — livraison **horodatée** (cycle ST → heure réelle de la trame + 30 ms,
   thread dédié : gigue mesurée ±60 ms → nulle) — et **Roland MT-32/CM-32L** via libmt32emu
-  (Munt, optionnel, ROM dans `roms/mt32/`), rendu dans la sortie audio avec événements datés à
+  (Munt 2.8.3, **vendorisé** dans `extern/mt32emu` et lié en statique — plus de paquet système
+  à installer ; ROM Roland à fournir dans `roms/mt32/`), rendu dans la sortie audio avec événements datés à
   l'échantillon. `audio/MidiOutMac`, `audio/Mt32Synth`.
 - **Port série RS-232 / USART MFP** : RSR/UDR, IRQ RxFull (12)/TxEmpty (10)/RxErr (11)/
   TxErr (9), lignes RTS→CTS (GPIP2)/DTR→DCD (GPIP1)/RI (GPIP6) via PSG port A.

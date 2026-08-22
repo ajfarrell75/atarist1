@@ -38,6 +38,20 @@ endif()
 # n'est rattachable à une release.
 set(NEOST_VERSION_STR "${PROJECT_VERSION}" CACHE STRING "Version affichée par les binaires")
 
+# ⚠ PIÈGE DE CACHE, déjà payé une fois. Étant une variable de CACHE, NEOST_VERSION_STR
+# garde À JAMAIS la valeur du PREMIER `cmake -B build` : bumper le project() ci-dessus
+# ne change rien, et `--version` ment jusqu'à ce qu'on repasse -D à la main. On mémorise
+# donc le PROJECT_VERSION qui a servi de graine ; s'il a changé ET que la valeur en cache
+# est toujours cette graine (donc personne ne l'a surchargée), on ré-ensemence.
+# Un -DNEOST_VERSION_STR=<tag> explicite diffère de la graine : il est PRÉSERVÉ.
+if(NOT NEOST_VERSION_SEED STREQUAL PROJECT_VERSION)
+    if(NEOST_VERSION_SEED AND NEOST_VERSION_STR STREQUAL NEOST_VERSION_SEED)
+        set(NEOST_VERSION_STR "${PROJECT_VERSION}" CACHE STRING "" FORCE)
+        message(STATUS "NeoST: version ré-ensemencée ${NEOST_VERSION_SEED} -> ${PROJECT_VERSION}")
+    endif()
+    set(NEOST_VERSION_SEED "${PROJECT_VERSION}" CACHE INTERNAL "PROJECT_VERSION ayant ensemencé NEOST_VERSION_STR")
+endif()
+
 option(NEOST_WITH_IMGUI  "Greffe Dear ImGui (visualiseur hexa + registres)" ON)
 option(NEOST_WARN_STRICT "Compilation stricte (-Wall -Wextra -Wpedantic)"   ON)
 # Réseau hôte : sockets réelles (modem Hayes, anneau MIDI). OFF → aucune socket
@@ -107,17 +121,50 @@ target_link_libraries(neost_net PUBLIC neost_core)
 # libslirp (LGPL 2.1+) : NAT en espace utilisateur — l'accès Internet RÉEL de la
 # NE2000 émulée (NetUSBee/EtherNEC), sans root ni pcap. Optionnel : sans lui,
 # SlirpBackend compile en coquille vide et l'option reste grisée.
-find_package(PkgConfig QUIET)
-if(PkgConfig_FOUND)
-    pkg_check_modules(SLIRP QUIET slirp)
+#
+# ⚠ VERSION MINIMALE 4.7, et un plancher EXPLICITE. SlirpBackend appelait
+# slirp_pollfds_fill_socket() (libslirp >= 4.8) sans que rien ne le vérifie : toute
+# machine portant la libslirp de sa distribution — Debian 12 bookworm = Raspberry
+# Pi OS, Ubuntu 24.04, toutes en 4.7.0 — échouait à COMPILER NeoST, sans aucun
+# moyen de refuser la fonctionnalité. SlirpBackend accepte désormais les DEUX API
+# (cf. son bloc SLIRP_CONFIG_VERSION_MAX) ; le plancher reste ici pour donner un
+# diagnostic net, et NEOST_WITH_SLIRP permet de trancher à la main.
+#
+#   AUTO (défaut) : activé si une libslirp >= 4.8 est là, sinon ignoré en silence.
+#   ON            : exigé — la configuration ÉCHOUE si elle manque (CI, paquets).
+#   OFF           : jamais compilé, même si la bibliothèque est présente.
+set(NEOST_WITH_SLIRP "AUTO" CACHE STRING
+    "Internet réel pour la NE2000 via libslirp >= 4.7 : AUTO, ON ou OFF")
+set_property(CACHE NEOST_WITH_SLIRP PROPERTY STRINGS AUTO ON OFF)
+
+if(NOT NEOST_WITH_SLIRP STREQUAL "OFF")
+    find_package(PkgConfig QUIET)
+    if(PkgConfig_FOUND)
+        pkg_check_modules(SLIRP QUIET "slirp>=4.7")
+    endif()
 endif()
 if(SLIRP_FOUND)
     target_compile_definitions(neost_net PUBLIC NEOST_WITH_SLIRP=1)
     target_include_directories(neost_net PUBLIC ${SLIRP_INCLUDE_DIRS})
     target_link_libraries(neost_net PUBLIC ${SLIRP_LINK_LIBRARIES})
     message(STATUS "NeoST: libslirp ${SLIRP_VERSION} trouvée — Internet réel pour la NE2000")
+elseif(NEOST_WITH_SLIRP STREQUAL "ON")
+    # Diagnostic UTILE : distinguer « absente » de « trop vieille » évite de
+    # chercher un paquet déjà installé.
+    if(PkgConfig_FOUND)
+        pkg_check_modules(SLIRP_ANY QUIET slirp)
+    endif()
+    if(SLIRP_ANY_FOUND)
+        message(FATAL_ERROR "NeoST: NEOST_WITH_SLIRP=ON mais libslirp ${SLIRP_ANY_VERSION} "
+                            "est trop ancienne (4.7 minimum).")
+    else()
+        message(FATAL_ERROR "NeoST: NEOST_WITH_SLIRP=ON mais libslirp est introuvable "
+                            "(paquet libslirp-dev / libslirp-devel, 4.7 minimum).")
+    endif()
+elseif(NEOST_WITH_SLIRP STREQUAL "OFF")
+    message(STATUS "NeoST: libslirp désactivée (NEOST_WITH_SLIRP=OFF)")
 else()
-    message(STATUS "NeoST: libslirp absente — NE2000 en boucle locale seulement")
+    message(STATUS "NeoST: libslirp >= 4.7 absente — NE2000 en boucle locale seulement")
 endif()
 set(NEOST_NET_SRC)
 if(NEOST_WITH_NET)
@@ -361,12 +408,6 @@ endif()
 #  on construit quand même neost_core + neost-headless (l'outil de debug n°1).
 # =============================================================================
 find_package(glfw3 QUIET)
-# Munt (libmt32emu, LGPL 2.1) : Roland MT-32/CM-32L sur le MIDI OUT du GUI. Optionnel
-# (brew install mt32emu / libmt32emu-dev) ; sans lui, l'option reste grisée.
-if(APPLE AND EXISTS "/opt/homebrew/lib/cmake/MT32Emu")
-    list(APPEND CMAKE_PREFIX_PATH "/opt/homebrew")
-endif()
-find_package(MT32Emu CONFIG QUIET)
 find_package(OpenGL QUIET)
 find_package(Threads QUIET)
 
@@ -377,6 +418,16 @@ if(NOT glfw3_FOUND OR NOT OPENGL_FOUND)
         "(installer libglfw3-dev / mesa pour activer le GUI).")
     return()
 endif()
+
+# Munt (libmt32emu, LGPL 2.1) : Roland MT-32/CM-32L sur le MIDI OUT du GUI.
+# VENDORISÉ dans extern/mt32emu (cf. son NEOST_VENDOR.md) — plus de find_package :
+# la fonctionnalité dépendait d'un paquet système (brew install mt32emu /
+# libmt32emu-dev) présent sur la machine du développeur et NULLE PART ailleurs, donc
+# le MT-32 était silencieusement absent de tous les binaires livrés. Comme Moira, le
+# code d'amont vit désormais dans l'arbre et se compile avec NeoST.
+# APRÈS le garde-fou GLFW à dessein : seul le GUI s'en sert, et le compiler pour rien
+# coûterait 26 fichiers aux cibles sans pile graphique (CI headless, Android, WASM).
+add_subdirectory(extern/mt32emu)
 
 add_executable(neost
     src/main.cpp
@@ -392,13 +443,9 @@ add_executable(neost
     src/audio/Mt32Synth.cpp)
 # stb_image (extern/stb, domaine public) : décodage de la photo du clavier (pic/).
 target_include_directories(neost PRIVATE "${CMAKE_SOURCE_DIR}/extern/stb")
-if(MT32Emu_FOUND)
-    target_compile_definitions(neost PRIVATE NEOST_WITH_MT32=1)
-    target_link_libraries(neost PRIVATE MT32Emu::mt32emu)
-    message(STATUS "NeoST: libmt32emu found — Roland MT-32/CM-32L output enabled")
-else()
-    message(STATUS "NeoST: libmt32emu not found — MT-32 output disabled")
-endif()
+# Plus de branche « absent » : la bibliothèque est dans l'arbre, donc toujours là.
+target_compile_definitions(neost PRIVATE NEOST_WITH_MT32=1)
+target_link_libraries(neost PRIVATE MT32Emu::mt32emu)
 # ${CMAKE_DL_LIBS} : miniaudio charge sa backend par dlopen ; avant la glibc
 # 2.34 (bionic — l'image release Linux), libdl est séparée et doit être liée
 # explicitement. Vide sur les systèmes où dlopen vit dans libc → sans effet.

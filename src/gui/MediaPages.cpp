@@ -245,7 +245,14 @@ void drawHardDiskPage(const std::string& hdDir, const std::string& gemdosDefault
     // ── GEMDOS ────────────────────────────────────────────────────────────
     ImGui::TextDisabled(ICON_FA_FOLDER_OPEN " GEMDOS — host folder mounted as C:");
     if (gemdosActive) {
+        // PushID OBLIGATOIRE : IconButton dérive son ID du seul texte de l'icône, et
+        // cette page affiche jusqu'à TROIS ICON_FA_EJECT (GEMDOS, ACSI, slot 2). Deux
+        // montés en même temps = deux widgets de même ID → ImGui ouvre son avertissement
+        // « conflicting ID » et les clics partent sur le mauvais bouton. driveRow(), page
+        // Disquettes, applique déjà cette discipline ; ici elle manquait.
+        ImGui::PushID("ejectGemdos");
         if (IconButton(ICON_FA_EJECT, "Eject the GEMDOS drive")) reqEjectGemdos = true;
+        ImGui::PopID();
         ImGui::SameLine();
         ImGui::Text("mounted: %s", curGemdos.c_str());
         ImGui::TextDisabled("(occupies cartridge port $FA0000 — exclusive with a cartridge)");
@@ -269,11 +276,23 @@ void drawHardDiskPage(const std::string& hdDir, const std::string& gemdosDefault
 
     // ── ACSI ──────────────────────────────────────────────────────────────
     ImGui::TextDisabled(ICON_FA_HDD " ACSI — hard disk image (target 0)");
-    if (acsiActive) {
+    // acsiActive vient de acsiActive() = anyEnabled(), qui balaie TOUTES les cibles :
+    // l'UltraSatan seul, avec son slot 2 (ID 1) peuplé, suffit à le rendre vrai alors
+    // que la cible 0 — la seule dont parle cette section — est vide. On s'appuie donc
+    // sur curAcsi, qui EST le chemin de la cible 0. Sans lui, la ligne affichait
+    // « mounted:  — 0 partition(s) » : un nom vide, et un décompte de partitions qui
+    // sommait les autres cibles, donc appartenait au slot 2.
+    if (acsiActive && !curAcsi.empty()) {
+        ImGui::PushID("ejectAcsi");
         if (IconButton(ICON_FA_EJECT, "Eject the ACSI image")) reqEjectAcsi = true;
+        ImGui::PopID();
         ImGui::SameLine();
         ImGui::Text("mounted: %s — %d partition(s)",
                     fs::path(curAcsi).filename().string().c_str(), acsiParts);
+    } else if (acsiActive) {
+        // Pas d'Eject ici : il n'y a pas de carte à retirer, et le bouton lançait
+        // quand même un hard reset.
+        ImGui::TextDisabled("(empty slot)");
     } else {
         ImGui::TextDisabled("(no ACSI image mounted)");
     }
@@ -303,7 +322,9 @@ void drawHardDiskPage(const std::string& hdDir, const std::string& gemdosDefault
     if (usatanOn) {
         ImGui::TextDisabled("slot 1 = the ACSI image above (ID 0) — slot 2 (ID 1):");
         if (!curSd2.empty()) {
+            ImGui::PushID("ejectSd2");
             if (IconButton(ICON_FA_EJECT, "Eject the slot 2 card")) reqEjectSd2 = true;
+            ImGui::PopID();
             ImGui::SameLine();
             ImGui::Text("slot 2: %s", fs::path(curSd2).filename().string().c_str());
         } else {

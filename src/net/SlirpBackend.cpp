@@ -222,8 +222,21 @@ void SlirpBackend::poll() {
     static std::vector<struct pollfd> fds;    // statique : réutilisé d'une trame à l'autre
     fds.clear();
     uint32_t timeout = 0;                     // on N'ATTEND PAS (cf. en-tête du fichier)
-    slirp_pollfds_fill_socket(slirp, &timeout,
-        [](slirp_os_socket fd, int events, void* /*opaque*/) -> int {
+    // Deux API pour la MÊME chose : slirp_pollfds_fill_socket (libslirp >= 4.8,
+    // SLIRP_CONFIG_VERSION_MAX >= 5) prend un slirp_os_socket, qui n'existe que
+    // pour porter les SOCKET Windows — sur POSIX c'est un int, donc les deux
+    // variantes sont identiques ici. On garde la classique en repli : sans elle,
+    // NeoST ne compilait pas du tout sur les distributions en libslirp 4.7
+    // (Debian 12 bookworm = Raspberry Pi OS, Ubuntu 24.04).
+#if defined(SLIRP_CONFIG_VERSION_MAX) && SLIRP_CONFIG_VERSION_MAX >= 5
+    using SlirpFd = slirp_os_socket;
+    #define NEOST_SLIRP_FILL slirp_pollfds_fill_socket
+#else
+    using SlirpFd = int;
+    #define NEOST_SLIRP_FILL slirp_pollfds_fill
+#endif
+    NEOST_SLIRP_FILL(slirp, &timeout,
+        [](SlirpFd fd, int events, void* /*opaque*/) -> int {
             short ev = 0;
             if (events & SLIRP_POLL_IN)  ev |= POLLIN;
             if (events & SLIRP_POLL_OUT) ev |= POLLOUT;
@@ -232,6 +245,7 @@ void SlirpBackend::poll() {
             fds.push_back(pollfd{int(fd), ev, 0});
             return int(fds.size()) - 1;
         }, this);
+#undef NEOST_SLIRP_FILL
 
     if (!fds.empty()) strace("sockets surveillees:", std::to_string(fds.size()));
     // 2) Interrogation NON BLOQUANTE de l'OS.

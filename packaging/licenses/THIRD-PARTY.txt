@@ -50,7 +50,12 @@ stb_image v2.30 — Sean Barrett et contributeurs. Double licence au choix : MIT
 public (Unlicense). Utilisé par le GUI pour décoder la photo du clavier (pic/).
 https://github.com/nothings/stb
 
---- libmt32emu / Munt (optional, dynamically linked) ---
-Munt MT-32/CM-32L emulator, LGPL 2.1 (https://github.com/munt/munt). Used by the macOS GUI
-when present at build time (brew install mt32emu) to render the ST's MIDI OUT through a
-Roland MT-32/CM-32L. The Roland ROMs are NOT included: the user provides them (roms/mt32/).
+--- libmt32emu / Munt (vendored, statically linked) ---
+Munt MT-32/CM-32L emulator, LGPL 2.1 or later (https://github.com/munt/munt), version 2.8.3.
+Vendored under extern/mt32emu and linked statically into the GUI, which renders the ST's
+MIDI OUT through a Roland MT-32/CM-32L. Upstream code is UNMODIFIED; only the CMake build
+file is NeoST's (see extern/mt32emu/NEOST_VENDOR.md). LGPL 2.1 allows static linking as long
+as the recipient can rebuild against a modified library: NeoST ships its full source under
+GPL 3, this copy of Munt included, which satisfies that. Its section 3 also permits the
+switch to the GPL, which settles compatibility with NeoST's GPL 3.
+The Roland ROMs are NOT included: the user provides them (roms/mt32/).
