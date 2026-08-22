@@ -75,7 +75,11 @@ import sys
 SECT = 512
 PART_START = 2          # la partition commence au secteur 2 (racine + 1 réservé)
 SPC = 2                 # clusters de 2 secteurs : la convention AHDI des partitions GEM
-NROOT = 128             # entrées de répertoire racine
+# Entrées de répertoire racine. 128 était BEAUCOUP trop peu : au-delà, mcopy rend
+# « No directory slots » et l'image est refusée. 512 est la convention des partitions
+# FAT16 de disque dur — c'est aussi ce que porte le disque donneur observé. Coût :
+# 32 secteurs, négligeable. ⚠ un nom hors 8.3 consomme PLUSIEURS entrées (VFAT).
+NROOT = 512
 RES = 1                 # secteurs réservés (le boot sector de la partition)
 
 # Le seuil FAT12/FAT16 est un vrai piège, déjà payé par make_usatan_hd.py : le TOS
@@ -105,12 +109,56 @@ def word_sum(buf: bytes) -> int:
     return sum(int.from_bytes(buf[i:i + 2], 'big') for i in range(0, len(buf), 2)) & 0xFFFF
 
 
+# Chemin de l'image EN COURS d'écriture. On construit sous un nom temporaire et on
+# ne le renomme qu'à la toute fin : un échec en cours de route (mcopy « Disk full »,
+# mformat…) laissait sinon à la place du résultat une image parfaitement montable et
+# VIDE, qu'on retrouve trois jours plus tard sans se rappeler qu'elle a échoué.
+_PARTIAL = None
+
+
+def _discard_partial():
+    global _PARTIAL
+    if _PARTIAL and os.path.exists(_PARTIAL):
+        try:
+            os.remove(_PARTIAL)
+        except OSError:
+            pass
+    _PARTIAL = None
+
+
+def _cmd_str(cmd) -> str:
+    """Ligne de commande lisible : mcopy en reçoit des milliers, l'afficher en
+    entier rendait le message d'erreur illisible (972 Ko mesurés sur 9000 fichiers)."""
+    if len(cmd) <= 12:
+        return ' '.join(cmd)
+    return f"{' '.join(cmd[:8])} … (+{len(cmd) - 9} arguments) {cmd[-1]}"
+
+
 def run(cmd, check=True):
     r = subprocess.run(cmd, capture_output=True, text=True)
     if check and r.returncode != 0:
-        sys.stderr.write(f"ERREUR: {' '.join(cmd)}\n{r.stdout}{r.stderr}")
+        sys.stderr.write(f"ERREUR: {_cmd_str(cmd)}\n{r.stdout}{r.stderr}")
+        _discard_partial()
         sys.exit(1)
     return r
+
+
+# Plafond de longueur d'une ligne de commande mcopy. ARG_MAX vaut 2 Mio sur ce Linux
+# mais bien moins ailleurs (macOS ~256 Kio utiles) : une ludothèque de quelques
+# milliers de fichiers aux noms longs partait droit sur E2BIG. On découpe.
+ARG_CHUNK = 96 * 1024
+
+
+def run_batched(prefix, items, suffix):
+    """Exécute `prefix + lot + suffix` en autant de lots qu'il faut."""
+    batch, size = [], 0
+    for it in items:
+        if batch and size + len(it) + 1 > ARG_CHUNK:
+            run(prefix + batch + suffix)
+            batch, size = [], 0
+        batch.append(it); size += len(it) + 1
+    if batch:
+        run(prefix + batch + suffix)
 
 
 def part_type(part_size: int) -> bytes:
@@ -226,8 +274,8 @@ def main() -> int:
                          f"({MIN_MB} Mo) — EmuTOS lirait la partition en FAT12.\n")
         return 2
 
-    # Défaut = image de DONNÉES. La greffe ne devient active que si on la demande
-    # explicitement, puisqu'elle ne donne pas (encore) un disque amorçable.
+    # Défaut = greffe du pilote (le disque produit s'amorce sous vrai TOS) ; --no-driver
+    # retombe sur une image de données, que seul EmuTOS montera.
     donor = None if args.no_driver else find_donor(args.driver_from)
     if donor is None and not args.no_driver:
         sys.stderr.write(
@@ -240,9 +288,32 @@ def main() -> int:
     total = args.size_mb * 1024 * 1024 // SECT
     part_size = total - PART_START
 
+    # Contrôle de capacité AVANT de travailler : sinon l'échec n'arrive qu'au mcopy, sous
+    # la forme d'un « Disk full » de mtools qui ne dit ni combien il manque, ni pourquoi.
+    src_bytes = sum(os.path.getsize(os.path.join(d, f))
+                    for d, _, fs in os.walk(args.src) for f in fs)
+    usable = (part_size - RES - 2 * ((part_size // SPC) * 2 // SECT + 1)) * SECT
+    if donor:
+        usable -= 64 * 1024                      # le pilote greffé occupe la racine
+    # Le nombre d'entrées RACINE est borné par le BPB, indépendamment de la place :
+    # sans ce contrôle, l'échec n'arrivait qu'au mcopy, en « No directory slots ».
+    n_root = len(os.listdir(args.src)) + (1 if donor else 0)   # +1 : le pilote greffé
+    if n_root > NROOT:
+        sys.stderr.write(f"ERREUR: {n_root} entrées à la racine de C:, le maximum est "
+                         f"{NROOT} — les regrouper dans des sous-dossiers.\n")
+        return 1
+    if src_bytes > usable:
+        sys.stderr.write(f"ERREUR: le contenu fait {src_bytes / 1048576:.1f} Mo, la partition "
+                         f"n'en offre que ~{max(0, usable) / 1048576:.1f} — augmenter --size-mb.\n")
+        return 1
+
+    global _PARTIAL
+    work = args.out + '.part'                    # construction sous un nom temporaire
+    _PARTIAL = work
+
     # 1) Le disque brut + sa table de partitions Atari (amorçable si greffe).
     code = donor[1] if donor else b''      # étage 1 (secteur racine)
-    with open(args.out, 'wb') as f:
+    with open(work, 'wb') as f:
         f.write(root_sector(total, PART_START, part_size, code))
         f.truncate(total * SECT)
 
@@ -253,7 +324,7 @@ def main() -> int:
     #    écart mesuré à l'octet 67087, 1re entrée racine). Contrairement à
     #    make_usatan_hd.py, cet outil produit du média utilisateur, pas un étalon :
     #    le déterminisme n'est pas requis ici, seulement la stabilité du contenu.
-    at = f"{args.out}@@{PART_START * SECT}"
+    at = f"{work}@@{PART_START * SECT}"
     # ⚠ 9 caractères, pas 11, quand on greffe : le code de l'étage 2 commence à $34 et
     # écrase les 2 derniers octets du champ « nom de volume » du BPB. Un nom plus long
     # y était SILENCIEUSEMENT tronqué — et mdir n'y voyait rien, parce qu'il lit le nom
@@ -273,7 +344,7 @@ def main() -> int:
         # -m des DEUX côtés : sans lui le pilote recopié porte l'heure courante, et
         # deux exécutions ne rendent plus la même image (constaté : premier écart à
         # l'octet 67087, dans le répertoire racine).
-        tmp = args.out + '.drv.tmp'
+        tmp = work + '.drv.tmp'
         run(['mcopy', '-i', f'{donor_path}@@{doff}', '-m', '-o', f'::{drv}', tmp])
         run(['mcopy', '-i', at, '-m', '-o', tmp, f'::{drv}'])
         os.remove(tmp)
@@ -281,8 +352,8 @@ def main() -> int:
     # 4) Le contenu. On copie les ENTRÉES du dossier, pas le dossier lui-même.
     entries = sorted(os.listdir(args.src))
     if entries:
-        run(['mcopy', '-i', at, '-s', '-Q', '-m']
-            + [os.path.join(args.src, e) for e in entries] + ['::'])
+        run_batched(['mcopy', '-i', at, '-s', '-Q', '-m'],
+                    [os.path.join(args.src, e) for e in entries], ['::'])
 
     # 5) L'ÉTAGE 2. L'étage 1 lit ce secteur puis EXIGE que ses 256 mots totalisent
     #    $1234 avant de l'exécuter (cmp.w #$1234,d0 / bne → abandon) : sans ce
@@ -290,7 +361,7 @@ def main() -> int:
     #    On garde NOTRE BPB ($03..$33) — l'étage 2 sait lire un FAT16 ordinaire — et on
     #    greffe le saut de tête plus le code à partir de STAGE2_CODE.
     if donor:
-        with open(args.out, 'r+b') as f:
+        with open(work, 'r+b') as f:
             f.seek(PART_START * SECT)
             boot = bytearray(f.read(SECT))
             boot[0:3] = stage2[0:3]
@@ -301,6 +372,9 @@ def main() -> int:
             assert word_sum(boot) == BOOT_MAGIC
             f.seek(PART_START * SECT)
             f.write(boot)
+
+    os.replace(work, args.out)                   # publication ATOMIQUE du résultat
+    _PARTIAL = None
 
     kind = (f"AMORÇABLE — pilote {donor[3]} greffé depuis {os.path.basename(donor[0])}"
             if donor else "image de données : EmuTOS la monte, un vrai TOS non "
