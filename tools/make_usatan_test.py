@@ -264,7 +264,7 @@ def build_prg() -> bytes:
     return hdr + text + bytes(reloc)
 
 
-def build_floppy(prg: bytes) -> bytes:
+def build_floppy(prg: bytes, name: str = 'USTEST') -> bytes:
     # Disquette 720 Ko FAT12 (BPB comme tools/make_floppy.py), dossier AUTO avec USTEST.PRG.
     # Secteur de boot NON amorçable : le TOS monte A:, et lance A:\AUTO s'il amorce sur A:.
     SPT, SIDES, TRACKS = 9, 2, 80
@@ -289,11 +289,11 @@ def build_floppy(prg: bytes) -> bytes:
             else:
                 img[off] = val & 0xFF; img[off + 1] = (img[off + 1] & 0xF0) | ((val >> 8) & 0x0F)
     set_fat(0, 0xFF9); set_fat(1, 0xFFF)
-    write_fs(img, root, data, SPC, set_fat, 0xFFF, prg)
+    write_fs(img, root, data, SPC, set_fat, 0xFFF, prg, name)
     return bytes(img)
 
 
-def write_fs(img, root, data, spc, set_fat, eoc, prg):
+def write_fs(img, root, data, spc, set_fat, eoc, prg, name='USTEST'):
     # Racine : dossier AUTO (cluster 2) ; AUTO : '.', '..', USTEST.PRG (clusters 3..).
     DATE = (46 << 9) | (8 << 5) | 21; TIME = (12 << 11)          # 2026-08-21 12:00 (fixe)
     csize = spc * SECT
@@ -306,7 +306,7 @@ def write_fs(img, root, data, spc, set_fat, eoc, prg):
     set_fat(2, eoc)
     d = data                                                     # cluster 2
     entry(d, '.', '', 0x10, 2, 0); entry(d + 32, '..', '', 0x10, 0, 0)
-    entry(d + 64, 'USTEST', 'PRG', 0x20, 3, len(prg))
+    entry(d + 64, name, 'PRG', 0x20, 3, len(prg))
     nclu = (len(prg) + csize - 1) // csize
     for k in range(nclu):
         c = 3 + k

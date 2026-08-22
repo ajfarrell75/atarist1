@@ -185,8 +185,29 @@ raccrocher ; `DCD` suit la porteuse). C'est le grand débloqueur du logiciel d'�
 terminaux, BBS, et les piles TCP/IP historiques **STiK/STinG en SLIP/PPP**. Repose sur
 `Mfp::receiveByte` (injection RX **cadencée** au débit série via `Scheduler::SERIAL_RX`,
 IRQ RxFull par octet — un pilote qui compte sur le rythme du fil ne perd aucun octet).
-Vérifié : `MODMTEST.TOS` ↔ serveur TCP local (`CONNECT 9600`, bannière reçue).
+Vérifié : `MODMTEST.TOS` ↔ serveur TCP local (`CONNECT 9600`, bannière reçue), et
+**bout-en-bout sur Internet** (2026-08-22) — `tools/make_net_test.py` génère une disquette
+dont l'`AUTO\NETTEST.PRG` compose `ATDT theoldnet.com:80`, envoie une requête HTTP à la
+main et affiche la réponse : en-têtes (`Content-Length`, `X-Powered-By: Express`) puis le
+HTML. C'est le chemin qui marche **sans pile TCP/IP côté ST** (le modem est un pont
+transparent octets ↔ socket) ; interactivement, `UNITERM.PRG` fait la même chose.
+
+```sh
+python3 tools/make_net_test.py /tmp/nettest.st theoldnet.com /
+./build/neost-headless roms/etos192us.img --machine megast --mem 1m --mono \
+    --modem --disk /tmp/nettest.st --frames 2500 --screenshot out.ppm
+```
+
+Deux pièges appris en l'écrivant, consignés dans le générateur : le compteur 200 Hz du TOS
+(`$4BA`) vit en mémoire BASSE, **protégée** — y toucher depuis un PRG (mode utilisateur)
+lève un bus error, d'où `Super(0)` ; et la console ST **n'enroule pas** les lignes longues,
+elle écrase la 80ᵉ colonne (une ligne HTML n'y laissait voir que son dernier caractère,
+une colonne de « > »), d'où le repli à 78 colonnes et le CR ajouté sur les LF seuls.
 `src/net/HayesModem.cpp`.
+
+⚠ Le **NetUSBee/EtherNEC ne sort PAS** sur Internet : son backend est une boucle locale
+(`NetBackendLoop`). Il faudrait `NetBackendSlirp` (libslirp, NAT mode utilisateur) **et**
+une pile TCP/IP côté ST (STinG + `ENEC.STX`) — cf. `TODO.md`.
 
 ## EtherNEC — NE2000 sur le port cartouche (`--ethernec`, GUI Network)
 
