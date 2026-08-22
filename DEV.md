@@ -188,21 +188,20 @@ python3 -m http.server -d wasm 8000
 la CI). La page hôte est `web/shell.html` ; `wasm/index.html` est l'artefact GÉNÉRÉ, pas
 la source.
 
-✅ **`wasm/` n'est PAS commité** (depuis le 2026-08-22) : c'est un dossier de BUILD,
-gitignoré. La démo en ligne est déployée par le job `pages` de `release.yml`, à partir
-de l'artefact que le job `wasm` vient de construire (`actions/upload-pages-artifact` →
-`actions/deploy-pages`, Pages en `build_type=workflow`). Elle est donc **toujours à jour
-avec les sources du commit** — rien à reconstruire ni à commiter à la main.
+⚠ **La démo en ligne EST le dossier `wasm/` commité** : Pages sert la branche
+(`build_type=legacy`, `main/(root)`). Mais depuis le 2026-08-22 **tu n'as plus à le
+reconstruire à la main** : sur push de `main`, le job `wasm` de `release.yml` compile le
+bundle et le **recommite** (`[skip ci]` pour ne pas boucler ; rien n'est commité s'il est
+identique). Le bundle reste donc dans l'arbre de travail — un `git pull` après le run le
+récupère — et la démo suit les sources toute seule.
 
-Le site publié ne contient QUE la démo : le bundle sous `wasm/` (l'URL historique
-[habib256.github.io/neost/wasm/](https://habib256.github.io/neost/wasm/) est préservée)
-et une racine qui y redirige. L'ancien mode « deploy from a branch » servait le dépôt
-ENTIER, ROM et jeux sous copyright compris (cf. `TODO.md`).
+C'est ce qui remplace la garde de fraîcheur `tools/wasm_stamp.sh` (supprimée) : elle
+signalait le bundle périmé en rendant la CI **rouge**, sans le réparer — deux fois en
+trois jours (2026-08-19, 2026-08-21). Réparer vaut mieux que signaler.
 
-Historique : le bundle a été commité de mars à août 2026, avec une garde de fraîcheur
-(`tools/wasm_stamp.sh`, supprimée) qui rendait la CI rouge à chaque chantier touchant
-`src/**` tant que le bundle n'était pas reconstruit — deux fois en trois jours
-(2026-08-19, 2026-08-21). Le déploiement par artefact supprime la classe de problème.
+⚠ Pages servant la branche, le dépôt est publié **en entier** sur
+habib256.github.io/neost/ — ROM Atari et jeux compris (cf. `TODO.md` § contenu
+propriétaire). Choix assumé du mainteneur (2026-08-22).
 
 **Windows** — MinGW-w64 dans un shell MSYS2/MINGW64,
 `NEOST_VERSION=<ver> packaging/windows/build_mingw.sh`. Tout est lié en statique et le
