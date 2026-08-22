@@ -54,8 +54,12 @@ jobs:
           sudo apt-get update
           # ubuntu-24.04 fournit libslirp 4.7.0 : c'est EXACTEMENT la version qui
           # ne compilait pas, donc c'est la bonne à tester.
+          # libglib2.0-dev n'est PAS un caprice : slirp.pc déclare « Requires: glib-2.0 »,
+          # donc sans les fichiers .pc de glib, pkg-config REFUSE de résoudre slirp — et
+          # le pkg_check_modules du CMakeLists échoue derrière, en erreur fatale puisque
+          # NEOST_WITH_SLIRP=ON. C'est exactement ce qui a fait tomber le premier run.
           sudo apt-get install -y --no-install-recommends \
-            cmake g++ libglfw3-dev libgl1-mesa-dev libslirp-dev
+            cmake g++ libglfw3-dev libgl1-mesa-dev libslirp-dev libglib2.0-dev
           pkg-config --modversion slirp
 
       - name: Configurer (NEOST_WITH_SLIRP=ON — échoue si la lib manque)
