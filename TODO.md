@@ -33,6 +33,7 @@ suit :
 | `roms/` | **44 images TOS Atari propriétaires** (`tos100*` → `tos404`, `TOS v1.02 …[MEGA TOS]`) | ~11 Mo |
 | `disks/st/`, `disks/stx/` | ~80 images de **jeux commerciaux**, majoritairement CRACKÉS (mentions `[cr Replicants]`, `[cr Elite]`, `[cr Medway Boys]`…) | ~51 Mo |
 | `carts/` | cartouches **Atari Field Service** (`ST_Diagnostic_v4.4`, `MegaSTE_Diagnostic_v1.5`, `STE_Test_v1.9`) | |
+| `wasm/index.data` | **artefact de build commis** (reconstruit et recommité par la CI) qui ré-embarque une partie des fichiers ci-dessus | 2,4 Mo |
 
 Conséquences : cloner le dépôt (ou télécharger le tarball GitHub) livre une archive de
 logiciels sous copyright.
@@ -62,11 +63,13 @@ rendait le retrait « impossible sans casser la CI » :
 `release.yml` / `pi-borne.yml` échouent désormais si une licence manque.
 
 ❌ **Reste à trancher (décision du mainteneur)** :
-1. `git rm --cached` sur `roms/tos*`, `disks/st`, `disks/stx`, `carts/`, puis **purger
-   l'historique** (`git filter-repo`) — sans quoi le contenu reste téléchargeable dans
-   les commits antérieurs. ✅ `wasm/index.*` : FAIT le 2026-08-22 (déploiement Pages par
-   artefact) ; au passage, Pages ne sert plus le dépôt entier, donc plus aucun de ces
-   fichiers n'est exposé sur le web. **Plus rien ne s'y
+1. `git rm --cached` sur `roms/tos*`, `disks/st`, `disks/stx`, `carts/`, `wasm/index.*`,
+   les ajouter au `.gitignore`, puis **purger l'historique** (`git filter-repo`) — sans
+   quoi le contenu reste téléchargeable dans les commits antérieurs. ⚠ GitHub Pages sert
+   la branche `main` À LA RACINE : tout ce contenu est donc aussi téléchargeable **depuis
+   le web** (habib256.github.io/neost/roms/…), pas seulement depuis git. Le déploiement
+   par artefact réglerait ce point ; écarté le 2026-08-22 (le bundle doit rester dans
+   l'arbre de travail). **Plus rien ne s'y
    oppose côté CI** (cf. découplage ci-dessus) ; c'est une réécriture d'historique, donc
    un choix, pas une tâche.
 2. **Les paquets bureau redistribuent DEUX ROM Atari propriétaires** (`tos102uk.img`,

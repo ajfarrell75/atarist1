@@ -6,30 +6,26 @@ l'ordre inverse. Version courante : **0.5.2**.
 - « NeoST gère-t-il X ? » → [`docs/IMPLEMENTED.md`](docs/IMPLEMENTED.md) (inventaire par puce)
 - « Que reste-t-il ? » → [`TODO.md`](TODO.md)
 
-## GitHub Pages déployé par artefact — `wasm/` n'est plus commité (2026-08-22)
+## La CI reconstruit ET recommite le bundle `wasm/` — plus de garde, plus de rouge (2026-08-22)
 
-La démo en ligne était le dossier `wasm/` **commité**, servi par Pages en « deploy from a
-branch ». Conséquence : toute modification de `src/**` périmait le bundle, et une garde de
-fraîcheur (`tools/wasm_stamp.sh --check`) rendait la CI **rouge** jusqu'à sa reconstruction
-manuelle — arrivé le 2026-08-19, puis à nouveau le 2026-08-21 (chantier UltraSatan/NetUSBee).
-La garde faisait son travail (sans elle, la démo restait périmée en silence), mais elle
-traitait le symptôme.
+La démo en ligne est le dossier `wasm/` **commité** (Pages sert la branche). Conséquence :
+toute modification de `src/**` le périmait, et la garde `tools/wasm_stamp.sh --check`
+rendait la CI **rouge** jusqu'à une reconstruction manuelle — le 2026-08-19, puis le
+2026-08-21 (chantier UltraSatan/NetUSBee). La garde faisait son travail (sans elle, la
+démo restait périmée en silence) mais elle **signalait** au lieu de **réparer**.
 
-Pages passe en `build_type=workflow` : le job **`pages`** de `release.yml` déploie
-l'artefact que le job `wasm` vient de construire (`actions/upload-pages-artifact@v3` →
-`actions/deploy-pages@v4`, push sur `main` seulement, `concurrency: pages` sans annulation).
-La démo suit donc les sources **par construction** — plus de bundle à commiter, plus de
-garde, plus de CI rouge pour cette raison. `wasm/` devient un dossier de build gitignoré et
+Désormais, sur push de `main`, le job `wasm` de `release.yml` recommite le bundle qu'il
+vient de construire : `[skip ci]` pour ne pas boucler, rien de commité s'il est identique
+(emcc est déterministe à version d'emsdk égale), et en cas de push concurrent il repart du
+nouveau sommet en y redéposant le bundle. Le dossier reste donc dans l'arbre de travail
+(`git pull` après le run) et la démo suit les sources sans intervention.
 `tools/wasm_stamp.sh` est supprimé.
 
-Deux effets de bord, tous deux souhaitables :
-- l'URL publiée **ne change pas** — le bundle est déposé sous `wasm/` dans l'artefact
-  ([habib256.github.io/neost/wasm/](https://habib256.github.io/neost/wasm/)), et la racine
-  y redirige (elle affichait le README rendu par Jekyll) ;
-- le site ne contient plus QUE la démo. L'ancien mode servait le dépôt **entier** : les ROM
-  Atari et les jeux sous copyright étaient donc téléchargeables depuis le web, ce que
-  `TODO.md` § contenu propriétaire signalait pour le dépôt sans voir ce prolongement.
-  Le point « `git rm --cached` sur `wasm/index.*` » de ce TODO est réglé du même coup.
+Essai intermédiaire écarté : déployer Pages depuis l'**artefact** de CI (`build_type=workflow`,
+`upload-pages-artifact` → `deploy-pages`). Ça marchait — démo à jour par construction, et le
+dépôt n'était plus publié — mais le bundle disparaissait de l'arbre de travail, ce que le
+mainteneur ne veut pas. Pages reste donc en `build_type=legacy` (`main/(root)`), avec sa
+contrepartie assumée : le dépôt est publié en entier, ROM comprises (cf. `TODO.md`).
 
 ## Page Sound : mixeur par source + choix MT-32 / CM-32L (2026-08-21)
 
