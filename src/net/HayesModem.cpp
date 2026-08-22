@@ -9,11 +9,11 @@
 #include <cstdio>
 #include <cstdlib>
 
-#include "net/HttpClient.hpp"
+#include "net/Socket.hpp"
 
 namespace {
 void mtrace(const char* what, const std::string& detail) {
-    static const bool on = std::getenv("NEOST_FUJI_TRACE") != nullptr;
+    static const bool on = std::getenv("NEOST_NET_TRACE") != nullptr;
     if (on) std::fprintf(stderr, "[modem] %s %s\n", what, detail.c_str());
 }
 } // namespace

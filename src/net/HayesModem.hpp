@@ -5,8 +5,8 @@
 //  TCP/IP historiques (STiK/STinG en SLIP/PPP) parlent toutes à « un modem sur
 //  le port série ». On interprète les commandes AT côté hôte et on ouvre de
 //  vraies connexions TCP : `ATDT hote:port` → CONNECT, puis pont transparent
-//  octets ↔ socket. C'est l'équivalent du device R: du FujiNet et des modules
-//  « WiFi modem » ESP8266 vendus pour ST.
+//  octets ↔ socket. C'est l'équivalent des modules « WiFi modem » ESP8266
+//  vendus pour ST, qui se branchent sur le port série d'origine.
 //
 //  Câblage (frontend) : Mfp::setSerialSink → onTx (octets émis par l'ST) ;
 //  les réponses/le flux entrant reviennent par Mfp::receiveByte (livraison
@@ -24,7 +24,7 @@
 #include <string>
 
 #include "io/Mfp.hpp"
-#include "net/HttpClient.hpp"
+#include "net/Socket.hpp"
 
 class HayesModem {
 public:

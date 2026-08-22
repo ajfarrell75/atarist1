@@ -15,8 +15,6 @@
 
 #include <string>
 
-#include "io/FujiDevice.hpp"
-#include "net/FujiHost.hpp"
 
 void drawFloppyPage(const std::string& disksDir,
                     const std::string& mountedA, const std::string& mountedB,
@@ -34,10 +32,6 @@ void drawHardDiskPage(const std::string& hdDir, const std::string& gemdosDefault
                       std::string& reqMountAcsi,  bool& reqEjectAcsi,
                       int& reqUltraSatan, std::string& reqMountSd2, bool& reqEjectSd2);
 
-void drawNetworkPage(bool fujiOn, int fujiTarget, const char* backendName,
-                     const FujiDevice& fuji, FujiHost* host, bool modemOn, bool etherOn,
+void drawNetworkPage(bool modemOn, bool etherOn,
                      bool netusbeeOn, bool cartMounted,
-                     int& reqFujinet, int& reqFujinetTarget,
-                     std::string& reqFujinetMount,
-                     std::string& reqFujinetHosts, bool& reqFujinetHostsSet,
                      int& reqModem, int& reqEther, int& reqNetUsbee);

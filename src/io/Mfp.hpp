@@ -8,7 +8,7 @@
 //      event-count (Timer A sur XSINT, Timer B sur le Display-Enable vidéo) ;
 //    - le GPIP complet avec sa machine de fronts AER/DDR (gpipSetLine /
 //      gpipUpdateInterrupt = port de MFP_GPIP_Set_Line_Input) ;
-//    - l'USART (RS-232 : débit, RxFull/TxEmpty, injection hôte modem/FujiNet) ;
+//    - l'USART (RS-232 : débit, RxFull/TxEmpty, injection hôte modem) ;
 //    - la logique d'interruption complète : IER/IPR/IMR/ISR + registre vecteur
 //      (VR), modes auto / "software end-of-interrupt", et le cycle IACK.
 //
@@ -248,7 +248,7 @@ public:
     // y est transmis. Les ROMs de diagnostic y impriment leur rapport quand la
     // vidéo n'est pas (encore) opérationnelle.
     void setSerialSink(std::function<void(uint8_t)> sink) { serialSink_ = std::move(sink); }
-    // Injection RX série côté hôte (modem Hayes, FujiNet RS-232) : octets mis en
+    // Injection RX série côté hôte (modem Hayes) : octets mis en
     // file et livrés au débit configuré via l'ordonnanceur (Scheduler::SERIAL_RX),
     // IRQ RxFull (canal 12) par octet. Cf. Mfp.cpp § Injection RX série.
     void receiveByte(uint8_t b);

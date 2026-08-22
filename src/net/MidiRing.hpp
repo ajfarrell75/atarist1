@@ -4,8 +4,8 @@
 //  MIDI Maze relie les ST en ANNEAU par câbles MIDI : le MIDI OUT de chaque
 //  machine va au MIDI IN de la suivante. On transporte cet anneau sur UDP :
 //  les octets MIDI OUT partent en datagrammes vers le pair « aval », et les
-//  datagrammes reçus (du pair « amont ») entrent dans le MIDI IN local. C'est
-//  exactement ce que fait FujiNet côté 8 bits (mozzwald/FujiNet-MIDIMaze).
+//  datagrammes reçus (du pair « amont ») entrent dans le MIDI IN local — le
+//  câble MIDI de la salle de réseau, rejoué sur Internet.
 //
 //  Câblage (frontend) :
 //    midi.setMidiSink([ring](uint8_t b){ ring->sendByte(b); });
@@ -19,7 +19,7 @@
 #include <functional>
 #include <string>
 
-#include "net/HttpClient.hpp"
+#include "net/Socket.hpp"
 
 class MidiRing {
 public:

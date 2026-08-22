@@ -160,7 +160,7 @@ python3 tools/compare_screenshot.py tests/out/foo_neost.ppm tests/reference/foo.
 ```
 
 Étalons intégrés aujourd'hui : **glue_selftest**, **spec512_selftest**, **bus_selftest**,
-**mfp_selftest**, **msa_selftest**, **fuji_selftest**, **enec_selftest** (P0, logique pure),
+**mfp_selftest**, **msa_selftest**, **enec_selftest** (P0, logique pure),
 **EmuTOS STE boot**, **spectrum512_diapo** + **spectrum512_diapo2** (ST) +
 **spectrum512_diapo_ste** (STE, scramble FIDÈLE == oracle Hatari STE), **overscan_top**,
 **trace_odd**, **scroll_8264** / **scroll_8265** (scroll fin STE), **nocooper** et
@@ -180,7 +180,6 @@ le `_comment` du fichier rappelle la couverture réelle (ni MegaST, ni MegaSTE, 
 ./build/neost-headless roms/etos256us.img --bus-selftest       # whitelist bus error (par octet)
 ./build/neost-headless roms/etos256us.img --mfp-selftest       # GPIP forcé / fronts AER-DDR / Timer B
 ./build/neost-headless roms/etos256us.img --msa-selftest       # ré-encodage .msa (aller-retour)
-./build/neost-headless roms/etos256us.img --fuji-selftest      # FujiNet virtuel + cas-limites ACSI
 ./build/neost-headless roms/etos256us.img --enec-selftest      # NE2000/EtherNEC (bouclage)
 ./build/neost-headless roms/etos256us.img --usatan-selftest    # UltraSatan (fil ACSI : INQUIRY, paquets 'US', RTC)
 ./build/neost-headless roms/etos256us.img --netusbee-selftest  # NetUSBee (ISP1160 + NE2000 en coexistence)

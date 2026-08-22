@@ -41,9 +41,6 @@ namespace neost::appconfig {
 struct Config { std::string rom; std::string disk; std::string diskb; std::string cart; bool mono = false;
                 std::string gemdos;   // HD GEMDOS : dossier hôte monté en C: (vide = off)
                 std::string acsi;     // image disque dur ACSI cible 0 (vide = off)
-                bool fujinet = false; // FujiNet virtuel sur le bus ACSI (extension NeoST)
-                int  fujinetTarget = 6;      // cible ACSI du FujiNet (0-7)
-                std::string fujinetHosts;    // host slots, séparés par '|' (slot 0 en tête)
                 bool modem = false;   // modem Hayes sur l'USART (pont AT → TCP)
                 bool midiLoopback = false; // fiche de bouclage MIDI OUT→IN (diagnostics ; OFF = vrai ST)
                 bool midiOutGm = false;    // MIDI OUT → synthé General MIDI intégré (macOS)

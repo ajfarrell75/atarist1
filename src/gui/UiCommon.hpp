@@ -45,7 +45,7 @@
 #define ICON_FA_EXPAND        "\xef\x81\xa5"
 // Engrenage U+F013 : la plage 0xf000-0xf8ff chargée dans la police le couvre déjà.
 #define ICON_FA_COG           "\xef\x80\x93"
-// WiFi U+F1EB (page Network / FujiNet) : même plage de police.
+// WiFi U+F1EB (page Network) : même plage de police.
 #define ICON_FA_WIFI          "\xef\x87\xab"
 
 // Bouton à ICÔNE SEULE, infobulle au survol. Renvoie true au clic.

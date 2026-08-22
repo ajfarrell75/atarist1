@@ -37,13 +37,6 @@
    "max_diff_px": 0
   },
   {
-   "id": "fuji_selftest",
-   "name": "FujiNet virtuel — protocole fil ACSI (auto-test déterministe, backend rejeu)",
-   "subsystem": "acsi/fujinet",
-   "type": "fuji_selftest",
-   "max_diff_px": 0
-  },
-  {
    "id": "enec_selftest",
    "name": "NE2000/EtherNEC — protocole fil port cartouche (auto-test déterministe, boucle)",
    "subsystem": "cart/ethernec",

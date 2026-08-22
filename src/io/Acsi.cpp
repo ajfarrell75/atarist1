@@ -16,7 +16,6 @@
 #include <filesystem>
 #include <cstdint>
 
-#include "io/FujiDevice.hpp"
 #include "io/UltraSatan.hpp"
 
 namespace {
@@ -66,9 +65,9 @@ bool Acsi::mount(int target, const std::string& path) {
     // surcharge à error_code ne LANCE pas sur un chemin illisible.
     std::error_code ec;
     const std::uintmax_t sz = std::filesystem::file_size(path, ec);
-    // Un slot UltraSatan / la cible FujiNet restent PEUPLÉS même si l'image est
-    // refusée (appareil présent, carte absente) — comme après unmountAll().
-    const bool devicePopulated = usatanSlot(target) >= 0 || (target == fujiTarget_ && fuji_);
+    // Un slot UltraSatan reste PEUPLÉ même si l'image est refusée (appareil
+    // présent, carte absente) — comme après unmountAll().
+    const bool devicePopulated = usatanSlot(target) >= 0;
     if (ec || sz == 0 || (sz & 511)) {
         std::fprintf(stderr, "[acsi] invalid image (zero size or not a multiple of 512): %s\n",
                      path.c_str());
@@ -101,8 +100,8 @@ void Acsi::unmountAll() {
         Dev& d = devs_[i];
         if (d.fp) fclose(d.fp);
         d.fp = nullptr;
-        // Les cibles FujiNet et UltraSatan restent peuplées (appareil sans carte).
-        d.enabled = (i == fujiTarget_ && fuji_) || usatanSlot(i) >= 0;
+        // Les cibles UltraSatan restent peuplées (appareil sans carte).
+        d.enabled = usatanSlot(i) >= 0;
     }
 }
 
@@ -115,55 +114,7 @@ void Acsi::reset() {
     dmaError_ = false;
     dataLen_ = 0;
     dmaWrite_ = false;
-    fujiPending_ = false;
     usatanPending_ = false;
-}
-
-// -----------------------------------------------------------------------------
-//  FujiNet (extension NeoST — cf. docs/EXTENSIONS.md)
-// -----------------------------------------------------------------------------
-void Acsi::attachFujiNet(int target, FujiDevice* dev) {
-    if (target < 0 || target >= MAX_DEVS || !dev) return;
-    fuji_ = dev;
-    fujiTarget_ = target;
-    devs_[target].enabled = true;      // cible peuplée → IRQ ACSI (le TOS la « voit »)
-    devs_[target].lastError = HD_REQSENS_OK;
-    std::fprintf(stderr, "[fuji] FujiNet attached on ACSI target %d\n", target);
-}
-
-void Acsi::detachFujiNet() {
-    if (fujiTarget_ >= 0)
-        devs_[fujiTarget_].enabled = (devs_[fujiTarget_].fp != nullptr);
-    fuji_ = nullptr;
-    fujiTarget_ = -1;
-    fujiPending_ = false;
-}
-
-// Un CDB FujiNet complet (10 octets, opcode $60) vient d'être reçu : délègue au
-// périphérique et rapatrie le résultat dans le contrat Acsi↔Fdc (status_/buf_/
-// dataLen_/dmaWrite_) que le DMA consomme tel quel.
-void Acsi::executeFuji() {
-    Dev& dev = devs_[target_];
-    dataLen_ = 0;
-    dmaWrite_ = false;
-    fujiPending_ = false;
-    const int st = fuji_->execute(command_);
-    if (st != 0) {                              // erreur à l'exécution → pas de phase données
-        status_ = HD_STATUS_ERROR;
-        dev.lastError = HD_REQSENS_INVARG;
-        return;
-    }
-    if (fuji_->isWrite()) {                     // dir=2 : payload ST→device attendu (DMA write)
-        dataLen_ = fuji_->dataLen();
-        prepRespBuf(dataLen_);
-        dmaWrite_ = true;
-        fujiPending_ = true;
-    } else if (fuji_->dataLen() > 0) {          // dir=1 : réponse device→ST (DMA read)
-        uint8_t* b = prepRespBuf(fuji_->dataLen());
-        memcpy(b, fuji_->readBuffer(), std::size_t(fuji_->dataLen()));
-    }
-    status_ = HD_STATUS_OK;
-    dev.lastError = HD_REQSENS_OK;
 }
 
 // -----------------------------------------------------------------------------
@@ -184,15 +135,15 @@ void Acsi::attachUltraSatan(int firstTarget, UltraSatan* dev) {
 void Acsi::detachUltraSatan() {
     if (usatanTarget_ >= 0)
         for (int s = 0; s < UltraSatan::kSlots && usatanTarget_ + s < MAX_DEVS; ++s)
-            devs_[usatanTarget_ + s].enabled = (devs_[usatanTarget_ + s].fp != nullptr)
-                                             || (usatanTarget_ + s == fujiTarget_ && fuji_);
+            devs_[usatanTarget_ + s].enabled = (devs_[usatanTarget_ + s].fp != nullptr);
     usatan_ = nullptr;
     usatanTarget_ = -1;
     usatanPending_ = false;
 }
 
 // Paquet ICD $20 'US…' complet (10 octets après le marqueur) : délègue à
-// l'appareil et rapatrie le résultat dans le contrat Acsi↔Fdc, comme executeFuji.
+// l'appareil et rapatrie le résultat dans le contrat Acsi↔Fdc (status_/buf_/
+// dataLen_/dmaWrite_) que le DMA consomme tel quel.
 void Acsi::executeUltraSatan() {
     Dev& dev = devs_[target_];
     dataLen_ = 0;
@@ -398,8 +349,8 @@ void Acsi::cmdReadCapacity() {
 void Acsi::cmdReadSector() {
     Dev& dev = devs_[target_];
     dev.lastBlockAddr = lba();
-    // Cible FujiNet sans image montée : dev.fp est nul (la cible n'est peuplée
-    // que pour l'opcode $60) → secteur introuvable, sans toucher au fichier.
+    // Slot d'appareil sans image montée : dev.fp est nul → secteur introuvable,
+    // sans toucher au fichier.
     if (!dev.fp) { status_ = HD_STATUS_ERROR;
                    dev.lastError = usatanSlot(target_) >= 0 ? HD_REQSENS_NOMEDIA : HD_REQSENS_NOSECTOR;
                    dev.setLastBlockAddr = true; return; }
@@ -447,13 +398,6 @@ void Acsi::cmdWriteSector() {
 
 void Acsi::writeToDisk(const uint8_t* src, int len) {
     Dev& dev = devs_[target_];
-    if (fujiPending_ && fuji_ && target_ == fujiTarget_) {   // payload d'une commande FujiNet
-        fujiPending_ = false;
-        const int st = fuji_->writeData(src, len);
-        status_ = st ? HD_STATUS_ERROR : HD_STATUS_OK;
-        dev.lastError = st ? HD_REQSENS_INVARG : HD_REQSENS_OK;
-        return;
-    }
     if (usatanPending_ && usatan_ && usatanSlot(target_) >= 0) {   // secteur d'un 'USWr…'
         usatanPending_ = false;
         const int st = usatan_->writeData(src, len);
@@ -541,10 +485,6 @@ bool Acsi::feedByte(uint8_t b) {
     ++byteCount_;
 
     bool didCmd = false;
-    // Cible FujiNet : l'opcode vendeur $60 (10 octets, envoyé derrière le
-    // marqueur ICD) est routé vers le périphérique virtuel. Toute autre cible
-    // garde le rejet >= $60 STRICT — le comportement d'un vrai disque ne bouge pas.
-    const bool fujiCdb = fuji_ && target_ == fujiTarget_ && opcode_ == FujiDevice::kAcsiOpcode;
     if ((opcode_ < 0x20 && byteCount_ == 6) ||
         (opcode_ >= 0x20 && opcode_ < 0x60 && byteCount_ == 10) ||
         (opcode_ == HD_REPORT_LUNS && byteCount_ == 12)) {
@@ -562,9 +502,6 @@ bool Acsi::feedByte(uint8_t b) {
             if (opcode_ == HD_REQ_SENSE) { cmdRequestSense(); didCmd = true; }
             else status_ = HD_STATUS_ERROR;
         }
-    } else if (fujiCdb) {
-        if (byteCount_ == 10) { executeFuji(); didCmd = true; }
-        else status_ = HD_STATUS_OK;
     } else if (opcode_ >= 0x60 && opcode_ != HD_REPORT_LUNS) {
         status_ = HD_STATUS_ERROR; dev.lastError = HD_REQSENS_OPCODE; dev.setLastBlockAddr = false;
     } else {

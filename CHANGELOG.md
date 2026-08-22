@@ -6,6 +6,39 @@ l'ordre inverse. Version courante : **0.5.2**.
 - « NeoST gère-t-il X ? » → [`docs/IMPLEMENTED.md`](docs/IMPLEMENTED.md) (inventaire par puce)
 - « Que reste-t-il ? » → [`TODO.md`](TODO.md)
 
+## FujiNet retiré : NeoST n'émule plus que du matériel qui a existé (2026-08-22)
+
+**Le FujiNet virtuel est supprimé du projet.** Il n'a jamais existé de FujiNet pour
+l'Atari ST : c'était un *binding de référence* inventé ici, greffé sur l'opcode vendeur
+ACSI `$60`. Un émulateur d'Atari ST n'a pas à porter du matériel imaginaire — et ce
+sous-système était par ailleurs le moins tenu du dépôt (`FujiHostLive` : **0 %** de
+couverture sous la suite complète).
+
+Retiré : `io/FujiDevice.{cpp,hpp}`, `net/FujiHost.hpp`, `net/FujiHostLive.{cpp,hpp}`,
+`net/FujiHostReplay.{cpp,hpp}`, `net/MiniJson.{cpp,hpp}`, `net/HttpClient.{cpp,hpp}`,
+les fixtures `tests/fixtures/fuji/`, `dev/fujinet/`, `gemdos/DEMOS/NWGET.TOS`, les
+drapeaux `--fujinet*` / `--fuji-selftest`, les clés `fujinet*=` de `neost.cfg`, l'étalon
+`fuji_selftest` et la section FujiNet de `docs/EXTENSIONS.md`.
+
+**Ce qui reste et ne bouge pas.** Le modem Hayes, l'anneau MIDI, EtherNEC, NetUSBee et
+l'UltraSatan sont intacts — tous correspondent à du matériel réel. La couche socket
+partagée qui vivait dans `HttpClient` (namespace `neonet` : `tcpConnect`, `sockSend`,
+`sockRecv`…) est extraite dans **`net/Socket.{hpp,cpp}`**, dont c'est désormais le seul
+rôle ; le modem et l'anneau MIDI y sont repointés. `NEOST_FUJI_TRACE` devient
+`NEOST_NET_TRACE`. Les programmes ST `MIDITEST.C` / `MODMTEST.C`, qui testent le MIDI
+ring et le modem, migrent de `dev/fujinet/` vers **`dev/netdemo/`** avec leur `build.sh`.
+
+**Effet de bord bienvenu sur l'ACSI** : l'opcode `$60` était routé vers le périphérique
+virtuel sur une cible ; il retrouve le **rejet strict sur toutes les cibles**, exactement
+comme le port de `hdc.c`. NeoST est donc *plus* fidèle qu'avant sur ce point.
+
+**Save-states : v12 → v13.** `FujiDevice` et `Acsi::fujiPending_` quittent le flux, et
+les bits de drapeau d'en-tête se décalent (bit1 = EtherNEC, bit2 = UltraSatan, bit3 =
+NetUSBee). Les `.state` antérieurs sont refusés avec un message explicite.
+
+**Vérification** : `--tier full` vert — 19 étalons, dont les 11 comparaisons pixel, **0
+pixel de différence**. Le retrait est neutre sur tout ce que la suite couvre.
+
 ## `docs/FUJINET.md` renommé, et un backend Internet réel pour la NE2000 (2026-08-22)
 
 **Renommage.** `docs/FUJINET.md` devient **`docs/EXTENSIONS.md`** : le fichier documentait

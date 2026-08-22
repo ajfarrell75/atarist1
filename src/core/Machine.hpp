@@ -30,7 +30,6 @@
 #include "io/MidiAcia.hpp"
 #include "io/GemdosHd.hpp"
 #include "io/Scc.hpp"
-#include "io/FujiDevice.hpp"
 #include "io/Ne2000.hpp"
 #include "io/UltraSatan.hpp"
 #include "io/Isp1160.hpp"
@@ -205,10 +204,6 @@ public:
     // que le frontend n'a pas appelé gemdos.setDirectory(...) — cf. io/GemdosHd.hpp.
     GemdosHd  gemdos{bus, cpu};
     Scc       scc;     // SCC série Z85C30 ($FF8C80) — Mega STE uniquement (cf. ctor/reconfigure)
-    // Périphérique FujiNet virtuel (extension NeoST, INACTIF par défaut). Attaché
-    // au bus ACSI par enableFujiNet ; le backend réseau (FujiHost) est posé par le
-    // frontend via fuji.setHost — le cœur reste sans socket ni thread.
-    FujiDevice fuji;
     // Carte réseau NE2000 sur le port cartouche (EtherNEC, extension NeoST,
     // INACTIVE par défaut). Le backend physique (NetBackend) est posé par le
     // frontend. Exclusive d'une cartouche montée (mêmes adresses $FA0000).
@@ -255,17 +250,6 @@ public:
     }
     void disableUltraSatan() { fdc.detachUltraSatan(); usatanOn_ = false; }
     bool ultraSatanEnabled() const { return usatanOn_; }
-
-    // Active le FujiNet virtuel sur la cible ACSI `target` (défaut 6 — laisse
-    // les cibles basses aux images disque de l'utilisateur). N'est PAS remis à
-    // zéro par reset()/hardReset() : un FujiNet réel survit au reboot de l'ST.
-    void enableFujiNet(int target = 6) {
-        fdc.attachFujiNet(&fuji, target);
-        fuji.setEnabled(true);
-        fuji.mountFloppyA  = [this](const std::string& p) { return fdc.loadImage(p, 0); };
-        fuji.mountHardDisk = [this, target](const std::string& p) { return fdc.mountAcsi(p, target); };
-    }
-    void disableFujiNet() { fdc.detachFujiNet(); fuji.setEnabled(false); }
 
 private:
     bool usatanOn_ = false;    // UltraSatan attaché (config, hors snapshot — cf. flags d'état)

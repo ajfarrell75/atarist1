@@ -227,8 +227,6 @@ static void testConfigParser() {
         a.rom = "roms/tos206fr.img"; a.disk = "disks/x.st"; a.diskb = "disks/y.st";
         a.cart = "carts/z.img";      a.gemdos = "/srv/gemdos"; a.acsi = "hd/c.img";
         a.machine = "megaste";       a.mem = "4m";  a.mono = true;  a.fpu = true;
-        a.fujinet = true;            a.fujinetTarget = 5;
-        a.fujinetHosts = "http://a|http://b";
         a.modem = true;              a.ethernec = true;
         a.joyport = 0;               a.joymap = "GUID1:0,GUID2:x";
         a.joydeadzone = 0.42f;       a.fastfdc = true;
@@ -248,11 +246,8 @@ static void testConfigParser() {
         checkStr("aller-retour machine",  b.machine, a.machine);
         checkStr("aller-retour mem",      b.mem,     a.mem);
         checkStr("aller-retour joymap",   b.joymap,  a.joymap);
-        checkStr("aller-retour fuji_hosts", b.fujinetHosts, a.fujinetHosts);
         checkBool("aller-retour mono",     b.mono     == a.mono,     true);
         checkBool("aller-retour fpu",      b.fpu      == a.fpu,      true);
-        checkBool("aller-retour fujinet",  b.fujinet  == a.fujinet,  true);
-        checkBool("aller-retour fuji_target", b.fujinetTarget == a.fujinetTarget, true);
         checkBool("aller-retour modem",    b.modem    == a.modem,    true);
         checkBool("aller-retour ethernec", b.ethernec == a.ethernec, true);
         checkBool("aller-retour joyport",  b.joyport  == a.joyport,  true);

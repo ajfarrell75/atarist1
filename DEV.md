@@ -13,9 +13,9 @@ read8/write8 vers les composants), et **le cœur ne dépend pas du GUI**.
   `YM2149`, `DmaSound`/`AudioMix`, `Blitter`, `Rtc`, `Fpu`, `GemdosHd`, `Glue`, plus
   `Machine`, `Scheduler`, `Tracer`/`Symbols`, `Framing`, `MediaScan`, `HostPath` et
   `AppConfig` (le format `neost.cfg` est du parsing pur, donc côté cœur).
-- **`neost_net`** (lib statique, HORS cœur) = les backends hôte du FujiNet virtuel :
-  sockets et threads y vivent (`FujiHostReplay`/`MiniJson` toujours ; `FujiHostLive`,
-  `HttpClient`, `HayesModem`, `MidiRing` sous `NEOST_WITH_NET`).
+- **`neost_net`** (lib statique, HORS cœur) = la couche réseau hôte : sockets et
+  threads y vivent (`SlirpBackend` toujours ; `Socket`, `HayesModem`, `MidiRing`
+  sous `NEOST_WITH_NET`).
 - **`Machine`** assemble les composants, les branche au `Bus`, encapsule `runFrame()`.
 - **`neost`** (GUI), **`neost-headless`**, **`neost-web`** et l'APK Android partagent
   `Machine`. Le GUI ajoute GLFW/OpenGL/ImGui/miniaudio et bride à 50 fps réels.
@@ -47,17 +47,17 @@ src/
     MidiAcia.{hpp,cpp}      2e ACIA 6850 (MIDI).
     Fdc.{hpp,cpp}           WD1772 + DMA disquette + routage ACSI.
     StxImage.{hpp,cpp}      Images Pasti .stx (jeux protégés).
-    Acsi.{hpp,cpp}          Disque dur ACSI (hdc.c) + rattachement du FujiNet virtuel.
+    Acsi.{hpp,cpp}          Disque dur ACSI (hdc.c) + rattachement de l'UltraSatan.
     GemdosHd.{hpp,cpp}      Disque dur GEMDOS (dossier hôte → C:), cf. § dédié.
     Scc.{hpp,cpp}           Z85C30 (Mega STE) ; Scu.hpp : gating d'IRQ Mega STE.
     Fpu.{hpp,cpp}           MC68881 optionnel (SoftFloatX80.hpp).
     Rtc.{hpp,cpp}           RP5C15 (Mega ST/Mega STE).
     MediaScan.{hpp,cpp}     Inventaire des supports (tri, images « sœurs » d'un même jeu).
-    FujiDevice/Ne2000       Extensions NeoST : FujiNet virtuel, EtherNEC (cf. docs/EXTENSIONS.md).
+    Ne2000.{hpp,cpp}        Extension NeoST : NE2000 (EtherNEC, cf. docs/EXTENSIONS.md).
     UltraSatan/Isp1160      Extensions NeoST : interface SD UltraSatan (ACSI, paquets 'US'), hôte USB
                             ISP1160 du NetUSBee (port cartouche, avec Ne2000). Cf. docs/EXTENSIONS.md.
-  net/                      Backends hôte du réseau (neost_net) : FujiHostLive/Replay,
-                            HttpClient, HayesModem, MidiRing, MiniJson.
+  net/                      Couche réseau hôte (neost_net) : Socket (TCP/UDP partagé),
+                            HayesModem, MidiRing, NetBackend/SlirpBackend.
   gui/                      Extraits de main.cpp : AppConfig (neost.cfg + profils
                             profiles/*.cfg — parseConfigLine / writeConfigKeys /
                             writeConfigAtomic), MediaPages (pages supports), UiCommon

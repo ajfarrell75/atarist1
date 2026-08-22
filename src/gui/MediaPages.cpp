@@ -334,23 +334,19 @@ void drawHardDiskPage(const std::string& hdDir, const std::string& gemdosDefault
     ImGui::TextDisabled("the machine (TOS only probes disks at boot).");
 }
 
-// Page « Network » : le FujiNet virtuel (extension NeoST — cf. docs/EXTENSIONS.md).
+// Page « Network » : les extensions réseau de NeoST (cf. docs/EXTENSIONS.md).
 // Discipline habituelle : données en entrée, requêtes en sortie, AUCUNE E/S ici.
-void drawNetworkPage(bool fujiOn, int fujiTarget, const char* backendName,
-                     const FujiDevice& fuji, FujiHost* host, bool modemOn, bool etherOn,
+void drawNetworkPage(bool modemOn, bool etherOn,
                      bool netusbeeOn, bool cartMounted,
-                     int& reqFujinet, int& reqFujinetTarget,
-                     std::string& reqFujinetMount,
-                     std::string& reqFujinetHosts, bool& reqFujinetHostsSet,
                      int& reqModem, int& reqEther, int& reqNetUsbee) {
-    ImGui::TextDisabled("FujiNet — virtual network device (NeoST extension)");
-    ImGui::TextWrapped("Protocol offloading for the ST: mount disk images from URLs, "
-                       "give 68000 programs HTTP/TCP/JSON without a TCP/IP stack. "
-                       "Attached to the ACSI bus (vendor opcode $60 — docs/EXTENSIONS.md).");
+    ImGui::TextDisabled("Network extensions (NeoST)");
+    ImGui::TextWrapped("Hardware that really existed on the ST, emulated here: a Hayes "
+                       "modem on the serial port, and NE2000-based cartridge-port "
+                       "adapters for the period TCP/IP stacks (STinG, MiNTnet).");
     ImGui::Separator();
 
-    // Modem Hayes : indépendant du FujiNet (le logiciel d'époque — terminaux,
-    // BBS, STinG/STiK en SLIP — parle à « un modem sur le port série »).
+    // Modem Hayes : le logiciel d'époque — terminaux, BBS, STinG/STiK en SLIP —
+    // parle à « un modem sur le port série ».
     bool mdm = modemOn;
     if (ImGui::Checkbox("Hayes modem on RS-232 (AT commands \xe2\x86\x92 TCP bridge)", &mdm))
         reqModem = mdm ? 1 : 0;
@@ -369,78 +365,4 @@ void drawNetworkPage(bool fujiOn, int fujiTarget, const char* backendName,
         if (ImGui::Checkbox("NetUSBee (NE2000 + ISP1160 USB host on the cartridge port)", &nub))
             reqNetUsbee = nub ? 1 : 0;
     }
-    ImGui::Separator();
-
-    bool on = fujiOn;
-    if (ImGui::Checkbox("Enable FujiNet (restarts the machine)", &on))
-        reqFujinet = on ? 1 : 0;
-
-    if (!fujiOn) {
-        ImGui::TextDisabled("(disabled — no network access from the emulated machine)");
-        return;
-    }
-
-    ImGui::Text("Backend: %s", backendName);
-    int tgt = fujiTarget;
-    ImGui::SetNextItemWidth(120.0f);
-    if (ImGui::InputInt("ACSI target (0-7)", &tgt))
-        reqFujinetTarget = (tgt < 0) ? 0 : (tgt > 7 ? 7 : tgt);
-
-    // ── Montage direct d'une image distante ─────────────────────────────────
-    ImGui::Separator();
-    ImGui::TextDisabled("Mount a remote disk image (http://…/file.st or a raw HD image)");
-    static char g_fujiUrlBuf[512] = "";
-    ImGui::SetNextItemWidth(-110.0f);
-    ImGui::InputTextWithHint("##fujiUrl", "http://host/path/disk.st…",
-                             g_fujiUrlBuf, sizeof g_fujiUrlBuf);
-    ImGui::SameLine();
-    if (ImGui::Button("Download##fuji") && g_fujiUrlBuf[0]) reqFujinetMount = g_fujiUrlBuf;
-
-    // ── Slots d'hôtes (préfixes d'URL pour les programmes ST) ───────────────
-    ImGui::Separator();
-    ImGui::TextDisabled("Host slots (URL prefixes offered to ST-side programs)");
-    static char g_fujiHostBuf[4][256];
-    static bool g_fujiHostSeeded = false;
-    if (!g_fujiHostSeeded) {
-        for (int i = 0; i < 4; ++i)
-            std::snprintf(g_fujiHostBuf[i], sizeof g_fujiHostBuf[i], "%s",
-                          fuji.hostSlot(i).c_str());
-        g_fujiHostSeeded = true;
-    }
-    for (int i = 0; i < 4; ++i) {
-        ImGui::PushID(i);
-        ImGui::SetNextItemWidth(-60.0f);
-        char label[16];
-        std::snprintf(label, sizeof label, "slot %d", i);
-        ImGui::InputText(label, g_fujiHostBuf[i], sizeof g_fujiHostBuf[i]);
-        ImGui::PopID();
-    }
-    if (ImGui::Button("Apply host slots")) {
-        std::string joined;
-        for (int i = 0; i < 4; ++i) {
-            if (i) joined += '|';
-            joined += g_fujiHostBuf[i];
-        }
-        // Rogne les '|' de queue (slots vides) pour un neost.cfg propre.
-        while (!joined.empty() && joined.back() == '|') joined.pop_back();
-        reqFujinetHosts = joined;
-        reqFujinetHostsSet = true;
-    }
-
-    // ── État des canaux N: ──────────────────────────────────────────────────
-    if (host) {
-        ImGui::Separator();
-        ImGui::TextDisabled("N: channels");
-        bool any = false;
-        for (int i = 0; i < FujiHost::MAX_CHANNELS; ++i) {
-            const FujiChanStatus st = host->status(i);
-            if (st.connected == 0 && st.avail == 0 && st.error == fn_err::OFFLINE) continue;
-            ImGui::Text("N%d:  %u byte(s) ready, %s (err %u)", i + 1, st.avail,
-                        st.connected ? "connected" : "closed", st.error);
-            any = true;
-        }
-        if (!any) ImGui::TextDisabled("(no channel open)");
-    }
-    ImGui::Separator();
-    ImGui::TextDisabled("Last device error: %u", fuji.lastError());
 }

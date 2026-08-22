@@ -83,10 +83,6 @@ public:
     bool acsiActive() const { return acsi_.anyEnabled(); }
     const std::string& acsiMountedPath(int target = 0) const { return acsi_.mountedPath(target); }
     int  acsiPartitionCount() const { return acsi_.partitionCount(); }
-    // FujiNet virtuel sur le bus ACSI (extension NeoST, cf. docs/EXTENSIONS.md).
-    void attachFujiNet(FujiDevice* dev, int target) { acsi_.attachFujiNet(target, dev); }
-    void detachFujiNet() { acsi_.detachFujiNet(); }
-    int  fujiTarget() const { return acsi_.fujiTarget(); }
     // UltraSatan (extension NeoST, cf. io/UltraSatan.hpp) : 2 slots SD sur 2 cibles.
     void attachUltraSatan(UltraSatan* dev, int firstTarget) { acsi_.attachUltraSatan(firstTarget, dev); }
     void detachUltraSatan() { acsi_.detachUltraSatan(); }

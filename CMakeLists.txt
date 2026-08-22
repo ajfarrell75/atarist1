@@ -40,10 +40,10 @@ set(NEOST_VERSION_STR "${PROJECT_VERSION}" CACHE STRING "Version affichée par l
 
 option(NEOST_WITH_IMGUI  "Greffe Dear ImGui (visualiseur hexa + registres)" ON)
 option(NEOST_WARN_STRICT "Compilation stricte (-Wall -Wextra -Wpedantic)"   ON)
-# FujiNet / réseau : backend hôte à sockets (FujiHostLive). OFF → seuls les
-# backends déterministes (Null/Replay) sont compilés — c'est le cas forcé des
-# cibles WASM et Android, qui n'ont ni threads POSIX complets ni intérêt v1.
-option(NEOST_WITH_NET "FujiNet : backend réseau hôte (sockets)" ON)
+# Réseau hôte : sockets réelles (modem Hayes, anneau MIDI). OFF → aucune socket
+# n'est compilée — c'est le cas forcé des cibles WASM et Android, qui n'ont ni
+# threads POSIX complets ni intérêt v1.
+option(NEOST_WITH_NET "Extensions réseau : sockets hôte (modem Hayes, anneau MIDI)" ON)
 if(EMSCRIPTEN OR ANDROID)
     set(NEOST_WITH_NET OFF)
 endif()
@@ -79,7 +79,6 @@ add_library(neost_core STATIC
     src/io/Acsi.cpp
     src/io/Scc.cpp
     src/io/MediaScan.cpp
-    src/io/FujiDevice.cpp
     src/io/Ne2000.cpp
     src/io/UltraSatan.cpp
     src/io/Isp1160.cpp
@@ -93,17 +92,15 @@ target_include_directories(neost_core PUBLIC "${CMAKE_SOURCE_DIR}/src")
 set_source_files_properties(
     src/core/Bus.cpp src/core/Shifter.cpp src/core/YM2149.cpp src/core/DmaSound.cpp
     src/core/Blitter.cpp
-    src/core/Machine.cpp src/core/Tracer.cpp src/core/Symbols.cpp src/io/Mfp.cpp src/io/Ikbd.cpp src/io/Fdc.cpp src/io/StxImage.cpp src/io/Rtc.cpp src/io/MidiAcia.cpp src/io/Fpu.cpp src/io/GemdosHd.cpp src/io/Acsi.cpp src/io/Scc.cpp src/io/MediaScan.cpp src/io/FujiDevice.cpp src/io/Ne2000.cpp src/io/UltraSatan.cpp src/io/Isp1160.cpp src/core/Framing.cpp src/util/HostPath.cpp src/gui/AppConfig.cpp
+    src/core/Machine.cpp src/core/Tracer.cpp src/core/Symbols.cpp src/io/Mfp.cpp src/io/Ikbd.cpp src/io/Fdc.cpp src/io/StxImage.cpp src/io/Rtc.cpp src/io/MidiAcia.cpp src/io/Fpu.cpp src/io/GemdosHd.cpp src/io/Acsi.cpp src/io/Scc.cpp src/io/MediaScan.cpp src/io/Ne2000.cpp src/io/UltraSatan.cpp src/io/Isp1160.cpp src/core/Framing.cpp src/util/HostPath.cpp src/gui/AppConfig.cpp
     PROPERTIES COMPILE_OPTIONS "${NEOST_STRICT_OPTS}")
 
 # =============================================================================
-#  neost_net — backends hôte du FujiNet virtuel (HORS cœur : c'est ici que
-#  vivent sockets et threads). Toujours bâtie (Replay/MiniJson sont sans
-#  dépendance) ; FujiHostLive n'entre que si NEOST_WITH_NET.
+#  neost_net — couche réseau hôte (HORS cœur : c'est ici que vivent sockets et
+#  threads). Toujours bâtie ; les sources à sockets n'entrent que si
+#  NEOST_WITH_NET.
 # =============================================================================
 add_library(neost_net STATIC
-    src/net/FujiHostReplay.cpp
-    src/net/MiniJson.cpp
     src/net/SlirpBackend.cpp)
 target_link_libraries(neost_net PUBLIC neost_core)
 
@@ -122,11 +119,11 @@ if(SLIRP_FOUND)
 else()
     message(STATUS "NeoST: libslirp absente — NE2000 en boucle locale seulement")
 endif()
-set(NEOST_NET_SRC src/net/FujiHostReplay.cpp src/net/MiniJson.cpp)
+set(NEOST_NET_SRC)
 if(NEOST_WITH_NET)
-    target_sources(neost_net PRIVATE src/net/FujiHostLive.cpp src/net/HttpClient.cpp
+    target_sources(neost_net PRIVATE src/net/Socket.cpp
                                      src/net/HayesModem.cpp src/net/MidiRing.cpp)
-    list(APPEND NEOST_NET_SRC src/net/FujiHostLive.cpp src/net/HttpClient.cpp
+    list(APPEND NEOST_NET_SRC src/net/Socket.cpp
                               src/net/HayesModem.cpp src/net/MidiRing.cpp)
     target_compile_definitions(neost_net PUBLIC NEOST_WITH_NET=1)
     find_package(Threads QUIET)

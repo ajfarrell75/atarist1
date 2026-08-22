@@ -1543,18 +1543,6 @@ Ces fonctionnalités **n'existent pas dans Hatari** (extensions assumées, consi
 *signale*, la lib `neost_net` (frontends) *fait l'I/O* — patron `Fdc::soundSink_`/
 `Mfp::serialSink_`.
 
-- **FujiNet virtuel sur le bus ACSI** (`io/FujiDevice`, cible ACSI dédiée, défaut 6) :
-  périphérique WiFi de **déport de protocole** — la machine envoie
-  `{device, cmd, aux1, aux2, dir, len}` (opcode vendeur ACSI **$60**, 10 octets) et le
-  périphérique fait le travail. Devices `$70` (Fuji : WiFi, host/device slots, montage
-  d'images, horloge) et `$71-$78` (**N1:-N8:** : open/close/read/write/status, JSON
-  parse/query déportés). HTTP(GET)/TCP via `FujiHostLive` (sockets, thread de travail) ;
-  `FujiHostReplay` (fixtures, **déterministe**) ; `FujiHostNull` (hors ligne).
-  Montage d'une **image distante** en lecteur A (bootable sans un octet de pilote ST).
-  Les commandes SCSI standard restent intactes sur la cible ; l'opcode $60 **verrouillé**
-  à la cible FujiNet (toute autre cible = port `hdc.c` byte-identique). Lib 68000 +
-  `NWGET.TOS` dans `dev/fujinet/`. Auto-test fil : `--fuji-selftest` (palier `fast`).
-  État FujiNet introduit dans les save-states **v10** ; format courant **v11**.
 - **Modem Hayes sur RS-232** (`net/HayesModem`, `--modem`) : commandes `AT` sur l'USART
   MFP → **pont TCP réel** (`ATDT hôte:port` → `CONNECT`, `+++`/`ATH`, DCD suit la
   porteuse). Débloque STiK/STinG (SLIP/PPP), terminaux, BBS. S'appuie sur

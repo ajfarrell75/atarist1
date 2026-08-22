@@ -344,7 +344,7 @@ rapides tournent en secondes et **gardent le commit**) :
   100-2500 ; les seules frames « fullscreen » ~300-400 = fond de chargement gris uni, IDENTIQUE Hatari).
 - ✅ **P3 — pont config GUI↔headless — FAIT (2026-07-09)** : `--from-cfg neost.cfg` rejoue en headless la
   config EXACTE du GUI (rom/machine/mem/cpu/mono/fastfdc/fpu, supports disk/diskb/cart/gemdos/acsi et
-  réseau fujinet*/modem/ethernec — `diskb`, `modem` et `ethernec` ajoutées le 2026-08-17 ; chemins `./../`
+  réseau modem/ethernec — `diskb`, `modem` et `ethernec` ajoutées le 2026-08-17 ; chemins `./../`
   du GUI résolus vers la racine ; les options CLI placées après surchargent). Reproduit « ce que
   l'utilisateur a lancé » → `--from-cfg neost.cfg --frames N --screenshot s.ppm` puis diff Hatari.
 - ✅ **Orchestration — FAIT (2026-07-09)** : `tools/run_all.py --tier fast` (P0+P1 et les gardes
@@ -354,7 +354,7 @@ rapides tournent en secondes et **gardent le commit**) :
 
 **Pyramide de test COMPLÈTE (2026-07-09, élargie depuis)** : **P0** `neost-selftest` (logique pure :
 chemins hôte, `neost.cfg`) + `--spec512-selftest` (borderless + bordé) + `--bus-selftest` +
-`--mfp-selftest` + `--msa-selftest` + `--fuji-selftest` + `--enec-selftest` · **P1** verdicts série
+`--mfp-selftest` + `--msa-selftest` + `--enec-selftest` · **P1** verdicts série
 cartouche (cpu/timing/frame/ipl/fpu) + `run_selftests.py` · **cycle-bench** (`run_cyclebench.py`,
 golden 68000) · **round-trip save-state** + **contrôle de la disquette livrée**
 (`check_disk_assets.py`) · **P2** `ref_kind` oracle + diff par ligne + `--verify-refs` ·
@@ -382,13 +382,6 @@ ACIA) ; si une vraie démo spec512 **overscan** (bordures ouvertes) est rapatri�
 - Capturer des **traces Hatari de référence** pour `trace_diff` (Arkanoid & co).
 
 ### Réseau (extensions NeoST — base livrée 2026-08-12, cf. `docs/EXTENSIONS.md`)
-- **FujiNet — TLS/HTTPS** : brancher mbedTLS (dépendance optionnelle, `NEOST_WITH_TLS`) — v1
-  refuse `https://`. Puis POST/headers custom côté N:, UDP, **TNFS**, FTP, imprimante P: (PDF).
-- **FujiNet — `FujiHostBridge`** : backend UDP relayant vers le **vrai firmware FujiNet-PC**
-  (façon NetSIO, requête de sync qui met l'émulation en pause). Interface `FujiHost` déjà
-  pluggable — c'est un simple ajout de backend, hérite de tous les protocoles amont.
-- **FujiNet — lib ST** : proposer le dossier `atarist/` en amont à `fujinet-lib` pour cadrer le
-  binding ACSI tôt ; device slots 0-7 différenciés ; montage lecteur B.
 - 🔴 **PRIORITÉ AU REDÉMARRAGE — `NetBackendSlirp` : finir le dernier pas** (2026-08-22).
   Le backend Internet réel de la NE2000 (NetUSBee/EtherNEC) est **écrit, compilé, câblé et
   aux trois quarts prouvé** : `src/net/SlirpBackend.{hpp,cpp}`, option CMake `NEOST_WITH_SLIRP`
@@ -452,5 +445,4 @@ ACIA) ; si une vraie démo spec512 **overscan** (bordures ouvertes) est rapatri�
 - **Modem/STinG** : documenter l'installation STinG (noyau+`sting.inf` dans `AUTO`, modules dans
   `C:\STING`) dans `docs/TEST_SOFTWARE.md` ; banc SLIP bout-en-bout.
 - **MIDI ring** : option GUI (saisie du pair) ; test en anneau à 2 nœuds (deux instances NeoST).
-- **Sécurité** : liste blanche de domaines optionnelle ; rejouer les scénarios d'évasion GEMDOS
-  (chemins/symlinks) contre les écritures de fichiers déclenchées par FujiNet.
+- **Sécurité** : liste blanche de domaines optionnelle pour les backends sortants.

@@ -48,9 +48,6 @@ void parseConfigLine(Config& c, std::string line) {
     else if (line.rfind("cart=", 0) == 0) c.cart = line.substr(5);
     else if (line.rfind("gemdos=", 0) == 0) c.gemdos = line.substr(7);
     else if (line.rfind("acsi=", 0) == 0) c.acsi = line.substr(5);
-    else if (line.rfind("fujinet=", 0) == 0) c.fujinet = (line.substr(8) == "1");
-    else if (line.rfind("fujinet_target=", 0) == 0) c.fujinetTarget = std::atoi(line.substr(15).c_str());
-    else if (line.rfind("fujinet_hosts=", 0) == 0) c.fujinetHosts = line.substr(14);
     else if (line.rfind("modem=", 0) == 0) c.modem = (line.substr(6) == "1");
     else if (line.rfind("midi_loopback=", 0) == 0) c.midiLoopback = (line.substr(14) == "1");
     else if (line.rfind("midi_out_gm=", 0) == 0) c.midiOutGm = (line.substr(12) == "1");
@@ -142,9 +139,6 @@ void writeConfigKeys(std::ostream& f, const Config& w, bool full) {
     f << "rom=" << w.rom << "\ndisk=" << w.disk << "\ndiskb=" << w.diskb
       << "\ncart=" << w.cart
       << "\ngemdos=" << w.gemdos << "\nacsi=" << w.acsi
-      << "\nfujinet=" << (w.fujinet ? 1 : 0)
-      << "\nfujinet_target=" << w.fujinetTarget
-      << "\nfujinet_hosts=" << w.fujinetHosts
       << "\nmodem=" << (w.modem ? 1 : 0)
       << "\nmidi_loopback=" << (w.midiLoopback ? 1 : 0)
       << "\nmidi_out_gm=" << (w.midiOutGm ? 1 : 0)

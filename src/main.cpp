@@ -53,10 +53,8 @@
 #endif
 
 #include "core/Machine.hpp"
-#include "net/FujiHost.hpp"
 #include "net/NetBackend.hpp"
 #ifdef NEOST_WITH_NET
-#include "net/FujiHostLive.hpp"
 #include "net/HayesModem.hpp"
 #endif
 #include "audio/Audio.hpp"
@@ -1895,10 +1893,6 @@ struct ConfigUi {
     std::string reqMountA, reqMountB, reqMountCart, reqMountGemdos, reqMountAcsi;
     bool reqEjectA = false, reqEjectB = false, reqEjectCart = false;
     bool reqEjectGemdos = false, reqEjectAcsi = false;
-    // FujiNet (page Network) : bascule, cible ACSI, montage d'URL, slots d'hôtes.
-    int  reqFujinet = -1, reqFujinetTarget = -1;
-    std::string reqFujinetMount, reqFujinetHosts;
-    bool reqFujinetHostsSet = false;
     int  reqModem = -1;                   // modem Hayes RS-232 (0/1)
     int  reqEther = -1;                   // EtherNEC NE2000 (0/1)
     // Sorties MIDI (page Sound) : synthé GM, port CoreMIDI, MT-32 (0/1) ; modèle 0 auto/1 MT-32/2 CM-32L.
@@ -1911,8 +1905,6 @@ struct ConfigUi {
     int  reqUltraSatan = -1;              // UltraSatan sur les IDs ACSI 0-1 (0/1)
     std::string reqMountSd2;              // image SD du slot 2 (ID 1)
     bool reqEjectSd2 = false;
-    const char* fujiBackendName = "";     // lecture : nom du backend actif
-    FujiHost* fujiHost = nullptr;         // lecture : statut des canaux N:
     bool reqApply  = false;       // appliquer les réglages matériels en attente
     bool reqKiosk  = false;
     int  reqMonitor = -1;         // 1 = couleur, 0 = mono
@@ -2124,14 +2116,9 @@ void drawConfigWindow(ConfigUi& ui) {
                      ui.reqMountCart, ui.reqEjectCart);
         break;
     case kCfgNet:
-        drawNetworkPage(ui.machine->fuji.enabled(),
-                        ui.cfg ? ui.cfg->fujinetTarget : 6,
-                        ui.fujiBackendName, ui.machine->fuji, ui.fujiHost,
-                        ui.cfg && ui.cfg->modem, ui.machine->ne2000.enabled(),
+        drawNetworkPage(ui.cfg && ui.cfg->modem, ui.machine->ne2000.enabled(),
                         ui.machine->netUsbeeEnabled(),
                         !ui.machine->bus.mountedCartPath().empty(),
-                        ui.reqFujinet, ui.reqFujinetTarget,
-                        ui.reqFujinetMount, ui.reqFujinetHosts, ui.reqFujinetHostsSet,
                         ui.reqModem, ui.reqEther, ui.reqNetUsbee);
         break;
     case kCfgScreen: {
@@ -2617,36 +2604,6 @@ int main(int argc, char** argv) {
         }
     };
     usatanApply();
-    // FujiNet virtuel (fujinet= dans neost.cfg) : cible ACSI dédiée + backend hôte
-    // (sockets si le build les a — cf. NEOST_WITH_NET). Extension NeoST, OFF par défaut.
-    std::unique_ptr<FujiHost> fujiHost;
-    auto fujiApply = [&](bool on) {
-        if (on) {
-            if (!fujiHost) {
-#ifdef NEOST_WITH_NET
-                fujiHost = std::make_unique<FujiHostLive>();
-#else
-                fujiHost = std::make_unique<FujiHostNull>();
-#endif
-            }
-            machine.fuji.setHost(fujiHost.get());
-            const int tgt = (cfg.fujinetTarget >= 0 && cfg.fujinetTarget <= 7)
-                                ? cfg.fujinetTarget : 6;
-            machine.enableFujiNet(tgt);
-            // Slots d'hôtes mémorisés : « url|url|… », slot 0 en tête.
-            std::size_t pos = 0;
-            for (int slot = 0; slot < FujiDevice::kHostSlots
-                               && pos <= cfg.fujinetHosts.size(); ++slot) {
-                std::size_t bar = cfg.fujinetHosts.find('|', pos);
-                if (bar == std::string::npos) bar = cfg.fujinetHosts.size();
-                if (bar > pos) machine.fuji.setHostSlot(slot, cfg.fujinetHosts.substr(pos, bar - pos));
-                pos = bar + 1;
-            }
-        } else {
-            machine.disableFujiNet();
-        }
-    };
-    if (cfg.fujinet) fujiApply(true);
 #ifdef NEOST_WITH_NET
     // Modem Hayes (modem= dans neost.cfg) : commandes AT sur l'USART → pont TCP.
     std::unique_ptr<HayesModem> hayesModem;
@@ -3317,8 +3274,6 @@ int main(int argc, char** argv) {
         static ConfigUi cfgUi;
         cfgUi.disksDir = disksDir; cfgUi.cartsDir = cartsDir; cfgUi.romsDir = romsDir;
         cfgUi.hdDir    = hdDir;    cfgUi.gemdosDir = gemdosDir;
-        cfgUi.fujiBackendName = fujiHost ? fujiHost->name() : "none";
-        cfgUi.fujiHost = machine.fuji.enabled() ? fujiHost.get() : nullptr;
         // Résolu à la PREMIÈRE trame, donc après le saveConfig de démarrage : c'est lui
         // qui a tranché où vit neost.cfg, et les profils le suivent (cf. profilesDir).
         static const std::string profDirResolved = profilesDir(exeDir);
@@ -3661,43 +3616,6 @@ int main(int argc, char** argv) {
                 saveConfig(exeDir, cfg, &machine);
                 cfgUi.reqFastFdc = -1;
             }
-            // FujiNet (page Network) : bascule / cible / montage d'URL / slots.
-            if (cfgUi.reqFujinet >= 0) {
-                cfg.fujinet = (cfgUi.reqFujinet == 1);
-                fujiApply(cfg.fujinet);
-                saveConfig(exeDir, cfg, &machine);
-                reqHardReset = true;          // le TOS ne sonde l'ACSI qu'au boot
-                cfgUi.reqFujinet = -1;
-            }
-            if (cfgUi.reqFujinetTarget >= 0) {
-                cfg.fujinetTarget = cfgUi.reqFujinetTarget;
-                if (cfg.fujinet) { fujiApply(true); reqHardReset = true; }
-                saveConfig(exeDir, cfg, &machine);
-                cfgUi.reqFujinetTarget = -1;
-            }
-            if (!cfgUi.reqFujinetMount.empty()) {
-                const std::string url = cfgUi.reqFujinetMount;
-                cfgUi.reqFujinetMount.clear();
-                if (machine.fuji.mountRemote(url)) {
-                    g_stateMsg = "\xef\x87\xab Remote image mounted";
-                    // Une image DISQUE DUR ne sera vue qu'au prochain boot.
-                    const auto dot = url.find_last_of('.');
-                    std::string ext = dot == std::string::npos ? "" : url.substr(dot + 1);
-                    for (char& ch : ext) ch = char(tolower(uint8_t(ch)));
-                    if (ext != "st" && ext != "msa" && ext != "dim" && ext != "stx")
-                        reqHardReset = true;
-                } else {
-                    g_stateMsg = "Download/mount failed (see console)";
-                }
-                g_stateMsgFrames = 120;
-            }
-            if (cfgUi.reqFujinetHostsSet) {
-                cfg.fujinetHosts = cfgUi.reqFujinetHosts;
-                if (cfg.fujinet) fujiApply(true);   // re-sème les slots
-                saveConfig(exeDir, cfg, &machine);
-                cfgUi.reqFujinetHostsSet = false;
-                cfgUi.reqFujinetHosts.clear();
-            }
             if (cfgUi.reqModem >= 0) {
                 cfg.modem = (cfgUi.reqModem == 1);
 #ifdef NEOST_WITH_NET
@@ -3842,11 +3760,10 @@ int main(int argc, char** argv) {
                     };
                     wantDisk(cfg.disk,  prevA, reqMount,  reqEject);
                     wantDisk(cfg.diskb, prevB, reqMountB, reqEjectB);
-                    // Réseau : le profil porte fujinet=/modem=/ethernec= mais ni
-                    // applyConfig ni le rebuild ne les branchent — sans ces appels,
-                    // les cases affichaient l'état du profil alors que le matériel
-                    // restait celui d'avant (modem coché mais AT dans le vide…).
-                    fujiApply(cfg.fujinet);
+                    // Réseau : le profil porte modem=/ethernec= mais ni applyConfig
+                    // ni le rebuild ne les branchent — sans ces appels, les cases
+                    // affichaient l'état du profil alors que le matériel restait
+                    // celui d'avant (modem coché mais AT dans le vide…).
 #ifdef NEOST_WITH_NET
                     modemApply(cfg.modem);
 #endif

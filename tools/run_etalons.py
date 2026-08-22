@@ -237,7 +237,6 @@ def run_one(entry: dict, args) -> bool:
                      "bus_selftest": "--bus-selftest",
                      "mfp_selftest": "--mfp-selftest",
                      "msa_selftest": "--msa-selftest",
-                     "fuji_selftest": "--fuji-selftest",
                      "enec_selftest": "--enec-selftest",
                      "usatan_selftest": "--usatan-selftest",
                      "netusbee_selftest": "--netusbee-selftest"}.get(entry.get("type"))

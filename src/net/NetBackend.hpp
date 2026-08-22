@@ -2,9 +2,9 @@
 //  NetBackend.hpp — Couche physique Ethernet pour la carte NE2000 émulée.
 //
 //  La NE2000 (io/Ne2000) émet et reçoit des TRAMES Ethernet complètes (avec MAC
-//  src/dst, sans CRC) ; le backend les fait transiter vers le monde réel. Comme
-//  FujiHost, cette interface vit HORS du cœur : le cœur ne connaît que
-//  `send(frame)` et pompe `recv(frame)`.
+//  src/dst, sans CRC) ; le backend les fait transiter vers le monde réel. Cette
+//  interface vit HORS du cœur : le cœur ne connaît que `send(frame)` et pompe
+//  `recv(frame)`.
 //
 //  Backends :
 //    · NetBackendNull  — aucun réseau (les trames émises sont perdues) ;

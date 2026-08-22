@@ -90,7 +90,7 @@ void Mfp::reset() {
 }
 
 // -----------------------------------------------------------------------------
-//  Injection RX série côté hôte (modem Hayes, FujiNet RS-232…). Les octets sont
+//  Injection RX série côté hôte (modem Hayes). Les octets sont
 //  mis en file puis livrés UN PAR UN au débit série configuré (~10 bits/octet),
 //  avec IRQ RxFull à chaque livraison — un pilote d'époque qui compte sur le
 //  rythme du fil (STiK/STinG en SLIP) ne perd ainsi aucun octet. La file est

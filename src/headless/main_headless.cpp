@@ -27,13 +27,9 @@
 #include "core/Machine.hpp"
 #include "util/HostPath.hpp"   // chemins hôte : UNE définition d'« absolu »
 #include "gui/AppConfig.hpp"   // neost.cfg : UNE définition du rognage de ligne
-#include "net/FujiHost.hpp"
-#include "net/FujiHostReplay.hpp"
-#include "net/MiniJson.hpp"
 #include "net/NetBackend.hpp"
 #include "net/SlirpBackend.hpp"
 #ifdef NEOST_WITH_NET
-#include "net/FujiHostLive.hpp"
 #include "net/HayesModem.hpp"
 #include "net/MidiRing.hpp"
 #endif
@@ -91,14 +87,6 @@ void usage() {
         "  --printer FILE    Centronics printer: capture the printed bytes into FILE\n"
         "  --acsi IMG        ACSI hard disk image (target 0): TOS reads the partition\n"
         "                    table and mounts C:/D:… (alias --hd; port of hdc.c)\n"
-        "  --fujinet         attach the virtual FujiNet on the ACSI bus (target 6;\n"
-        "                    NeoST extension, see docs/EXTENSIONS.md)\n"
-        "  --fujinet-target N  ACSI target of the FujiNet device (0-7, default 6)\n"
-        "  --fujinet-host URL  put URL in host slot 0; if it points to a disk image\n"
-        "                    (.st/.msa/.dim/.stx or raw HD), download and mount it\n"
-        "  --fujinet-replay DIR  deterministic backend: replay fixtures from DIR\n"
-        "                    (no network I/O — used by the test suite)\n"
-        "  --fujinet-offline no network backend (device present, WiFi down)\n"
         "  --modem           Hayes modem on the MFP USART: AT commands bridge the\n"
         "                    serial port to real TCP (ATDT host:port -> CONNECT)\n"
         "  --ethernec        NE2000/EtherNEC on the cartridge port (loopback backend;\n"
@@ -121,8 +109,6 @@ void usage() {
         "  --bus-selftest    self-test of the bus error model (whitelist) then exit\n"
         "  --mfp-selftest    self-test of the MFP (GPIP/edges/Timer B) then exit\n"
         "  --msa-selftest    self-test of the .msa re-encoding (round-trip) then exit\n"
-        "  --fuji-selftest   self-test of the virtual FujiNet (ACSI wire protocol,\n"
-        "                    deterministic replay backend) then exit\n"
         "  --enec-selftest   self-test of the NE2000/EtherNEC (cartridge-port wire\n"
         "                    protocol, loopback backend) then exit\n"
         "  --usatan-selftest self-test of the UltraSatan (ACSI wire protocol: INQUIRY,\n"
@@ -139,191 +125,6 @@ void usage() {
         "  --shot-from N     only start the --shot-every dumps at frame N\n"
         "  --version         print the build version and exit\n"
         "  rom               TOS image (default roms/etos192us.img)\n");
-}
-
-// =============================================================================
-//  --fuji-selftest — auto-test DÉTERMINISTE du FujiNet virtuel, au niveau FIL :
-//  on pilote les registres DMA $FF8604/06 exactement comme le ferait un pilote
-//  ST (marqueur ICD, CDB $60 de 10 octets, phases DMA), à travers le VRAI plan
-//  mémoire (Bus → Fdc → Acsi → FujiDevice → backend de rejeu). Les fixtures
-//  sont auto-générées dans un dossier temporaire : aucune E/S réseau, aucun
-//  fichier du dépôt requis — rejouable par tools/run_all.py --tier fast.
-// =============================================================================
-int fujiSelfTest(Machine& machine) {
-    namespace fs = std::filesystem;
-    int passed = 0, failed = 0;
-    auto check = [&](bool ok, const char* what) {
-        std::fprintf(stderr, "[fuji-selftest] %-34s %s\n", what, ok ? "OK" : "FAIL");
-        (ok ? passed : failed)++;
-    };
-
-    // --- Fixtures auto-générées ------------------------------------------------
-    std::error_code ec;
-    const fs::path dir = fs::temp_directory_path(ec) / "neost-fuji-selftest";
-    fs::create_directories(dir, ec);
-    const std::string hello = "Hello from NeoST FujiNet!\n";
-    const std::string json  = "{\"name\":\"neost\",\"values\":[10,20,30]}";
-    { std::ofstream f(dir / "HTTP___test_hello.txt", std::ios::binary); f << hello; }
-    { std::ofstream f(dir / "HTTP___test_data.json", std::ios::binary); f << json; }
-
-    FujiHostReplay host(dir.string());
-    machine.fuji.setHost(&host);
-    machine.enableFujiNet(6);
-
-    Bus& bus = machine.bus;
-    constexpr uint32_t kDmaBuf = 0x8000;                    // tampon DMA dans la ST-RAM
-    auto w16 = [&](uint32_t a, uint16_t v) { bus.write16(a, v); };
-    auto setDmaAddr = [&](uint32_t addr) {
-        w16(0xFF8608, uint16_t((addr >> 16) & 0xFF));
-        w16(0xFF860A, uint16_t((addr >> 8) & 0xFF));
-        w16(0xFF860C, uint16_t(addr & 0xFF));
-    };
-    auto acsiStatus = [&]() -> uint8_t {
-        w16(0xFF8606, 0x008A);                              // CSACSI | A0 (statut)
-        return uint8_t(bus.read16(0xFF8604) & 0xFF);
-    };
-    // Émet un CDB FujiNet complet (marqueur ICD cible 6 + 10 octets) puis déclenche
-    // la phase DMA (write=false : device→ST ; write=true : ST→device).
-    auto sendFujiCdb = [&](uint8_t dev, uint8_t cmd, uint8_t aux1, uint8_t aux2,
-                           uint8_t dirByte, uint16_t len, bool write) {
-        setDmaAddr(kDmaBuf);
-        w16(0xFF8606, 0x0088);                              // CSACSI, A1 bas → 1er octet
-        w16(0xFF8604, uint16_t(0x00C0 | 0x1F));             // (6<<5)|$1F : cible 6, marqueur ICD
-        w16(0xFF8606, 0x008A);                              // A1 haut → octets suivants
-        const uint8_t cdb[10] = {0x60, 0x00, dev, cmd, aux1, aux2, dirByte,
-                                 uint8_t(len >> 8), uint8_t(len & 0xFF), 0x00};
-        for (uint8_t b : cdb) w16(0xFF8604, b);
-        w16(0xFF8606, write ? 0x0100 : 0x0000);             // 0xC0 → 0 : transfert DMA
-    };
-    // Dépose un payload ST→device dans la RAM (lu par le DMA).
-    auto putPayload = [&](const std::string& s) {
-        for (std::size_t i = 0; i < s.size() && kDmaBuf + i < bus.ram.size(); ++i)
-            bus.ram[kDmaBuf + i] = uint8_t(s[i]);
-        bus.ram[kDmaBuf + s.size()] = 0;
-    };
-
-    // --- 1. Statut WiFi (device $70, $FA, dir=1) -------------------------------
-    sendFujiCdb(0x70, 0xFA, 0, 0, 1, 1, false);
-    check(acsiStatus() == 0 && bus.ram[kDmaBuf] == 3, "wifi status ($70/$FA)");
-
-    // --- 2. Horloge (device $70, $D2) — date FIXE du backend de rejeu ----------
-    sendFujiCdb(0x70, 0xD2, 0, 0, 1, 7, false);
-    check(acsiStatus() == 0 && bus.ram[kDmaBuf] == 0x07 && bus.ram[kDmaBuf + 1] == 0xC1
-          && bus.ram[kDmaBuf + 2] == 6, "clock ($70/$D2, deterministic)");
-
-    // --- 3. Open + Status + Read sur le canal N1: ------------------------------
-    putPayload("N1:HTTP://test/hello.txt");
-    sendFujiCdb(0x71, 'O', 4, 0, 2, 24, true);
-    check(acsiStatus() == 0, "N1: open (payload DMA write)");
-
-    sendFujiCdb(0x71, 'S', 0, 0, 1, 4, false);
-    const int avail = bus.ram[kDmaBuf] | (bus.ram[kDmaBuf + 1] << 8);
-    check(acsiStatus() == 0 && avail == (int)hello.size() && bus.ram[kDmaBuf + 2] == 1,
-          "N1: status (avail/connected)");
-
-    sendFujiCdb(0x71, 'R', 0, 0, 1, uint16_t(hello.size()), false);
-    bool same = acsiStatus() == 0;
-    for (std::size_t i = 0; same && i < hello.size(); ++i)
-        same = bus.ram[kDmaBuf + i] == uint8_t(hello[i]);
-    check(same, "N1: read (contents)");
-
-    // Relire alors que le canal est vide → erreur propre (contrat FujiNet).
-    sendFujiCdb(0x71, 'R', 0, 0, 1, 16, false);
-    check(acsiStatus() == 2, "N1: read past EOF fails cleanly");
-    sendFujiCdb(0x71, 'C', 0, 0, 0, 0, false);
-    check(acsiStatus() == 0, "N1: close");
-
-    // --- 4. JSON déporté (parse + query) sur N2: -------------------------------
-    putPayload("N2:HTTP://test/data.json");
-    sendFujiCdb(0x72, 'O', 4, 0, 2, 25, true);
-    sendFujiCdb(0x72, 'P', 0, 0, 0, 0, false);
-    check(acsiStatus() == 0, "N2: JSON parse");
-    putPayload("/values/2");
-    sendFujiCdb(0x72, 'Q', 0, 0, 2, 10, true);
-    sendFujiCdb(0x72, 'R', 0, 0, 1, 2, false);
-    check(acsiStatus() == 0 && bus.ram[kDmaBuf] == '3' && bus.ram[kDmaBuf + 1] == '0',
-          "N2: JSON query (/values/2 = 30)");
-
-    // --- 5. Les commandes SCSI standard marchent toujours sur la cible 6 -------
-    setDmaAddr(kDmaBuf);
-    w16(0xFF8606, 0x0088);
-    w16(0xFF8604, uint16_t((6u << 5) | 0x12));              // INQUIRY (classe 0)
-    w16(0xFF8606, 0x008A);
-    for (uint8_t b : {uint8_t(0), uint8_t(0), uint8_t(0), uint8_t(36), uint8_t(0)})
-        w16(0xFF8604, b);
-    w16(0xFF8606, 0x0000);
-    check(acsiStatus() == 0 && bus.ram[kDmaBuf + 8] == 'N' && bus.ram[kDmaBuf + 9] == 'e',
-          "target 6: standard INQUIRY intact");
-
-    // --- 6. L'opcode $60 reste REJETÉ sur une cible non-FujiNet ----------------
-    machine.fdc.mountAcsi("disks/etalons/selftest_hd.img", 0);   // peut échouer : absent
-    // CDB $60 COMPLET (10 octets) vers la cible 0, avec un octet device INVALIDE :
-    // s'il était routé à tort vers FujiNet, execute() poserait NO_DEVICE — le test
-    // est falsifiable. L'ancienne version n'envoyait que 2 octets : execute() ne
-    // tournait jamais (déclenché à byteCount == 10), lastError restait OK dans
-    // TOUS les builds, gating cassé compris — l'assertion ne validait rien.
-    w16(0xFF8606, 0x0088);
-    w16(0xFF8604, uint16_t((0u << 5) | 0x1F));              // cible 0, marqueur ICD
-    w16(0xFF8606, 0x008A);
-    for (uint8_t b : {uint8_t(0x60), uint8_t(0x00), uint8_t(0xEE), uint8_t('Z'),
-                      uint8_t(0x00), uint8_t(0x00), uint8_t(0x00), uint8_t(0x00),
-                      uint8_t(0x00), uint8_t(0x00)})
-        w16(0xFF8604, b);
-    // …cible vide (pas d'IRQ) ou peuplée : dans les deux cas, JAMAIS routé FujiNet.
-    check(machine.fuji.lastError() == fn_err::OK, "vendor opcode gated to Fuji target");
-
-    // --- 7. Cas limites du parseur JSON utilisé par N: --------------------------
-    bool invalidRejected = true;
-    for (const char* bad : {".", "+", "01", "1.", "1e", "true garbage", "{\"a\":1}tail",
-                            "\"bad\\q\"", "\"bad\\uZZZZ\"", "\"raw\nline\""})
-        invalidRejected = invalidRejected && !minijson::looksLikeJson(bad);
-    std::string jsonValue;
-    check(invalidRejected && minijson::looksLikeJson(" -12.5e+2 \n")
-          && minijson::query("{\"a\":1.25e-2}", "/a", jsonValue)
-          && jsonValue == "1.25e-2", "JSON strict numbers + full EOF");
-#ifdef NEOST_WITH_NET
-    neonet::Url parsed;
-    const bool queryUrl = neonet::parseUrl("http://example.test?x=1", parsed)
-                       && parsed.host == "example.test" && parsed.path == "/?x=1";
-    const bool ipv6Url = neonet::parseUrl("http://[::1]:8080/x", parsed)
-                      && parsed.host == "::1" && parsed.port == 8080 && parsed.path == "/x";
-    check(queryUrl && ipv6Url && !neonet::parseUrl("http://host:abc/x", parsed)
-          && !neonet::parseUrl("http://::1/x", parsed),
-          "URL query/IPv6/port validation");
-#endif
-
-    // --- 8. Cas limites SCSI ACSI (sans passer par le backend FujiNet) ----------
-    const fs::path acsiPath = dir / "acsi-count-probe.img";
-    {
-        std::ofstream f(acsiPath, std::ios::binary | std::ios::trunc);
-        const char zero[512] = {};
-        for (int i = 0; i < 300; ++i) f.write(zero, sizeof zero);
-    }
-    Acsi acsi;
-    const bool mounted = acsi.mount(0, acsiPath.string());
-    auto sendAcsi = [&](std::initializer_list<uint8_t> cdb) {
-        acsi.selectTarget(0);
-        for (uint8_t b : cdb) acsi.feedByte(b);
-    };
-    sendAcsi({0x08, 0, 0, 0, 0, 0});              // READ(6), count 0 == 256
-    check(mounted && acsi.status() == 0 && acsi.dataLen() == 256 * 512,
-          "ACSI READ(6) count 0 means 256");
-    sendAcsi({0x0A, 0, 0, 0, 0, 0});              // WRITE(6), même codage spécial
-    check(acsi.status() == 0 && acsi.dataLen() == 256 * 512 && acsi.isWrite(),
-          "ACSI WRITE(6) count 0 means 256");
-    sendAcsi({0x1A, 0, 0x04, 0, 4, 0});            // MODE SENSE(6), allocation 4
-    check(acsi.status() == 0 && acsi.dataLen() == 4,
-          "ACSI MODE SENSE allocation cap");
-    acsi.selectTarget(0);
-    acsi.feedByte(0x08); acsi.feedByte(0); acsi.feedByte(0); // CDB partiel
-    acsi.reset();
-    check(acsi.byteCount() == 0 && acsi.dataLen() == 0 && !acsi.isWrite(),
-          "ACSI reset cancels command/data");
-    acsi.unmountAll();
-    fs::remove(acsiPath, ec);
-
-    std::fprintf(stderr, "[fuji-selftest] %d passed, %d failed\n", passed, failed);
-    return failed == 0 ? 0 : 1;
 }
 
 // =============================================================================
@@ -589,10 +390,9 @@ int usatanSelfTest(Machine& machine) {
           "RdFW/unknown refused, RdLog answers");
 
     // --- 10. Un paquet $20 'US' vers une cible NON UltraSatan reste rejeté ------
-    machine.enableFujiNet(6);                                  // cible peuplée, non UltraSatan
+    machine.fdc.mountAcsi(sdPath.string(), 6);                 // cible peuplée, non UltraSatan
     st = sendUs(6, "CurntFW", 0, 0, 0, false);
     check(st == 2 && !ramStr(kDmaBuf, "UltraSatan v1.20"), "'US' packet gated to UltraSatan targets");
-    machine.disableFujiNet();
 
     machine.fdc.unmountAcsi();
     machine.disableUltraSatan();
@@ -1067,11 +867,6 @@ int main(int argc, char** argv) {
     std::string printerPath;                     // --printer FILE : capture Centronics (port parallèle)
     std::string gemdosDir;                       // --gemdos DIR : disque dur GEMDOS (dossier hôte)
     std::string acsiImg;                         // --acsi IMG : image disque dur ACSI (cible 0)
-    bool        fujinet       = false;           // --fujinet : FujiNet virtuel sur le bus ACSI
-    int         fujinetTarget = 6;               // --fujinet-target N (défaut 6)
-    std::string fujinetHost;                     // --fujinet-host URL (slot 0 + auto-montage)
-    std::string fujinetReplay;                   // --fujinet-replay DIR (backend déterministe)
-    bool        fujinetOffline = false;          // --fujinet-offline : backend nul
     bool        modemFlag      = false;          // --modem : modem Hayes sur l'USART
     bool        ethernecFlag   = false;          // --ethernec : NE2000 port cartouche
     bool        netusbeeFlag   = false;          // --netusbee : NE2000 + ISP1160 port cartouche
@@ -1109,7 +904,6 @@ int main(int argc, char** argv) {
     bool        busSelfTest  = false;  // auto-test déterministe du modèle de bus error
     bool        mfpSelfTest  = false;  // auto-test déterministe du MFP (GPIP/fronts/Timer B)
     bool        msaSelfTest  = false;  // auto-test déterministe du ré-encodage .msa
-    bool        fujiSelfTestFlag = false; // auto-test déterministe du FujiNet (protocole fil)
     bool        enecSelfTestFlag = false; // auto-test déterministe NE2000/EtherNEC (fil)
     bool        usatanSelfTestFlag = false;   // auto-test déterministe UltraSatan (fil ACSI)
     bool        netusbeeSelfTestFlag = false; // auto-test déterministe NetUSBee/ISP1160 (fil)
@@ -1184,11 +978,6 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(a, "--gemdos"))     gemdosDir = next(a);
         else if (!std::strcmp(a, "--printer"))    printerPath = next(a);
         else if (!std::strcmp(a, "--acsi") || !std::strcmp(a, "--hd")) acsiImg = next(a);
-        else if (!std::strcmp(a, "--fujinet"))         fujinet = true;
-        else if (!std::strcmp(a, "--fujinet-target"))  { fujinet = true; fujinetTarget = std::atoi(next(a)); }
-        else if (!std::strcmp(a, "--fujinet-host"))    { fujinet = true; fujinetHost = next(a); }
-        else if (!std::strcmp(a, "--fujinet-replay"))  { fujinet = true; fujinetReplay = next(a); }
-        else if (!std::strcmp(a, "--fujinet-offline")) { fujinet = true; fujinetOffline = true; }
         else if (!std::strcmp(a, "--modem"))           modemFlag = true;
         else if (!std::strcmp(a, "--ethernec"))        ethernecFlag = true;
         else if (!std::strcmp(a, "--netusbee"))        netusbeeFlag = true;
@@ -1222,7 +1011,6 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(a, "--bus-selftest")) busSelfTest = true;
         else if (!std::strcmp(a, "--mfp-selftest")) mfpSelfTest = true;
         else if (!std::strcmp(a, "--msa-selftest")) msaSelfTest = true;
-        else if (!std::strcmp(a, "--fuji-selftest")) fujiSelfTestFlag = true;
         else if (!std::strcmp(a, "--enec-selftest")) enecSelfTestFlag = true;
         else if (!std::strcmp(a, "--usatan-selftest")) usatanSelfTestFlag = true;
         else if (!std::strcmp(a, "--netusbee-selftest")) netusbeeSelfTestFlag = true;
@@ -1247,7 +1035,7 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(a, "--from-cfg")) {
             // P3 — pont GUI↔headless : rejoue la config exacte de neost.cfg — machine,
             // TOS, mem, cpu, mono, fastfdc, fpu, supports (disk, diskb, cart, gemdos,
-            // acsi) ET réseau (fujinet*, modem, ethernec). La liste des clés relues est
+            // acsi) ET réseau (modem, ethernec). La liste des clés relues est
             // celle de la boucle ci-dessous : la tenir à jour avec le lecteur du GUI.
             // Les options CLI placées APRÈS --from-cfg surchargent (le cfg sert de base).
             const char* p = next(a);
@@ -1292,16 +1080,10 @@ int main(int argc, char** argv) {
                 else if (ln.rfind("cart=", 0) == 0)    { if (ln.size() > 5) cartPath  = resolve(v(ln, 5)); }
                 else if (ln.rfind("gemdos=", 0) == 0)  { if (ln.size() > 7) gemdosDir = resolve(v(ln, 7)); }
                 else if (ln.rfind("acsi=", 0) == 0)    { if (ln.size() > 5) acsiImg   = resolve(v(ln, 5)); }
-                else if (ln.rfind("fujinet=", 0) == 0) fujinet = (v(ln, 8) == "1");
-                else if (ln.rfind("fujinet_target=", 0) == 0) fujinetTarget = std::atoi(v(ln, 15).c_str());
-                else if (ln.rfind("fujinet_host=", 0) == 0) { if (ln.size() > 13) fujinetHost = v(ln, 13); }
-                // Clé écrite par le GUI : liste de slots séparés par '|', slot 0 en tête.
-                else if (ln.rfind("fujinet_hosts=", 0) == 0) {
-                    if (ln.size() > 14) fujinetHost = v(ln, 14).substr(0, v(ln, 14).find('|'));
-                }
-                // modem= / ethernec= : le GUI les écrit à côté des clés fujinet_*, toutes
-                // relues ici — sauf ces deux-là. Rejouer une config réseau avec --from-cfg
-                // démarrait donc SANS le modem ni la carte EtherNEC, sans un mot.
+                // modem= / ethernec= : le GUI les écrit à côté des autres clés
+                // réseau, toutes relues ici — sauf ces deux-là. Rejouer une config
+                // réseau avec --from-cfg démarrait donc SANS le modem ni la carte
+                // EtherNEC, sans un mot.
                 else if (ln.rfind("modem=", 0) == 0)    modemFlag    = (v(ln, 6) == "1");
                 else if (ln.rfind("ethernec=", 0) == 0) ethernecFlag = (v(ln, 9) == "1");
                 else if (ln.rfind("machine=", 0) == 0) machType   = parseMachine(v(ln, 8).c_str());
@@ -1346,7 +1128,6 @@ int main(int argc, char** argv) {
     if (busSelfTest) return machine.bus.busSelfTest() ? 0 : 1;
     if (mfpSelfTest) return machine.mfp.mfpSelfTest() ? 0 : 1;
     if (msaSelfTest) return machine.fdc.msaSelfTest() ? 0 : 1;
-    if (fujiSelfTestFlag) return fujiSelfTest(machine);
     if (enecSelfTestFlag) return enecSelfTest(machine);
     if (usatanSelfTestFlag) return usatanSelfTest(machine);
     if (netusbeeSelfTestFlag) return netusbeeSelfTest(machine);
@@ -1395,40 +1176,6 @@ int main(int argc, char** argv) {
             std::fprintf(stderr, "[headless] UltraSatan slot 2: %s\n", sd2Img.c_str());
         std::fprintf(stderr, "[headless] UltraSatan on ACSI targets %d-%d (%d partition(s))\n",
                      ultrasatanId, ultrasatanId + 1, machine.fdc.acsiPartitionCount());
-    }
-    // FujiNet virtuel (--fujinet…) : cible ACSI dédiée + backend hôte. Le backend
-    // vit ici (frontend) — le cœur ne voit que l'interface FujiHost.
-    std::unique_ptr<FujiHost> fujiHost;
-    if (fujinet) {
-        if (fujinetTarget < 0 || fujinetTarget > 7) {
-            std::fprintf(stderr, "[headless] --fujinet-target must be 0-7\n");
-            return 2;
-        }
-        if (!fujinetReplay.empty())
-            fujiHost = std::make_unique<FujiHostReplay>(fujinetReplay);
-        else if (fujinetOffline)
-            fujiHost = std::make_unique<FujiHostNull>();
-        else {
-#ifdef NEOST_WITH_NET
-            fujiHost = std::make_unique<FujiHostLive>();
-#else
-            std::fprintf(stderr, "[headless] this build has no network backend "
-                                 "(NEOST_WITH_NET=OFF) — FujiNet is offline\n");
-            fujiHost = std::make_unique<FujiHostNull>();
-#endif
-        }
-        machine.fuji.setHost(fujiHost.get());
-        machine.enableFujiNet(fujinetTarget);
-        std::fprintf(stderr, "[headless] FujiNet backend: %s\n", fujiHost->name());
-        if (!fujinetHost.empty()) {
-            if (machine.fuji.mountRemote(fujinetHost))
-                std::fprintf(stderr, "[headless] FujiNet: %s mounted\n", fujinetHost.c_str());
-            else {
-                machine.fuji.setHostSlot(0, fujinetHost);
-                std::fprintf(stderr, "[headless] FujiNet: %s in host slot 0 (not a "
-                                     "mountable image)\n", fujinetHost.c_str());
-            }
-        }
     }
     machine.mfp.setColorMonitor(!machineMono);   // --mono → moniteur mono (haute rés)
 

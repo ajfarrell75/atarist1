@@ -21,11 +21,11 @@
 #include <unistd.h>
 #endif
 
-#include "net/HttpClient.hpp"   // netInitOnce()
+#include "net/Socket.hpp"   // netInitOnce()
 
 namespace {
 void rtrace(const char* what, const std::string& d) {
-    static const bool on = std::getenv("NEOST_FUJI_TRACE") != nullptr;
+    static const bool on = std::getenv("NEOST_NET_TRACE") != nullptr;
     if (on) std::fprintf(stderr, "[midi-ring] %s %s\n", what, d.c_str());
 }
 } // namespace
