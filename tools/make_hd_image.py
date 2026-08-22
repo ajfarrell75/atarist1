@@ -14,20 +14,27 @@
 #  bureau n'affiche que A: et B: — exactement comme un UltraSatan sans pilote sur
 #  du matériel réel.
 #
-#  ⚠ LA GREFFE N'EST PAS VÉRIFIÉE DE BOUT EN BOUT, et pas par sa faute : dans l'état
-#  actuel de NeoST, AUCUN disque dur ne se monte sous TOS 2.06 — pas même un disque
-#  d'origine équipé de HDDRIVER et non touché par cet outil. Mesuré au drapeau
-#  _drvbits ($4C2), invariant en 512k/1m/4m et en ST comme en MegaSTE :
-#      EmuTOS + carte de données ......... A B C
-#      EmuTOS + disque HDDRIVER 3 Go ..... A B C D E F G H I
-#      TOS 2.06 + le MÊME disque 3 Go .... A B          ← rien
-#  La chaîne d'amorçage s'exécute pourtant (NEOST_ACSI_TRACE=1 montre la lecture du
-#  secteur 0, puis du secteur 2, puis deux transferts de 32 secteurs = le pilote qui
-#  se charge) : c'est l'INSTALLATION du pilote qui n'aboutit pas. Piège de méthode à
-#  ne pas refaire : les icônes C:/D:/E: du bureau 2.06 viennent des lignes #M de
-#  NEWDESK.INF et s'affichent SANS lecteur monté — juger sur _drvbits, pas sur elles.
-#  Tant que ce point n'est pas tranché contre l'oracle Hatari, ne construire des
-#  disques que pour EmuTOS.
+#  ⚠ LA GREFFE (--driver-from) NE PRODUIT PAS UN DISQUE AMORÇABLE — expérimental.
+#  Mesuré : sur un disque préparé par HDDRIVER, le code du secteur racine lit le
+#  secteur 0, le secteur 2, puis le secteur 242 (FAT/racine) et charge le pilote.
+#  Sur une image fabriquée ici, il lit le secteur 0, le secteur 2… et s'arrête. Le
+#  SECOND ÉTAGE (du code 68000 vit aussi dans le secteur d'amorçage de la partition,
+#  là où mformat écrit un secteur DOS) sait lire le système de fichiers TEL QUE
+#  l'installeur HDDRIVER l'a formaté — secteurs logiques de 8192 octets, 512 entrées
+#  racine, 7 secteurs par FAT sur le disque observé. Recopier le code sans reproduire
+#  cette géométrie ne suffit pas ; le reproduire, c'est rétro-concevoir l'installeur
+#  d'un logiciel commercial. Pour un vrai TOS, la voie qui marche est de copier ses
+#  fichiers SUR un disque déjà préparé par HDDRIVER/HDDRUTIL.
+#
+#  ⚠ Ne PAS déduire de là que NeoST ne monte pas les disques durs sous vrai TOS : il
+#  les monte. Une version antérieure de ce commentaire l'affirmait, à tort, sur la
+#  foi d'un protocole de test fautif — `--keys` tape APRÈS le boot, or TOS 2.06
+#  attend une touche sur son écran mémoire et ne l'avait donc jamais reçue. Avec
+#  `--keys-at 700 " "`, TOS 2.06 monte A à I depuis le disque d'origine (_drvbits
+#  $000001FF, hdv_bpb en RAM), et TOS 1.04, qui n'attend aucune touche, y arrive
+#  sans rien de particulier. Leçon de méthode : mesurer sur _drvbits ($4C2) et les
+#  vecteurs hdv_* ($472), jamais sur les icônes du bureau (elles viennent des lignes
+#  #M de NEWDESK.INF et s'affichent sans lecteur monté).
 #
 #  Ce script NE FOURNIT PAS de pilote : HDDRIVER est un logiciel commercial (Uwe
 #  Seimet) et rien de tel n'est vendorisable. Il en GREFFE un depuis un disque
@@ -185,10 +192,10 @@ def main() -> int:
     ap.add_argument('--size-mb', type=int, default=16, help="taille du disque en Mo (défaut 16)")
     ap.add_argument('--label', default='NEOST', help="nom de volume (11 car. max)")
     ap.add_argument('--driver-from', metavar='DISQUE',
-                    help="disque donneur d'où greffer l'amorçage + le pilote TOS "
-                         "(défaut : premier disque amorçable trouvé dans hd/)")
+                    help="EXPÉRIMENTAL : greffer l'amorçage + le pilote TOS depuis ce "
+                         "disque donneur. Le disque obtenu N'AMORCE PAS (cf. en-tête).")
     ap.add_argument('--no-driver', action='store_true',
-                    help="image de DONNÉES non amorçable (EmuTOS la monte quand même)")
+                    help="(défaut, conservé pour compatibilité) image de DONNÉES")
     args = ap.parse_args()
 
     if not os.path.isdir(args.src):
@@ -203,14 +210,12 @@ def main() -> int:
                          f"({MIN_MB} Mo) — EmuTOS lirait la partition en FAT12.\n")
         return 2
 
-    donor = None if args.no_driver else find_donor(args.driver_from)
-    if donor is None and not args.no_driver:
-        sys.stderr.write(
-            "ERREUR: aucun disque donneur amorçable trouvé dans hd/.\n"
-            "        Le TOS Atari n'a pas de pilote de disque dur en ROM : sans greffe,\n"
-            "        seul EmuTOS montera l'image. Options : --driver-from <disque>, ou\n"
-            "        --no-driver pour assumer une image de données.\n")
-        return 1
+    # Défaut = image de DONNÉES. La greffe ne devient active que si on la demande
+    # explicitement, puisqu'elle ne donne pas (encore) un disque amorçable.
+    donor = find_donor(args.driver_from) if args.driver_from else None
+    if args.driver_from:
+        sys.stderr.write("ATTENTION: --driver-from est expérimental — le disque produit "
+                         "ne s'amorce pas sous vrai TOS (cf. en-tête du script).\n")
 
     total = args.size_mb * 1024 * 1024 // SECT
     part_size = total - PART_START
@@ -250,8 +255,10 @@ def main() -> int:
         run(['mcopy', '-i', at, '-s', '-Q', '-m']
             + [os.path.join(args.src, e) for e in entries] + ['::'])
 
-    kind = (f"amorçable (pilote {donor[2]} greffé depuis {os.path.basename(donor[0])})"
-            if donor else "données, NON amorçable (EmuTOS seulement)")
+    kind = (f"pilote {donor[2]} greffé depuis {os.path.basename(donor[0])} — "
+            f"NE S'AMORCE PAS sous vrai TOS (expérimental)"
+            if donor else "image de données : EmuTOS la monte ; sous vrai TOS il faut "
+                          "un disque déjà préparé par HDDRIVER")
     print(f"{args.out} : {args.size_mb} Mo, 1 partition {part_type(part_size).decode()} "
           f"FAT16, {len(entries)} entrée(s) à la racine de C: — {kind}")
     return 0
