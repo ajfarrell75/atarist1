@@ -38,6 +38,11 @@ public:
 
     // Octet MIDI OUT daté (thread d'émulation — le même que render).
     void byteAt(uint8_t b, int64_t cycle);
+    // Jette les événements en attente SANS les jouer. À appeler quand la trame ne sera
+    // pas rendue (pas de périphérique audio) : sans ça la file grossit sans fin, cf.
+    // Audio::produceFrame. Le parseur n'est PAS réinitialisé, pour qu'un SysEx à cheval
+    // sur plusieurs trames (un dump de patch MT-32 dure ~80 ms, soit 4 trames) survive.
+    void clearEvents();
 
     // Rend `frames` échantillons stéréo entrelacés couvrant la trame émulée
     // [frameStartCycle, frameStartCycle + frameCycles) et les AJOUTE à `lr`.

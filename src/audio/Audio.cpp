@@ -71,6 +71,13 @@ void Audio::produceFrame(int64_t frameCycles, int64_t frameEndCycle) {
     if (!started_) {                                  // pas de périphérique : on draine juste les événements
         psg_.clearEvents();
         if (dma_) dma_->clearEvents();
+        // Le MT-32 était OUBLIÉ ici : Mt32Synth::byteAt empile dès que le synthé est
+        // ouvert, mais sa file n'est vidée que par render(), qui est justement ce
+        // qu'on saute. Sans périphérique audio, elle grossissait donc sans fin — et
+        // au retour du son (cf. la reprise automatique ci-dessous) tout le retard
+        // partait d'un coup dans une seule trame. Devenu atteignable par tous depuis
+        // que le MT-32 est actif par défaut.
+        if (mt32_) mt32_->clearEvents();
         return;
     }
     // Périphérique hôte PERDU (débranché, suspend/resume, backend brut) : le thread audio
@@ -103,7 +110,11 @@ void Audio::produceFrame(int64_t frameCycles, int64_t frameEndCycle) {
     if      (adj >  8) adj =  8;
     else if (adj < -8) adj = -8;
     n += adj;
-    if (n <= 0) { psg_.clearEvents(); if (dma_) dma_->clearEvents(); return; }   // anneau saturé : on draine
+    // Anneau saturé : on draine PSG/DMA (un échantillon perdu ne laisse pas de trace).
+    // Le MT-32, lui, est DÉLIBÉRÉMENT conservé : jeter un Note-Off laisserait une note
+    // bloquée. C'est transitoire, les événements repartent à la trame suivante, et
+    // kMaxPending (Mt32Synth) borne le pire cas.
+    if (n <= 0) { psg_.clearEvents(); if (dma_) dma_->clearEvents(); return; }
 
     // Chaîne YM horodaté + DMA STE + LMC1992 : PARTAGÉE avec le headless et le
     // frontend web (core/AudioMix.cpp). Elle vivait ici en clair, recopiée dans les

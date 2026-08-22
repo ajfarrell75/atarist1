@@ -183,10 +183,21 @@ int dataBytesFor(uint8_t st) {
 
 void Mt32Synth::byteAt(uint8_t b, int64_t cycle) { if (synth_) parse(b, cycle); }
 
+void Mt32Synth::clearEvents() { pending_.clear(); }
+
+namespace { constexpr std::size_t kMaxPending = 8192; }   // ~3 min de notes : jamais atteint en marche normale
+
 void Mt32Synth::parse(uint8_t b, int64_t cycle) {
     if (b >= 0xF8) return;                           // temps réel : rien pour un MT-32
     if (inSysex_) {
-        if (b == 0xF7) { sysex_.push_back(b); pending_.push_back({cycle, 0, sysex_}); sysex_.clear(); inSysex_ = false; }
+        // kMaxPending : filet. Un appelant qui oublie de rendre la trame (périphérique
+        // audio perdu) ferait autrement croître la file SANS FIN, et au retour du son
+        // tout le retard partirait d'un coup dans une seule trame.
+        if (b == 0xF7) {
+            sysex_.push_back(b);
+            if (pending_.size() < kMaxPending) pending_.push_back({cycle, 0, sysex_});
+            sysex_.clear(); inSysex_ = false;
+        }
         else if (b & 0x80) { sysex_.clear(); inSysex_ = false; parse(b, cycle); }
         else if (sysex_.size() < 4096) sysex_.push_back(b);
         return;
@@ -201,7 +212,8 @@ void Mt32Synth::parse(uint8_t b, int64_t cycle) {
     data_[got_++] = b;
     if (got_ >= needed_) {
         if (status_ < 0xF0)
-            pending_.push_back({cycle, uint32_t(status_) | (uint32_t(data_[0]) << 8) | (uint32_t(data_[1]) << 16), {}});
+            if (pending_.size() < kMaxPending)
+                pending_.push_back({cycle, uint32_t(status_) | (uint32_t(data_[0]) << 8) | (uint32_t(data_[1]) << 16), {}});
         got_ = 0;
         if (status_ >= 0xF0) status_ = 0;
     }

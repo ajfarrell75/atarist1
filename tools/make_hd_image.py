@@ -254,9 +254,18 @@ def main() -> int:
     #    make_usatan_hd.py, cet outil produit du média utilisateur, pas un étalon :
     #    le déterminisme n'est pas requis ici, seulement la stabilité du contenu.
     at = f"{args.out}@@{PART_START * SECT}"
+    # ⚠ 9 caractères, pas 11, quand on greffe : le code de l'étage 2 commence à $34 et
+    # écrase les 2 derniers octets du champ « nom de volume » du BPB. Un nom plus long
+    # y était SILENCIEUSEMENT tronqué — et mdir n'y voyait rien, parce qu'il lit le nom
+    # dans l'entrée de répertoire racine, pas dans le BPB : les deux divergeaient.
+    label_max = 9 if donor else 11
+    label = args.label[:label_max].upper()
+    if len(args.label) > label_max:
+        sys.stderr.write(f"ATTENTION: nom de volume tronqué à {label_max} caractères "
+                         f"« {label} » (le code d'amorçage occupe la fin du champ).\n")
     run(['mformat', '-i', at, '-T', str(part_size), '-c', str(SPC),
          '-r', str(NROOT), '-R', str(RES), '-M', str(SECT),
-         '-N', '4e454f53', '-v', args.label[:11].upper(), '::'])
+         '-N', '4e454f53', '-v', label, '::'])
 
     # 3) Le pilote À LA RACINE — le code d'amorçage l'y cherche par son nom.
     if donor:
