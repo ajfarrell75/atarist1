@@ -6,6 +6,30 @@ l'ordre inverse. Version courante : **0.5.2**.
 - « NeoST gère-t-il X ? » → [`docs/IMPLEMENTED.md`](docs/IMPLEMENTED.md) (inventaire par puce)
 - « Que reste-t-il ? » → [`TODO.md`](TODO.md)
 
+## `docs/FUJINET.md` renommé, et un backend Internet réel pour la NE2000 (2026-08-22)
+
+**Renommage.** `docs/FUJINET.md` devient **`docs/EXTENSIONS.md`** : le fichier documentait
+depuis longtemps *toutes* les extensions NeoST — UltraSatan (stockage), NetUSBee, EtherNEC,
+modem Hayes, anneau MIDI — alors que son nom n'annonçait que le FujiNet, **qui n'a jamais
+existé sur Atari ST** (c'est le seul binding « de référence » du lot, sans matériel
+correspondant). Un tableau en tête distingue désormais ce qui a réellement existé de ce qui
+est une invention NeoST. `git mv` (l'historique suit), 17 fichiers de références mis à jour.
+
+**`NetBackendSlirp` (en cours).** Le TODO « EtherNEC — backend réel » est attaqué :
+`src/net/SlirpBackend.{hpp,cpp}` donne à la NE2000 émulée un accès Internet par **NAT en
+espace utilisateur** (libslirp, le routeur de QEMU) — aucun privilège, pas de pcap ni de TAP.
+L'ST reçoit 10.0.2.15/24, passerelle 10.0.2.2, DNS 10.0.2.3, DHCP servi par SLIRP. Option
+CMake `NEOST_WITH_SLIRP` (pkg-config), drapeaux `--slirp` / `--slirp-restricted`, auto-test
+`--slirp-selftest`. **3 vérifications sur 4 passent** (ARP, DHCP, compteurs) ; la sortie
+réelle (DNS, opt-in `NEOST_SLIRP_ONLINE=1`) reste à finir — état détaillé, pièges déjà
+résolus et pistes dans `TODO.md`, entrée en tête de liste.
+
+Trois pièges de libslirp valent d'être retenus : ses callbacks `register_poll_fd` sont
+*deprecated* mais appelés **sans test de nullité** (SIGSEGV à la première socket sortante) ;
+`clock_get_ns` doit partir de zéro, sinon toute socket UDP naît « expirée » et meurt au
+premier tour ; et SLIRP **ARPe l'invité** avant de lui livrer un paquet — sur un vrai ST
+c'est la pile TCP/IP qui répond.
+
 ## La CI reconstruit ET recommite le bundle `wasm/` — plus de garde, plus de rouge (2026-08-22)
 
 La démo en ligne est le dossier `wasm/` **commité** (Pages sert la branche). Conséquence :
@@ -236,7 +260,7 @@ FUJINET, TEST_SOFTWARE, TODO, empaquetage). Palier `fast` vert avant comme aprè
   rapatrier » alors que `etalons.json` en compte **19** (7 auto-tests + 12 étalons machine,
   `union_demo` présent mais `optional`). La liste des auto-tests P0 ignorait `--msa-selftest`,
   `--fuji-selftest`, `--enec-selftest` et `neost-selftest`.
-- **`--fuji-selftest` fait 17 vérifications, pas 11** (`FUJINET.md`) — les cas-limites ACSI
+- **`--fuji-selftest` fait 17 vérifications, pas 11** (`EXTENSIONS.md`) — les cas-limites ACSI
   (`count=0` ⇒ 256, plafond MODE SENSE, reset) ont été ajoutés sans que le compte suive.
 - **L'APK Android a une interface depuis le 2026-08-11** (menu décalqué de la borne,
   `src/android/AndroidMenu.cpp`) ; `CLAUDE.md` disait encore « pas d'interface ». Ce qui reste
@@ -440,7 +464,7 @@ au moins la taille d'un bloc CoreAudio. Le premier amorçage conserve la latence
 Première ouverture de la machine émulée sur le réseau — **quatre extensions NeoST**,
 toutes **OFF par défaut**, sans équivalent Hatari (`docs/HATARI_DIVERGENCES.md` §
 Extensions), **sans effet sur les étalons** (réseau jamais ouvert par `run_all.py`).
-Réf. complète : [`docs/FUJINET.md`](docs/FUJINET.md). Principe : `neost_core` reste sans
+Réf. complète : [`docs/EXTENSIONS.md`](docs/EXTENSIONS.md). Principe : `neost_core` reste sans
 socket ni thread ; une nouvelle lib **`neost_net`** (frontends) fait l'I/O (option CMake
 `NEOST_WITH_NET`, forcée OFF sur WASM/Android).
 

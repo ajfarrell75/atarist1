@@ -22,6 +22,7 @@
 #include <memory>
 #include <string>
 #include <fstream>
+#include <thread>
 
 #include "core/Machine.hpp"
 #include "util/HostPath.hpp"   // chemins hôte : UNE définition d'« absolu »
@@ -30,6 +31,7 @@
 #include "net/FujiHostReplay.hpp"
 #include "net/MiniJson.hpp"
 #include "net/NetBackend.hpp"
+#include "net/SlirpBackend.hpp"
 #ifdef NEOST_WITH_NET
 #include "net/FujiHostLive.hpp"
 #include "net/HayesModem.hpp"
@@ -90,7 +92,7 @@ void usage() {
         "  --acsi IMG        ACSI hard disk image (target 0): TOS reads the partition\n"
         "                    table and mounts C:/D:… (alias --hd; port of hdc.c)\n"
         "  --fujinet         attach the virtual FujiNet on the ACSI bus (target 6;\n"
-        "                    NeoST extension, see docs/FUJINET.md)\n"
+        "                    NeoST extension, see docs/EXTENSIONS.md)\n"
         "  --fujinet-target N  ACSI target of the FujiNet device (0-7, default 6)\n"
         "  --fujinet-host URL  put URL in host slot 0; if it points to a disk image\n"
         "                    (.st/.msa/.dim/.stx or raw HD), download and mount it\n"
@@ -103,6 +105,10 @@ void usage() {
         "                    for STinG/MiNTnet drivers — exclusive with --cart)\n"
         "  --netusbee        NetUSBee on the cartridge port: NE2000 (as EtherNEC) +\n"
         "                    ISP1160 USB host controller (empty root hub; exclusive with --cart)\n"
+        "  --slirp           REAL Internet for the NE2000 (--ethernec/--netusbee): user-mode\n"
+        "                    NAT via libslirp. The ST gets 10.0.2.15/24, gateway 10.0.2.2,\n"
+        "                    DNS 10.0.2.3 (DHCP served) — needs a TCP/IP stack on the ST side\n"
+        "                    (STinG + ENEC.STX). --slirp-restricted = sandbox, no outbound\n"
         "  --ultrasatan      UltraSatan SD interface on the ACSI bus: 2 slots on targets\n"
         "                    N and N+1 (default 0-1), JOOKIE INQUIRY, RTC, 'US' commands\n"
         "  --ultrasatan-id N first ACSI ID of the UltraSatan (0-6, default 0)\n"
@@ -123,6 +129,8 @@ void usage() {
         "                    ICD 'US' packets, RTC, empty slot) then exit\n"
         "  --netusbee-selftest self-test of the NetUSBee ISP1160 (cartridge-port wire\n"
         "                    protocol, chip ID, registers, ATL) + NE2000 coexistence, then exit\n"
+        "  --slirp-selftest  self-test of the real-Internet backend (libslirp): ARP + DHCP\n"
+        "                    through the emulated NE2000, no outbound traffic needed, then exit\n"
         "  --serial-dump F   write the raw RS-232 serial bytes into F (NEOST-TEST verdicts)\n"
         "  --from-cfg F      replay the GUI config (neost.cfg); later options override it\n"
         "  --dump-at N A L F raw dump of L bytes of RAM from $A (hex) after frame N → F\n"
@@ -324,7 +332,7 @@ int fujiSelfTest(Machine& machine) {
 //  fausses lectures ($FA0000 + reg*512 + data*2), lectures par $FB0000 + reg*512,
 //  le tout à travers le VRAI plan mémoire (Bus). Backend en boucle locale : une
 //  trame émise revient en réception → on la relit via Remote DMA. Aucune E/S
-//  réseau. Cf. docs/FUJINET.md § EtherNEC.
+//  réseau. Cf. docs/EXTENSIONS.md § EtherNEC.
 // =============================================================================
 int enecSelfTest(Machine& machine) {
     int passed = 0, failed = 0;
@@ -708,6 +716,267 @@ int netusbeeSelfTest(Machine& machine) {
     return failed == 0 ? 0 : 1;
 }
 
+// =============================================================================
+//  --slirp-selftest — auto-test du backend Internet (libslirp) AU NIVEAU FIL.
+//
+//  On pilote la NE2000 exactement comme le pilote ST (écritures par fausses
+//  lectures $FA0000+reg*512+data*2, lectures $FB0000+reg*512, Remote DMA), on
+//  émet une trame construite à la main, et on vérifie que SLIRP répond — donc
+//  que TOUT le chemin ST → carte → NAT → carte → ST fonctionne :
+//
+//    1. ARP « qui a 10.0.2.2 ? » → réponse ARP de la passerelle ;
+//    2. DHCP DISCOVER → OFFER attribuant 10.0.2.15 (adresse, masque, routeur, DNS).
+//
+//  AUCUN accès à Internet n'est requis : les deux réponses viennent de SLIRP
+//  lui-même (serveur ARP/DHCP internes) — l'auto-test est donc DÉTERMINISTE et
+//  utilisable en CI hors ligne, contrairement à un vrai GET HTTP.
+// =============================================================================
+int slirpSelfTest(Machine& machine) {
+    int passed = 0, failed = 0;
+    auto check = [&](bool ok, const char* what) {
+        std::fprintf(stderr, "[slirp-selftest] %-40s %s\n", what, ok ? "OK" : "FAIL");
+        (ok ? passed : failed)++;
+    };
+    if (!SlirpBackend::available()) {
+        std::fprintf(stderr, "[slirp-selftest] libslirp absente de ce build — test sauté\n");
+        return 0;                                    // pas un échec : dépendance optionnelle
+    }
+    SlirpBackend net;
+    if (!net.open(false)) {
+        std::fprintf(stderr, "[slirp-selftest] open: %s\n", net.lastError().c_str());
+        return 1;
+    }
+    machine.ne2000.setBackend(&net);
+    if (!machine.enableNetUsbee()) { std::fprintf(stderr, "[slirp-selftest] enable failed\n"); return 1; }
+
+    Bus& bus = machine.bus;
+    auto wr = [&](uint8_t reg, uint8_t data) {
+        (void)bus.read8(Ne2000::WRITE_BASE + uint32_t(reg) * 512u + uint32_t(data) * 2u);
+    };
+    auto rd = [&](uint8_t reg) -> uint8_t { return bus.read8(Ne2000::READ_BASE + uint32_t(reg) * 512u); };
+
+    const uint8_t mac[6] = {0x02, 0x4E, 0x53, 0x54, 0x00, 0x01};
+    const uint8_t kTxPage = 0x40, kRxStart = 0x46, kRxStop = 0x80;
+    wr(0x00, 0x21); wr(0x01, kRxStart); wr(0x02, kRxStop); wr(0x03, kRxStart);
+    wr(0x00, 0x61);                                   // page 1 : MAC + CURR
+    for (int i = 0; i < 6; ++i) wr(uint8_t(0x01 + i), mac[i]);
+    wr(0x07, kRxStart);
+    wr(0x00, 0x21);
+    wr(0x0C, 0x04);                                   // RCR : accepte le broadcast
+
+    // Émet `frame` par la carte, puis laisse SLIRP travailler quelques tours.
+    auto transmit = [&](const std::vector<uint8_t>& frame) {
+        const uint16_t addr = uint16_t(kTxPage) * 256u;
+        wr(0x08, uint8_t(addr)); wr(0x09, uint8_t(addr >> 8));
+        wr(0x0A, uint8_t(frame.size())); wr(0x0B, uint8_t(frame.size() >> 8));
+        wr(0x00, 0x12);                               // Remote Write
+        for (uint8_t b : frame) wr(0x10, b);
+        wr(0x04, kTxPage);
+        wr(0x05, uint8_t(frame.size())); wr(0x06, uint8_t(frame.size() >> 8));
+        wr(0x00, 0x26);                               // TXP + STA
+        for (int i = 0; i < 200; ++i) machine.ne2000.poll();
+    };
+    // Relit la trame déposée dans l'anneau à la page `page` (en-tête 4 octets).
+    auto readRing = [&](uint8_t page, std::vector<uint8_t>& out) -> bool {
+        const uint16_t hdr = uint16_t(page) * 256u;
+        wr(0x08, uint8_t(hdr)); wr(0x09, uint8_t(hdr >> 8));
+        wr(0x0A, 4); wr(0x0B, 0);
+        wr(0x00, 0x0A);                               // Remote Read
+        const uint8_t rsr = rd(0x10); const uint8_t next = rd(0x10);
+        const uint8_t lo = rd(0x10);  const uint8_t hi = rd(0x10);
+        (void)next;
+        const int len = int(lo | (hi << 8)) - 4;      // l'en-tête compte dans la longueur
+        if (!(rsr & 0x01) || len <= 0 || len > 1600) return false;
+        wr(0x08, uint8_t(hdr + 4)); wr(0x09, uint8_t((hdr + 4) >> 8));
+        wr(0x0A, uint8_t(len)); wr(0x0B, uint8_t(len >> 8));
+        wr(0x00, 0x0A);
+        out.clear();
+        for (int i = 0; i < len; ++i) out.push_back(rd(0x10));
+        return true;
+    };
+
+    // --- 1. ARP : « qui a 10.0.2.2 ? » ---------------------------------------
+    std::vector<uint8_t> arp = {
+        0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,                // dst broadcast
+        mac[0],mac[1],mac[2],mac[3],mac[4],mac[5],    // src
+        0x08,0x06,                                    // EtherType ARP
+        0x00,0x01, 0x08,0x00, 0x06,0x04, 0x00,0x01,   // Ethernet/IPv4, requête
+        mac[0],mac[1],mac[2],mac[3],mac[4],mac[5],    // expéditeur MAC
+        10,0,2,15,                                    // expéditeur IP
+        0,0,0,0,0,0,                                  // cible MAC (inconnue)
+        10,0,2,2,                                     // cible IP = passerelle
+    };
+    arp.resize(60, 0);                                // padding Ethernet minimal
+    transmit(arp);
+    std::vector<uint8_t> reply;
+    const bool gotArp = readRing(kRxStart, reply);
+    const bool arpOk = gotArp && reply.size() >= 42
+                    && reply[12] == 0x08 && reply[13] == 0x06        // ARP
+                    && reply[20] == 0x00 && reply[21] == 0x02        // opcode = réponse
+                    && reply[28] == 10 && reply[29] == 0 && reply[30] == 2 && reply[31] == 2;
+    check(arpOk, "ARP: la passerelle 10.0.2.2 repond");
+
+    // --- 2. DHCP DISCOVER → OFFER --------------------------------------------
+    // Trame complète construite à la main : Ethernet + IPv4 + UDP + BOOTP/DHCP.
+    std::vector<uint8_t> dhcp;
+    auto put  = [&](std::initializer_list<uint8_t> b) { for (uint8_t x : b) dhcp.push_back(x); };
+    auto put16 = [&](uint16_t v) { dhcp.push_back(uint8_t(v >> 8)); dhcp.push_back(uint8_t(v)); };
+    put({0xFF,0xFF,0xFF,0xFF,0xFF,0xFF});
+    put({mac[0],mac[1],mac[2],mac[3],mac[4],mac[5]});
+    put({0x08,0x00});                                  // IPv4
+    const std::size_t ipOff = dhcp.size();
+    put({0x45,0x00}); put16(0);                        // ver/IHL, TOS, longueur (patchée)
+    put16(0); put16(0);                                // id, flags
+    put({0x40,0x11}); put16(0);                        // TTL, UDP, somme (0 = tolérée)
+    put({0,0,0,0});                                    // src 0.0.0.0
+    put({255,255,255,255});                            // dst broadcast
+    const std::size_t udpOff = dhcp.size();
+    put16(68); put16(67); put16(0); put16(0);          // ports client/serveur, longueur, somme
+    const std::size_t bootpOff = dhcp.size();
+    put({0x01,0x01,0x06,0x00});                        // BOOTREQUEST, Ethernet, hlen 6
+    put({0x12,0x34,0x56,0x78});                        // xid
+    put16(0); put16(0);                                // secs, flags
+    for (int i = 0; i < 16; ++i) dhcp.push_back(0);    // ciaddr/yiaddr/siaddr/giaddr
+    put({mac[0],mac[1],mac[2],mac[3],mac[4],mac[5]});
+    for (int i = 0; i < 10; ++i) dhcp.push_back(0);    // reste de chaddr
+    for (int i = 0; i < 192; ++i) dhcp.push_back(0);   // sname + file
+    put({0x63,0x82,0x53,0x63});                        // cookie magique DHCP
+    put({53,1,1});                                     // option 53 : DISCOVER
+    put({55,3,1,3,6});                                 // option 55 : masque, routeur, DNS
+    dhcp.push_back(0xFF);                              // fin des options
+    // Longueurs : UDP puis IPv4 (le tout après le padding minimal).
+    const uint16_t udpLen = uint16_t(dhcp.size() - udpOff);
+    dhcp[udpOff + 4] = uint8_t(udpLen >> 8); dhcp[udpOff + 5] = uint8_t(udpLen);
+    const uint16_t ipLen = uint16_t(dhcp.size() - ipOff);
+    dhcp[ipOff + 2] = uint8_t(ipLen >> 8); dhcp[ipOff + 3] = uint8_t(ipLen);
+    // Somme de contrôle IPv4 (obligatoire, SLIRP la vérifie).
+    uint32_t sum = 0;
+    for (std::size_t i = ipOff; i < ipOff + 20; i += 2)
+        sum += (uint32_t(dhcp[i]) << 8) | dhcp[i + 1];
+    while (sum >> 16) sum = (sum & 0xFFFF) + (sum >> 16);
+    const uint16_t ck = uint16_t(~sum);
+    dhcp[ipOff + 10] = uint8_t(ck >> 8); dhcp[ipOff + 11] = uint8_t(ck);
+    (void)bootpOff;
+    transmit(dhcp);
+    // La réponse arrive à la page suivante : l'ARP a consommé la première.
+    const uint8_t nextPage = uint8_t(kRxStart + 1);
+    std::vector<uint8_t> off;
+    bool gotOffer = readRing(nextPage, off);
+    if (!gotOffer) gotOffer = readRing(kRxStart, off);       // si l'ARP n'avait rien laissé
+    // yiaddr (adresse offerte) est à l'octet 16 du BOOTP = 14 (Eth) + 20 (IP) + 8 (UDP) + 16.
+    const std::size_t yi = 14 + 20 + 8 + 16;
+    const bool dhcpOk = gotOffer && off.size() > yi + 4
+                     && off[yi] == 10 && off[yi + 1] == 0 && off[yi + 2] == 2 && off[yi + 3] == 15;
+    check(dhcpOk, "DHCP: OFFER attribue 10.0.2.15");
+
+    // --- 3. Les compteurs voient passer le trafic ------------------------------
+    check(net.txFrames() >= 2 && net.rxFrames() >= 1, "compteurs TX/RX du backend");
+
+    // --- 4. SORTIE RÉELLE (opt-in) : requête DNS vers l'extérieur ---------------
+    // Hors CI par défaut : les auto-tests du projet ne doivent JAMAIS dépendre du
+    // réseau (règle de tools/run_all.py). NEOST_SLIRP_ONLINE=1 l'active pour
+    // vérifier une vraie installation — c'est le seul contrôle qui prouve que les
+    // paquets QUITTENT la machine, les points 1-2 étant servis par SLIRP lui-même.
+    if (std::getenv("NEOST_SLIRP_ONLINE")) {
+        // MAC de la passerelle, apprise de la réponse ARP (octets 22-27).
+        uint8_t gw[6] = {0x52,0x55,0x0A,0x00,0x02,0x02};
+        if (arpOk && reply.size() >= 28) std::memcpy(gw, reply.data() + 22, 6);
+        std::vector<uint8_t> dns;
+        auto d  = [&](std::initializer_list<uint8_t> b) { for (uint8_t x : b) dns.push_back(x); };
+        auto d16 = [&](uint16_t v) { dns.push_back(uint8_t(v >> 8)); dns.push_back(uint8_t(v)); };
+        d({gw[0],gw[1],gw[2],gw[3],gw[4],gw[5]});
+        d({mac[0],mac[1],mac[2],mac[3],mac[4],mac[5]});
+        d({0x08,0x00});
+        const std::size_t ip2 = dns.size();
+        d({0x45,0x00}); d16(0); d16(0x1234); d16(0);
+        d({0x40,0x11}); d16(0);
+        // Cible du DNS : par défaut le relais interne de SLIRP (10.0.2.3), qui
+        // réexpédie vers le résolveur de l'hôte. NEOST_SLIRP_DNS=a.b.c.d vise un
+        // résolveur PUBLIC à la place — utile pour distinguer « le relais ne marche
+        // pas » de « rien ne sort du tout ».
+        uint8_t dnsIp[4] = {10, 0, 2, 3};
+        if (const char* e = std::getenv("NEOST_SLIRP_DNS")) {
+            unsigned a, b, c2, d2;
+            if (std::sscanf(e, "%u.%u.%u.%u", &a, &b, &c2, &d2) == 4)
+                { dnsIp[0] = uint8_t(a); dnsIp[1] = uint8_t(b); dnsIp[2] = uint8_t(c2); dnsIp[3] = uint8_t(d2); }
+        }
+        d({10,0,2,15}); d({dnsIp[0],dnsIp[1],dnsIp[2],dnsIp[3]});
+        const std::size_t udp2 = dns.size();
+        d16(5300); d16(53); d16(0); d16(0);
+        const std::size_t q = dns.size();
+        d16(0xBEEF); d16(0x0100); d16(1); d16(0); d16(0); d16(0);   // en-tête DNS
+        for (const char* lbl : {"theoldnet", "com"}) {              // question, en labels
+            dns.push_back(uint8_t(std::strlen(lbl)));
+            for (const char* c = lbl; *c; ++c) dns.push_back(uint8_t(*c));
+        }
+        dns.push_back(0); d16(1); d16(1);                            // A, IN
+        const uint16_t ul = uint16_t(dns.size() - udp2);
+        dns[udp2 + 4] = uint8_t(ul >> 8); dns[udp2 + 5] = uint8_t(ul);
+        const uint16_t il = uint16_t(dns.size() - ip2);
+        dns[ip2 + 2] = uint8_t(il >> 8); dns[ip2 + 3] = uint8_t(il);
+        uint32_t s2 = 0;
+        for (std::size_t i = ip2; i < ip2 + 20; i += 2) s2 += (uint32_t(dns[i]) << 8) | dns[i + 1];
+        while (s2 >> 16) s2 = (s2 & 0xFFFF) + (s2 >> 16);
+        const uint16_t c2 = uint16_t(~s2);
+        dns[ip2 + 10] = uint8_t(c2 >> 8); dns[ip2 + 11] = uint8_t(c2);
+        (void)q;
+        if (std::getenv("NEOST_SLIRP_TRACE")) {
+            std::fprintf(stderr, "[slirp-selftest] trame DNS (%zu o) : ", dns.size());
+            for (uint8_t b : dns) std::fprintf(stderr, "%02x", b);
+            std::fprintf(stderr, "\n");
+        }
+        transmit(dns);
+        // ⚠ Attendre du TEMPS RÉEL, pas des tours de boucle : un aller-retour DNS
+        // prend des dizaines de MILLISECONDES, alors que 400 poll() non bloquants
+        // s'exécutent en microsecondes — la première version concluait « pas de
+        // réponse » avant même que le paquet n'ait quitté la machine.
+        bool answered = false;
+        for (int i = 0; i < 300 && !answered; ++i) {
+            machine.ne2000.poll();
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));   // 3 s au plus
+            // On balaie l'anneau : la réponse peut atterrir sur n'importe quelle page.
+            for (uint8_t pg = kRxStart; pg < kRxStop && !answered; ++pg) {
+                std::vector<uint8_t> r;
+                if (!readRing(pg, r) || r.size() < 28) continue;
+                // ⚠ SLIRP nous ARPe AVANT de livrer : il lui faut la MAC de 10.0.2.15.
+                // Sur un vrai ST c'est la pile TCP/IP (STinG) qui répond ; ici c'est à
+                // l'auto-test de le faire, sinon la réponse DNS n'est jamais remise et
+                // le test conclut à tort « rien ne revient » (diagnostiqué le 2026-08-22).
+                if (r[12] == 0x08 && r[13] == 0x06 && r.size() >= 42
+                    && r[20] == 0x00 && r[21] == 0x01                       // requête ARP
+                    && r[38] == 10 && r[39] == 0 && r[40] == 2 && r[41] == 15) {
+                    std::vector<uint8_t> ar(r.begin() + 22, r.begin() + 28); // MAC du demandeur
+                    std::vector<uint8_t> rep;
+                    rep.insert(rep.end(), ar.begin(), ar.end());             // dst = demandeur
+                    rep.insert(rep.end(), mac, mac + 6);                     // src = nous
+                    for (uint8_t b : {0x08,0x06, 0x00,0x01, 0x08,0x00, 0x06,0x04, 0x00,0x02})
+                        rep.push_back(b);                                    // ARP, RÉPONSE
+                    rep.insert(rep.end(), mac, mac + 6);
+                    for (uint8_t b : {10,0,2,15}) rep.push_back(b);          // nous
+                    rep.insert(rep.end(), ar.begin(), ar.end());
+                    rep.insert(rep.end(), r.begin() + 28, r.begin() + 32);   // IP du demandeur
+                    rep.resize(60, 0);
+                    transmit(rep);
+                    continue;
+                }
+                if (r.size() < 14 + 20 + 8 + 12) continue;
+                if (r[12] != 0x08 || r[13] != 0x00 || r[23] != 0x11) continue;  // IPv4/UDP
+                const std::size_t h = 14 + 20 + 8;
+                if (r[h] != 0xBE || r[h + 1] != 0xEF) continue;                 // notre xid
+                answered = ((r[h + 6] << 8) | r[h + 7]) >= 1;                   // ancount
+            }
+        }
+        check(answered, "SORTIE REELLE : DNS resout theoldnet.com");
+    } else {
+        std::fprintf(stderr, "[slirp-selftest] (sortie reelle non testee — NEOST_SLIRP_ONLINE=1 pour l'activer)\n");
+    }
+
+    machine.disableNetUsbee();
+    net.close();
+    std::fprintf(stderr, "[slirp-selftest] %d passed, %d failed\n", passed, failed);
+    return failed == 0 ? 0 : 1;
+}
+
 // Dump du framebuffer décodé en PPM binaire (P6) — comparable visuellement.
 bool writePpm(const char* path, const uint32_t* px, int w, int h) {
     std::FILE* f = std::fopen(path, "wb");
@@ -806,6 +1075,8 @@ int main(int argc, char** argv) {
     bool        modemFlag      = false;          // --modem : modem Hayes sur l'USART
     bool        ethernecFlag   = false;          // --ethernec : NE2000 port cartouche
     bool        netusbeeFlag   = false;          // --netusbee : NE2000 + ISP1160 port cartouche
+    bool        slirpFlag      = false;          // --slirp : NAT user-mode (Internet réel)
+    bool        slirpRestricted = false;         // --slirp-restricted : bac à sable
     bool        ultrasatan     = false;          // --ultrasatan : interface SD sur le bus ACSI
     int         ultrasatanId   = 0;              // --ultrasatan-id N : première cible (0-6)
     std::string sd1Img, sd2Img;                  // --sd1/--sd2 IMG : images des slots SD
@@ -842,6 +1113,7 @@ int main(int argc, char** argv) {
     bool        enecSelfTestFlag = false; // auto-test déterministe NE2000/EtherNEC (fil)
     bool        usatanSelfTestFlag = false;   // auto-test déterministe UltraSatan (fil ACSI)
     bool        netusbeeSelfTestFlag = false; // auto-test déterministe NetUSBee/ISP1160 (fil)
+    bool        slirpSelfTestFlag = false;    // auto-test du backend Internet (ARP + DHCP)
     int         shotEvery   = 0;      // --shot-every N : dump une capture toutes les N trames
     std::string shotPrefix;           // --shot-every PREFIX : préfixe des captures périodiques
     int         shotFrom    = 0;      // --shot-from N : ne capture qu'à partir de la trame N
@@ -920,6 +1192,8 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(a, "--modem"))           modemFlag = true;
         else if (!std::strcmp(a, "--ethernec"))        ethernecFlag = true;
         else if (!std::strcmp(a, "--netusbee"))        netusbeeFlag = true;
+        else if (!std::strcmp(a, "--slirp"))           slirpFlag = true;
+        else if (!std::strcmp(a, "--slirp-restricted")) { slirpFlag = true; slirpRestricted = true; }
         else if (!std::strcmp(a, "--ultrasatan"))      ultrasatan = true;
         else if (!std::strcmp(a, "--ultrasatan-id"))   { ultrasatan = true; ultrasatanId = std::atoi(next(a)); }
         else if (!std::strcmp(a, "--sd1"))             { ultrasatan = true; sd1Img = next(a); }
@@ -952,6 +1226,7 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(a, "--enec-selftest")) enecSelfTestFlag = true;
         else if (!std::strcmp(a, "--usatan-selftest")) usatanSelfTestFlag = true;
         else if (!std::strcmp(a, "--netusbee-selftest")) netusbeeSelfTestFlag = true;
+        else if (!std::strcmp(a, "--slirp-selftest")) slirpSelfTestFlag = true;
         else if (!std::strcmp(a, "--shot-every"))  {
             shotEvery = std::atoi(next(a)); shotPrefix = next(a);
             if (shotEvery <= 0)             // le préfixe a été consommé pour rien : le dire
@@ -1075,6 +1350,7 @@ int main(int argc, char** argv) {
     if (enecSelfTestFlag) return enecSelfTest(machine);
     if (usatanSelfTestFlag) return usatanSelfTest(machine);
     if (netusbeeSelfTestFlag) return netusbeeSelfTest(machine);
+    if (slirpSelfTestFlag) return slirpSelfTest(machine);
     std::fprintf(stderr, "[headless] CPU core: %s | machine: %s | RAM: %s\n",
                  Cpu68k::coreName(machine.cpu.core()), machineName(machType), ramLabel(ramBytes));
     if (!machine.loadTos(romPath)) {
@@ -1180,8 +1456,18 @@ int main(int argc, char** argv) {
     // EtherNEC (--ethernec) : NE2000 sur le port cartouche, backend boucle locale
     // (aucune E/S réseau). Exclusif d'une cartouche montée.
     NetBackendLoop enecLoop;
+    SlirpBackend   slirpNet;
+    if ((ethernecFlag || netusbeeFlag) && slirpFlag) {
+        if (slirpNet.open(slirpRestricted)) {
+            machine.ne2000.setBackend(&slirpNet);
+        } else {
+            std::fprintf(stderr, "[headless] --slirp: %s — repli sur la boucle locale\n",
+                         slirpNet.lastError().c_str());
+            slirpFlag = false;
+        }
+    }
     if (ethernecFlag || netusbeeFlag) {
-        machine.ne2000.setBackend(&enecLoop);
+        if (!slirpFlag) machine.ne2000.setBackend(&enecLoop);
         const bool ok = netusbeeFlag ? machine.enableNetUsbee() : machine.enableEtherNec();
         if (ok)
             std::fprintf(stderr, "[headless] %s on the cartridge port\n",
@@ -1189,6 +1475,8 @@ int main(int argc, char** argv) {
         else
             std::fprintf(stderr, "[headless] --%s refused: the cartridge port is in use\n",
                          netusbeeFlag ? "netusbee" : "ethernec");
+    } else if (slirpFlag) {
+        std::fprintf(stderr, "[headless] --slirp ignored: needs --ethernec or --netusbee\n");
     }
     // Anneau MIDI réseau (--midi-net) : MIDI OUT → UDP → pair aval ; datagrammes
     // de l'amont → MIDI IN. Débranche le bouclage interne de l'ACIA MIDI.

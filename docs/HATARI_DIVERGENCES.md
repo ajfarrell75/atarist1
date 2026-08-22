@@ -1181,12 +1181,12 @@ les étalons de fidélité** (réseau OFF pendant `run_all.py --tier fast/full`)
   2 slots, l'INQUIRY `JOOKIE  UltraSatan`, l'état « slot vide = NOT READY » et les paquets
   ICD `$20 'US…'` du firmware v1.20 (source : atarijookie/ce-atari). Garde-fou : ces paquets ne
   sont routés que sur les cibles UltraSatan ; une cible ordinaire reste byte-identique à `hdc.c`.
-  Spec : `docs/FUJINET.md` § UltraSatan.
+  Spec : `docs/EXTENSIONS.md` § UltraSatan.
 - **[EXTENSION] NetUSBee — ISP1160 USB sur le port cartouche** (`src/io/Isp1160.*`, `Bus::read8Slow`,
   2026-08-21). La moitié NE2000 est l'EtherNEC existant ; l'ISP1160 est décodé aux adresses du
   pilote FreeMiNT. Hub racine vide (aucun périphérique USB). ⚠ La fenêtre LSB `$FA0000-$FA01FF`
   est partagée avec le registre CR de la NE2000 : sans schéma, NeoST laisse les DEUX puces voir
-  l'accès — à corriger si le matériel gate l'une d'elles. Spec : `docs/FUJINET.md` § NetUSBee.
+  l'accès — à corriger si le matériel gate l'une d'elles. Spec : `docs/EXTENSIONS.md` § NetUSBee.
 - **[EXTENSION] FujiNet virtuel sur le bus ACSI** (`src/io/FujiDevice.*`,
   `src/net/*`, cible ACSI dédiée). Périphérique WiFi de déport de protocole (HTTP/TCP/
   JSON, montage d'images distantes) attaché via un **opcode vendeur ACSI `$60`**. La
@@ -1194,6 +1194,6 @@ les étalons de fidélité** (réseau OFF pendant `run_all.py --tier fast/full`)
   `rs232.c` (redirection série hôte), `midi.c` (I/O MIDI hôte), `hdc.c` (déjà porté
   dans `Acsi`). Le protocole FujiNet lui-même vient du firmware amont
   ([fujinet-firmware](https://github.com/FujiNetWIFI/fujinet-firmware/wiki)) — pas
-  d'Hatari. Spec complète : `docs/FUJINET.md`. Garde-fou : l'opcode `$60` n'est routé
+  d'Hatari. Spec complète : `docs/EXTENSIONS.md`. Garde-fou : l'opcode `$60` n'est routé
   que sur la cible FujiNet ; toute autre cible ACSI reste **byte-identique** au port
   de `hdc.c`. Auto-test déterministe : `neost-headless --fuji-selftest` (palier `fast`).

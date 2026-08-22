@@ -7,7 +7,7 @@
 //  le périphérique fait le travail (HTTP, TCP, montage d'images…). Aucun
 //  FujiNet matériel n'existe pour l'Atari ST : NeoST définit ici le binding ST
 //  de référence, sur le port ACSI (opcode vendeur $60) — spécification complète
-//  dans docs/FUJINET.md. Hatari n'a AUCUN équivalent (divergence assumée,
+//  dans docs/EXTENSIONS.md. Hatari n'a AUCUN équivalent (divergence assumée,
 //  cf. docs/HATARI_DIVERGENCES.md) ; la fonctionnalité est INACTIVE par défaut.
 //
 //  Cette classe est la machine à états côté cœur : décodage des CDB, tampons
@@ -54,7 +54,7 @@ public:
     // la machine émulée : un FujiNet réel survit au reboot de son hôte).
     void reset();
 
-    // --- Exécution d'un CDB (10 octets, cf. docs/FUJINET.md) -----------------
+    // --- Exécution d'un CDB (10 octets, cf. docs/EXTENSIONS.md) -----------------
     // Renvoie le statut ACSI (0 = OK, 2 = erreur). Après l'appel :
     //   dir=1 (device→ST) : dataLen()>0 et readBuffer() prêt (complété à 512) ;
     //   dir=2 (ST→device) : dataLen()>0, l'appelant DOIT livrer via writeData().

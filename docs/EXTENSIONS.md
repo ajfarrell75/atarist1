@@ -1,4 +1,24 @@
-# FujiNet virtuel — spécification du binding Atari ST (extension NeoST)
+# Extensions NeoST — matériel que l'Atari ST n'avait pas d'origine
+
+> **Statut commun.** Toutes **inactives par défaut**, sans effet sur les étalons (aucune
+> n'ouvre de socket depuis `tools/run_all.py`), et consignées comme divergences délibérées
+> dans `docs/HATARI_DIVERGENCES.md` § Extensions — Hatari n'a aucun équivalent. Le cœur
+> (`neost_core`) ne fait que *signaler* ; l'I/O réelle vit dans `neost_net` (frontends).
+>
+> Deux familles s'y mêlent, d'où le nom du fichier (renommé de `FUJINET.md` le
+> 2026-08-22 : ce document n'a jamais parlé que de FujiNet, et **aucun FujiNet n'a jamais
+> existé sur Atari ST**) :
+>
+> | Extension | Nature | Réalité matérielle |
+> |-----------|--------|--------------------|
+> | [UltraSatan](#ultrasatan--interface-sdmmc-sur-le-bus-acsi---ultrasatan-gui-hard-disks) | stockage SD sur ACSI | **matériel réel** (Jookie) |
+> | [NetUSBee](#netusbee--ne2000--hôte-usb-isp1160-sur-le-port-cartouche---netusbee-gui-network) | Ethernet + USB, port cartouche | **matériel réel** |
+> | [EtherNEC](#ethernec--ne2000-sur-le-port-cartouche---ethernec-gui-network) | NE2000, port cartouche | **matériel réel** (montage T. Redelberger) |
+> | [Modem Hayes](#modem-hayes-sur-rs-232---modem-gui-network) | pont RS-232 → TCP | équivalent des modems WiFi ESP8266 vendus pour ST |
+> | [Anneau MIDI](#anneau-midi-réseau--midimaze-en-ligne---midi-net-hpl) | MIDIMaze sur UDP | transpose un câblage MIDI réel |
+> | [FujiNet virtuel](#fujinet-virtuel--binding-atari-st-de-référence) | déport de protocole sur ACSI | **n'existe pas sur ST** — binding de référence défini par NeoST |
+
+## FujiNet virtuel — binding Atari ST de référence
 
 > **Statut.** Extension NeoST assumée, **inactive par défaut**. Aucun FujiNet matériel
 > n'existe pour l'Atari ST (le fil AtariAge de la communauté propose le port ACSI mais
@@ -169,13 +189,12 @@ Chaîne : `dev/fujinet/build.sh` (vbcc/vasm, cf. `dev/etalons/build.sh`).
 
 ---
 
-# Autres extensions réseau NeoST
+# Les autres extensions — matériel qui a RÉELLEMENT existé sur ST
 
-Ces extensions partagent la même philosophie (backend hôte hors du cœur, OFF par
-défaut, `NEOST_WITH_NET` pour celles qui ouvrent des sockets) et le même statut
-« extension assumée » que FujiNet. Les deux dernières — **UltraSatan** et **NetUSBee** —
-sont les périphériques que l'écosystème ST a RÉELLEMENT adoptés pour le stockage et le
-réseau : un vrai matériel, de vrais pilotes, pas un binding de référence.
+Même philosophie que ci-dessus (backend hôte hors du cœur, OFF par défaut,
+`NEOST_WITH_NET` pour celles qui ouvrent des sockets), mais ici on émule des
+périphériques que les Atariens ont vraiment branchés : **UltraSatan** pour le stockage,
+**NetUSBee**/**EtherNEC** pour le réseau.
 
 ## Modem Hayes sur RS-232 (`--modem`, GUI Network)
 

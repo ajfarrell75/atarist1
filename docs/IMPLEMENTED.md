@@ -1535,7 +1535,7 @@ atteignent leur menu et passent leur batterie de tests internes (Z) **sans erreu
 les **2 cœurs**, avec un vrai TOS. Restes (« Hard error »/VME/FPU) = périphériques absents,
 fidèles à Hatari, pas des bugs.
 
-## Réseau — extensions NeoST (INACTIVES par défaut, cf. `docs/FUJINET.md`)
+## Réseau — extensions NeoST (INACTIVES par défaut, cf. `docs/EXTENSIONS.md`)
 
 Ces fonctionnalités **n'existent pas dans Hatari** (extensions assumées, consignées dans
 `docs/HATARI_DIVERGENCES.md` § Extensions) ; OFF par défaut, **sans effet sur les
@@ -1580,7 +1580,7 @@ Ces fonctionnalités **n'existent pas dans Hatari** (extensions assumées, consi
   données/commande, mots 16 bits) — ID `$6120`, reset logiciel, registres OHCI/ISP, **hub racine
   vide**, ATL achevée en `DeviceNotResponding`. Les pilotes s'initialisent, rien n'est énuméré
   (périphérique USB hôte = point d'extension). Auto-tests : `--netusbee-selftest` (11 checks)
-  + verdict série. ⚠ fenêtre LSB partagée avec le CR NE2000 (cf. `docs/FUJINET.md`).
+  + verdict série. ⚠ fenêtre LSB partagée avec le CR NE2000 (cf. `docs/EXTENSIONS.md`).
 - **Anneau MIDI réseau** (`net/MidiRing`, `--midi-net H:P[:L]`) : **MIDIMaze en ligne** —
   MIDI OUT → UDP → pair aval, datagrammes amont → MIDI IN (`MidiAcia::setMidiSink`/
   `receiveExternal`, tampon de gigue respectant les 2 octets du 6850). Vérifié

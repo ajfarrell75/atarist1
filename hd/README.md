@@ -24,7 +24,7 @@ livré avec NeoST (`gemdos/DEMOS`, les `DESKTOP.INF`/`NEWDESK.INF`).
 Cochée, l'interface SD de Jookie occupe les **IDs ACSI 0 et 1** : le **slot 1 est l'image
 ACSI** montée ci-dessus (ID 0), le **slot 2** se monte à part (ID 1, `sd2=` dans `neost.cfg`).
 Le TOS voit alors `JOOKIE  UltraSatan` à l'INQUIRY, un slot vide répond « pas de carte », et
-`US_CONF.TOS` peut lire le firmware, l'horloge et le nom INQUIRY (cf. `docs/FUJINET.md`).
+`US_CONF.TOS` peut lire le firmware, l'horloge et le nom INQUIRY (cf. `docs/EXTENSIONS.md`).
 En ligne de commande : `--ultrasatan --sd1 IMG --sd2 IMG`.
 
 ## Trois choses à savoir

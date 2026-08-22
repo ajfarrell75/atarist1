@@ -8,7 +8,7 @@
 //    · ÉCRIRE `data` dans `reg`: lecture à $FA0000 + reg*512 + data*2  (/ROM3)
 //  (HARDWARE.TXT d'EmmanuelKasper/ethernec). NeoST décode cette fenêtre dans
 //  Bus::read8Slow quand une NE2000 est attachée — extension NeoST, cf.
-//  docs/FUJINET.md § EtherNEC et docs/HATARI_DIVERGENCES.md § Extensions.
+//  docs/EXTENSIONS.md § EtherNEC et docs/HATARI_DIVERGENCES.md § Extensions.
 //
 //  Le modèle DP8390 est classique : registres en pages 0/1/2, tampon en anneau
 //  de réception, DMA distant (Remote DMA) pour transférer trames et registres
