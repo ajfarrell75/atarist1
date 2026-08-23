@@ -40,9 +40,9 @@
 //   · Ultimate Ripper (Gotcha) — même idée, sur la ligne RI (GPIP6) du port série.
 //     Dans les deux cas l'appui est relâché à la VBL suivante (comme Steem).
 //
-//  Non émulés faute de relevé public : Notator/Creator et Log 3 (C-Lab/Emagic,
-//  EP600 décapsulé en 2023 mais équations non publiées ; lecture dans les IRQ MIDI),
-//  Pro-24 / Twenty Four (GAL16V8), Avalon, Synthworks (clé noire — même famille que
+//  Non émulés faute de relevé public : Log 3 (Emagic, deuxième puce EP330 non
+//  relevée — la clé Notator/Creator, elle, est dans CubaseDongle), Pro-24 / Twenty
+//  Four (GAL16V8), Avalon, Synthworks (clé noire — même famille que
 //  Cubase 2 mais équations distinctes), Zodiac (LED sur le port joystick 1),
 //  Dames Grand-Maître (potentiomètres POTX/POTY — l'Amiga seulement), NeoN Grafix
 //  (port LAN Falcon : simple boucle TX→RX). Cf. docs/EXTENSIONS.md.

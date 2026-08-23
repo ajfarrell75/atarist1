@@ -74,6 +74,7 @@ void Mfp::reset() {
     // le sink PSG tire — psg.reset() (R15=0) ne le fait pas, un BUSY asserté par le
     // bouclage ou la capture imprimante restait donc coincé après reset.
     busyLine_ = false;
+    monButton_ = false;                   // bouton Multiface relâché (PortDongle::reset l'oublie aussi)
     rxByte_ = 0; rxFull_ = false; rxOverrun_ = false;   // USART : tampon vidé (pas de RXFULL fantôme)
     serialBaud_ = 0; serialUcr_ = 0;      // suivi débit série remis (sinon serialBaud() rapporte l'avant-reset)
     if (sched_) {   // reset MACHINE : Hatari appelle CycInt_Reset() (reset.c:76) avant MFP_Reset_All

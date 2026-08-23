@@ -417,6 +417,10 @@ uint8_t Bus::read8Slow(uint32_t addr) {
         const bool first = ioAccessWidth_ < 2 || (addr & 1) == 0;
         return dongle->cartRead(addr, first);
     }
+    // /ROM4 ($FA0000-$FAFFFF) : la clé Notator y écoute son armement ; la donnée,
+    // elle, vient toujours de la cartouche / du GEMDOS HD ci-dessous.
+    if (dongle && addr >= stmap::CART_BASE && addr < 0xFB0000u)
+        dongle->rom4Read(addr, ioAccessWidth_ < 2 || (addr & 1) == 0);
 
     // Port cartouche ($FA0000-$FBFFFF) : si une cartouche est montée, on expose
     // sa ROM ; le TOS lit le magic à $FA0000 et amorce (diagnostic/applicative).

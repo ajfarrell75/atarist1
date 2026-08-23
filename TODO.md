@@ -430,8 +430,11 @@ ACIA) ; si une vraie démo spec512 **overscan** (bordures ouvertes) est rapatri�
 - **Adaptateurs de port — validation** (2026-08-23) : `PortDongle` transcrit Steem/WinUAE sans
   logiciel à clé sous la main. À exercer : Leader Board / 10th Frame (dump ST), B.A.T. II, Music
   Master, et l'option « Pro Sound » du menu de Wings of Death / Lethal Xcess (présents en STX) pour
-  entendre le DAC. Restent sans relevé public : Notator/Log 3 (EP600), Pro-24 (GAL16V8), Avalon /
-  Synthworks (clé noire, équations ≠ Cubase 2), Zodiac, DynaBlaster.
+  entendre le DAC. **Clé Notator** (`--dongle notator`, équations TPH) : à confronter à un Notator
+  SL original (non cracké) — deux incertitudes à trancher sur le vrai matériel : le front de /ROM4
+  qui cadence FEEDB1 (fin d'accès supposée) et l'ordre UDS↔/ROM4 à l'armement (données remises à 0
+  supposées). Restent sans relevé public : Log 3 (EP330), Pro-24 (GAL16V8), Avalon / Synthworks
+  (clé noire, équations ≠ Cubase 2), Zodiac, DynaBlaster.
 - **Clé Steinberg — validation** (2026-08-23) : `CubaseDongle` (rouge/noire, équations MiSTery) n'a
   jamais vu un Cubase 3.10 / Score / 2.01 réel. Il faut une disquette originale (non crackée) pour
   trancher ; la noire dépend en plus du motif bus exact de Moira. Option de confort : choisir une

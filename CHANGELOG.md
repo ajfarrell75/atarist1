@@ -20,7 +20,12 @@ STF) — R15 horodaté et rejoué par le YM avant son HPF. Boutons **Multiface S
 **Ultimate Ripper** (RI) : page Dongles ou `--button-at N`, relâchés à la VBL. Crochets :
 `Mfp::setGpipReadHook`/`setMonitorButton`, `YM2149::setPortBDac`, sonde joystick IKBD, abonné
 port A. **OFF par défaut**, étalons inchangés (`--tier full`), auto-tests par protocole.
-Non émulés faute de relevé public : Notator/Log 3, Pro-24, Avalon, Zodiac.
+**Clé C-Lab Notator / Creator** (`--dongle notator`) : les équations de l'EP600, publiées
+par TPH en octobre 2025 et transcrites en C dans le firmware SidecarTridge `md-notator`,
+sont portées dans `CubaseDongle` — bascule d'armement `FEEDB1` sur /ROM4 (`$FA00EA`),
+8 bascules D cadencées par UDS (désarmée) ou par la **descente** de /ROM3 (armée), resets
+asynchrones D8/D9 ; nouveau crochet `rom4Read` dans le `Bus`, save-state **v15**.
+Non émulés faute de relevé public : Log 3 (EP330), Pro-24, Avalon, Zodiac.
 
 ## Cubase Lite joue un SMF en headless, et on le vérifie note à note (2026-08-23)
 

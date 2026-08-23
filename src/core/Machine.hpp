@@ -269,7 +269,9 @@ public:
     void setAdapter(PortDongle::Type t) {
         adapter.setType(t);
         psg.setPortBDac(adapter.usesPortBDac());
-        mfp.setMonitorButton(false); mfp.setRs232Ri(false);
+        // Lignes qu'un adaptateur précédent a pu laisser hors repos : bouton (GPIP7),
+        // RI (GPIP6), DCD (Jeanne d'Arc — repos ACTIF, cf. Mfp::reset).
+        mfp.setMonitorButton(false); mfp.setRs232Ri(false); mfp.setRs232Dcd(true);
         if (adapter.attached())
             mfp.setGpipReadHook([this](uint8_t& v) { adapter.gpipRead(v, sched.now()); });
         else

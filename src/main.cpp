@@ -1899,7 +1899,7 @@ struct ConfigUi {
     int  reqMidiOutGm = -1, reqMidiOutPort = -1, reqMidiOutMt32 = -1, reqMt32Model = -1;
     bool reqMidiPanic = false;            // bouton « All notes off » de la page MIDI
     int  reqMidiLoopback = -1;            // case OUT->IN de la page MIDI
-    int  reqDongle = -1;                  // clé Steinberg : 0 none, 1 cubase2, 2 cubase3, 3 auto
+    int  reqDongle = -1;                  // clé cartouche : 0 none, 1 cubase2, 2 cubase3, 3 auto, 4 notator
     int  reqAdapter = -1;                 // adaptateur joystick/série/parallèle : PortDongle::Type
     bool reqAdapterButton = false;        // bouton Multiface / Ultimate Ripper (page Dongles)
     std::string mt32Status;               // lecture : modèle chargé ou erreur
@@ -2135,15 +2135,17 @@ void drawConfigWindow(ConfigUi& ui) {
     case kCfgDongle: {
         // Clé Steinberg sur le port cartouche (/ROM3 $FB0000, invisible du TOS).
         ImGui::TextDisabled("STEINBERG KEY (cartridge port, $FB0000)");
-        int dk = cfg.dongle == "cubase2" ? 1 : cfg.dongle == "cubase3" ? 2 : cfg.dongle == "auto" ? 3 : 0;
+        int dk = cfg.dongle == "cubase2" ? 1 : cfg.dongle == "cubase3" ? 2 : cfg.dongle == "auto" ? 3
+               : cfg.dongle == "notator" ? 4 : 0;
         bool dkCh = false;
         dkCh |= ImGui::RadioButton("None##key", &dk, 0); ImGui::SameLine();
         dkCh |= ImGui::RadioButton("Red key (Cubase 3.1 / Score / Audio)", &dk, 2);
         dkCh |= ImGui::RadioButton("Black key (Cubase 2.01)", &dk, 1); ImGui::SameLine();
-        dkCh |= ImGui::RadioButton("Auto", &dk, 3);
+        dkCh |= ImGui::RadioButton("Auto (red/black)", &dk, 3);
+        dkCh |= ImGui::RadioButton("C-Lab key (Notator / Creator, Unitor-N)", &dk, 4);
         if (dkCh) ui.reqDongle = dk;
-        ImGui::TextDisabled("  PAL16R8 / 5C060 state machines (MiSTery equations). Cubase Lite needs none.");
-        ImGui::TextDisabled("  Black key: clocked by every CPU bus cycle - best effort.");
+        ImGui::TextDisabled("  PAL16R8 / 5C060 / EP600 state machines (MiSTery + TPH equations).");
+        ImGui::TextDisabled("  Cubase Lite needs none. Black key: clocked by every CPU bus cycle - best effort.");
         ImGui::Separator();
 
         // Adaptateurs sur les autres ports : un seul à la fois (comme Steem).
@@ -2174,7 +2176,7 @@ void drawConfigWindow(ConfigUi& ui) {
                            "from RTS/DTR. Pro Sound Designer is not a key: an 8-bit DAC on the printer "
                            "port, used by Wings of Death / Lethal Xcess on an STF. Protocols from Steem "
                            "SSE and WinUAE; Hatari emulates none of them. Not emulated (no public "
-                           "dump): Notator/Log 3, Pro-24, Avalon, Zodiac.");
+                           "dump): Log 3, Pro-24, Avalon, Zodiac.");
         break;
     }
 
@@ -2780,6 +2782,7 @@ int main(int argc, char** argv) {
         const CubaseDongle::Model dm = cfg.dongle == "cubase2" ? CubaseDongle::Model::Cubase2
                                      : cfg.dongle == "cubase3" ? CubaseDongle::Model::Cubase3
                                      : cfg.dongle == "auto"    ? CubaseDongle::Model::Auto
+                                     : cfg.dongle == "notator" ? CubaseDongle::Model::Notator
                                      : CubaseDongle::Model::None;
         if (!machine.setDongle(dm)) {
             g_stateMsg = "Steinberg key needs the cartridge port free (EtherNEC/NetUSBee)";
@@ -3812,8 +3815,8 @@ int main(int argc, char** argv) {
             }
             if (cfgUi.reqAdapterButton) { cfgUi.reqAdapterButton = false; machine.pressAdapterButton(); }
             if (cfgUi.reqDongle >= 0) {
-                static const char* const names[] = { "", "cubase2", "cubase3", "auto" };
-                const int d = cfgUi.reqDongle & 3; cfgUi.reqDongle = -1;
+                static const char* const names[] = { "", "cubase2", "cubase3", "auto", "notator" };
+                const int d = std::min(cfgUi.reqDongle, 4); cfgUi.reqDongle = -1;
                 if (machine.setDongle(CubaseDongle::Model(d))) {
                     cfg.dongle = names[d];
                     saveConfig(exeDir, cfg, &machine);

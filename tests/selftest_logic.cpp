@@ -340,6 +340,33 @@ static void testCubaseDongle() {
         }
         checkStr("cubase3 : 48 bits épinglés", got, "000011100010001000100010001000100010001000100010");
     }
+    {   // Clé Notator : armement par /ROM4 à $FA00EA (STER), données par /ROM3 ensuite.
+        CubaseDongle k; k.setModel(CubaseDongle::Model::Notator);
+        checkBool("notator : reset → 0, désarmée, crochet /UDS demandé", k.state() == 0 && !k.armed() && k.wantsUds(), true);
+        k.udsCycle(0x1002);    // désarmée : UDS cadence les données (A1=1 → D14 ← 1)
+        checkBool("notator : désarmée, UDS cadence (A1 → D14)", k.state() == 0x40, true);
+        k.rom4Read(0xFA00EA, true); k.udsCycle(0xFA00EA);   // accès d'armement : STER → 0 puis FEEDB1
+        checkBool("notator : $FA00EA arme et remet à 0", k.armed() && k.state() == 0, true);
+        k.udsCycle(0x1002); k.udsCycle(0x1008);
+        checkBool("notator : armée, UDS sans effet", k.state() == 0, true);
+        const uint8_t v = k.cartRead(0xFB0002, true);       // /ROM3 descend : horloge AVANT lecture
+        checkBool("notator : lecture $FB0002 = état APRÈS horloge (D14)", v == 0x40 && k.state() == 0x40, true);
+        checkBool("notator : octet faible $FF", k.cartRead(0xFB0003, false) == 0xFF, true);
+        k.rom4Read(0xFA0000, true); k.udsCycle(0xFA0000);   // tout autre accès /ROM4 désarme
+        checkBool("notator : accès /ROM4 hors STER désarme", !k.armed(), true);
+        k.rom4Read(0xFA00EA, true); k.udsCycle(0xFA00EA);
+        std::string got;
+        for (int i = 0; i < 12; ++i) {
+            const uint32_t a = 0xFB0000 | ((uint32_t(i * 53) & 0xFF) << 1);
+            char b[8]; std::snprintf(b, sizeof b, "%02X", k.cartRead(a, true)); got += b;
+        }
+        checkStr("notator : séquence épinglée", got, "FF00FD0000400100FF000040");
+        k.cartRead(0xFB00EA, true);
+        checkBool("notator : $FB00EA (STER) remet à 0", k.state() == 0, true);
+        k.cartRead(0xFB0002, true);                          // D14 ← 1 (A1)
+        k.cartRead(0xFB0014, true);                          // A4·A2 : reset asynchrone de D9 ; A1=0
+        checkBool("notator : reset asynchrone D9 sous A4·A2", (k.state() & 0x02) == 0, true);
+    }
     {   // Auto : premier accès avec A7..A1 = 0 → rouge ; ≠ 0 → noire.
         CubaseDongle k; k.setModel(CubaseDongle::Model::Auto);
         checkBool("auto : crochet /UDS demandé tant que non tranché", k.wantsUds(), true);

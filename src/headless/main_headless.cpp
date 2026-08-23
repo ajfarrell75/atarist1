@@ -109,7 +109,8 @@ void usage() {
         "                    peer H:P, receive MIDI IN on local port L (default 6820)\n"
         "  --dongle MODEL    Steinberg key on the cartridge port (/ROM3, $FB0000):\n"
         "                    cubase3 (red key: Cubase 3.10/Score/Audio), cubase2 (black\n"
-        "                    key: Cubase 2.01, needs a 68000-exact bus pattern), auto\n"
+        "                    key: Cubase 2.01, needs a 68000-exact bus pattern), auto,\n"
+        "                    notator (C-Lab Notator/Creator key, EP600, $FA00EA arms it)\n"
         "  --adapter NAME    dongle/adapter on the joystick, serial or printer port:\n"
         "                    leaderboard, 10thframe, cricket, rugby, soccer (joystick),\n"
         "                    bat2, musicmaster, jeannedarc (RS-232), prosound (8-bit DAC\n"
@@ -1273,9 +1274,10 @@ int main(int argc, char** argv) {
         if      (dongleModel == "cubase3") m = CubaseDongle::Model::Cubase3;
         else if (dongleModel == "cubase2") m = CubaseDongle::Model::Cubase2;
         else if (dongleModel == "auto")    m = CubaseDongle::Model::Auto;
-        else { std::fprintf(stderr, "[headless] --dongle %s: unknown model (cubase2, cubase3, auto)\n", dongleModel.c_str()); return 2; }
+        else if (dongleModel == "notator") m = CubaseDongle::Model::Notator;
+        else { std::fprintf(stderr, "[headless] --dongle %s: unknown model (cubase2, cubase3, auto, notator)\n", dongleModel.c_str()); return 2; }
         if (machine.setDongle(m))
-            std::fprintf(stderr, "[headless] Cubase dongle (%s) on /ROM3 $FB0000\n", dongleModel.c_str());
+            std::fprintf(stderr, "[headless] cartridge key (%s) on /ROM3 $FB0000\n", dongleModel.c_str());
         else
             std::fprintf(stderr, "[headless] --dongle refused: EtherNEC/NetUSBee decode the whole cartridge window\n");
     }

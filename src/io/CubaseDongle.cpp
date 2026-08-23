@@ -5,6 +5,7 @@
 void CubaseDongle::reset() {
     d_ = 0;
     r_ = 0;
+    n_ = 0; feedb1_ = false; rom4Pending_ = -1;
     chosen_ = (model_ == Model::Auto) ? Model::None : model_;
     locked_ = (model_ != Model::Auto);
 }
@@ -15,6 +16,7 @@ uint8_t CubaseDongle::outputByte() const {
         // Clé rouge : seule D8 est pilotée (bit 0 de l'octet fort), D9-D15 flottent
         // à 1 comme le reste du port.
         case Model::Cubase3: return uint8_t(0xFE | ((r_ >> 15) & 1));
+        case Model::Notator: return n_;
         default:             return 0xFF;
     }
 }
@@ -26,6 +28,15 @@ uint8_t CubaseDongle::cartRead(uint32_t addr, bool first) {
         chosen_ = (addr & 0xFE) ? Model::Cubase2 : Model::Cubase3;
         locked_ = true;
     }
+    // Clé Notator armée : /ROM3 qui DESCEND cadence les bascules, puis les resets
+    // asynchrones D9 (A4·A2) / D8 (A3·A1) agissent tant que /ROM3 est bas — le CPU
+    // lit donc l'état APRÈS le coup d'horloge. Désarmée : rien ici (UDS, cf. udsCycle).
+    if (first && chosen_ == Model::Notator && feedb1_) {
+        const uint8_t a = uint8_t((addr >> 1) & 0xFF);
+        clockN(a);
+        if ((a & 0x08) && (a & 0x02)) n_ &= uint8_t(~0x02);   // D9.rst = FEEDB1·A4·/ROM3·A2
+        if ((a & 0x04) && (a & 0x01)) n_ &= uint8_t(~0x01);   // D8.rst = FEEDB1·A3·/ROM3·A1
+    }
     // L'octet faible n'est relié à rien.
     const uint8_t v = (addr & 1) ? 0xFF : outputByte();
     // /ROM3 remonte à la fin de l'accès : la clé rouge avance APRÈS avoir été lue.
@@ -33,8 +44,74 @@ uint8_t CubaseDongle::cartRead(uint32_t addr, bool first) {
     return v;
 }
 
+void CubaseDongle::rom4Read(uint32_t addr, bool first) {
+    if (chosen_ == Model::Notator && first) rom4Pending_ = ster(uint8_t((addr >> 1) & 0xFF)) ? 1 : 0;
+}
+
 void CubaseDongle::udsCycle(uint32_t addr) {
-    if (chosen_ == Model::Cubase2) clock2(uint8_t((addr >> 1) & 0xFF));
+    if (chosen_ == Model::Cubase2) { clock2(uint8_t((addr >> 1) & 0xFF)); return; }
+    if (chosen_ != Model::Notator) return;
+    // Désarmée : UDS remonte en fin de cycle → horloge des données, quelle que soit
+    // l'adresse (fetchs compris). Puis seulement /ROM4 remonte (décodage GLUE après
+    // /AS) : FEEDB1 := STER de l'accès $FAxxxx qui vient de finir.
+    if (!feedb1_) clockN(uint8_t((addr >> 1) & 0xFF));
+    if (rom4Pending_ >= 0) { feedb1_ = rom4Pending_ != 0; rom4Pending_ = -1; }
+}
+
+// --- Clé Notator : EP600, 8 bascules D actives bas (relevé TPH, cf. en-tête) ------
+void CubaseDongle::clockN(uint8_t a) {
+    const bool a1 = a & 0x01, a4 = a & 0x08, a5 = a & 0x10;
+    const bool d8  = n_ & 0x01, d9  = n_ & 0x02, d10 = n_ & 0x04, d11 = n_ & 0x08;
+    const bool d12 = n_ & 0x10, d13 = n_ & 0x20, d14 = n_ & 0x40, d15 = n_ & 0x80;
+    const bool S = ster(a);
+
+    const bool n9 = !(S
+        || (a5 && !d13) || (a4 && d15)
+        || (a1 && !d8 && !d15) || (a1 && !d10 && !d15) || (a1 && !d12 && !d15)
+        || (a1 && !d15 && !d14)
+        || (a1 && d8 && d10 && d12 && d15 && d14));
+    const bool n8 = !(S
+        || (a5 && !d14) || (a1 && !d9 && !d14)
+        || (a4 && !d9 && d15) || (a4 && !d9 && d13) || (a4 && !d9 && d11)
+        || (a4 && d9 && !d11 && !d13 && !d15)
+        || (a1 && d9 && d8 && d11 && d10 && d13 && d12 && d15 && d14));
+    const bool n11 = !(S
+        || (a5 && !d15)
+        || (a1 && !d8 && !d10) || (a1 && !d8 && !d12) || (a1 && !d8 && !d14)
+        || (a4 && !d8 && d15)
+        || (a1 && d8 && d10 && d12 && d14)
+        || (a4 && !d9 && d8 && !d11 && !d10 && !d13 && !d12 && !d15 && !d14));
+    const bool n10 = !(S
+        || (a5 && !d9)
+        || (a1 && !d11 && !d12) || (a1 && !d11 && !d14)
+        || (a4 && !d11 && d15) || (a4 && !d11 && d13)
+        || (a4 && d11 && !d13 && !d15)
+        || (a1 && d8 && d11 && d10 && d13 && d12 && d15 && d14));
+    const bool n13 = !(S
+        || (a5 && !d11)
+        || (a1 && !d10 && !d13) || (a1 && !d13 && !d12) || (a1 && !d13 && !d14)
+        || (a4 && !d13 && d15) || (a4 && d13 && !d15)
+        || (a1 && d8 && d10 && d13 && d12 && d15 && d14));
+    const bool n12 = !(S
+        || (a5 && !d10)
+        || (a1 && !d12 && !d14)
+        || (a4 && !d12 && d15) || (a4 && d13 && !d12) || (a4 && d11 && !d12)
+        || (a1 && d12 && d14)
+        || (a4 && !d9 && !d11 && !d13 && d12 && !d15 && !d14));
+    const bool n15 = !(S
+        || (a5 && !d8)
+        || (a1 && !d10 && !d12) || (a1 && !d10 && !d14)
+        || (a4 && !d10 && d15) || (a4 && !d10 && d13)
+        || (a1 && d10 && d12 && d14)
+        || (a4 && !d9 && !d11 && d10 && !d13 && !d12 && !d15 && !d14));
+    const bool n14 = !(S
+        || (a5 && !d12)
+        || (a1 && d14)
+        || (a4 && d15 && !d14) || (a4 && d13 && !d14) || (a4 && d11 && !d14) || (a4 && d9 && !d14)
+        || (a4 && !d9 && !d11 && !d13 && !d15 && d14));
+
+    n_ = uint8_t((n15 << 7) | (n14 << 6) | (n13 << 5) | (n12 << 4)
+               | (n11 << 3) | (n10 << 2) | (n9 << 1) | (n8 << 0));
 }
 
 // --- Clé noire : PAL16R8, sorties actives bas (D = NOT(somme de produits)) -------
@@ -167,5 +244,6 @@ void CubaseDongle::clock3(bool a8) {
 void CubaseDongle::serialize(StateArchive& ar) {
     uint8_t m = uint8_t(model_), c = uint8_t(chosen_);
     ar(m); ar(c); ar(locked_); ar(d_); ar(r_);
-    if (ar.loading()) { model_ = Model(m & 3); chosen_ = Model(c & 3); }
+    ar(n_); ar(feedb1_);                     // clé Notator (v15)
+    if (ar.loading()) { model_ = Model(m & 7); chosen_ = Model(c & 7); rom4Pending_ = -1; }
 }

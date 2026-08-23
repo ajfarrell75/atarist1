@@ -205,6 +205,11 @@ d'adresse (A1-A8) d'une lecture « fantôme », la **réponse** revient sur D8-D
 | **rouge** (`cubase3`) | EPLD Intel 5C060, 16 bascules T, 1 entrée (A8), 1 sortie (D8) | Cubase 3.10, Cubase Score 2.0x, Cubase Audio Falcon | front montant de **/ROM3** : seuls les accès `$FBxxxx` la font avancer | fidèle (équations du JED décapsulé, décompilé par troed) |
 | **noire** (`cubase2`) | PAL16R8, 8 bascules D, A1-A8 → D8-D15 | Cubase 2.01 | **chaque** front montant de /UDS, où que lise le CPU — fetchs compris | « au mieux » : exige le motif bus d'un vrai 68000 (Moira modélise le prefetch) ; crochet `udsDone` dans `NeostMoira` |
 | `auto` | — | — | — | heuristique MiSTery : premier accès `$FBxxxx` avec A7..A1 = 0 → rouge, sinon noire |
+| **C-Lab** (`notator`) | EP600 (= 5C060), 8 bascules D actives bas + 1 bascule d'armement | Notator, Creator (clé seule ou intégrée à l'Unitor-N) | **armement** : `FEEDB1 := STER` sur /ROM4 (STER = A8..A1 = `$75`, soit `$FA00EA`) ; **données** : désarmée → UDS de chaque cycle (comme la noire), armée → **descente** de /ROM3 (le CPU lit l'état *après* le coup d'horloge) ; resets asynchrones D9 (A4·A2) et D8 (A3·A1) pendant l'accès | fidèle aux équations TPH (JED EP600 décapsulé par Zippy, relevé Unnamed Villain, publié 10/2025 ; transcription C du firmware SidecarTridge `md-notator`) ; tout terme contient STER → l'armement remet les 8 bascules à 0, le motif bus exact ne compte donc pas |
+
+Pour la clé C-Lab, les accès `$FAxxxx` du **GEMDOS HD** de NeoST (qui vit sur /ROM4)
+**désarment** la clé (`FEEDB1 := 0`) — Notator le tolère s'il réarme à chaque contrôle,
+comme le ferait n'importe quel accès cartouche du TOS sur une vraie machine.
 
 Source des équations : cœur FPGA **MiSTery** (`atarist/cubase2_dongle.v`,
 `cubase3_dongle.v`, gyurco) — clé noire relevée par force brute sur une clé réelle
@@ -260,7 +265,8 @@ Sound » du menu du jeu reste à exercer.
 |----------|------|----------|--------|
 | Cubase 2.01, Avalon 2.1, Synthworks Wavestation | cartouche | **clé noire** PAL/GAL16V8 (routine « A » du forum exxos) | Cubase 2 émulé (équations MiSTery) ; Avalon/Synthworks : même famille, **équations distinctes non relevées** |
 | Cubase 3.10, Score 2.0x, Audio Falcon | cartouche | **clé rouge** EPLD 5C060 | émulé |
-| Notator / Creator (C-Lab), Unitor-N, Log 3 (Emagic, 2 puces) | cartouche | EP600 ; JED extrait par décapsulation (Zippy, 2023) mais **non publié** ; lu dans les IRQ timer/MIDI | non émulable sans le relevé ; la communauté vise un clone CPLD |
+| Notator / Creator (C-Lab), Unitor-N | cartouche | EP600 ; JED extrait par décapsulation (Zippy), équations publiées par TPH en octobre 2025 (atari-forum t=43078, 1er message), transcrites en C dans le firmware SidecarTridge [`md-notator`](https://github.com/MrYoIt/md-notator) (2026) | **émulé** (`--dongle notator`, voir plus haut) |
+| Log 3 (Emagic : Notator Logic) | cartouche | EP600 + EP330 (2 puces) ; seule la partie EP600 est publiée | non émulé (EP330 non relevée) |
 | Pro-24 / Twenty Four, Proscore | cartouche | GAL16V8 | aucun relevé public (Steem : « failed like an old dog ») ; Pro 24 v2.1 tourne sans clé |
 | Music Master (Computer's Dream) | série | — | émulé |
 | Zero-X, Virtuoso, SY77 SWS, X-Analyzer, SoundPool (clé + fichier licence) | cartouche | inconnu | aucun relevé |
@@ -273,4 +279,5 @@ Sound » du menu du jeu reste à exercer.
 Sources : Steem SSE (`steem/headers/stports.h`, `ior.cpp`, `iow.cpp`, `ikbd.cpp`, `run.cpp`,
 miroir github.com/mattiasgustavsson/steem-crt), WinUAE `dongle.cpp`, AtariForumWiki
 « Dongle protections », atari-forum « Dongle Protections » (t=14437), « Notator Dongle Dump »
-(t=43078), « Cartridge keys and emulation » (exxosforum t=2781), MiSTery `cubase*_dongle.v`.
+(t=43078, équations Notator dans le 1er message), « Cartridge keys and emulation »
+(exxosforum t=2781), MiSTery `cubase*_dongle.v`, firmware `md-notator` (`rp/src/notator_dongle.c`).
