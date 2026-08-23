@@ -32,6 +32,10 @@ public:
     bool start();              // ouvre et démarre le périphérique
     void stop();
     bool ok() const { return started_; }
+    // Fréquence RÉELLEMENT négociée avec le périphérique (cf. rate_) : elle peut
+    // différer des 48 kHz demandés. Tout ce qui synthétise à part — MT-32, bruits de
+    // lecteur — doit s'aligner dessus, sinon eux seuls sortent désaccordés.
+    uint32_t rate() const { return rate_; }
 
     // Coussin d'amorçage visé, en MILLISECONDES (défaut 85). À appeler AVANT start() :
     // c'est start() qui convertit en échantillons une fois la fréquence réelle négociée.

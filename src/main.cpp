@@ -2665,11 +2665,15 @@ int main(int argc, char** argv) {
     MidiOutMac midiOut;
     // Roland MT-32/CM-32L (Munt) : rendu DANS la sortie audio, daté au cycle (pas de gigue).
     Mt32Synth mt32;
+    // Fréquence de sortie visée. Ce n'est PAS forcément celle qu'on obtiendra : le
+    // périphérique en négocie une (cf. Audio::rate()), et cette lambda s'exécute AVANT
+    // que l'objet Audio n'existe. On la corrige juste après audio.start().
+    uint32_t audioRate = 48000;
     auto midiOutApply = [&]() {
         if (cfg.midiOutGm)   { if (!midiOut.openSynth()) cfg.midiOutGm = false; } else midiOut.closeSynth();
         if (cfg.midiOutPort) { if (!midiOut.openVirtualPort()) cfg.midiOutPort = false; } else midiOut.closeVirtualPort();
         if (cfg.midiOutMt32) {
-            if (!mt32.isOpen() && !mt32.open(resolveData(cfg.mt32Roms, exeDir), 48000, cfg.mt32Model)) {
+            if (!mt32.isOpen() && !mt32.open(resolveData(cfg.mt32Roms, exeDir), audioRate, cfg.mt32Model)) {
                 g_stateMsg = "MT-32: " + mt32.lastError(); g_stateMsgFrames = 300;
                 std::fprintf(stderr, "[mt32] %s\n", mt32.lastError().c_str());
                 cfg.midiOutMt32 = false;
@@ -2710,6 +2714,18 @@ int main(int argc, char** argv) {
     audio.setMixGains(cfg.mixYm, cfg.mixDma, cfg.mixDrive, cfg.mixMt32);   // mixeur (page Sound)
     audio.setLatencyMs(uint32_t(cfg.audioLatencyMs < 0 ? 0 : cfg.audioLatencyMs));  // AVANT start (borné dans Audio)
     audio.start();   // échec silencieux possible (CI / pas de carte son)
+    // Le périphérique peut rendre une AUTRE fréquence que les 48 kHz demandés (44,1 kHz
+    // sur un matériel qui n'accepte que ça). Le reste de la chaîne suit déjà rate_, mais
+    // le MT-32 et les bruits de lecteur avaient été initialisés sur l'hypothèse 48 kHz :
+    // eux seuls sortiraient alors désaccordés (~8,8 % à 44,1 kHz) et dériveraient du
+    // mixage. On les réaligne — chemin rare, sans effet quand 48 kHz est accordé.
+    if (audio.ok() && audio.rate() != audioRate) {
+        std::fprintf(stderr, "[Audio] device negotiated %u Hz (not %u) — realigning MT-32 "
+                             "and drive sounds\n", audio.rate(), audioRate);
+        audioRate = audio.rate();
+        if (driveSoundAvail) drive.init(resolveData("roms/drivesound/epson_smd480l", exeDir), audioRate);
+        if (mt32.isOpen()) { mt32.close(); midiOutApply(); }
+    }
     // Sink FdcSound armé SEULEMENT si la sortie audio existe : sans elle, produceFrame ne
     // draine jamais DriveSound et chaque Step/Seek/Index allouait un son miniaudio jamais
     // recyclé (croissance mémoire non bornée sur une longue session).
