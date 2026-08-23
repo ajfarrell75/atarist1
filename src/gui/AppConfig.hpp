@@ -71,6 +71,10 @@ struct Config { std::string rom; std::string disk; std::string diskb; std::strin
                 std::string cpu = "moira"; std::string machine = "st";
                 std::string mem = "512k"; bool fpu = false;   // MC68881 Mega STE (cf. Fpu.hpp)
                 int joyport = 1;
+                // port0 = ce qui occupe le port 0 (port souris) : "mouse" (défaut — une
+                // manette n'y va que si on l'y ÉPINGLE par joymap) ou "auto" (historique :
+                // la 2e manette présente y va toute seule). Page Input.
+                std::string port0 = "mouse";
                 // Affectation des manettes HÔTE aux ports ST, persistée par GUID :
                 // "guid:rôle,guid:rôle" avec rôle ∈ {0, 1, x} (port 0, port 1, off).
                 // Une manette absente de la liste est AUTO (cf. stjoy::resolveAssign).

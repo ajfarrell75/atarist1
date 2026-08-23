@@ -6,6 +6,18 @@ l'ordre inverse. Version courante : **0.5.2**.
 - « NeoST gère-t-il X ? » → [`docs/IMPLEMENTED.md`](docs/IMPLEMENTED.md) (inventaire par puce)
 - « Que reste-t-il ? » → [`TODO.md`](TODO.md)
 
+## Page Input : ce qu'on branche dans les deux ports joystick (2026-08-23)
+
+Vue **par port** au lieu d'une liste de manettes : « Port 0 (mouse port) » = souris
+(défaut) / auto (2ᵉ manette) / clavier / telle manette ; « Port 1 » = auto (1ʳᵉ manette) /
+clavier / telle manette. S'exprime sur le mécanisme existant (rôles par GUID `joymap=`,
+émulation clavier, nouveau `port0=mouse|auto`) : la fenêtre Joystick et le menu borne
+restent cohérents. **Changement de défaut** : une 2ᵉ manette ne prend plus le port souris
+toute seule (`port0=mouse`) — on l'y branche explicitement, ou `port0=auto` pour
+l'ancien comportement. Un joystick qui occupe le port 0 **débranche la souris hôte**
+(`g_port0Joystick`), comme sur un vrai ST ; les clés de protection du port (page Dongles)
+s'affichent à côté.
+
 ## Dongles, 2e passe : oracle de rejeu, un périphérique par port, port cartouche abstrait (2026-08-23)
 
 Revue d'architecture du chantier dongles, six manques corrigés :

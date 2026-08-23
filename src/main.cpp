@@ -317,6 +317,8 @@ bool  g_dbgMouse = false;              // NEOST_DEBUG_MOUSE=1 → trace les paqu
 bool  g_dbgJoy = false;                // NEOST_DEBUG_JOY=1 → trace l'état brut des manettes
 bool  g_kbdJoy = false;                // émulation joystick au clavier (flèches + Ctrl droit)
 int   g_kbdJoyPort = 1;                // port ST visé par l'émulation clavier (0/1)
+bool  g_port0Auto = false;             // port 0 : "auto" (2e manette y va seule) vs "mouse" (défaut)
+bool  g_port0Joystick = false;         // calculé chaque trame : un joystick OCCUPE le port 0 → souris débranchée
 float g_joyDeadzone = 0.30f;           // zone morte centrale des sticks analogiques [0,0.95]
 uint8_t g_lastJoy0 = 0, g_lastJoy1 = 0; // dernier octet composé posé sur l'IKBD (fenêtre Joystick)
 // Affectation des manettes hôte aux ports ST, par GUID (stable au rebranchement —
@@ -971,7 +973,7 @@ void drawJoystickWindow(GLFWwindow* win, uint8_t lastJoy0, uint8_t lastJoy1) {
     int8_t joyRoles[GLFW_JOYSTICK_LAST + 1];
     joyResolveRoles(joyRoles);
     int8_t joyAssign[GLFW_JOYSTICK_LAST + 1];
-    stjoy::resolveAssign(joyRoles, joyAssign);
+    stjoy::resolveAssign(joyRoles, joyAssign, g_port0Auto);
     int nPresent = 0;
     for (int jid = GLFW_JOYSTICK_1; jid <= GLFW_JOYSTICK_LAST; ++jid) {
         if (!glfwJoystickPresent(jid)) continue;
@@ -1583,7 +1585,7 @@ void drawKioskDiskMenu(const std::string& disksDir, const std::string& mounted) 
         int8_t roles[GLFW_JOYSTICK_LAST + 1];
         joyResolveRoles(roles);
         int8_t assign[GLFW_JOYSTICK_LAST + 1];
-        stjoy::resolveAssign(roles, assign);
+        stjoy::resolveAssign(roles, assign, g_port0Auto);
         int row = 0;
         for (int jid = GLFW_JOYSTICK_1; jid <= GLFW_JOYSTICK_LAST; ++jid) {
             if (!glfwJoystickPresent(jid)) continue;
@@ -2340,14 +2342,71 @@ void drawConfigWindow(ConfigUi& ui) {
         break;
     }
     case kCfgInput: {
-        // Émulation au clavier : réglage de SESSION, jamais persisté (elle avale les
-        // flèches, ce qui « casse » le clavier des jeux qui s'en servent).
-        ImGui::Checkbox("Keyboard joystick emulation (arrows + right Ctrl)", &g_kbdJoy);
-        ImGui::SameLine(); ImGui::TextDisabled("(F11 — not remembered)");
-        ImGui::TextDisabled("ST port driven by the keyboard:");
-        if (ImGui::RadioButton("Port 1 (games)", g_kbdJoyPort == 1))  { g_kbdJoyPort = 1; g_joyCfgDirty = true; }
-        ImGui::SameLine();
-        if (ImGui::RadioButton("Port 0 (mouse)", g_kbdJoyPort == 0)) { g_kbdJoyPort = 0; g_joyCfgDirty = true; }
+        // Modèle PHYSIQUE des deux ports DE-9 : on choisit ce qu'on y BRANCHE. Port 0 =
+        // port souris (la souris par défaut ; un joystick l'y remplace, comme sur un vrai
+        // ST) ; port 1 = port jeux (la 1re manette par défaut). Les choix s'expriment
+        // sur le mécanisme existant (rôles par GUID — joymap —, émulation clavier,
+        // port0=) : la page Joystick et le menu borne voient la même chose.
+        ImGui::TextDisabled("WHAT IS PLUGGED INTO THE TWO JOYSTICK PORTS");
+        int8_t roles[GLFW_JOYSTICK_LAST + 1]; joyResolveRoles(roles);
+        int8_t assign[GLFW_JOYSTICK_LAST + 1]; stjoy::resolveAssign(roles, assign, g_port0Auto);
+        auto padName = [](int jid) { const char* n = glfwGetGamepadName(jid); if (!n) n = glfwGetJoystickName(jid); return n ? n : "?"; };
+        auto unpin = [&](int port) {   // toute manette épinglée sur `port` repasse en AUTO
+            for (int jid = GLFW_JOYSTICK_1; jid <= GLFW_JOYSTICK_LAST; ++jid)
+                if (glfwJoystickPresent(jid) && roles[jid] == port) g_joyRoleByGuid.erase(joyGuid(jid));
+        };
+        for (int port = 0; port < 2; ++port) {
+            // Valeur courante : manette ÉPINGLÉE > clavier > auto/souris.
+            int pinnedJid = -1, autoJid = -1;
+            for (int jid = GLFW_JOYSTICK_1; jid <= GLFW_JOYSTICK_LAST; ++jid) {
+                if (!glfwJoystickPresent(jid)) continue;
+                if (roles[jid] == port) pinnedJid = jid;
+                else if (assign[jid] == port && roles[jid] == stjoy::ROLE_AUTO) autoJid = jid;
+            }
+            const bool kbdHere = g_kbdJoy && g_kbdJoyPort == port;
+            char cur[160];
+            if (pinnedJid >= 0)      std::snprintf(cur, sizeof cur, "Pad: %s", padName(pinnedJid));
+            else if (kbdHere)        std::snprintf(cur, sizeof cur, "Keyboard joystick (arrows + right Ctrl)");
+            else if (port == 0)      std::snprintf(cur, sizeof cur, g_port0Auto ? (autoJid >= 0 ? "Auto: 2nd pad (%s)" : "Auto: 2nd pad (none yet)") : "Mouse", autoJid >= 0 ? padName(autoJid) : "");
+            else                     std::snprintf(cur, sizeof cur, autoJid >= 0 ? "Auto: first pad (%s)" : "Auto: first pad (none detected)", autoJid >= 0 ? padName(autoJid) : "");
+            ImGui::SetNextItemWidth(320);
+            if (ImGui::BeginCombo(port == 0 ? "Port 0 (mouse port)" : "Port 1 (joystick port)", cur)) {
+                if (port == 0) {
+                    if (ImGui::Selectable("Mouse", pinnedJid < 0 && !kbdHere && !g_port0Auto)) {
+                        unpin(0); g_port0Auto = false; if (kbdHere) g_kbdJoyPort = 1; g_joyCfgDirty = true;
+                    }
+                    if (ImGui::Selectable("Auto: 2nd pad takes the mouse port", pinnedJid < 0 && !kbdHere && g_port0Auto)) {
+                        unpin(0); g_port0Auto = true; if (kbdHere) g_kbdJoyPort = 1; g_joyCfgDirty = true;
+                    }
+                } else {
+                    if (ImGui::Selectable("Auto: first free pad", pinnedJid < 0 && !kbdHere)) {
+                        unpin(1); if (kbdHere) g_kbdJoyPort = 0; g_joyCfgDirty = true;
+                    }
+                }
+                if (ImGui::Selectable("Keyboard joystick (arrows + right Ctrl)", kbdHere && pinnedJid < 0)) {
+                    unpin(port); g_kbdJoy = true; g_kbdJoyPort = port; g_joyCfgDirty = true;
+                }
+                for (int jid = GLFW_JOYSTICK_1; jid <= GLFW_JOYSTICK_LAST; ++jid) {
+                    if (!glfwJoystickPresent(jid)) continue;
+                    char lab[200]; std::snprintf(lab, sizeof lab, "Pad: %s##%d", padName(jid), jid);
+                    if (ImGui::Selectable(lab, pinnedJid == jid)) {
+                        unpin(port);                                  // un seul épinglé par port
+                        g_joyRoleByGuid[joyGuid(jid)] = int8_t(port); // cette manette, ici
+                        if (kbdHere) g_kbdJoyPort = 1 - port;         // le clavier cède la place
+                        g_joyCfgDirty = true;
+                    }
+                }
+                ImGui::EndCombo();
+            }
+            // Clé de protection branchée sur ce port (page Dongles) : elle s'ajoute.
+            const auto key = ui.machine->ports.at(port == 0 ? PortDevices::Port::Joy0 : PortDevices::Port::Joy1);
+            if (key != PortDevices::Device::None) { ImGui::SameLine(); ImGui::TextDisabled("+ %s (Dongles page)", PortDevices::label(key)); }
+        }
+        if (g_port0Joystick) ImGui::TextDisabled("  A joystick occupies port 0: the host mouse is unplugged from the ST.");
+        ImGui::TextDisabled("  Two players: put a pad on port 0 (games disable the mouse themselves).");
+        ImGui::Separator();
+        if (ImGui::Checkbox("Keyboard joystick emulation active", &g_kbdJoy)) g_joyCfgDirty = true;
+        ImGui::SameLine(); ImGui::TextDisabled("(F11 - session only: it swallows the arrow keys)");
         ImGui::Separator();
         // Zone morte centrale des sticks analogiques (anti-drift). Le D-pad numérique
         // n'est pas concerné. Mémorisée à la validation du slider.
@@ -2359,19 +2418,13 @@ void drawConfigWindow(ConfigUi& ui) {
             g_joyCfgDirty = true;
         }
         ImGui::Separator();
-        ImGui::TextDisabled("USB pads detected (effective assignment, joymap):");
+        ImGui::TextDisabled("USB pads detected (effective assignment):");
         int nPad = 0;
-        // cf. drawJoystickWindow : montrer l'affectation RÉELLE, pas l'ordre d'énumération.
-        int8_t padRoles[GLFW_JOYSTICK_LAST + 1];
-        joyResolveRoles(padRoles);
-        int8_t padAssign[GLFW_JOYSTICK_LAST + 1];
-        stjoy::resolveAssign(padRoles, padAssign);
         for (int jid = GLFW_JOYSTICK_1; jid <= GLFW_JOYSTICK_LAST; ++jid) {
             if (!glfwJoystickPresent(jid)) continue;
-            const char* nm = glfwGetGamepadName(jid);
-            if (!nm) nm = glfwGetJoystickName(jid);
-            if (padAssign[jid] >= 0) ImGui::BulletText("Port %d: %s", padAssign[jid], nm ? nm : "?");
-            else                     ImGui::BulletText("Off: %s", nm ? nm : "?");
+            const char* how = roles[jid] == stjoy::ROLE_OFF ? " (off)" : roles[jid] == stjoy::ROLE_AUTO ? " (auto)" : " (pinned)";
+            if (assign[jid] >= 0) ImGui::BulletText("Port %d: %s%s", assign[jid], padName(jid), how);
+            else                  ImGui::BulletText("Unused: %s%s", padName(jid), how);
             ++nPad;
         }
         if (nPad == 0) ImGui::BulletText("(none)");
@@ -2973,6 +3026,7 @@ int main(int argc, char** argv) {
     // droit = feu), sans menu pour l'activer. F11 la rebascule si besoin (jeu clavier).
     g_kbdJoy     = g_kiosk;
     g_kbdJoyPort = cfg.joyport;
+    g_port0Auto  = (cfg.port0 == "auto");
     g_joyDeadzone = cfg.joydeadzone;    // zone morte des sticks (mémorisée)
     joymapParse(cfg.joymap);            // affectation manettes→ports (par GUID)
     glfwSetKeyCallback(window, onKey);
@@ -3233,7 +3287,7 @@ int main(int argc, char** argv) {
         }
 
 
-        if (g_mouseCaptured) {                  // mouvement relatif → paquet IKBD (boutons inclus)
+        if (g_mouseCaptured && !g_port0Joystick) {   // mouvement relatif → paquet IKBD (boutons inclus) ; port 0 pris par un joystick = pas de souris
             double mx, my; glfwGetCursorPos(window, &mx, &my);
             const int dx = int(mx - lastMx), dy = int(my - lastMy);
             if (dx || dy) {
@@ -3303,7 +3357,16 @@ int main(int argc, char** argv) {
             uint8_t joy0 = 0, joy1 = 0;
             int8_t joyRoles[GLFW_JOYSTICK_LAST + 1];
             joyResolveRoles(joyRoles);   // affectation par GUID (menu kiosk « Joysticks »)
-            stjoy::compose(window, kbd, g_kbdJoyPort, g_joyDeadzone, joy0, joy1, joyRoles);
+            stjoy::compose(window, kbd, g_kbdJoyPort, g_joyDeadzone, joy0, joy1, joyRoles, g_port0Auto);
+            // Port 0 occupé par un joystick (manette affectée, ou clavier qui le vise) :
+            // sur un vrai ST il a pris la place de la souris — on la débranche.
+            {
+                int8_t asg[GLFW_JOYSTICK_LAST + 1];
+                stjoy::resolveAssign(joyRoles, asg, g_port0Auto);
+                bool occ = kbd && g_kbdJoyPort == 0;
+                for (int jid = GLFW_JOYSTICK_1; jid <= GLFW_JOYSTICK_LAST; ++jid) if (asg[jid] == 0) occ = true;
+                g_port0Joystick = occ;
+            }
             // Overlay kiosk ouvert : la manette pilote l'overlay → on n'envoie
             // rien au ST (sinon le jeu bougerait pendant la navigation).
             if (g_kioskDiskMenu) { joy0 = 0; joy1 = 0; }
@@ -3315,7 +3378,7 @@ int main(int argc, char** argv) {
             // kiosk s'ouvre (la manette pilote alors le menu, pas le jeu).
             {
                 static uint8_t prevAux = 0;
-                uint8_t aux = g_kioskDiskMenu ? 0 : stjoy::composeAux(joyRoles);
+                uint8_t aux = g_kioskDiskMenu ? 0 : stjoy::composeAux(joyRoles, g_port0Auto);
                 const uint8_t delta = aux ^ prevAux;
                 if (delta & stjoy::AUX_SPACE)
                     machine.ikbd.keyEvent(0x39, aux & stjoy::AUX_SPACE);   // ESPACE
@@ -3942,7 +4005,7 @@ int main(int argc, char** argv) {
                 cfg.crt      = g_crtOn; cfg.crtParams = g_crtParams;
                 cfg.volume   = audio.masterVolume();
                 cfg.joyport  = g_kbdJoyPort; cfg.joydeadzone = g_joyDeadzone;
-                cfg.joymap   = joymapSerialize();
+                cfg.joymap   = joymapSerialize(); cfg.port0 = g_port0Auto ? "auto" : "mouse";
                 cfg.driveSound = driveSoundOn;
                 std::string err;
                 if (saveProfile(cfgUi.profDir, cfgUi.reqSaveProfile, cfg, err)) {
@@ -4054,6 +4117,7 @@ int main(int argc, char** argv) {
         // Un réglage joystick a changé dans la fenêtre → resauve neost.cfg.
         if (g_joyCfgDirty) {
             cfg.joyport = g_kbdJoyPort; cfg.joydeadzone = g_joyDeadzone;
+            cfg.port0 = g_port0Auto ? "auto" : "mouse"; cfg.joymap = joymapSerialize();
             saveConfig(exeDir, cfg, &machine); g_joyCfgDirty = false;
         }
         }                                        // fin if(!g_kiosk) : chrome ImGui
@@ -4077,7 +4141,7 @@ int main(int argc, char** argv) {
             int8_t navRoles[GLFW_JOYSTICK_LAST + 1];
             joyResolveRoles(navRoles);
             int8_t navAssign[GLFW_JOYSTICK_LAST + 1];
-            stjoy::resolveAssign(navRoles, navAssign);
+            stjoy::resolveAssign(navRoles, navAssign, g_port0Auto);
             auto navUsable = [&](int j) {
                 return j >= 0 && j <= GLFW_JOYSTICK_LAST && navAssign[j] >= 0;
             };

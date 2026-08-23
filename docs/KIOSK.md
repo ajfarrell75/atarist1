@@ -64,12 +64,16 @@ Choisir **quelle manette hôte pilote quel port ST**. Une ligne par manette dét
 bouger un stick allume une pastille ● pour identifier laquelle est laquelle. Le FEU fait
 tourner son rôle :
 
-**AUTO** (1ʳᵉ manette → port 1 « jeux », 2ᵉ → port 0) → **PORT 1** → **PORT 0** →
-**OFF** → AUTO.
+**AUTO** (1ʳᵉ manette → port 1 « jeux » ; la 2ᵉ ne va au port 0 que si `port0=auto`,
+sinon le port 0 reste à la souris) → **PORT 1** → **PORT 0** → **OFF** → AUTO.
 
 Plusieurs manettes sur le même port sont OR-ées (deux sticks pilotent le même joueur).
 Le choix est **persisté par GUID** dans `neost.cfg` (`joymap=`) : il survit au
-rebranchement et au reboot.
+rebranchement et au reboot. Dans le GUI, la page **Input** montre la même chose
+**par port** : « Port 0 (mouse port) » = souris / auto (2ᵉ manette) / clavier / telle
+manette ; « Port 1 » = auto (1ʳᵉ manette) / clavier / telle manette. Un joystick
+branché sur le port 0 **débranche la souris hôte** (comme sur un vrai ST) — c'est le
+réglage « jouer à deux ».
 
 Boutons en jeu : **A/B et gâchettes = FEU**, **X = ESPACE**, **Y = RETURN** — les jeux
 « press SPACE to start » (Enchanted Land…) se jouent entièrement à la manette.

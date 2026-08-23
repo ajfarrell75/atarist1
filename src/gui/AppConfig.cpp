@@ -91,6 +91,7 @@ void parseConfigLine(Config& c, std::string line) {
     else if (line.rfind("fpu=", 0)  == 0) c.fpu  = (line.substr(4) == "1");
     else if (line.rfind("joyport=", 0) == 0) c.joyport = (line.substr(8) == "0") ? 0 : 1;
     else if (line.rfind("joymap=", 0) == 0) c.joymap = line.substr(7);
+    else if (line.rfind("port0=", 0) == 0) c.port0 = (line.substr(6) == "auto") ? "auto" : "mouse";
     else if (line.rfind("joydeadzone=", 0) == 0) {
         // Bornée comme volume= : négative, > 0.95 ou NaN (fichier hostile/corrompu),
         // la valeur brute rendait le menu kiosque incontrôlable (padAxis compare
@@ -183,6 +184,7 @@ void writeConfigKeys(std::ostream& f, const Config& w, bool full) {
       << "\nfpu=" << (w.fpu ? 1 : 0)
       << "\njoyport=" << w.joyport
       << "\njoymap=" << w.joymap
+      << "\nport0=" << w.port0
       << "\njoydeadzone=" << w.joydeadzone << "\nfastfdc=" << (w.fastfdc ? 1 : 0)
       << "\nvolume=" << w.volume
       << "\naudio_latency_ms=" << w.audioLatencyMs

@@ -201,7 +201,12 @@ inline uint8_t readStick(int jid, float deadzone) {
 //    d'abord, puis port 0 — comme l'affectation historique 1re→P1, 2e→P0.
 // Partagé entre compose() (état IKBD) et le menu kiosk « Joysticks » (affichage
 // du port effectif d'une manette AUTO).
-inline void resolveAssign(const int8_t* roles, int8_t assign[GLFW_JOYSTICK_LAST + 1]) {
+//  - `autoPort0` : les manettes AUTO peuvent-elles remplir le port 0 (port souris) ?
+//    Faux par défaut côté natif (« port 0 = souris », page Input) : une 2e manette
+//    n'y va que si on L'Y BRANCHE — comme un vrai ST, où mettre un joystick dans le
+//    port 0 est un geste délibéré qui retire la souris.
+inline void resolveAssign(const int8_t* roles, int8_t assign[GLFW_JOYSTICK_LAST + 1],
+                          bool autoPort0 = true) {
     bool pinned[2] = {false, false};
     for (int jid = GLFW_JOYSTICK_1; jid <= GLFW_JOYSTICK_LAST; ++jid) {
         assign[jid] = -1;
@@ -209,7 +214,7 @@ inline void resolveAssign(const int8_t* roles, int8_t assign[GLFW_JOYSTICK_LAST 
         const int8_t r = roles ? roles[jid] : int8_t(ROLE_AUTO);
         if (r == ROLE_PORT0 || r == ROLE_PORT1) { assign[jid] = r; pinned[r] = true; }
     }
-    bool autoTaken[2] = {pinned[0], pinned[1]};
+    bool autoTaken[2] = {pinned[0] || !autoPort0, pinned[1]};
     for (int jid = GLFW_JOYSTICK_1; jid <= GLFW_JOYSTICK_LAST; ++jid) {
         if (!glfwJoystickPresent(jid)) continue;
         if ((roles ? roles[jid] : int8_t(ROLE_AUTO)) != ROLE_AUTO) continue;
@@ -226,7 +231,8 @@ inline void resolveAssign(const int8_t* roles, int8_t assign[GLFW_JOYSTICK_LAST 
 //    historique (1re manette → port 1, 2e → port 0, le reste ignoré).
 // `out0`/`out1` reçoivent les octets composés (port 0 / port 1).
 inline void compose(GLFWwindow* win, bool kbdEnabled, int kbdPort, float deadzone,
-                    uint8_t& out0, uint8_t& out1, const int8_t* roles = nullptr) {
+                    uint8_t& out0, uint8_t& out1, const int8_t* roles = nullptr,
+                    bool autoPort0 = true) {
     uint8_t p[2] = {0, 0};
 
     if (kbdEnabled) {
@@ -240,7 +246,7 @@ inline void compose(GLFWwindow* win, bool kbdEnabled, int kbdPort, float deadzon
     }
 
     int8_t assign[GLFW_JOYSTICK_LAST + 1];
-    resolveAssign(roles, assign);
+    resolveAssign(roles, assign, autoPort0);
     for (int jid = GLFW_JOYSTICK_1; jid <= GLFW_JOYSTICK_LAST; ++jid)
         if (assign[jid] >= 0) p[assign[jid]] |= readStick(jid, deadzone);
 
@@ -251,9 +257,9 @@ inline void compose(GLFWwindow* win, bool kbdEnabled, int kbdPort, float deadzon
 // Compose les bits AUXILIAIRES (AUX_SPACE/AUX_RETURN) de toutes les manettes
 // AFFECTÉES à un port (les OFF/non affectées n'injectent pas de touches). Le
 // frontend compare au tick précédent et envoie make/break IKBD sur les fronts.
-inline uint8_t composeAux(const int8_t* roles = nullptr) {
+inline uint8_t composeAux(const int8_t* roles = nullptr, bool autoPort0 = true) {
     int8_t assign[GLFW_JOYSTICK_LAST + 1];
-    resolveAssign(roles, assign);
+    resolveAssign(roles, assign, autoPort0);
     uint8_t aux = 0;
     for (int jid = GLFW_JOYSTICK_1; jid <= GLFW_JOYSTICK_LAST; ++jid)
         if (assign[jid] >= 0) aux |= readAux(jid);
