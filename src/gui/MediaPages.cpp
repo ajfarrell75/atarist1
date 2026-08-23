@@ -182,6 +182,55 @@ void drawCartPage(const std::string& cartsDir, const std::string& mounted,
 //   · un FICHIER image à plat dans hd/ = une image ACSI.
 // Le scan des images ACSI n'est donc PAS récursif : sans ça, les .img rangés DANS un
 // lecteur GEMDOS (hd/JEUX/DEMOS/truc.img) seraient proposés comme disques durs.
+// Champ de saisie LIBRE d'un chemin, avec VERDICT IMMÉDIAT. Il y avait là deux façons
+// de croire l'interface cassée : ce que l'on tape ne va au champ que si la souris n'est
+// PAS capturée (main.cpp:854 — sinon les touches partent au clavier ST), et le bouton
+// refuse SILENCIEUSEMENT un champ vide ; quant au message d'échec du montage, il
+// s'affiche en bas de la fenêtre PRINCIPALE, invisible quand la Configuration est
+// détachée dans sa propre fenêtre. On répond donc sur place : le verdict s'affiche sous
+// le champ pendant la frappe, et Entrée vaut clic.
+//
+// Un seul stat() par trame sur une chaîne courte : sans commune mesure avec le scan de
+// dossier que cette page met en cache (cf. la note de drawFloppyPage).
+static bool pathEntryRow(const char* id, const char* hint, char* buf, std::size_t bufSz,
+                         bool wantDir) {
+    ImGui::SetNextItemWidth(-70.0f);
+    const bool entered = ImGui::InputTextWithHint(id, hint, buf, bufSz,
+                                                  ImGuiInputTextFlags_EnterReturnsTrue);
+    ImGui::SameLine();
+    char btn[64];
+    std::snprintf(btn, sizeof btn, "Mount##%s", id);
+    const bool clicked = ImGui::Button(btn);
+
+    // Messages COURTS : le panneau est étroit (nav de gauche + fenêtre parfois
+    // détachée), et une phrase complète y était coupée en plein milieu. Le détail
+    // part en infobulle, qui, elle, n'est pas contrainte par la largeur.
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("%s", wantDir
+            ? "Absolute path to a host folder, e.g. /home/you/atari-stuff\n"
+              "It becomes drive C: (GEMDOS). Enter or Mount validates.\n"
+              "Tip: a folder dropped in hd/ is listed above, no typing needed.\n"
+              "Note: typing only reaches this field when the mouse is NOT captured\n"
+              "(middle-click or Ctrl+Alt+G releases it)."
+            : "Absolute path to a hard disk image (.img .hd .acsi .vhd .raw)\n"
+              "Enter or Mount validates.\n"
+              "Tip: an image dropped in hd/ is listed above, no typing needed.");
+
+    if (buf[0]) {
+        std::error_code ec;
+        const bool ok = wantDir ? fs::is_directory(buf, ec) : fs::is_regular_file(buf, ec);
+        if (ok) ImGui::TextColored(ImVec4(0.45f, 0.95f, 0.55f, 1.f),
+                                   wantDir ? "folder OK — Mount or Enter" : "file OK — Mount or Enter");
+        else    ImGui::TextColored(ImVec4(1.f, 0.5f, 0.4f, 1.f),
+                                   wantDir ? "no such folder" : "no such file");
+        if (!ok) return false;                      // on ne propose pas un montage voué à l'échec
+    } else {
+        ImGui::TextDisabled("absolute path, or drop it in hd/");
+        return false;                               // champ vide : le bouton ne fait rien, on le DIT
+    }
+    return entered || clicked;
+}
+
 void drawHardDiskPage(const std::string& hdDir, const std::string& gemdosDefault,
                       const std::string& curGemdos, bool gemdosActive,
                       const std::string& curAcsi, bool acsiActive, int acsiParts,
@@ -267,10 +316,8 @@ void drawHardDiskPage(const std::string& hdDir, const std::string& gemdosDefault
         ImGui::TextUnformatted(c.label.c_str());
         ImGui::PopID();
     }
-    ImGui::SetNextItemWidth(-70.0f);
-    ImGui::InputTextWithHint("##gdPath", "path to a host folder…", g_gdBuf, sizeof g_gdBuf);
-    ImGui::SameLine();
-    if (ImGui::Button("Mount##gdFree") && g_gdBuf[0]) reqMountGemdos = g_gdBuf;
+    if (pathEntryRow("##gdPath", "path to a host folder…", g_gdBuf, sizeof g_gdBuf, true))
+        reqMountGemdos = g_gdBuf;
 
     ImGui::Separator();
 
@@ -304,10 +351,8 @@ void drawHardDiskPage(const std::string& hdDir, const std::string& gemdosDefault
         ImGui::TextUnformatted(c.label.c_str());
         ImGui::PopID();
     }
-    ImGui::SetNextItemWidth(-70.0f);
-    ImGui::InputTextWithHint("##hdPath", "path to a hard disk image…", g_hdBuf, sizeof g_hdBuf);
-    ImGui::SameLine();
-    if (ImGui::Button("Mount##hdFree") && g_hdBuf[0]) reqMountAcsi = g_hdBuf;
+    if (pathEntryRow("##hdPath", "path to a hard disk image…", g_hdBuf, sizeof g_hdBuf, false))
+        reqMountAcsi = g_hdBuf;
 
     if (gemCands.empty() && acsiCands.empty())
         ImGui::TextDisabled("(nothing in %s/ — drop a folder or an image there)", hdDir.c_str());
