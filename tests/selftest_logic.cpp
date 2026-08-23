@@ -17,6 +17,7 @@
 // =============================================================================
 #include "gui/AppConfig.hpp"
 #include "util/HostPath.hpp"
+#include "io/CubaseDongle.hpp"
 
 #include <cstdio>
 #include <sstream>
@@ -298,7 +299,58 @@ static void testConfigParser() {
     }
 }
 
+// -----------------------------------------------------------------------------
+//  CubaseDongle — machines d'état des clés Steinberg (logique pure, pas de bus).
+//  Les valeurs épinglées ont été produites par cette implémentation (aucune séquence
+//  de référence n'est publiée) : elles gardent la TRANSCRIPTION des équations à
+//  l'identique, elles ne prouvent pas la clé. Les propriétés, elles, sont connues.
+// -----------------------------------------------------------------------------
+static void testCubaseDongle() {
+    std::printf("CubaseDongle (clés Steinberg /ROM3)\n");
+    {   // Clé noire : registres à 0 au reset, le motif %11011000 sur A8..A1 ramène à 0.
+        CubaseDongle k; k.setModel(CubaseDongle::Model::Cubase2);
+        checkBool("cubase2 : sortie au reset = $00 (octet fort)", k.cartRead(0xFB0000, true) == 0x00, true);
+        checkBool("cubase2 : octet faible = $FF", k.cartRead(0xFB0001, false) == 0xFF, true);
+        k.udsCycle(0x1000);   // fetch quelconque, A8..A1 = 0 : aucun terme vrai → $FF
+        checkBool("cubase2 : un cycle /UDS hors clé cadence la PAL", k.state() == 0xFF, true);
+        for (uint32_t a = 1; a < 40; ++a) k.udsCycle(0x1000 + a * 2);
+        k.udsCycle(0xFB01B0);   // A8..A1 = %11011000 → tous les termes vrais → 0
+        checkBool("cubase2 : motif de reset logiciel → état 0", k.state() == 0, true);
+        // Épinglage : 8 lectures « défi » successives A8..A1 = i*37, même défi deux fois.
+        std::string got;
+        for (int i = 0; i < 8; ++i) {
+            const uint32_t a = 0xFB0000 | ((uint32_t(i * 37) & 0xFF) << 1);
+            char b[8]; std::snprintf(b, sizeof b, "%02X", k.cartRead(a, true)); got += b;
+            k.udsCycle(a);
+        }
+        checkStr("cubase2 : séquence épinglée", got, "00FF00FF00000000");
+    }
+    {   // Clé rouge : 1 bit (D8) ; D9-D15 à 1 ; horloge sur chaque accès $FBxxxx seulement.
+        CubaseDongle k; k.setModel(CubaseDongle::Model::Cubase3);
+        checkBool("cubase3 : sortie au reset = $FE (D8=0, D9-15=1)", k.cartRead(0xFB0000, true) == 0xFE, true);
+        const uint16_t s0 = k.state();
+        k.udsCycle(0x1234); k.udsCycle(0xFB0100);
+        checkBool("cubase3 : /UDS seul ne cadence pas", k.state() == s0, true);
+        std::string got;
+        for (int i = 0; i < 48; ++i) {
+            const uint32_t a = 0xFB0000 | (((i * 7) & 1) ? 0x100u : 0u);   // A8 pseudo-aléatoire
+            got += (k.cartRead(a, true) & 1) ? '1' : '0';
+        }
+        checkStr("cubase3 : 48 bits épinglés", got, "000011100010001000100010001000100010001000100010");
+    }
+    {   // Auto : premier accès avec A7..A1 = 0 → rouge ; ≠ 0 → noire.
+        CubaseDongle k; k.setModel(CubaseDongle::Model::Auto);
+        checkBool("auto : crochet /UDS demandé tant que non tranché", k.wantsUds(), true);
+        k.cartRead(0xFB0100, true);
+        checkBool("auto : A7..A1 = 0 → clé rouge", k.cartRead(0xFB0000, true) == 0xFE && !k.wantsUds(), true);
+        CubaseDongle k2; k2.setModel(CubaseDongle::Model::Auto);
+        k2.cartRead(0xFB00B4, true);
+        checkBool("auto : A7..A1 ≠ 0 → clé noire", k2.wantsUds(), true);
+    }
+}
+
 int main() {
+    testCubaseDongle();
     testWindowsPaths();
     testPosixPaths();
     testNativeDefaults();

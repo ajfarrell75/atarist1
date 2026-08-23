@@ -1899,6 +1899,7 @@ struct ConfigUi {
     int  reqMidiOutGm = -1, reqMidiOutPort = -1, reqMidiOutMt32 = -1, reqMt32Model = -1;
     bool reqMidiPanic = false;            // bouton « All notes off » de la page MIDI
     int  reqMidiLoopback = -1;            // case OUT->IN de la page MIDI
+    int  reqDongle = -1;                  // clé Steinberg : 0 none, 1 cubase2, 2 cubase3, 3 auto
     std::string mt32Status;               // lecture : modèle chargé ou erreur
     // Mixeur (page Sound) : édité EN PLACE par la page ; mixDirty = appliquer, mixDone = persister.
     float mixYm = 1.0f, mixDma = 1.0f, mixDrive = 1.0f, mixMt32 = 1.0f;
@@ -2257,6 +2258,19 @@ void drawConfigWindow(ConfigUi& ui) {
         bool loop = cfg.midiLoopback;   // cfg est CONST ici : on passe par une requête
         if (ImGui::Checkbox("Loopback cable OUT->IN", &loop)) ui.reqMidiLoopback = loop ? 1 : 0;
         ImGui::TextDisabled("  A real ST has none. Cubase MIDI Thru = feedback.");
+        ImGui::Separator();
+
+        // Clé Steinberg sur le port cartouche (/ROM3 $FB0000, invisible du TOS).
+        ImGui::TextDisabled("STEINBERG KEY (cartridge port)");
+        int dk = cfg.dongle == "cubase2" ? 1 : cfg.dongle == "cubase3" ? 2 : cfg.dongle == "auto" ? 3 : 0;
+        bool dkCh = false;
+        dkCh |= ImGui::RadioButton("None", &dk, 0); ImGui::SameLine();
+        dkCh |= ImGui::RadioButton("Red key (Cubase 3.1 / Score / Audio)", &dk, 2);
+        dkCh |= ImGui::RadioButton("Black key (Cubase 2.01)", &dk, 1); ImGui::SameLine();
+        dkCh |= ImGui::RadioButton("Auto", &dk, 3);
+        if (dkCh) ui.reqDongle = dk;
+        ImGui::TextDisabled("  PAL16R8 / 5C060 state machines at $FB0000. Cubase Lite needs none.");
+        ImGui::TextDisabled("  Black key: clocked by every CPU bus cycle - best effort.");
         ImGui::Separator();
 
         // Panique : indispensable dès qu'on coupe une sortie en plein accord.
@@ -2718,6 +2732,18 @@ int main(int argc, char** argv) {
     if (cfg.netusbee) netUsbeeApply(true);
     if (cfg.ethernec) etherApply(true);
     machine.midi.setLoopback(cfg.midiLoopback);   // fiche MIDI OUT→IN (OFF par défaut)
+    // Clé Steinberg (dongle= dans neost.cfg) : /ROM3, cohabite avec le HD GEMDOS.
+    if (!cfg.dongle.empty()) {
+        const CubaseDongle::Model dm = cfg.dongle == "cubase2" ? CubaseDongle::Model::Cubase2
+                                     : cfg.dongle == "cubase3" ? CubaseDongle::Model::Cubase3
+                                     : cfg.dongle == "auto"    ? CubaseDongle::Model::Auto
+                                     : CubaseDongle::Model::None;
+        if (!machine.setDongle(dm)) {
+            g_stateMsg = "Steinberg key needs the cartridge port free (EtherNEC/NetUSBee)";
+            g_stateMsgFrames = 150;
+            cfg.dongle.clear();
+        }
+    }
     // Sortie MIDI hôte (macOS) : synthé GM intégré et/ou port CoreMIDI virtuel. Dès
     // qu'une sortie est ouverte, l'ACIA y envoie MIDI OUT (au lieu du bouclage).
     MidiOutHost midiOut;
@@ -2729,7 +2755,13 @@ int main(int argc, char** argv) {
     uint32_t audioRate = 48000;
     auto midiOutApply = [&]() {
         if (cfg.midiOutGm)   { if (!midiOut.openSynth()) cfg.midiOutGm = false; } else midiOut.closeSynth();
-        if (cfg.midiOutPort) { if (!midiOut.openVirtualPort()) cfg.midiOutPort = false; } else midiOut.closeVirtualPort();
+        if (cfg.midiOutPort) {
+            if (!midiOut.openVirtualPort()) {
+                cfg.midiOutPort = false;
+                g_stateMsg = "MIDI OUT: cannot create the CoreMIDI port (see console)";
+                g_stateMsgFrames = 300;
+            }
+        } else midiOut.closeVirtualPort();
         if (cfg.midiOutMt32) {
             if (!mt32.isOpen() && !mt32.open(resolveData(cfg.mt32Roms, exeDir), audioRate, cfg.mt32Model)) {
                 g_stateMsg = "MT-32: " + mt32.lastError(); g_stateMsgFrames = 300;
@@ -3723,6 +3755,17 @@ int main(int argc, char** argv) {
                                               cfgUi.reqMidiLoopback = -1;
                                               machine.midi.setLoopback(cfg.midiLoopback);
                                               saveConfig(exeDir, cfg, &machine); }
+            if (cfgUi.reqDongle >= 0) {
+                static const char* const names[] = { "", "cubase2", "cubase3", "auto" };
+                const int d = cfgUi.reqDongle & 3; cfgUi.reqDongle = -1;
+                if (machine.setDongle(CubaseDongle::Model(d))) {
+                    cfg.dongle = names[d];
+                    saveConfig(exeDir, cfg, &machine);
+                } else {
+                    g_stateMsg = "Steinberg key needs the cartridge port free (EtherNEC/NetUSBee)";
+                    g_stateMsgFrames = 150;
+                }
+            }
             // Panique : on la passe AUX DEUX destinations. Le MT-32 est un synthé à part
             // (il ne voit pas le flux de MidiOutHost), donc lui envoyer les mêmes
             // contrôleurs est le seul moyen de le faire taire.

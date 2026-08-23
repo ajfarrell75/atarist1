@@ -34,6 +34,7 @@
 #include "net/MidiRing.hpp"
 #endif
 #include "core/Tracer.hpp"
+#include "io/CubaseDongle.hpp"
 #include "core/Symbols.hpp"
 #include "core/AudioMix.hpp"   // chaîne de mixage partagée (--sound-dump)
 
@@ -67,6 +68,7 @@ void usage() {
         "  --mem SIZE        ST-RAM: 256k, 512k (default), 1m, 2m, 4m\n"
         "  --walk-mouse      after boot, inject a mouse move + click (diagnostic)\n"
         "  --keys STR        after boot, type STR on the keyboard (e.g. diag menus)\n"
+        "  --azerty          type --keys* for a French TOS (AZERTY scancodes: A/Q, Z/W, M)\n"
         "  --key-down N C    press key C at frame N and HOLD it (make code only)\n"
         "  --key-up N C      release key C at frame N (break code only)\n"
         "  --keys-at N STR   type STR from frame N on (repeatable): 4 frames per char,\n"
@@ -104,6 +106,12 @@ void usage() {
         "                    also lands in slot 1 when the UltraSatan sits on ID 0)\n"
         "  --midi-net H:P[:L]  MIDI ring over UDP (MIDI Maze online): send MIDI OUT to\n"
         "                    peer H:P, receive MIDI IN on local port L (default 6820)\n"
+        "  --dongle MODEL    Steinberg key on the cartridge port (/ROM3, $FB0000):\n"
+        "                    cubase3 (red key: Cubase 3.10/Score/Audio), cubase2 (black\n"
+        "                    key: Cubase 2.01, needs a 68000-exact bus pattern), auto\n"
+        "  --midi-dump FILE  log every MIDI OUT byte as '<cpu cycle> <hex>' (one per\n"
+        "                    line) — tools/midi_compare.py turns it into an SMF or\n"
+        "                    checks it against the song a sequencer was asked to play\n"
         "  --glue-selftest   self-test of the Glue machine (borders) then exit\n"
         "  --spec512-selftest self-test of the Spectrum 512 re-render (palette/pixel) then exit\n"
         "  --bus-selftest    self-test of the bus error model (whitelist) then exit\n"
@@ -797,7 +805,22 @@ bool writePpm(const char* path, const uint32_t* px, int w, int h) {
     return ok;
 }
 
+// --azerty : les TOS français lisent un clavier AZERTY ; A/Q, Z/W et M n'ont pas le même
+// scancode qu'en QWERTY. Sans ce drapeau, « M » tapé dans un sélecteur de fichier GEM
+// arrive en virgule et disparaît du nom (observé avec tos104fr + Cubase Lite).
+bool g_azerty = false;
+
 uint8_t stScancode(char c) {
+    if (g_azerty) {
+        switch (c) {
+            case 'a': case 'A': return 0x10;   // position Q QWERTY
+            case 'q': case 'Q': return 0x1E;   // position A QWERTY
+            case 'z': case 'Z': return 0x11;   // position W QWERTY
+            case 'w': case 'W': return 0x2C;   // position Z QWERTY
+            case 'm': case 'M': return 0x27;   // position ; QWERTY
+            default: break;
+        }
+    }
     switch (c) {
         case '1': return 0x02; case '2': return 0x03;
         case '3': return 0x04; case '4': return 0x05;
@@ -834,6 +857,10 @@ uint8_t stScancode(char c) {
         case '#': return 0x3D;   // F3
         case '$': return 0x3E;   // F4
         case '%': return 0x3F;   // F5
+        case '|': return 0x72;   // Enter du PAVÉ NUMÉRIQUE (≠ Return) : Play dans Cubase
+        case '.': return 0x71;   // '.' du PAVÉ NUMÉRIQUE : même caractère sur tous les
+                                 // TOS (sur la rangée principale, FR = Shift+;) — noms
+                                 // de fichiers 8.3 dans un sélecteur GEM
         case '\t': return 0x0F;  // Tab
         case '^': return 0x0E;   // Backspace
         case '~': return 0x53;   // Delete
@@ -876,6 +903,8 @@ int main(int argc, char** argv) {
     int         ultrasatanId   = 0;              // --ultrasatan-id N : première cible (0-6)
     std::string sd1Img, sd2Img;                  // --sd1/--sd2 IMG : images des slots SD
     std::string midiNetPeer;                     // --midi-net host:port[:listen] : anneau MIDI UDP
+    std::string dongleModel;                     // --dongle cubase2|cubase3|auto
+    std::string midiDumpPath;                    // --midi-dump FILE : journal « cycle octet » du MIDI OUT
     int         midiNetListen  = 6820;           // port d'écoute par défaut
     std::string soundDumpPath;                   // --sound-dump F : WAV 48 kHz de la boucle --frames
     std::string serialDumpPath;                  // --serial-dump F : octets série RS-232 bruts (verdicts)
@@ -987,6 +1016,9 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(a, "--ultrasatan-id"))   { ultrasatan = true; ultrasatanId = std::atoi(next(a)); }
         else if (!std::strcmp(a, "--sd1"))             { ultrasatan = true; sd1Img = next(a); }
         else if (!std::strcmp(a, "--sd2"))             { ultrasatan = true; sd2Img = next(a); }
+        else if (!std::strcmp(a, "--midi-dump")) midiDumpPath = next(a);
+        else if (!std::strcmp(a, "--dongle"))    dongleModel  = next(a);
+        else if (!std::strcmp(a, "--azerty"))   g_azerty = true;
         else if (!std::strcmp(a, "--midi-net")) {
             // "host:port" ou "host:port:listen" (le port d'écoute par défaut est 6820).
             std::string s = next(a);
@@ -1225,6 +1257,18 @@ int main(int argc, char** argv) {
     } else if (slirpFlag) {
         std::fprintf(stderr, "[headless] --slirp ignored: needs --ethernec or --netusbee\n");
     }
+    // Clé Steinberg (--dongle) : répond dans $FB0000-$FBFFFF, invisible du TOS.
+    if (!dongleModel.empty()) {
+        CubaseDongle::Model m = CubaseDongle::Model::None;
+        if      (dongleModel == "cubase3") m = CubaseDongle::Model::Cubase3;
+        else if (dongleModel == "cubase2") m = CubaseDongle::Model::Cubase2;
+        else if (dongleModel == "auto")    m = CubaseDongle::Model::Auto;
+        else { std::fprintf(stderr, "[headless] --dongle %s: unknown model (cubase2, cubase3, auto)\n", dongleModel.c_str()); return 2; }
+        if (machine.setDongle(m))
+            std::fprintf(stderr, "[headless] Cubase dongle (%s) on /ROM3 $FB0000\n", dongleModel.c_str());
+        else
+            std::fprintf(stderr, "[headless] --dongle refused: EtherNEC/NetUSBee decode the whole cartridge window\n");
+    }
     // Anneau MIDI réseau (--midi-net) : MIDI OUT → UDP → pair aval ; datagrammes
     // de l'amont → MIDI IN. Débranche le bouclage interne de l'ACIA MIDI.
 #ifdef NEOST_WITH_NET
@@ -1245,6 +1289,24 @@ int main(int argc, char** argv) {
     if (!midiNetPeer.empty())
         std::fprintf(stderr, "[headless] --midi-net ignored: no network backend in this build\n");
 #endif
+    // --midi-dump : chaque octet émis par l'ACIA MIDI, daté de son cycle 68000 (horloge
+    // continue du Scheduler, 8 021 248 Hz). C'est la vérité terrain d'un séquenceur : ce
+    // que Cubase a réellement envoyé et QUAND — à comparer au morceau qu'on lui a donné.
+    // Journal texte volontairement brut (un outil Python en fait un SMF) pour rester
+    // lisible au `diff` et indépendant de tout parseur MIDI côté C++.
+    std::vector<std::pair<int64_t, uint8_t>> midiDump;
+    if (!midiDumpPath.empty()) {
+        // Le puits daté a priorité sur le puits simple (MidiAcia::write) : on relaie
+        // donc nous-mêmes vers l'anneau MIDI s'il est branché.
+        std::function<void(uint8_t)> relay;
+#ifdef NEOST_WITH_NET
+        if (midiRing) relay = [r = midiRing.get()](uint8_t b) { r->sendByte(b); };
+#endif
+        machine.midi.setMidiSinkTimed([&midiDump, relay](uint8_t b, int64_t cyc) {
+            midiDump.emplace_back(cyc, b);
+            if (relay) relay(b);
+        });
+    }
 
     Tracer tracer;
     if (!tracePath.empty()) {
@@ -1650,6 +1712,19 @@ int main(int argc, char** argv) {
     if (!serialOut.empty())
         std::fprintf(stderr, "[headless] RS-232 serial port (%zu bytes):\n%s\n",
                      serialOut.size(), serialOut.c_str());
+    if (!midiDumpPath.empty()) {
+        if (FILE* mf = std::fopen(midiDumpPath.c_str(), "w")) {
+            std::fprintf(mf, "# NeoST MIDI OUT dump — cpu_hz=8021248 — '<cycle> <byte hex>'\n");
+            for (const auto& [cyc, b] : midiDump)
+                std::fprintf(mf, "%lld %02X\n", (long long)cyc, b);
+            std::fclose(mf);
+            std::fprintf(stderr, "[headless] MIDI OUT: %zu bytes -> %s\n",
+                         midiDump.size(), midiDumpPath.c_str());
+        } else {
+            std::fprintf(stderr, "[headless] cannot write the MIDI dump %s\n", midiDumpPath.c_str());
+            outFail = true;
+        }
+    }
     // --serial-dump FILE : écrit les octets série bruts dans FILE (capture propre pour
     // les runners de verdict, ex. tools/run_selftests.py qui y cherche NEOST-TEST: … PASS).
     if (!serialDumpPath.empty()) {

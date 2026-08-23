@@ -96,6 +96,7 @@ add_library(neost_core STATIC
     src/io/Ne2000.cpp
     src/io/UltraSatan.cpp
     src/io/Isp1160.cpp
+    src/io/CubaseDongle.cpp
     src/core/Framing.cpp
     src/util/HostPath.cpp
     src/gui/AppConfig.cpp)
@@ -106,7 +107,7 @@ target_include_directories(neost_core PUBLIC "${CMAKE_SOURCE_DIR}/src")
 set_source_files_properties(
     src/core/Bus.cpp src/core/Shifter.cpp src/core/YM2149.cpp src/core/DmaSound.cpp
     src/core/Blitter.cpp
-    src/core/Machine.cpp src/core/Tracer.cpp src/core/Symbols.cpp src/io/Mfp.cpp src/io/Ikbd.cpp src/io/Fdc.cpp src/io/StxImage.cpp src/io/Rtc.cpp src/io/MidiAcia.cpp src/io/Fpu.cpp src/io/GemdosHd.cpp src/io/Acsi.cpp src/io/Scc.cpp src/io/MediaScan.cpp src/io/Ne2000.cpp src/io/UltraSatan.cpp src/io/Isp1160.cpp src/core/Framing.cpp src/util/HostPath.cpp src/gui/AppConfig.cpp
+    src/core/Machine.cpp src/core/Tracer.cpp src/core/Symbols.cpp src/io/Mfp.cpp src/io/Ikbd.cpp src/io/Fdc.cpp src/io/StxImage.cpp src/io/Rtc.cpp src/io/MidiAcia.cpp src/io/Fpu.cpp src/io/GemdosHd.cpp src/io/Acsi.cpp src/io/Scc.cpp src/io/MediaScan.cpp src/io/Ne2000.cpp src/io/UltraSatan.cpp src/io/Isp1160.cpp src/io/CubaseDongle.cpp src/core/Framing.cpp src/util/HostPath.cpp src/gui/AppConfig.cpp
     PROPERTIES COMPILE_OPTIONS "${NEOST_STRICT_OPTS}")
 
 # =============================================================================
@@ -245,7 +246,7 @@ endif()
 #  neost-headless — sans interface, pour les traces comparables à MAME.
 # =============================================================================
 add_executable(neost-headless src/headless/main_headless.cpp)
-target_link_libraries(neost-headless PRIVATE neost_core neost_net)
+target_link_libraries(neost-headless PRIVATE neost_net)  # neost_core via neost_net (PUBLIC)
 target_compile_definitions(neost-headless PRIVATE NEOST_VERSION="${NEOST_VERSION_STR}")
 set_source_files_properties(src/headless/main_headless.cpp
     PROPERTIES COMPILE_OPTIONS "${NEOST_STRICT_OPTS}")
@@ -486,7 +487,7 @@ if(WIN32 AND NEOST_WIN_GLFW_LIBS)
 else()
     set(NEOST_GLFW_LINK glfw)
 endif()
-target_link_libraries(neost PRIVATE neost_core neost_net ${NEOST_GLFW_LINK} OpenGL::GL Threads::Threads ${CMAKE_DL_LIBS})
+target_link_libraries(neost PRIVATE neost_net ${NEOST_GLFW_LINK} OpenGL::GL Threads::Threads ${CMAKE_DL_LIBS})
 if(WIN32)
     # miniaudio (WASAPI) n'auto-lie ses dépendances COM que sous MSVC (#pragma
     # comment), jamais sous MinGW : sans elles, l'édition de liens échoue sur

@@ -14,6 +14,7 @@
 > | [EtherNEC](#ethernec--ne2000-sur-le-port-cartouche---ethernec-gui-network) | NE2000, port cartouche | **matériel réel** (montage T. Redelberger) |
 > | [Modem Hayes](#modem-hayes-sur-rs-232---modem-gui-network) | pont RS-232 → TCP | équivalent des modems WiFi ESP8266 vendus pour ST |
 > | [Anneau MIDI](#anneau-midi-réseau--midimaze-en-ligne---midi-net-hpl) | MIDIMaze sur UDP | transpose un câblage MIDI réel |
+> | [Clé Steinberg](#clé-steinberg--dongle-cubase-sur-le-port-cartouche---dongle-gui-midi) | PAL16R8 / EPLD sur /ROM3 | **matériel réel** (clés noire et rouge de Cubase) |
 
 # Les extensions, une par une
 
@@ -190,4 +191,31 @@ l'ATL/ITL et le hub racine sont là, il manque un « device » derrière `HcRhPo
   verdicts matériels **FAIL** — le test ne passe pas par construction.
 * Save-states : **v13** (UltraSatan + ISP1160 sérialisés ; drapeaux d'en-tête bit2 = UltraSatan,
   bit3 = NetUSBee — les configs save/load doivent concorder).
+
+## Clé Steinberg — dongle Cubase sur le port cartouche (`--dongle`, GUI MIDI)
+
+La protection de Cubase ST : une clé dans le port cartouche, lue en `$FB0000-$FBFFFF`
+(/ROM3 — le TOS ne sonde que /ROM4 `$FA0000`, la clé lui est invisible et cohabite avec
+le HD GEMDOS). Pas d'écriture possible sur ce port : le **défi** voyage sur les lignes
+d'adresse (A1-A8) d'une lecture « fantôme », la **réponse** revient sur D8-D15.
+
+| Clé | Puce | Logiciels | Horloge | Émulation |
+|-----|------|-----------|---------|-----------|
+| **rouge** (`cubase3`) | EPLD Intel 5C060, 16 bascules T, 1 entrée (A8), 1 sortie (D8) | Cubase 3.10, Cubase Score 2.0x, Cubase Audio Falcon | front montant de **/ROM3** : seuls les accès `$FBxxxx` la font avancer | fidèle (équations du JED décapsulé, décompilé par troed) |
+| **noire** (`cubase2`) | PAL16R8, 8 bascules D, A1-A8 → D8-D15 | Cubase 2.01 | **chaque** front montant de /UDS, où que lise le CPU — fetchs compris | « au mieux » : exige le motif bus d'un vrai 68000 (Moira modélise le prefetch) ; crochet `udsDone` dans `NeostMoira` |
+| `auto` | — | — | — | heuristique MiSTery : premier accès `$FBxxxx` avec A7..A1 = 0 → rouge, sinon noire |
+
+Source des équations : cœur FPGA **MiSTery** (`atarist/cubase2_dongle.v`,
+`cubase3_dongle.v`, gyurco) — clé noire relevée par force brute sur une clé réelle
+(MasterOfGizmo, 2022), clé rouge depuis le JED de la puce décapsulée. Transcription en
+C++ dans `src/io/CubaseDongle.cpp`, épinglée par `neost-selftest` (propriétés : registres
+à 0 au reset, motif de reset logiciel `%11011000` → 0 sur la noire, /UDS sans effet sur
+la rouge). Une lecture renvoie l'état **courant** (les bascules basculent en fin de
+cycle) ; octet faible `$FF`. Sérialisé dans le save-state (v14, drapeau bit 4).
+
+⚠ **Non validée sur logiciel** : aucun Cubase à clé n'est dans le dépôt (Cubase Lite n'en
+a pas besoin). Recette quand on en aura un : `neost-headless roms/tos104fr.img --dongle
+cubase3 --disk cubase310.st --frames 3000 --screenshot s.ppm` ; si bombes ou « dongle
+not found », tracer `--trace` autour des lectures `$FB0000` (la rouge lit avec A7..A1 = 0,
+A8 = bit de défi).
 

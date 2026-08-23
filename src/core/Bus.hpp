@@ -36,6 +36,7 @@ class GemdosHd;
 class Scc;
 class Ne2000;
 class Isp1160;
+class CubaseDongle;
 // -----------------------------------------------------------------------------
 //  Plan mémoire de l'Atari ST (bus d'adresses 24 bits → 16 Mo adressables).
 //  Les constantes documentent le POURQUOI de chaque zone.
@@ -293,6 +294,11 @@ public:
     // $FA0000/$FA8000/$FB8000/$FBC000 décodées AVANT la NE2000 — qui peut voir le
     // même accès (latch LSB = registre CR, cf. io/Isp1160.hpp). Posé par Machine.
     Isp1160* isp1160 = nullptr;
+    // Clé Steinberg (Cubase 2/3) sur /ROM3 ($FB0000-$FBFFFF) : décodée AVANT la ROM
+    // cartouche ; la clé noire avance aussi sur chaque cycle /UDS du CPU (crochet
+    // posé par Cpu68k quand dongleUds est vrai). Posé par Machine. Cf. io/CubaseDongle.hpp.
+    CubaseDongle* dongle = nullptr;
+    bool dongleUds = false;
 
     // Profil machine : décide quel matériel optionnel répond (son DMA STE, etc.)
     // et où une bus error se produit. Posé par Machine. Défaut : 1040 STE.

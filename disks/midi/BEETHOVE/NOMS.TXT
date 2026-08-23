@@ -1,0 +1,15 @@
+Fichiers MIDI simplifies pour sequenceur ST
+format 1, 96 PPQN, sans SysEx ni textes
+
+APPASIO1.MID appasio1_beethoven_op57_mvt1.mid
+BEETHO19.MID beetho19_sonata19_op49-1_mvt1.mid
+BEETHO20.MID beetho20_sonata20_op49-2_mvt1.mid
+CUCKOO1.MID  cuckoo1_beethoven_op79_mvt1.mid
+MOONLGHT.MID moonlght_beethoven_sonata14_op27-2_mvt1.mid
+MOONLGT2.MID moonlgt2_beethoven_op27-2_mvt2.mid
+MOONLGT3.MID moonlgt3_beethoven_op27-2_mvt3.mid
+PATHET1.MID  pathet1_beethoven_op13_mvt1.mid
+PATHET3.MID  pathet3_beethoven_op13_mvt3.mid
+PATHETIQ.MID pathetiq_beethoven_sonata8_op13_mvt2.mid
+TEMPEST3.MID tempest3_beethoven_op31-2_mvt3.mid
+WALDSTN1.MID waldstn1_beethoven_op53_mvt1.mid

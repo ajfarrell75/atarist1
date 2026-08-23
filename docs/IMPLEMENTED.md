@@ -1325,6 +1325,8 @@ Pour ce qui reste → [`../TODO.md`](../TODO.md).
   `rtc_saved=` horodatage hôte) : reprise au boot avec rattrapage du temps écoulé ;
   snapshot à chaque sauvegarde de config (`saveConfig` / `snapshotRtc`).
 - **MIDI** (`MidiAcia`, `$FFFC04/06`) : IRQ canal 6 (RX/TX), TDRE cadencé à 31250 bauds ; fiche de bouclage OUT→IN **optionnelle** (`--loopback`, menu Machine, `midi_loopback=`), **débranchée par défaut** depuis le 2026-08-21 (Cubase/MROS + Thru = larsen sinon).
+  Validé par l'étalon `tools/run_midi_sequencer.py` (2026-08-23) : Cubase Lite importe un SMF et le joue, `--midi-dump` journalise le MIDI OUT daté au cycle, `tools/midi_compare.py` confronte notes/vélocités/durées/pédale/tempo au fichier (pente 1,001, gigue σ ≈ 1 ms).
+- **Clé Steinberg** (`CubaseDongle`, `/ROM3` `$FB0000-$FBFFFF`, `--dongle cubase2|cubase3|auto`, page MIDI, `dongle=`) — 2026-08-23, **OFF par défaut**. Clé **rouge** (Cubase 3.10 / Score / Audio : EPLD 5C060, 16 bascules T, entrée A8, sortie D8, cadencée par /ROM3) et clé **noire** (Cubase 2.01 : PAL16R8, A1-A8 → D8-D15, cadencée par **chaque** front /UDS du CPU — crochet dans `NeostMoira`, « au mieux »). Équations transcrites de MiSTery (`cubase2_dongle.v`, `cubase3_dongle.v`). Invisible du TOS (/ROM4 seul sondé), cohabite avec le HD GEMDOS. ⚠ Pas encore confrontée à un vrai Cubase 3.10 (aucun logiciel à clé dans le dépôt) ; auto-test de transcription dans `neost-selftest`.
   **Sorties hôte** (GUI macOS, 2026-08-21) : synthé GM intégré, port CoreMIDI virtuel
   « NeoST MIDI OUT » — livraison **horodatée** (cycle ST → heure réelle de la trame + 30 ms,
   thread dédié : gigue mesurée ±60 ms → nulle) — et **Roland MT-32/CM-32L** via libmt32emu

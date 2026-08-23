@@ -19,8 +19,10 @@
 
 namespace {
 // Command Register (CR)
-constexpr uint8_t CR_STP = 0x01, CR_STA = 0x02, CR_TXP = 0x04;
-constexpr uint8_t CR_RD0 = 0x08, CR_RD1 = 0x10, CR_RD2 = 0x20;  // Remote DMA cmd
+// CR_STA (0x02), CR_RD0 (0x08) et CR_RD1 (0x10) existent aussi mais ne sont jamais
+// testés ici : l'émulation ne distingue que STP, TXP et l'abandon de DMA distante (RD2).
+constexpr uint8_t CR_STP = 0x01, CR_TXP = 0x04;
+constexpr uint8_t CR_RD2 = 0x20;  // Remote DMA cmd : abort/complete
 // Interrupt Status/Mask (ISR/IMR)
 constexpr uint8_t ISR_PRX = 0x01, ISR_PTX = 0x02, ISR_OVW = 0x10, ISR_RDC = 0x40;
 // Receive Status (posé dans l'en-tête de paquet de l'anneau)

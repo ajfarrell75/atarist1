@@ -109,8 +109,19 @@ void SlirpBackend::cbNotify(void* /*opaque*/) {
 bool SlirpBackend::open(bool restricted) {
 #ifdef NEOST_WITH_SLIRP
     close();
-    static const SlirpCb cbs = [] {
-        SlirpCb c{};
+    // Les deux champs *_poll_fd sont marqués « deprecated » depuis libslirp 4.8
+    // (remplacés par *_poll_socket, SlirpConfig version 6) mais restent les seuls
+    // servis en version 4, que l'on garde pour les libslirp plus anciens (Linux, MinGW).
+#if defined(__clang__) || defined(__GNUC__)
+#  pragma GCC diagnostic push
+#  pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
+    // Remplie en place (pas de copie/déplacement de SlirpCb : le constructeur
+    // implicite toucherait les champs deprecated HORS de la portée du pragma).
+    static SlirpCb cbs{};
+    static bool cbsReady = false;
+    if (!cbsReady) {
+        SlirpCb& c = cbs;
         c.send_packet      = &SlirpBackend::cbSendPacket;
         c.guest_error      = &SlirpBackend::cbGuestError;
         c.clock_get_ns     = &SlirpBackend::cbClockNs;
@@ -130,8 +141,11 @@ bool SlirpBackend::open(bool restricted) {
         c.timer_new_opaque = [](SlirpTimerId id, void* cbOpaque, void* opaque) -> void* {
             return SlirpBackend::cbTimerNewOpaque(int(id), cbOpaque, opaque);
         };
-        return c;
-    }();
+        cbsReady = true;
+    }
+#if defined(__clang__) || defined(__GNUC__)
+#  pragma GCC diagnostic pop
+#endif
 
     SlirpConfig cfg{};
     cfg.version    = 4;                       // suffisant : timer_new_opaque + init_completed

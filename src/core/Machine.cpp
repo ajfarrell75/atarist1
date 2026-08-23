@@ -663,7 +663,8 @@ static uint32_t cartFingerprint(const std::vector<uint8_t>& cart) {
 static uint32_t stateCrc32(const uint8_t* p, std::size_t n);   // défini plus bas
 void Machine::serializeState(StateArchive& ar) {
     uint32_t magic   = 0x4E535453u;   // 'NSTS'
-    uint16_t version = 13;            // v13 : FujiNet RETIRÉ (matériel inexistant sur ST) —
+    uint16_t version = 14;            // v14 : + CubaseDongle (clé Steinberg /ROM3) ;
+                                      // v13 : FujiNet RETIRÉ (matériel inexistant sur ST) —
                                       // FujiDevice, Acsi::fujiPending_ et le bit de drapeau
                                       // disparaissent, les bits suivants se décalent ;
                                       // v12 : + UltraSatan + Isp1160 (NetUSBee) + Acsi::
@@ -699,7 +700,8 @@ void Machine::serializeState(StateArchive& ar) {
     //    sérialisation.
     uint8_t flags = uint8_t((gemdos.active() ? 1u : 0u)
                             | (ne2000.enabled() ? 2u : 0u) | (usatanOn_ ? 4u : 0u)
-                            | (isp1160.enabled() ? 8u : 0u));
+                            | (isp1160.enabled() ? 8u : 0u)
+                            | (dongle.attached() ? 16u : 0u));   // clé Cubase (v14)
     uint32_t cartFp = cartFingerprint(bus.cart);
     ar(flags); ar(cartFp);
     // CRC32 du payload (tout ce qui suit ce champ) : écrit par saveState (patch à
@@ -769,7 +771,8 @@ void Machine::serializeState(StateArchive& ar) {
     scc.serialize(ar);      mapAt("ne2000",  ar.saveSize());   // SCC Z85C30 (Mega STE)
     ne2000.serialize(ar);   mapAt("usatan",  ar.saveSize());   // NE2000/EtherNEC (v10)
     usatan.serialize(ar);   mapAt("isp1160", ar.saveSize());   // UltraSatan (v12)
-    isp1160.serialize(ar);  mapAt("fin",     ar.saveSize());   // ISP1160/NetUSBee (v12)
+    isp1160.serialize(ar);  mapAt("dongle",  ar.saveSize());   // ISP1160/NetUSBee (v12)
+    dongle.serialize(ar);   mapAt("fin",     ar.saveSize());   // clé Cubase (v14)
     if (ar.loading()) {
         // tbScheduledAt_ n'est pas dans le flux : chaque schedule(TIMER_B) lui est
         // apparié, donc il se re-dérive de l'échéance restaurée. Le laisser à la
@@ -778,6 +781,7 @@ void Machine::serializeState(StateArchive& ar) {
         // parti à la mauvaise position → une ligne raster décalée).
         const int64_t rem = sched.rawCyclesUntil(Scheduler::TIMER_B);
         tbScheduledAt_ = (rem == INT64_MIN) ? 0 : sched.now() + rem;
+        bus.dongleUds = dongle.wantsUds();   // la clé noire a pu (dé)verrouiller son choix
     }
 }
 
@@ -818,9 +822,9 @@ bool Machine::loadState(const uint8_t* data, std::size_t n) {
     uint32_t magic;   std::memcpy(&magic, data, 4);
     uint16_t version; std::memcpy(&version, data + 4, 2);
     if (magic != 0x4E535453u) return false;
-    if (version != 13) {
+    if (version != 14) {
         std::fprintf(stderr, "[state] rejected: unsupported format v%u (this build of "
-                     "NeoST writes v13) — older states are not compatible\n", version);
+                     "NeoST writes v14) — older states are not compatible\n", version);
         return false;
     }
     uint8_t  mt    = data[6];
@@ -838,16 +842,18 @@ bool Machine::loadState(const uint8_t* data, std::size_t n) {
     uint32_t cartFp; std::memcpy(&cartFp, data + 14, 4);
     const uint8_t  curFlags  = uint8_t((gemdos.active() ? 1u : 0u)
                                        | (ne2000.enabled() ? 2u : 0u) | (usatanOn_ ? 4u : 0u)
-                                       | (isp1160.enabled() ? 8u : 0u));
+                                       | (isp1160.enabled() ? 8u : 0u)
+                                       | (dongle.attached() ? 16u : 0u));
     const uint32_t curCartFp = cartFingerprint(bus.cart);
     if (flags != curFlags) {
         std::fprintf(stderr, "[state] rejected: peripheral config mismatch — GEMDOS HD "
                      "%s->%s, EtherNEC %s->%s, UltraSatan %s->%s, "
-                     "NetUSBee %s->%s (these must match the save)\n",
+                     "NetUSBee %s->%s, Cubase dongle %s->%s (these must match the save)\n",
                      (flags & 1) ? "active" : "inactive", (curFlags & 1) ? "active" : "inactive",
                      (flags & 2) ? "active" : "inactive", (curFlags & 2) ? "active" : "inactive",
                      (flags & 4) ? "active" : "inactive", (curFlags & 4) ? "active" : "inactive",
-                     (flags & 8) ? "active" : "inactive", (curFlags & 8) ? "active" : "inactive");
+                     (flags & 8) ? "active" : "inactive", (curFlags & 8) ? "active" : "inactive",
+                     (flags & 16) ? "active" : "inactive", (curFlags & 16) ? "active" : "inactive");
         return false;
     }
     if (cartFp != curCartFp) {

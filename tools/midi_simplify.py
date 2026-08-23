@@ -18,7 +18,8 @@
 #    · division **96 PPQN** par défaut (valeur d'époque), rééchelonnée sur les temps
 #      ABSOLUS puis re-différenciée, pour ne pas accumuler l'erreur d'arrondi ;
 #    · méta-événements réduits au strict utile : tempo (0x51), mesure (0x58),
-#      armure (0x59), fin de piste (0x2F). Tout le reste saute ;
+#      armure (0x59) au tick 0 seulement (plus loin, Cubase Lite perd la piste de
+#      notes), fin de piste (0x2F). Tout le reste saute ;
 #    · plus aucun SysEx ;
 #    · statut courant (running status) conservé : c'est de la norme d'origine, et
 #      ça divise la taille par ~1,5 — or la mémoire est le suspect n°1 ;
@@ -85,7 +86,11 @@ def parse(data: bytes):
             if b0 == 0xFF:                                   # méta
                 mt = data[j + 1]
                 ln, k = rd_vlq(data, j + 2)
-                if mt in META_KEEP:
+                # Armure (0x59) : gardée au tick 0 SEULEMENT. Mesuré sur Cubase Lite
+                # (Mozart K.331 « Alla turca », modulations) : une armure en cours de
+                # morceau fait jeter la piste de notes entière à l'import — il ne reste
+                # que la piste de tempo. Inoffensif pour la lecture.
+                if mt in META_KEEP and not (mt == 0x59 and t > 0):
                     events.append((t, order, bytes([0xFF, mt]) + wr_vlq(ln) + data[k:k + ln]))
                     order += 1
                 j = k + ln
@@ -104,11 +109,107 @@ def parse(data: bytes):
     return div, events
 
 
-def build(div_in: int, events, ppqn: int) -> bytes:
+def detach_repeats(scaled):
+    """Rend le flux de notes « monophonique par hauteur », comme le jouait un pianiste.
+
+    Mesuré sur Cubase Lite (tools/run_midi_sequencer.py) sur des partitions à
+    plusieurs voix (Scarlatti K.514, Chopin op. 28 n° 15) :
+      · deux note-on de MÊME hauteur au même tick (doublure à l'unisson entre deux
+        voix) → Cubase émet un note-off 2 ms après, la note est mangée ;
+      · un note-off qui tombe PILE sur le note-on suivant de même hauteur → Cubase
+        émet le note-on d'abord, le note-off tue la nouvelle note (2 ms).
+    Un vrai pianiste ne peut ni doubler une touche ni la rejouer sans la lâcher : on
+    apparie on/off par (canal, hauteur), on FUSIONNE les unissons (vélocité max, fin
+    la plus tardive), on TRONQUE un chevauchement au tick précédant la reprise, et on
+    SÉPARE d'un tick une note qui finirait sur la suivante. Les autres événements
+    (pédale, tempo…) ne bougent pas. Entrée/sortie : (tick, ordre, événement) triés.
+    """
+    def is_on(ev):  return (ev[0] & 0xF0) == 0x90 and len(ev) > 2 and ev[2] > 0
+    def is_off(ev): return (ev[0] & 0xF0) == 0x80 or ((ev[0] & 0xF0) == 0x90 and len(ev) > 2 and ev[2] == 0)
+    others, notes, open_ = [], [], {}          # notes : [t_on, t_off, on_ev, off_ev]
+    for t, o, ev in scaled:
+        if is_on(ev):
+            key = (ev[0] & 0x0F, ev[1])
+            n = [t, None, ev, None, o]
+            open_.setdefault(key, []).append(n); notes.append(n)
+        elif is_off(ev):
+            key = (ev[0] & 0x0F, ev[1])
+            q = open_.get(key)
+            if q:
+                n = q.pop(0); n[1] = t; n[3] = ev       # FIFO : le plus ancien d'abord
+            # note-off orphelin : jeté (rien à éteindre)
+        else:
+            others.append((t, o, ev))
+    for n in notes:                                     # note jamais fermée : 1 tick
+        if n[1] is None:
+            n[1] = n[0] + 1; n[3] = bytes([0x80 | (n[2][0] & 0x0F), n[2][1], 0x40])
+    by_key: dict = {}
+    for n in notes:
+        by_key.setdefault((n[2][0] & 0x0F, n[2][1]), []).append(n)
+    kept = []
+    for key, lst in by_key.items():
+        lst.sort(key=lambda n: (n[0], n[4]))
+        out = []
+        for n in lst:
+            if out and n[0] == out[-1][0]:              # unisson : fusion
+                c = out[-1]
+                c[1] = max(c[1], n[1])
+                if n[2][2] > c[2][2]:
+                    c[2] = n[2]
+                continue
+            if out and n[0] <= out[-1][1]:              # chevauche ou touche : tronque
+                out[-1][1] = max(out[-1][0] + 1, n[0] - 1)
+            out.append(n)
+        kept += out
+    result = list(others)
+    for n in kept:
+        result.append((n[0], n[4], n[2]))
+        result.append((n[1], n[4], n[3]))
+    def rank(ev): return 0 if ev[0] == 0xFF else 1 if is_off(ev) else 2
+    return sorted(result, key=lambda x: (x[0], rank(x[2]), x[1]))
+
+
+MAX_BPM = 250   # plafond de tempo de Cubase Lite (au-delà il reste à 120 : morceau 2,5× trop lent)
+
+
+def clamp_tempo(div_in: int, events):
+    """Ramène tout tempo > MAX_BPM dans la plage du séquenceur en doublant les durées.
+
+    Mesuré sur Cubase Lite (Mozart K.457 III, *MM300 dans la partition) : un tempo
+    au-delà de ~250 bpm n'est pas importé, le morceau se joue au 120 par défaut (pente
+    2,5 à l'étalon). Remède sans rien changer à la musique : µs/noire ×2 et durées en
+    ticks ÷2 (l'ancienne noire devient une croche) — sur TOUT le fichier, par cohérence.
+    """
+    bpm_max = 0.0
+    for _t, _o, ev in events:
+        if ev[0] == 0xFF and ev[1] == 0x51:
+            us = int.from_bytes(ev[-3:], 'big') or 500000
+            bpm_max = max(bpm_max, 60e6 / us)
+    k = 1
+    while bpm_max / k > MAX_BPM:
+        k *= 2
+    if k == 1:
+        return div_in, events
+    out = []
+    for t, o, ev in events:
+        if ev[0] == 0xFF and ev[1] == 0x51:
+            us = min(int.from_bytes(ev[-3:], 'big') * k, 0xFFFFFF)
+            ev = ev[:-3] + us.to_bytes(3, 'big')
+        out.append((t, o, ev))
+    # µs/noire ×k ⇒ pour garder les mêmes durées réelles, chaque événement doit
+    # tomber k fois plus tôt en ticks : division ×k (le rééchelonnage aval fait
+    # t * ppqn / div_in). L'ancienne noire devient une croche — musique inchangée.
+    return div_in * k, out
+
+
+def build(div_in: int, events, ppqn: int, detach: bool = False) -> bytes:
     """SMF format 0, division `ppqn`, statut courant, une seule piste."""
     # Rééchelonnage sur les temps ABSOLUS : le faire sur les deltas ferait dériver le
     # morceau, chaque arrondi s'ajoutant au précédent.
-    scaled = sorted(((t * ppqn + div_in // 2) // div_in, o, ev) for t, o, ev in events)
+    div_in, events = clamp_tempo(div_in, events)
+    scaled = sorted((int(round(t * ppqn / div_in)), o, ev) for t, o, ev in events)
+    if detach:
+        scaled = detach_repeats(scaled)
     trk, prev_t, running = bytearray(), 0, None
     for t, _o, ev in scaled:
         trk += wr_vlq(t - prev_t); prev_t = t
@@ -123,7 +224,7 @@ def build(div_in: int, events, ppqn: int) -> bytes:
             + b'MTrk' + struct.pack('>I', len(trk)) + bytes(trk))
 
 
-def build_per_channel(div_in: int, events, ppqn: int) -> bytes:
+def build_per_channel(div_in: int, events, ppqn: int, detach: bool = False) -> bytes:
     """SMF format 1, une piste PAR CANAL MIDI (+ une piste de tempo).
 
     Pourquoi cette variante : le format 0 fusionne tout, donc les statuts alternent et
@@ -133,7 +234,10 @@ def build_per_channel(div_in: int, events, ppqn: int) -> bytes:
     rend chaque piste homogène : on retrouve la taille d'origine, et le morceau reste
     lisible par instrument. Le nombre de pistes reste borné par 16 canaux + 1.
     """
-    scaled = sorted(((t * ppqn + div_in // 2) // div_in, o, ev) for t, o, ev in events)
+    div_in, events = clamp_tempo(div_in, events)
+    scaled = sorted((int(round(t * ppqn / div_in)), o, ev) for t, o, ev in events)
+    if detach:
+        scaled = detach_repeats(scaled)
     metas = [(t, ev) for t, _o, ev in scaled if ev[0] == 0xFF]
     by_ch: dict[int, list] = {}
     for t, _o, ev in scaled:
@@ -158,8 +262,16 @@ def build_per_channel(div_in: int, events, ppqn: int) -> bytes:
 
 
 def short_name(stem: str, taken: set[str]) -> str:
-    """Nom 8.3 majuscule, unique — le GEMDOS ne montre rien d'autre."""
-    base = ''.join(c for c in stem.upper() if c.isalnum())[:8] or 'MIDI'
+    """Nom 8.3 majuscule, unique — le GEMDOS ne montre rien d'autre.
+
+    Un « préfixe explicite » — la partie avant le premier `_`, si elle tient en 8
+    caractères alphanumériques — devient le nom ST tel quel : `wtc1p01_bwv846.mid` →
+    `WTC1P01.MID` (sans lui, le rognage à 8 caractères donnerait `WTC1P01B`). Le reste
+    du nom long ne sert qu'à l'index NOMS.TXT.
+    """
+    head = stem.split('_', 1)[0] if '_' in stem else ''
+    head = ''.join(c for c in head.upper() if c.isalnum())
+    base = head if 0 < len(head) <= 8 else (''.join(c for c in stem.upper() if c.isalnum())[:8] or 'MIDI')
     name = base
     n = 1
     while name + '.MID' in taken:
@@ -175,6 +287,10 @@ def main() -> int:
     ap.add_argument('--per-channel', action='store_true',
                     help="format 1 avec une piste par canal (plus compact et plus lisible "
                          "par instrument) au lieu du format 0 fusionné (plus universel)")
+    ap.add_argument('--detach', action='store_true',
+                    help="corpus piano : fusionne les unissons, tronque les chevauchements "
+                         "de même hauteur, sépare d'un tick les notes répétées — sinon "
+                         "Cubase coupe ces notes au bout de 2 ms")
     a = ap.parse_args()
     if not os.path.isdir(a.src):
         sys.stderr.write(f"ERREUR: {a.src} n'est pas un dossier\n"); return 2
@@ -188,8 +304,8 @@ def main() -> int:
         src = os.path.join(a.src, f)
         try:
             div, ev = parse(open(src, 'rb').read())
-            blob = (build_per_channel(div, ev, a.ppqn) if a.per_channel
-                    else build(div, ev, a.ppqn))
+            blob = (build_per_channel(div, ev, a.ppqn, a.detach) if a.per_channel
+                    else build(div, ev, a.ppqn, a.detach))
         except Exception as e:                                # fichier illisible : on le DIT
             sys.stderr.write(f"  ✗ {f} : {e}\n"); fails += 1; continue
         dst_name = short_name(os.path.splitext(f)[0], taken)
