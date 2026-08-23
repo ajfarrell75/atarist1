@@ -100,6 +100,20 @@ jobs:
       - name: Compiler
         run: cmake --build build -j"$(nproc)" --target neost-headless neost-selftest
 
+      # Le palier fast n'exécute quasiment PAS de code invité réel : il valide des
+      # parseurs et des verdicts. Une démo de 300 trames, elle, martèle Shifter,
+      # Blitter, MFP et le cœur 68000 — et coûte 2 s sous ASan. Sans ça, les
+      # sanitizers de la CI ne voyaient jamais l'émulateur travailler.
+      - name: Démos réelles sous sanitizers (code invité, pas des parseurs)
+        env:
+          ASAN_OPTIONS: halt_on_error=1:detect_leaks=0:abort_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          for d in nocooper.msa cuddly_demos.msa closure.msa; do
+            echo "--- $d"
+            ./build/neost-headless roms/tos102uk.img --disk "disks/etalons/$d" --frames 300
+          done
+
       - name: Palier fast sous sanitizers
         env:
           # halt_on_error : un dépassement doit FAIRE ÉCHOUER le job, pas se noyer
