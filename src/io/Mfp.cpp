@@ -74,7 +74,7 @@ void Mfp::reset() {
     // le sink PSG tire — psg.reset() (R15=0) ne le fait pas, un BUSY asserté par le
     // bouclage ou la capture imprimante restait donc coincé après reset.
     busyLine_ = false;
-    monButton_ = false;                   // bouton Multiface relâché (PortDongle::reset l'oublie aussi)
+    monButton_ = false;                   // bouton Multiface relâché (PortDevices::reset l'oublie aussi)
     rxByte_ = 0; rxFull_ = false; rxOverrun_ = false;   // USART : tampon vidé (pas de RXFULL fantôme)
     serialBaud_ = 0; serialUcr_ = 0;      // suivi débit série remis (sinon serialBaud() rapporte l'avant-reset)
     if (sched_) {   // reset MACHINE : Hatari appelle CycInt_Reset() (reset.c:76) avant MFP_Reset_All
@@ -142,7 +142,7 @@ uint8_t Mfp::read8(uint32_t addr) {
             // ddr vaut 0 par défaut (tout en entrée) → le résultat reste exactement les entrées.
             const uint8_t v = gpipInput();
             uint8_t r = uint8_t((gpip & ddr) | (v & ~ddr));
-            if (gpipHook_) gpipHook_(r);     // adaptateur sur le port série (PortDongle)
+            if (gpipHook_) gpipHook_(r);     // adaptateur sur le port série (PortDevices)
             return r;
         }
         case 0x03: return aer;
@@ -720,7 +720,7 @@ uint8_t Mfp::gpipInput() const {
     bool bit7 = colorMonitor_;                   // moniteur : couleur=1, mono=0
     if (hasDmaSound_) bit7 ^= xsint_;            // STE/Mega STE : XOR ligne XSINT son DMA
     if (!bit7)          v &= ~0x80;              // bit7 = moniteur^XSINT
-    if (monButton_)     v &= ~0x80;              // bouton freeze Multiface (PortDongle)
+    if (monButton_)     v &= ~0x80;              // bouton freeze Multiface (PortDevices)
     if (riLine_)        v |= 0x40;               // bit6 = RS232 RI (niveau, 0 au repos)
     if (fdcLine_)       v &= ~0x20;              // bit5 = FDC
     if (aciaLineKbd_ || aciaLineMidi_) v &= ~0x10;  // bit4 = ACIA clavier OU MIDI (wire-OR)

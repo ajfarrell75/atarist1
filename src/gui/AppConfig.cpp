@@ -60,7 +60,26 @@ void parseConfigLine(Config& c, std::string line) {
     else if (line.rfind("mix_drive=", 0) == 0) c.mixDrive = float(std::atof(line.substr(10).c_str()));
     else if (line.rfind("mix_mt32=", 0) == 0) c.mixMt32 = float(std::atof(line.substr(9).c_str()));
     else if (line.rfind("dongle=", 0) == 0) c.dongle = line.substr(7);
-    else if (line.rfind("adapter=", 0) == 0) c.adapter = line.substr(8);
+    else if (line.rfind("joy0=", 0) == 0) c.joy0 = line.substr(5);
+    else if (line.rfind("joy1=", 0) == 0) c.joy1 = line.substr(5);
+    else if (line.rfind("rs232=", 0) == 0) c.rs232 = line.substr(6);
+    else if (line.rfind("printer=", 0) == 0) c.printer = line.substr(8);
+    else if (line.rfind("cartbutton=", 0) == 0) c.cartbutton = line.substr(11);
+    else if (line.rfind("mix_dac=", 0) == 0) c.mixDac = float(std::atof(line.substr(8).c_str()));
+    else if (line.rfind("auto_dongle=", 0) == 0) c.autoDongle = (line.substr(12) != "0");
+    else if (line.rfind("adapter=", 0) == 0) {           // ancien format : un seul adaptateur
+        const std::string a = line.substr(8);
+        static const char* const joy1[] = { "leaderboard", "10thframe", "rugby" };
+        static const char* const joy0[] = { "cricket", "soccer" };
+        static const char* const ser[]  = { "bat2", "musicmaster", "jeannedarc" };
+        static const char* const btn[]  = { "multiface", "urc" };
+        auto in = [&](const char* const* t, size_t n) { for (size_t i = 0; i < n; ++i) if (a == t[i]) return true; return false; };
+        if      (in(joy1, 3)) c.joy1 = a;
+        else if (in(joy0, 2)) c.joy0 = a;
+        else if (in(ser, 3))  c.rs232 = a;
+        else if (in(btn, 2))  c.cartbutton = a;
+        else if (a == "prosound") c.printer = a;
+    }
     else if (line.rfind("ethernec=", 0) == 0) c.ethernec = (line.substr(9) == "1");
     else if (line.rfind("netusbee=", 0) == 0) c.netusbee = (line.substr(9) == "1");
     else if (line.rfind("ultrasatan=", 0) == 0) c.ultrasatan = (line.substr(11) == "1");
@@ -151,7 +170,10 @@ void writeConfigKeys(std::ostream& f, const Config& w, bool full) {
       << "\nmix_ym=" << w.mixYm << "\nmix_dma=" << w.mixDma
       << "\nmix_drive=" << w.mixDrive << "\nmix_mt32=" << w.mixMt32
       << "\ndongle=" << w.dongle
-      << "\nadapter=" << w.adapter
+      << "\njoy0=" << w.joy0 << "\njoy1=" << w.joy1 << "\nrs232=" << w.rs232
+      << "\nprinter=" << w.printer << "\ncartbutton=" << w.cartbutton
+      << "\nmix_dac=" << w.mixDac
+      << "\nauto_dongle=" << (w.autoDongle ? 1 : 0)
       << "\nethernec=" << (w.ethernec ? 1 : 0)
       << "\nnetusbee=" << (w.netusbee ? 1 : 0)
       << "\nultrasatan=" << (w.ultrasatan ? 1 : 0)

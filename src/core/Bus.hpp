@@ -21,6 +21,7 @@
 #include <functional>
 #include <string>
 #include <vector>
+#include <algorithm>
 
 class Shifter;
 class YM2149;
@@ -36,7 +37,7 @@ class GemdosHd;
 class Scc;
 class Ne2000;
 class Isp1160;
-class CubaseDongle;
+#include "core/CartDevice.hpp"
 // -----------------------------------------------------------------------------
 //  Plan mémoire de l'Atari ST (bus d'adresses 24 bits → 16 Mo adressables).
 //  Les constantes documentent le POURQUOI de chaque zone.
@@ -294,11 +295,21 @@ public:
     // $FA0000/$FA8000/$FB8000/$FBC000 décodées AVANT la NE2000 — qui peut voir le
     // même accès (latch LSB = registre CR, cf. io/Isp1160.hpp). Posé par Machine.
     Isp1160* isp1160 = nullptr;
-    // Clé Steinberg (Cubase 2/3) sur /ROM3 ($FB0000-$FBFFFF) : décodée AVANT la ROM
-    // cartouche ; la clé noire avance aussi sur chaque cycle /UDS du CPU (crochet
-    // posé par Cpu68k quand dongleUds est vrai). Posé par Machine. Cf. io/CubaseDongle.hpp.
-    CubaseDongle* dongle = nullptr;
-    bool dongleUds = false;
+    // Périphériques du port cartouche abonnés aux signaux /ROM3, /ROM4, /UDS
+    // (clés de protection…) : consultés dans l'ordre, avant la ROM cartouche et le
+    // GEMDOS HD. Cf. core/CartDevice.hpp. Posés par Machine (addCartDevice).
+    std::vector<CartDevice*> cartDevices;
+    bool udsObserved = false;   // au moins un abonné veut /UDS (évite la boucle par cycle)
+    void addCartDevice(CartDevice* d) { removeCartDevice(d); cartDevices.push_back(d); refreshUds(); }
+    void removeCartDevice(CartDevice* d) {
+        cartDevices.erase(std::remove(cartDevices.begin(), cartDevices.end(), d), cartDevices.end());
+        refreshUds();
+    }
+    void refreshUds() {
+        udsObserved = false;
+        for (const CartDevice* d : cartDevices) udsObserved = udsObserved || d->wantsUds();
+    }
+    void udsCycle(uint32_t addr) { for (CartDevice* d : cartDevices) d->udsCycle(addr); }
 
     // Profil machine : décide quel matériel optionnel répond (son DMA STE, etc.)
     // et où une bus error se produit. Posé par Machine. Défaut : 1040 STE.

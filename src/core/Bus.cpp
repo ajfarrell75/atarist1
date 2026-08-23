@@ -4,7 +4,6 @@
 //  (c) 2026 VERHILLE Arnaud — projet NeoST.
 // =============================================================================
 #include "core/Bus.hpp"
-#include "io/CubaseDongle.hpp"
 #include "core/StateArchive.hpp"
 #include "core/Shifter.hpp"
 #include "core/YM2149.hpp"
@@ -411,16 +410,20 @@ uint8_t Bus::read8Slow(uint32_t addr) {
     }
     if (ispHit) return ispVal;
 
-    // Clé Steinberg sur /ROM3 ($FB0000-$FBFFFF) : la clé répond à la place de la
-    // ROM cartouche dans cette banque (le TOS ne sonde que /ROM4 = $FA0000).
-    if (dongle && addr >= 0xFB0000u && addr < stmap::CART_END) {
+    // Périphériques abonnés au port cartouche (clés de protection…) : /ROM3 pour
+    // $FBxxxx, /ROM4 pour $FAxxxx. Le premier qui pilote D0-D15 répond ; les autres
+    // voient tout de même le cycle (une clé Notator écoute /ROM4 sans y répondre).
+    if (!cartDevices.empty() && addr >= stmap::CART_BASE && addr < stmap::CART_END) {
         const bool first = ioAccessWidth_ < 2 || (addr & 1) == 0;
-        return dongle->cartRead(addr, first);
+        const bool rom3  = addr >= 0xFB0000u;
+        bool hit = false; uint8_t out = 0xFF;
+        for (CartDevice* d : cartDevices) {
+            uint8_t v;
+            const bool h = rom3 ? d->rom3Read(addr, first, v) : d->rom4Read(addr, first, v);
+            if (h && !hit) { hit = true; out = v; }
+        }
+        if (hit) return out;
     }
-    // /ROM4 ($FA0000-$FAFFFF) : la clé Notator y écoute son armement ; la donnée,
-    // elle, vient toujours de la cartouche / du GEMDOS HD ci-dessous.
-    if (dongle && addr >= stmap::CART_BASE && addr < 0xFB0000u)
-        dongle->rom4Read(addr, ioAccessWidth_ < 2 || (addr & 1) == 0);
 
     // Port cartouche ($FA0000-$FBFFFF) : si une cartouche est montée, on expose
     // sa ROM ; le TOS lit le magic à $FA0000 et amorce (diagnostic/applicative).

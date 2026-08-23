@@ -1,5 +1,5 @@
 // =============================================================================
-//  CubaseDongle — clés de protection Steinberg sur le port cartouche (/ROM3)
+//  CartridgeKey — clés de protection Steinberg sur le port cartouche (/ROM3)
 // =============================================================================
 //
 //  Deux clés matérielles ont réellement existé ; toutes deux vivent dans la banque
@@ -58,19 +58,20 @@
 // =============================================================================
 #pragma once
 #include <cstdint>
+#include <cstdio>
+#include "core/CartDevice.hpp"
 
 class StateArchive;
 
-class CubaseDongle {
+class CartridgeKey : public CartDevice {
 public:
     enum class Model : uint8_t { None = 0, Cubase2 = 1, Cubase3 = 2, Auto = 3, Notator = 4 };
 
     void setModel(Model m) { model_ = m; reset(); }
     Model model() const { return model_; }
     bool  attached() const { return model_ != Model::None; }
-    // Vrai si la clé doit voir CHAQUE cycle bus du CPU (clé noire, ou Auto non
-    // encore tranché) — le Bus n'installe le crochet /UDS que dans ce cas.
-    bool  wantsUds() const { return chosen_ == Model::Cubase2 || chosen_ == Model::Notator || !locked_; }
+    // wantsUds (CartDevice) : vrai si la clé doit voir CHAQUE cycle bus du CPU (clé
+    // noire, Notator, ou Auto non encore tranché) — le Bus ne boucle sur /UDS qu'alors.
 
     // Mise sous tension / reset : registres à 0 (cf. en-tête).
     void reset();
@@ -80,12 +81,33 @@ public:
     // (/ROM3 remonte en fin de cycle, après que la valeur a été échantillonnée).
     uint8_t cartRead(uint32_t addr, bool first);
 
-    // Fin d'un cycle bus CPU ayant activé /UDS (mot, ou octet à adresse paire) :
-    // horloge de la clé NOIRE (et de la Notator désarmée). Sans effet sur la rouge.
-    void udsCycle(uint32_t addr);
     // Lecture CPU dans $FA0000-$FAFFFF (/ROM4) : la clé Notator y cadence sa bascule
     // d'armement (appliquée en fin de cycle, dans udsCycle). Sans effet sur les autres.
-    void rom4Read(uint32_t addr, bool first);
+    void rom4Listen(uint32_t addr, bool first);
+
+    // --- CartDevice : signaux du port cartouche (cf. core/CartDevice.hpp) ---------
+    bool rom3Read(uint32_t a, bool first, uint8_t& out) override {
+        if (!attached()) return false;
+        out = cartRead(a, first); return true;
+    }
+    bool rom4Read(uint32_t a, bool first, uint8_t&) override { rom4Listen(a, first); return false; }
+    void udsCycle(uint32_t addr) override;
+    bool wantsUds() const override { return attached() && (chosen_ == Model::Cubase2 || chosen_ == Model::Notator || !locked_); }
+
+    // --- Observabilité -------------------------------------------------------------
+    // Journal des accès (format de TRACE DE RÉFÉRENCE, cf. docs/EXTENSIONS.md) :
+    //   R3 <A8..A1 hex> <octet fort lu>   lecture $FBxxxx (1er octet de l'accès)
+    //   R4 <A8..A1 hex>                   lecture $FAxxxx (clé Notator : armement)
+    //   U  <A8..A1 hex>                   cycle /UDS dans la fenêtre cartouche
+    // Une capture matérielle (analyseur logique, SidecarTridge) mise à ce format se
+    // REJOUE contre la machine d'état : replay() compare chaque R3 et signale le
+    // premier écart. C'est l'oracle qui manque tant qu'aucun logiciel à clé n'est là.
+    void     setLog(FILE* f) { log_ = f; }
+    // Rejoue un fichier de trace ; renvoie le nombre d'écarts (−1 : fichier illisible).
+    // `err` reçoit la première ligne en écart (numéro + attendu/obtenu).
+    int      replay(const char* path, char* err, std::size_t errLen);
+    uint32_t probes() const { return probes_; }     // lectures /ROM3 (1er octet)
+    uint8_t  lastByte() const { return last_; }
 
     void serialize(StateArchive& ar);
 
@@ -110,4 +132,7 @@ private:
     uint8_t  n_ = 0;               // clé Notator : D15..D8 (bit7 = D15)
     bool     feedb1_ = false;      // clé Notator : armée (FEEDB1)
     int8_t   rom4Pending_ = -1;    // clé Notator : STER de l'accès /ROM4 en cours (-1 : aucun)
+    FILE*    log_ = nullptr;       // journal de trace (hors snapshot)
+    uint32_t probes_ = 0;          // compteur de lectures /ROM3 (hors snapshot)
+    uint8_t  last_ = 0xFF;         // dernier octet fort rendu (hors snapshot)
 };

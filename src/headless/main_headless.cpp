@@ -34,8 +34,9 @@
 #include "net/MidiRing.hpp"
 #endif
 #include "core/Tracer.hpp"
-#include "io/CubaseDongle.hpp"
-#include "io/PortDongle.hpp"
+#include "io/CartridgeKey.hpp"
+#include "io/PortDevices.hpp"
+#include "io/DongleTable.hpp"
 #include "core/Symbols.hpp"
 #include "core/AudioMix.hpp"   // chaîne de mixage partagée (--sound-dump)
 
@@ -111,11 +112,17 @@ void usage() {
         "                    cubase3 (red key: Cubase 3.10/Score/Audio), cubase2 (black\n"
         "                    key: Cubase 2.01, needs a 68000-exact bus pattern), auto,\n"
         "                    notator (C-Lab Notator/Creator key, EP600, $FA00EA arms it)\n"
-        "  --adapter NAME    dongle/adapter on the joystick, serial or printer port:\n"
-        "                    leaderboard, 10thframe, cricket, rugby, soccer (joystick),\n"
-        "                    bat2, musicmaster, jeannedarc (RS-232), prosound (8-bit DAC\n"
-        "                    on the printer port), multiface, urc (cartridge buttons)\n"
+        "  --key-log FILE    log every cartridge-key access (R3/R4/U lines, the reference\n"
+        "                    trace format - docs/EXTENSIONS.md) for replay against a capture\n"
+        "  --key-replay FILE replay a trace (hardware capture or --key-log) against the\n"
+        "                    --dongle model and exit: 0 = identical, 1 = first mismatch shown\n"
+        "  --plug PORT=DEV   device on a port (repeatable). PORT: joy0, joy1, rs232, printer,\n"
+        "                    cartbutton. DEV: leaderboard, 10thframe, cricket, rugby, soccer\n"
+        "                    (joystick keys), bat2, musicmaster, jeannedarc (RS-232 keys),\n"
+        "                    prosound (8-bit DAC, printer), multiface, urc (cartridge button)\n"
+        "  --adapter DEV     same, on the port the software probes (e.g. leaderboard->joy1)\n"
         "  --button-at N     press the Multiface/Ultimate Ripper button at frame N\n"
+        "  --no-auto-dongle  do not plug keys from disks/dongles.txt for the --disk image\n"
         "  --midi-dump FILE  log every MIDI OUT byte as '<cpu cycle> <hex>' (one per\n"
         "                    line) — tools/midi_compare.py turns it into an SMF or\n"
         "                    checks it against the song a sequencer was asked to play\n"
@@ -911,7 +918,9 @@ int main(int argc, char** argv) {
     std::string sd1Img, sd2Img;                  // --sd1/--sd2 IMG : images des slots SD
     std::string midiNetPeer;                     // --midi-net host:port[:listen] : anneau MIDI UDP
     std::string dongleModel;                     // --dongle cubase2|cubase3|auto
-    std::string adapterName;                     // --adapter NAME (PortDongle::id)
+    std::vector<std::pair<std::string, std::string>> plugs;   // --plug PORT=DEV / --adapter DEV
+    std::string keyLogPath, keyReplayPath;       // --key-log / --key-replay
+    bool        noAutoDongle = false;            // --no-auto-dongle
     int         buttonAtFrame = -1;              // --button-at N : bouton Multiface/URC
     std::string midiDumpPath;                    // --midi-dump FILE : journal « cycle octet » du MIDI OUT
     int         midiNetListen  = 6820;           // port d'écoute par défaut
@@ -1027,7 +1036,12 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(a, "--sd2"))             { ultrasatan = true; sd2Img = next(a); }
         else if (!std::strcmp(a, "--midi-dump")) midiDumpPath = next(a);
         else if (!std::strcmp(a, "--dongle"))    dongleModel  = next(a);
-        else if (!std::strcmp(a, "--adapter"))   adapterName  = next(a);
+        else if (!std::strcmp(a, "--adapter"))   plugs.emplace_back("", next(a));
+        else if (!std::strcmp(a, "--plug"))      { const std::string v = next(a); const auto eq = v.find('=');
+                                                   plugs.emplace_back(v.substr(0, eq), eq == std::string::npos ? "" : v.substr(eq + 1)); }
+        else if (!std::strcmp(a, "--no-auto-dongle")) noAutoDongle = true;
+        else if (!std::strcmp(a, "--key-log"))   keyLogPath   = next(a);
+        else if (!std::strcmp(a, "--key-replay")) keyReplayPath = next(a);
         else if (!std::strcmp(a, "--button-at")) buttonAtFrame = std::atoi(next(a));
         else if (!std::strcmp(a, "--azerty"))   g_azerty = true;
         else if (!std::strcmp(a, "--midi-net")) {
@@ -1182,6 +1196,19 @@ int main(int argc, char** argv) {
         return 1;
     }
     machine.loadDisk(diskPath);   // lecteur A (optionnel)
+    // Clé du jeu (disks/dongles.txt à côté de l'image, sinon table livrée) : comme le
+    // GUI, seulement les emplacements vides — --dongle / --plug explicites priment.
+    if (!noAutoDongle && !diskPath.empty()) {
+        std::string text;
+        const std::string tbl = (std::filesystem::path(diskPath).parent_path() / "dongles.txt").string();
+        if (std::ifstream in(tbl); in) text.assign(std::istreambuf_iterator<char>(in), {});
+        else text = neost::defaultDongleTable();
+        for (const auto& r : neost::matchDongleRules(neost::parseDongleTable(text), diskPath)) {
+            if (r.cart) { if (!machine.dongle.attached() && machine.setDongle(r.key)) std::fprintf(stderr, "[headless] auto-plug: cartridge key %d (dongles.txt)\n", int(r.key)); }
+            else if (machine.ports.at(r.port) == PortDevices::Device::None && machine.plugPort(r.port, r.dev))
+                std::fprintf(stderr, "[headless] auto-plug: %s on %s (dongles.txt)\n", PortDevices::label(r.dev), PortDevices::portId(r.port));
+        }
+    }
     if (!diskBPath.empty()) machine.loadDiskB(diskBPath);   // lecteur B (optionnel)
     machine.fdc.setFastFdc(fastFdc);   // FDC rapide (--fastfdc) : accès disque ÷10
     // Disque dur GEMDOS (--gemdos) : installe la cartouche système à $FA0000 →
@@ -1270,29 +1297,49 @@ int main(int argc, char** argv) {
     }
     // Clé Steinberg (--dongle) : répond dans $FB0000-$FBFFFF, invisible du TOS.
     if (!dongleModel.empty()) {
-        CubaseDongle::Model m = CubaseDongle::Model::None;
-        if      (dongleModel == "cubase3") m = CubaseDongle::Model::Cubase3;
-        else if (dongleModel == "cubase2") m = CubaseDongle::Model::Cubase2;
-        else if (dongleModel == "auto")    m = CubaseDongle::Model::Auto;
-        else if (dongleModel == "notator") m = CubaseDongle::Model::Notator;
+        CartridgeKey::Model m = CartridgeKey::Model::None;
+        if      (dongleModel == "cubase3") m = CartridgeKey::Model::Cubase3;
+        else if (dongleModel == "cubase2") m = CartridgeKey::Model::Cubase2;
+        else if (dongleModel == "auto")    m = CartridgeKey::Model::Auto;
+        else if (dongleModel == "notator") m = CartridgeKey::Model::Notator;
         else { std::fprintf(stderr, "[headless] --dongle %s: unknown model (cubase2, cubase3, auto, notator)\n", dongleModel.c_str()); return 2; }
         if (machine.setDongle(m))
             std::fprintf(stderr, "[headless] cartridge key (%s) on /ROM3 $FB0000\n", dongleModel.c_str());
         else
             std::fprintf(stderr, "[headless] --dongle refused: EtherNEC/NetUSBee decode the whole cartridge window\n");
     }
-    // Adaptateur joystick/série/parallèle (--adapter) : cf. io/PortDongle.hpp.
-    if (!adapterName.empty()) {
-        const PortDongle::Type t = PortDongle::fromId(adapterName.c_str());
-        if (t == PortDongle::Type::None) {
-            std::fprintf(stderr, "[headless] --adapter %s: unknown (", adapterName.c_str());
-            for (int i = 1; i < int(PortDongle::Type::Count); ++i)
-                std::fprintf(stderr, "%s%s", i > 1 ? ", " : "", PortDongle::id(PortDongle::Type(i)));
+    // Oracle de rejeu (--key-replay) : la trace est confrontée à la machine d'état de
+    // la clé, sans machine — on sort aussitôt. Cf. CartridgeKey::replay.
+    static FILE* keyLog = nullptr;
+    if (!keyReplayPath.empty()) {
+        if (!machine.dongle.attached()) { std::fprintf(stderr, "[headless] --key-replay needs --dongle MODEL\n"); return 2; }
+        char err[160];
+        const int n = machine.dongle.replay(keyReplayPath.c_str(), err, sizeof err);
+        if (n < 0) { std::fprintf(stderr, "[headless] --key-replay: cannot read %s\n", keyReplayPath.c_str()); return 2; }
+        std::fprintf(stderr, "[headless] key replay %s: %d mismatch(es)%s%s\n", keyReplayPath.c_str(), n,
+                     n ? " - first: " : "", n ? err : "");
+        return n ? 1 : 0;
+    }
+    if (!keyLogPath.empty()) {
+        keyLog = std::fopen(keyLogPath.c_str(), "w");
+        if (!keyLog) { std::fprintf(stderr, "[headless] --key-log: cannot write %s\n", keyLogPath.c_str()); return 2; }
+        machine.dongle.setLog(keyLog);
+    }
+    // Périphériques des ports (--plug / --adapter) : cf. io/PortDevices.hpp.
+    for (const auto& [portId, devId] : plugs) {
+        const PortDevices::Device d = PortDevices::fromId(devId.c_str());
+        if (d == PortDevices::Device::None) {
+            std::fprintf(stderr, "[headless] --plug %s: unknown device (", devId.c_str());
+            for (int i = 1; i < int(PortDevices::Device::Count); ++i)
+                std::fprintf(stderr, "%s%s", i > 1 ? ", " : "", PortDevices::id(PortDevices::Device(i)));
             std::fprintf(stderr, ")\n");
             return 2;
         }
-        machine.setAdapter(t);
-        std::fprintf(stderr, "[headless] adapter: %s\n", PortDongle::label(t));
+        bool ok = true;
+        const PortDevices::Port p = portId.empty() ? PortDevices::defaultPort(d) : PortDevices::portFromId(portId.c_str(), &ok);
+        if (!ok) { std::fprintf(stderr, "[headless] --plug %s: unknown port (joy0, joy1, rs232, printer, cartbutton)\n", portId.c_str()); return 2; }
+        if (!machine.plugPort(p, d)) { std::fprintf(stderr, "[headless] --plug: %s does not fit the %s port\n", devId.c_str(), PortDevices::portId(p)); return 2; }
+        std::fprintf(stderr, "[headless] %s: %s\n", PortDevices::portId(p), PortDevices::label(d));
     }
     // Anneau MIDI réseau (--midi-net) : MIDI OUT → UDP → pair aval ; datagrammes
     // de l'amont → MIDI IN. Débranche le bouclage interne de l'ACIA MIDI.
@@ -1542,8 +1589,8 @@ int main(int argc, char** argv) {
             }
         }
         if (buttonAtFrame >= 0 && frame == buttonAtFrame) {
-            machine.pressAdapterButton();
-            std::fprintf(stderr, "[headless] adapter button pressed at frame %d\n", frame);
+            machine.pressPortButton();
+            std::fprintf(stderr, "[headless] cartridge button pressed at frame %d\n", frame);
         }
         if (joyAtFrame >= 0 && frame == joyAtFrame) {
             machine.ikbd.setJoystick(0, joyAt1);
@@ -1785,5 +1832,6 @@ int main(int argc, char** argv) {
     }
 
     tracer.close();
+    if (keyLog) { machine.dongle.setLog(nullptr); std::fclose(keyLog); }
     return outFail ? 1 : 0;   // une sortie fichier a échoué → visible du runner
 }

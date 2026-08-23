@@ -6,6 +6,26 @@ l'ordre inverse. Version courante : **0.5.2**.
 - « NeoST gère-t-il X ? » → [`docs/IMPLEMENTED.md`](docs/IMPLEMENTED.md) (inventaire par puce)
 - « Que reste-t-il ? » → [`TODO.md`](TODO.md)
 
+## Dongles, 2e passe : oracle de rejeu, un périphérique par port, port cartouche abstrait (2026-08-23)
+
+Revue d'architecture du chantier dongles, six manques corrigés :
+1. **Oracle** — format de trace de référence (`R3`/`R4`/`U`, `docs/EXTENSIONS.md`),
+   `--key-log FILE` l'écrit, `--key-replay FILE` rejoue une capture (matérielle ou NeoST)
+   contre la machine d'état sans machine et sort 0/1 ; recette de capture documentée.
+2. **Un périphérique par port** — `PortDevices` remplace l'enum unique « à la Steem » :
+   `joy0=`/`joy1=`/`rs232=`/`printer=`/`cartbutton=`, `--plug PORT=DEVICE`, connecteurs
+   vérifiés (une clé joystick entre dans les deux DE-9, le GUI signale le mauvais port),
+   coexistence. `disks/dongles.txt` branche la clé d'un jeu au montage (emplacements vides
+   seulement), GUI, borne et headless.
+3. **Port cartouche abstrait** — `core/CartDevice.hpp` : les périphériques s'abonnent aux
+   signaux /ROM3, /ROM4, /UDS ; le `Bus` boucle sur la liste (plusieurs clés possibles),
+   plus de `dongleUds` spécial dans le wrapper CPU. `CubaseDongle` → `CartridgeKey`.
+4. **Observabilité** — page Dongles : sondages, dernier octet, état, armement.
+5. **Save-state v16** — `PortDevices` sérialisé (oscillateur, date, périphériques branchés).
+6. **DAC Pro Sound** — bloc DC propre amorcé au branchement (plus de clic), fader `mix_dac=`
+   page Sound.
+Non couvert : les frontends WASM/Android n'exposent toujours pas les dongles.
+
 ## Page « Dongles » et adaptateurs de port : `PortDongle` (2026-08-23)
 
 Après les clés Steinberg, **les autres** : recherche sur les dongles ST (Steem SSE, WinUAE,

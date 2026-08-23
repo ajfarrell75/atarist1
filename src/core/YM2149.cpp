@@ -327,9 +327,14 @@ void YM2149::synthBlock(const uint8_t* r, float* out, uint32_t frames, uint32_t 
 
     for (uint32_t i = 0; i < frames; ++i) {
         ensureMargin(sampleRate);
-        // DAC du port parallèle (Pro Sound Designer) : ajouté AVANT le HPF, qui ôte sa
-        // composante continue (sur STE le HPF aval du mix s'en charge).
-        const float s = nextResampleWeightedN(sampleRate) + dacLevel_;
+        float s = nextResampleWeightedN(sampleRate);
+        // DAC du port parallèle (Pro Sound Designer) : son propre bloc DC (même pôle
+        // que le HPF YM), amorcé au branchement — pas d'échelon —, puis le fader.
+        if (portBDac_) {
+            const float hp = dacLevel_ - dacHpX1_ + float(kHpfPole) * dacHpY0_;
+            dacHpX1_ = dacLevel_; dacHpY0_ = hp;
+            s += hp * dacGain_;
+        }
 
         // STE (hpfBypass_) : YM BRUT — le HPF sous-sonique s'applique en aval au MIX
         // YM+DMA (DmaSound::applyHpfStereo ≙ dmaSnd.c:699,706), comme sound.c:1730-1735
@@ -351,9 +356,7 @@ void YM2149::synthesizeFrame(float* out, uint32_t frames, uint32_t sampleRate, i
     uint32_t pos = 0;
     // Pro Sound Designer : niveau du DAC parallèle (R15) ajouté à chaque segment. Amplitude
     // d'un octet non signé ramenée à ±0.5 × outScale_ — du même ordre qu'une voie YM.
-    auto dacSync = [&] {
-        dacLevel_ = portBDac_ ? (float(audioRegs_[15]) - 128.0f) / 256.0f : 0.0f;
-    };
+    auto dacSync = [&] { dacLevel_ = portBDac_ ? dacRaw(audioRegs_[15]) : 0.0f; };
     dacSync();
     for (const RegEvent& e : events_) {
         uint32_t off = uint32_t(int64_t(e.cycle) * frames / frameCycles);

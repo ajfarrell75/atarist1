@@ -1,8 +1,8 @@
-// Clés Steinberg (port cartouche /ROM3). Cf. CubaseDongle.hpp pour le contexte.
-#include "io/CubaseDongle.hpp"
+// Clés Steinberg (port cartouche /ROM3). Cf. CartridgeKey.hpp pour le contexte.
+#include "io/CartridgeKey.hpp"
 #include "core/StateArchive.hpp"
 
-void CubaseDongle::reset() {
+void CartridgeKey::reset() {
     d_ = 0;
     r_ = 0;
     n_ = 0; feedb1_ = false; rom4Pending_ = -1;
@@ -10,7 +10,7 @@ void CubaseDongle::reset() {
     locked_ = (model_ != Model::Auto);
 }
 
-uint8_t CubaseDongle::outputByte() const {
+uint8_t CartridgeKey::outputByte() const {
     switch (chosen_) {
         case Model::Cubase2: return d_;
         // Clé rouge : seule D8 est pilotée (bit 0 de l'octet fort), D9-D15 flottent
@@ -21,7 +21,7 @@ uint8_t CubaseDongle::outputByte() const {
     }
 }
 
-uint8_t CubaseDongle::cartRead(uint32_t addr, bool first) {
+uint8_t CartridgeKey::cartRead(uint32_t addr, bool first) {
     if (model_ == Model::None) return 0xFF;
     if (!locked_ && first) {
         // Heuristique MiSTery : Cubase 3 interroge toujours avec A7..A1 = 0.
@@ -41,14 +41,58 @@ uint8_t CubaseDongle::cartRead(uint32_t addr, bool first) {
     const uint8_t v = (addr & 1) ? 0xFF : outputByte();
     // /ROM3 remonte à la fin de l'accès : la clé rouge avance APRÈS avoir été lue.
     if (first && chosen_ == Model::Cubase3) clock3((addr >> 8) & 1);
+    if (first) {
+        ++probes_; last_ = v;
+        if (log_) std::fprintf(log_, "R3 %02X %02X\n", unsigned((addr >> 1) & 0xFF), v);
+    }
     return v;
 }
 
-void CubaseDongle::rom4Read(uint32_t addr, bool first) {
-    if (chosen_ == Model::Notator && first) rom4Pending_ = ster(uint8_t((addr >> 1) & 0xFF)) ? 1 : 0;
+void CartridgeKey::rom4Listen(uint32_t addr, bool first) {
+    if (!first || model_ == Model::None) return;
+    if (log_) std::fprintf(log_, "R4 %02X\n", unsigned((addr >> 1) & 0xFF));
+    if (chosen_ == Model::Notator) rom4Pending_ = ster(uint8_t((addr >> 1) & 0xFF)) ? 1 : 0;
 }
 
-void CubaseDongle::udsCycle(uint32_t addr) {
+int CartridgeKey::replay(const char* path, char* err, std::size_t errLen) {
+    FILE* f = std::fopen(path, "r");
+    if (!f) return -1;
+    if (errLen) err[0] = 0;
+    reset();
+    FILE* savedLog = log_; log_ = nullptr;   // ne pas ré-écrire la trace qu'on rejoue
+    char line[128]; int lineNo = 0, mismatches = 0;
+    while (std::fgets(line, sizeof line, f)) {
+        ++lineNo;
+        char kind[4] = {0}; unsigned a = 0, d = 0;
+        const int n = std::sscanf(line, "%3s %x %x", kind, &a, &d);
+        if (n < 2 || line[0] == '#') continue;
+        const uint32_t addr = uint32_t(a & 0xFF) << 1;
+        if (!std::strcmp(kind, "R3")) {
+            const uint8_t got = cartRead(0xFB0000u | addr, true);
+            if (n >= 3 && got != uint8_t(d)) {
+                if (!mismatches && errLen)
+                    std::snprintf(err, errLen, "line %d: R3 %02X expected %02X got %02X", lineNo, a, d, got);
+                ++mismatches;
+            }
+            udsCycle(0xFB0000u | addr);           // chaque accès mot est aussi un cycle /UDS
+        } else if (!std::strcmp(kind, "R4")) {
+            rom4Listen(0xFA0000u | addr, true);
+            udsCycle(0xFA0000u | addr);
+        } else if (!std::strcmp(kind, "U")) {
+            udsCycle(addr);
+        }
+    }
+    std::fclose(f);
+    log_ = savedLog;
+    return mismatches;
+}
+
+void CartridgeKey::udsCycle(uint32_t addr) {
+    // Trace : les cycles HORS fenêtre cartouche (ceux de la fenêtre sont déjà
+    // impliqués par leur ligne R3/R4). Volumineux, mais c'est la vérité d'une clé
+    // cadencée par /UDS — une capture matérielle doit les contenir aussi.
+    if (log_ && (addr < 0xFA0000u || addr >= 0xFC0000u))
+        std::fprintf(log_, "U %02X\n", unsigned((addr >> 1) & 0xFF));
     if (chosen_ == Model::Cubase2) { clock2(uint8_t((addr >> 1) & 0xFF)); return; }
     if (chosen_ != Model::Notator) return;
     // Désarmée : UDS remonte en fin de cycle → horloge des données, quelle que soit
@@ -59,7 +103,7 @@ void CubaseDongle::udsCycle(uint32_t addr) {
 }
 
 // --- Clé Notator : EP600, 8 bascules D actives bas (relevé TPH, cf. en-tête) ------
-void CubaseDongle::clockN(uint8_t a) {
+void CartridgeKey::clockN(uint8_t a) {
     const bool a1 = a & 0x01, a4 = a & 0x08, a5 = a & 0x10;
     const bool d8  = n_ & 0x01, d9  = n_ & 0x02, d10 = n_ & 0x04, d11 = n_ & 0x08;
     const bool d12 = n_ & 0x10, d13 = n_ & 0x20, d14 = n_ & 0x40, d15 = n_ & 0x80;
@@ -115,7 +159,7 @@ void CubaseDongle::clockN(uint8_t a) {
 }
 
 // --- Clé noire : PAL16R8, sorties actives bas (D = NOT(somme de produits)) -------
-void CubaseDongle::clock2(uint8_t a) {
+void CartridgeKey::clock2(uint8_t a) {
     const bool a1 = a & 0x01, a2 = a & 0x02, a3 = a & 0x04, a4 = a & 0x08;
     const bool a5 = a & 0x10, a6 = a & 0x20, a7 = a & 0x40, a8 = a & 0x80;
     const bool d8  = d_ & 0x01, d9  = d_ & 0x02, d10 = d_ & 0x04, d11 = d_ & 0x08;
@@ -193,7 +237,7 @@ void CubaseDongle::clock2(uint8_t a) {
 }
 
 // --- Clé rouge : EPLD 5C060, bascules T (p ^= somme de produits), entrée A8 -------
-void CubaseDongle::clock3(bool a8) {
+void CartridgeKey::clock3(bool a8) {
     const uint16_t r = r_;
     auto bit = [r](int i) { return bool((r >> i) & 1); };
     const bool p03 = bit(0),  p04 = bit(1),  p05 = bit(2),  p06 = bit(3);
@@ -241,7 +285,7 @@ void CubaseDongle::clock3(bool a8) {
     r_ = uint16_t(r ^ t);
 }
 
-void CubaseDongle::serialize(StateArchive& ar) {
+void CartridgeKey::serialize(StateArchive& ar) {
     uint8_t m = uint8_t(model_), c = uint8_t(chosen_);
     ar(m); ar(c); ar(locked_); ar(d_); ar(r_);
     ar(n_); ar(feedb1_);                     // clé Notator (v15)

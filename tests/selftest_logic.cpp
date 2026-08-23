@@ -17,11 +17,13 @@
 // =============================================================================
 #include "gui/AppConfig.hpp"
 #include "util/HostPath.hpp"
-#include "io/CubaseDongle.hpp"
-#include "io/PortDongle.hpp"
+#include "io/CartridgeKey.hpp"
+#include "io/PortDevices.hpp"
+#include "io/DongleTable.hpp"
 #include "io/Mfp.hpp"
 
 #include <cstdio>
+#include <cstring>
 #include <sstream>
 #include <string>
 
@@ -302,15 +304,15 @@ static void testConfigParser() {
 }
 
 // -----------------------------------------------------------------------------
-//  CubaseDongle — machines d'état des clés Steinberg (logique pure, pas de bus).
+//  CartridgeKey — machines d'état des clés Steinberg (logique pure, pas de bus).
 //  Les valeurs épinglées ont été produites par cette implémentation (aucune séquence
 //  de référence n'est publiée) : elles gardent la TRANSCRIPTION des équations à
 //  l'identique, elles ne prouvent pas la clé. Les propriétés, elles, sont connues.
 // -----------------------------------------------------------------------------
-static void testCubaseDongle() {
-    std::printf("CubaseDongle (clés Steinberg /ROM3)\n");
+static void testCartridgeKey() {
+    std::printf("CartridgeKey (clés Steinberg /ROM3)\n");
     {   // Clé noire : registres à 0 au reset, le motif %11011000 sur A8..A1 ramène à 0.
-        CubaseDongle k; k.setModel(CubaseDongle::Model::Cubase2);
+        CartridgeKey k; k.setModel(CartridgeKey::Model::Cubase2);
         checkBool("cubase2 : sortie au reset = $00 (octet fort)", k.cartRead(0xFB0000, true) == 0x00, true);
         checkBool("cubase2 : octet faible = $FF", k.cartRead(0xFB0001, false) == 0xFF, true);
         k.udsCycle(0x1000);   // fetch quelconque, A8..A1 = 0 : aucun terme vrai → $FF
@@ -328,7 +330,7 @@ static void testCubaseDongle() {
         checkStr("cubase2 : séquence épinglée", got, "00FF00FF00000000");
     }
     {   // Clé rouge : 1 bit (D8) ; D9-D15 à 1 ; horloge sur chaque accès $FBxxxx seulement.
-        CubaseDongle k; k.setModel(CubaseDongle::Model::Cubase3);
+        CartridgeKey k; k.setModel(CartridgeKey::Model::Cubase3);
         checkBool("cubase3 : sortie au reset = $FE (D8=0, D9-15=1)", k.cartRead(0xFB0000, true) == 0xFE, true);
         const uint16_t s0 = k.state();
         k.udsCycle(0x1234); k.udsCycle(0xFB0100);
@@ -341,20 +343,20 @@ static void testCubaseDongle() {
         checkStr("cubase3 : 48 bits épinglés", got, "000011100010001000100010001000100010001000100010");
     }
     {   // Clé Notator : armement par /ROM4 à $FA00EA (STER), données par /ROM3 ensuite.
-        CubaseDongle k; k.setModel(CubaseDongle::Model::Notator);
+        CartridgeKey k; k.setModel(CartridgeKey::Model::Notator);
         checkBool("notator : reset → 0, désarmée, crochet /UDS demandé", k.state() == 0 && !k.armed() && k.wantsUds(), true);
         k.udsCycle(0x1002);    // désarmée : UDS cadence les données (A1=1 → D14 ← 1)
         checkBool("notator : désarmée, UDS cadence (A1 → D14)", k.state() == 0x40, true);
-        k.rom4Read(0xFA00EA, true); k.udsCycle(0xFA00EA);   // accès d'armement : STER → 0 puis FEEDB1
+        k.rom4Listen(0xFA00EA, true); k.udsCycle(0xFA00EA);   // accès d'armement : STER → 0 puis FEEDB1
         checkBool("notator : $FA00EA arme et remet à 0", k.armed() && k.state() == 0, true);
         k.udsCycle(0x1002); k.udsCycle(0x1008);
         checkBool("notator : armée, UDS sans effet", k.state() == 0, true);
         const uint8_t v = k.cartRead(0xFB0002, true);       // /ROM3 descend : horloge AVANT lecture
         checkBool("notator : lecture $FB0002 = état APRÈS horloge (D14)", v == 0x40 && k.state() == 0x40, true);
         checkBool("notator : octet faible $FF", k.cartRead(0xFB0003, false) == 0xFF, true);
-        k.rom4Read(0xFA0000, true); k.udsCycle(0xFA0000);   // tout autre accès /ROM4 désarme
+        k.rom4Listen(0xFA0000, true); k.udsCycle(0xFA0000);   // tout autre accès /ROM4 désarme
         checkBool("notator : accès /ROM4 hors STER désarme", !k.armed(), true);
-        k.rom4Read(0xFA00EA, true); k.udsCycle(0xFA00EA);
+        k.rom4Listen(0xFA00EA, true); k.udsCycle(0xFA00EA);
         std::string got;
         for (int i = 0; i < 12; ++i) {
             const uint32_t a = 0xFB0000 | ((uint32_t(i * 53) & 0xFF) << 1);
@@ -367,85 +369,134 @@ static void testCubaseDongle() {
         k.cartRead(0xFB0014, true);                          // A4·A2 : reset asynchrone de D9 ; A1=0
         checkBool("notator : reset asynchrone D9 sous A4·A2", (k.state() & 0x02) == 0, true);
     }
+    {   // Oracle de rejeu : une trace écrite par setLog se rejoue sans écart ; une
+        // trace altérée signale le premier écart (c'est ce qu'une capture matérielle
+        // divergente produira).
+        const char* path = "neost_selftest_key.trace";
+        {
+            CartridgeKey k; k.setModel(CartridgeKey::Model::Notator);
+            FILE* f = std::fopen(path, "w"); k.setLog(f);
+            k.udsCycle(0x1002);
+            k.rom4Listen(0xFA00EA, true); k.udsCycle(0xFA00EA);
+            for (int i = 0; i < 12; ++i) { const uint32_t a = 0xFB0000 | ((uint32_t(i * 53) & 0xFF) << 1); k.cartRead(a, true); k.udsCycle(a); }
+            k.setLog(nullptr); std::fclose(f);
+        }
+        CartridgeKey k; k.setModel(CartridgeKey::Model::Notator);
+        char err[128];
+        checkBool("replay : trace propre → 0 écart", k.replay(path, err, sizeof err) == 0, true);
+        if (FILE* f = std::fopen(path, "a")) { std::fputs("R3 00 12\n", f); std::fclose(f); }
+        const int n = k.replay(path, err, sizeof err);
+        checkBool("replay : ligne altérée → 1 écart localisé", n == 1 && std::strstr(err, "expected 12") != nullptr, true);
+        checkBool("replay : fichier absent → -1", k.replay("/nonexistent/x.trace", err, sizeof err) == -1, true);
+        std::remove(path);
+    }
     {   // Auto : premier accès avec A7..A1 = 0 → rouge ; ≠ 0 → noire.
-        CubaseDongle k; k.setModel(CubaseDongle::Model::Auto);
+        CartridgeKey k; k.setModel(CartridgeKey::Model::Auto);
         checkBool("auto : crochet /UDS demandé tant que non tranché", k.wantsUds(), true);
         k.cartRead(0xFB0100, true);
         checkBool("auto : A7..A1 = 0 → clé rouge", k.cartRead(0xFB0000, true) == 0xFE && !k.wantsUds(), true);
-        CubaseDongle k2; k2.setModel(CubaseDongle::Model::Auto);
+        CartridgeKey k2; k2.setModel(CartridgeKey::Model::Auto);
         k2.cartRead(0xFB00B4, true);
         checkBool("auto : A7..A1 ≠ 0 → clé noire", k2.wantsUds(), true);
     }
 }
 
 // -----------------------------------------------------------------------------
-//  PortDongle — adaptateurs joystick/série/parallèle (protocoles Steem SSE / WinUAE).
+//  PortDevices — un périphérique par port (protocoles Steem SSE / WinUAE).
 // -----------------------------------------------------------------------------
-static void testPortDongle() {
-    std::printf("PortDongle (adaptateurs joystick / série / boutons)\n");
-    checkBool("ids : aller-retour sur tous les types", [] {
-        for (int i = 0; i < int(PortDongle::Type::Count); ++i)
-            if (PortDongle::fromId(PortDongle::id(PortDongle::Type(i))) != PortDongle::Type(i)) return false;
-        return PortDongle::fromId("bogus") == PortDongle::Type::None && PortDongle::fromId(nullptr) == PortDongle::Type::None;
+static void testPortDevices() {
+    std::printf("PortDevices (clés joystick / série, DAC, boutons)\n");
+    using PD = PortDevices;
+    checkBool("ids : aller-retour sur tous les périphériques et ports", [] {
+        for (int i = 0; i < int(PD::Device::Count); ++i)
+            if (PD::fromId(PD::id(PD::Device(i))) != PD::Device(i)) return false;
+        for (int i = 0; i < int(PD::Port::Count); ++i) { bool ok; if (PD::portFromId(PD::portId(PD::Port(i)), &ok) != PD::Port(i) || !ok) return false; }
+        bool ok = true; PD::portFromId("bogus", &ok);
+        return PD::fromId("bogus") == PD::Device::None && PD::fromId(nullptr) == PD::Device::None && !ok;
     }(), true);
-    {   // Leader Board / 10th Frame : haut+bas sur le port 1, port 0 intact.
-        PortDongle d; d.setType(PortDongle::Type::LeaderBoard);
-        uint8_t j0 = 0x80, j1 = 0x04; d.onJoystick(j0, j1);
-        checkBool("leaderboard : joy1 |= haut+bas, joy0 intact", j0 == 0x80 && j1 == 0x07, true);
+    {   // Connecteurs : une clé joystick entre dans les deux ports DE-9, pas ailleurs.
+        PD d;
+        checkBool("fits : leaderboard → joy0/joy1 oui, rs232 non",
+                  d.plug(PD::Port::Joy0, PD::Device::LeaderBoard) && d.plug(PD::Port::Joy1, PD::Device::LeaderBoard)
+                  && !d.plug(PD::Port::Rs232, PD::Device::LeaderBoard) && !d.plug(PD::Port::Joy0, PD::Device::Bat2), true);
+        checkBool("defaultPort : leaderboard → joy1, cricket → joy0, prosound → printer",
+                  PD::defaultPort(PD::Device::LeaderBoard) == PD::Port::Joy1 && PD::defaultPort(PD::Device::Cricket) == PD::Port::Joy0
+                  && PD::defaultPort(PD::Device::ProSound) == PD::Port::Printer, true);
+        d.unplugAll(); checkBool("unplugAll", !d.any(), true);
     }
-    {   // Cricket : %1100 / %1101 alternés sur le port 0 ; Rugby sur le port 1.
-        PortDongle d; d.setType(PortDongle::Type::Cricket);
-        uint8_t j0 = 0, j1 = 0; d.onJoystick(j0, j1); const uint8_t a = j0;
-        j0 = 0; d.onJoystick(j0, j1); const uint8_t b = j0;
-        checkBool("cricket : oscille entre $C et $D sur joy0", ((a == 0xC && b == 0xD) || (a == 0xD && b == 0xC)) && j1 == 0, true);
-        PortDongle r; r.setType(PortDongle::Type::Rugby);
-        j0 = 0; j1 = 0; r.onJoystick(j0, j1);
-        checkBool("rugby : sur joy1", j0 == 0 && (j1 == 0xC || j1 == 0xD), true);
+    {   // Leader Board dans le port 1 : haut+bas, port 0 intact ; dans le port 0 : l'inverse.
+        PD d; d.plug(PD::Port::Joy1, PD::Device::LeaderBoard);
+        uint8_t j0 = 0x80, j1 = 0x04; d.onJoystick(j0, j1);
+        checkBool("leaderboard (joy1) : joy1 |= haut+bas, joy0 intact", j0 == 0x80 && j1 == 0x07, true);
+        PD w; w.plug(PD::Port::Joy0, PD::Device::LeaderBoard);
+        j0 = 0; j1 = 0; w.onJoystick(j0, j1);
+        checkBool("leaderboard (mauvais port) : joy0 seulement", j0 == 0x03 && j1 == 0, true);
+    }
+    {   // Cricket + Leader Board coexistent ; oscillateur indépendant par port.
+        PD d; d.plug(PD::Port::Joy0, PD::Device::Cricket); d.plug(PD::Port::Joy1, PD::Device::Rugby);
+        uint8_t j0 = 0, j1 = 0; d.onJoystick(j0, j1); const uint8_t a0 = j0, a1 = j1;
+        j0 = j1 = 0; d.onJoystick(j0, j1);
+        checkBool("cricket/rugby : oscillent entre $C et $D sur leur port", a0 + j0 == 0xC + 0xD && a1 + j1 == 0xC + 0xD, true);
     }
     {   // B.A.T. II : CTS (bit2) forcé à 0, le reste intact.
-        PortDongle d; d.setType(PortDongle::Type::Bat2);
+        PD d; d.plug(PD::Port::Rs232, PD::Device::Bat2);
         uint8_t v = 0xFF; d.gpipRead(v, 0);
-        checkBool("bat2 : GPIP bit2 (CTS) = 0", v == 0xFB, true);
+        checkBool("bat2 : GPIP bit2 (CTS) = 0", v == 0xFB && d.hasSerial(), true);
     }
     {   // Music Master : DCD (bit1) suit DTR avec 200 cycles de retard.
-        Mfp mfp; PortDongle d; d.setType(PortDongle::Type::MusicMaster);
-        d.onPortA(0x10, 1000, mfp);             // DTR = 1 au cycle 1000
-        uint8_t v = 0xFD; d.gpipRead(v, 1100);  // < 200 cycles : ancienne valeur (0)
-        const bool early = (v & 0x02) == 0;
-        v = 0xFD; d.gpipRead(v, 1300);          // > 200 cycles : nouvelle valeur (1)
-        const bool late = (v & 0x02) != 0;
-        d.onPortA(0x00, 2000, mfp);             // DTR = 0
-        v = 0xFF; d.gpipRead(v, 2100); const bool early2 = (v & 0x02) != 0;   // encore 1
-        v = 0xFF; d.gpipRead(v, 2300); const bool late2  = (v & 0x02) == 0;   // puis 0
+        Mfp mfp; PD d; d.plug(PD::Port::Rs232, PD::Device::MusicMaster);
+        d.onPortA(0x10, 1000, mfp);
+        uint8_t v = 0xFD; d.gpipRead(v, 1100); const bool early = (v & 0x02) == 0;
+        v = 0xFD; d.gpipRead(v, 1300);         const bool late  = (v & 0x02) != 0;
+        d.onPortA(0x00, 2000, mfp);
+        v = 0xFF; d.gpipRead(v, 2100); const bool early2 = (v & 0x02) != 0;
+        v = 0xFF; d.gpipRead(v, 2300); const bool late2  = (v & 0x02) == 0;
         checkBool("musicmaster : DTR → DCD retardé de 200 cycles", early && late && early2 && late2, true);
     }
     {   // Jeanne d'Arc : DCD assertée quand (RTS|DTR) décroît sans s'annuler.
-        Mfp mfp; PortDongle d; d.setType(PortDongle::Type::JeanneDArc);
-        d.onPortA(0x18, 0, mfp);                // RTS+DTR
-        const bool a = (mfp.read8(0xFFFA01) & 0x02) != 0;   // pas de décroissance → DCD inactive (bit=1)
-        d.onPortA(0x08, 0, mfp);                // 0x18 → 0x08 : décroît, non nul → assertée (bit=0)
-        const bool b = (mfp.read8(0xFFFA01) & 0x02) == 0;
-        d.onPortA(0x00, 0, mfp);                // → 0 : s'annule → inactive
-        const bool c = (mfp.read8(0xFFFA01) & 0x02) != 0;
+        Mfp mfp; PD d; d.plug(PD::Port::Rs232, PD::Device::JeanneDArc);
+        d.onPortA(0x18, 0, mfp); const bool a = (mfp.read8(0xFFFA01) & 0x02) != 0;
+        d.onPortA(0x08, 0, mfp); const bool b = (mfp.read8(0xFFFA01) & 0x02) == 0;
+        d.onPortA(0x00, 0, mfp); const bool c = (mfp.read8(0xFFFA01) & 0x02) != 0;
         checkBool("jeannedarc : DCD = !(new && new < old)", a && b && c, true);
     }
     {   // Multiface : bouton → GPIP7 à 0 jusqu'à la VBL, quel que soit le moniteur.
         Mfp mfp; mfp.setColorMonitor(true);
-        PortDongle d; d.setType(PortDongle::Type::Multiface);
+        PD d; d.plug(PD::Port::CartButton, PD::Device::Multiface);
         const bool before = (mfp.read8(0xFFFA01) & 0x80) != 0;
         d.pressButton(mfp);
         const bool during = (mfp.read8(0xFFFA01) & 0x80) == 0 && d.buttonPressed();
         d.onVbl(mfp);
         const bool after = (mfp.read8(0xFFFA01) & 0x80) != 0 && !d.buttonPressed();
         checkBool("multiface : GPIP7 bas pendant l'appui, relâché à la VBL", before && during && after, true);
-        PortDongle n; n.setType(PortDongle::Type::Bat2); n.pressButton(mfp);
-        checkBool("bouton : sans effet sur un autre adaptateur", !n.buttonPressed(), true);
+        PD n; n.plug(PD::Port::Rs232, PD::Device::Bat2); n.pressButton(mfp);
+        checkBool("bouton : sans effet sans bouton branché", !n.buttonPressed(), true);
+        checkBool("reset : relâche le bouton, garde le périphérique", [&] { d.pressButton(mfp); d.reset(); return !d.buttonPressed() && d.hasButton(); }(), true);
     }
 }
 
+// -----------------------------------------------------------------------------
+//  DongleTable — disks/dongles.txt (motif → branchement).
+// -----------------------------------------------------------------------------
+static void testDongleTable() {
+    std::printf("DongleTable (disks/dongles.txt)\n");
+    int bad = 0;
+    const auto rules = neost::parseDongleTable(neost::defaultDongleTable(), &bad);
+    checkBool("table livrée : toutes les lignes valides", bad == 0 && rules.size() >= 15, true);
+    const auto hits = neost::matchDongleRules(rules, "disks/st/Leader Board (1986)(Access)[cr].st");
+    checkBool("leader board → joy1:leaderboard", hits.size() == 1 && !hits[0].cart
+              && hits[0].port == PortDevices::Port::Joy1 && hits[0].dev == PortDevices::Device::LeaderBoard, true);
+    const auto n = neost::matchDongleRules(rules, "/x/NOTATOR_SL_3.21.msa");
+    checkBool("NOTATOR (majuscules) → cart:notator", n.size() == 1 && n[0].cart && n[0].key == CartridgeKey::Model::Notator, true);
+    checkBool("sans correspondance → vide", neost::matchDongleRules(rules, "disks/diskA.st").empty(), true);
+    const auto r2 = neost::parseDongleTable("# c\n  foo = joy0:leaderboard # ok\nbar = rs232:leaderboard\nbaz\nqux = cart:nope\n", &bad);
+    checkBool("analyse : commentaires, espaces, lignes invalides comptées", r2.size() == 1 && bad == 3 && r2[0].pattern == "foo", true);
+}
+
 int main() {
-    testCubaseDongle();
-    testPortDongle();
+    testDongleTable();
+    testCartridgeKey();
+    testPortDevices();
     testWindowsPaths();
     testPosixPaths();
     testNativeDefaults();

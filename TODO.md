@@ -427,15 +427,18 @@ ACIA) ; si une vraie démo spec512 **overscan** (bordures ouvertes) est rapatri�
 
 - **MIDI OUT Windows** : `MidiOutHost` couvre CoreMIDI (macOS) et ALSA (Linux) ; winmm reste à
   écrire — le MT-32 (Munt), lui, est portable.
-- **Adaptateurs de port — validation** (2026-08-23) : `PortDongle` transcrit Steem/WinUAE sans
+- **Périphériques des ports — validation** (2026-08-23) : `PortDevices` transcrit Steem/WinUAE sans
   logiciel à clé sous la main. À exercer : Leader Board / 10th Frame (dump ST), B.A.T. II, Music
   Master, et l'option « Pro Sound » du menu de Wings of Death / Lethal Xcess (présents en STX) pour
   entendre le DAC. **Clé Notator** (`--dongle notator`, équations TPH) : à confronter à un Notator
   SL original (non cracké) — deux incertitudes à trancher sur le vrai matériel : le front de /ROM4
   qui cadence FEEDB1 (fin d'accès supposée) et l'ordre UDS↔/ROM4 à l'armement (données remises à 0
   supposées). Restent sans relevé public : Log 3 (EP330), Pro-24 (GAL16V8), Avalon / Synthworks
-  (clé noire, équations ≠ Cubase 2), Zodiac, DynaBlaster.
-- **Clé Steinberg — validation** (2026-08-23) : `CubaseDongle` (rouge/noire, équations MiSTery) n'a
+  (clé noire, équations ≠ Cubase 2), Zodiac, DynaBlaster. L'outil pour trancher existe : une capture
+  matérielle au format `R3`/`R4`/`U` + `--key-replay` (recette dans `docs/EXTENSIONS.md`).
+- **Dongles — frontends WASM/Android** : `PortDevices`/`CartridgeKey` ne sont exposés que par le GUI
+  et le headless ; le menu Android (décalqué de la borne) et la démo web n'ont pas de page Dongles.
+- **Clé Steinberg — validation** (2026-08-23) : `CartridgeKey` (rouge/noire, équations MiSTery) n'a
   jamais vu un Cubase 3.10 / Score / 2.01 réel. Il faut une disquette originale (non crackée) pour
   trancher ; la noire dépend en plus du motif bus exact de Moira. Option de confort : choisir une
   **destination** CoreMIDI (`MIDIGetNumberOfDestinations`) au lieu de la seule source virtuelle.

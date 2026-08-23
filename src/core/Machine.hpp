@@ -33,8 +33,8 @@
 #include "io/Ne2000.hpp"
 #include "io/UltraSatan.hpp"
 #include "io/Isp1160.hpp"
-#include "io/CubaseDongle.hpp"
-#include "io/PortDongle.hpp"
+#include "io/CartridgeKey.hpp"
+#include "io/PortDevices.hpp"
 
 class Machine {
 public:
@@ -103,8 +103,8 @@ public:
         gemdos.reset();    // ferme les fichiers HD GEMDOS ouverts (no-op si inactif)
         scc.reset();       // SCC série (Mega STE) au repos
         midi.reset();      // ACIA MIDI (reset.c:111 ACIA_Reset + :124 Midi_Reset)
-        dongle.reset(); bus.dongleUds = dongle.wantsUds();   // clé Cubase : registres à 0
-        adapter.reset();
+        dongle.reset(); bus.refreshUds();   // clé cartouche : registres à 0
+        ports.reset();
         bus.seedResetVectors();    // vecteurs SSP/PC $0-$7 : miroir ROM en RAM (stMemory.c)
         cpu.reset();
         frameStartInit_ = false;   // FIX1 : ré-ancre frameStart_ sur sched.now() à la 1re trame post-reset
@@ -124,8 +124,8 @@ public:
         gemdos.reset();    // ferme les fichiers HD GEMDOS ouverts (no-op si inactif)
         scc.reset();       // SCC série (Mega STE) au repos
         midi.reset();      // ACIA MIDI (reset.c:111 ACIA_Reset + :124 Midi_Reset)
-        dongle.reset(); bus.dongleUds = dongle.wantsUds();   // clé Cubase : registres à 0
-        adapter.reset();
+        dongle.reset(); bus.refreshUds();   // clé cartouche : registres à 0
+        ports.reset();
         // $FF8001 remis à 0 au FROID (stMemory.c:93, bCold). ⚠ DIVERGENCE ASSUMÉE : à la
         // CONFIGURATION (constructeur / reconfigure), NeoST le pré-remplit au contraire
         // avec memConfigForBytes() alors qu'Hatari laisse 0 et compte sur le test mémoire
@@ -220,12 +220,12 @@ public:
     // Contrôleur hôte USB ISP1160 du NetUSBee (extension NeoST, INACTIF par défaut).
     // NetUSBee = ne2000 (RTL8019AS, câblage EtherNEC) + isp1160, même port cartouche.
     Isp1160   isp1160;
-    // Clé Steinberg (Cubase 2/3) sur /ROM3 — OFF par défaut. Cf. io/CubaseDongle.hpp.
-    CubaseDongle dongle;
-    // Adaptateur sur les ports joystick/série/parallèle (Leader Board, B.A.T. II,
-    // Music Master, Pro Sound Designer, bouton Multiface…) — OFF par défaut.
-    // Cf. io/PortDongle.hpp. Un seul à la fois (comme le « port 4 » de Steem).
-    PortDongle adapter;
+    // Clé Steinberg (Cubase 2/3) sur /ROM3 — OFF par défaut. Cf. io/CartridgeKey.hpp.
+    CartridgeKey dongle;
+    // Périphériques des ports joystick 0/1, RS-232, imprimante, bouton de cartouche
+    // (Leader Board, B.A.T. II, Music Master, Pro Sound Designer, Multiface…) — OFF par
+    // défaut, un par port, coexistants. Cf. io/PortDevices.hpp.
+    PortDevices ports;
     Scheduler sched;
 
     // Active la NE2000/EtherNEC. Refuse si une cartouche est montée (conflit de
@@ -255,30 +255,34 @@ public:
     // Branche une clé Steinberg sur /ROM3 (None = débranche). Pas d'exclusivité avec
     // le GEMDOS HD ($FA0000 = /ROM4) ; incompatible avec EtherNEC/NetUSBee qui
     // décodent toute la fenêtre — refusé dans ce cas.
-    bool setDongle(CubaseDongle::Model m) {
-        if (m != CubaseDongle::Model::None && (ne2000.enabled() || isp1160.enabled())) return false;
+    bool setDongle(CartridgeKey::Model m) {
+        if (m != CartridgeKey::Model::None && (ne2000.enabled() || isp1160.enabled())) return false;
         dongle.setModel(m);
-        bus.dongle    = dongle.attached() ? &dongle : nullptr;
-        bus.dongleUds = dongle.wantsUds();
+        if (dongle.attached()) bus.addCartDevice(&dongle); else bus.removeCartDevice(&dongle);
         return true;
     }
     bool netUsbeeEnabled() const { return isp1160.enabled(); }
 
-    // Branche un adaptateur sur les ports joystick/série/parallèle (None = débranche).
-    // Pas de conflit possible avec le reste : il ne décode aucune adresse.
-    void setAdapter(PortDongle::Type t) {
-        adapter.setType(t);
-        psg.setPortBDac(adapter.usesPortBDac());
-        // Lignes qu'un adaptateur précédent a pu laisser hors repos : bouton (GPIP7),
+    // Branche `d` sur le port `p` (None = débranche). Faux si le connecteur ne convient
+    // pas. Pas de conflit possible avec le reste : rien ici ne décode d'adresse.
+    bool plugPort(PortDevices::Port p, PortDevices::Device d) {
+        if (!ports.plug(p, d)) return false;
+        portsApply();
+        return true;
+    }
+    // Re-câble les crochets selon les périphériques branchés (après plug, load d'état).
+    void portsApply() {
+        psg.setPortBDac(ports.usesPortBDac());
+        // Lignes qu'un périphérique précédent a pu laisser hors repos : bouton (GPIP7),
         // RI (GPIP6), DCD (Jeanne d'Arc — repos ACTIF, cf. Mfp::reset).
         mfp.setMonitorButton(false); mfp.setRs232Ri(false); mfp.setRs232Dcd(true);
-        if (adapter.attached())
-            mfp.setGpipReadHook([this](uint8_t& v) { adapter.gpipRead(v, sched.now()); });
+        if (ports.hasSerial())
+            mfp.setGpipReadHook([this](uint8_t& v) { ports.gpipRead(v, sched.now()); });
         else
             mfp.setGpipReadHook(nullptr);
     }
-    // Bouton du Multiface / Ultimate Ripper (sans effet pour les autres adaptateurs).
-    void pressAdapterButton() { adapter.pressButton(mfp); cpu.updateIpl(); }
+    // Bouton du Multiface / Ultimate Ripper (sans effet si aucun n'est branché).
+    void pressPortButton() { ports.pressButton(mfp); cpu.updateIpl(); }
 
     // Active l'UltraSatan sur les cibles ACSI `firstTarget` et `firstTarget+1`
     // (défaut 0-1 : c'est l'ID d'usine, le TOS y boote). Les images SD se montent

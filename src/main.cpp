@@ -61,6 +61,7 @@
 #include "audio/DriveSound.hpp"
 #include "io/JoystickInput.hpp"
 #include "io/MediaScan.hpp"
+#include "io/DongleTable.hpp"
 #include "core/Framing.hpp"
 #include "util/HostPath.hpp"   // chemins hôte : UNE définition d'« absolu »
 #include "gui/AppConfig.hpp"   // neost.cfg : structure, analyse, écriture, profils
@@ -1900,11 +1901,11 @@ struct ConfigUi {
     bool reqMidiPanic = false;            // bouton « All notes off » de la page MIDI
     int  reqMidiLoopback = -1;            // case OUT->IN de la page MIDI
     int  reqDongle = -1;                  // clé cartouche : 0 none, 1 cubase2, 2 cubase3, 3 auto, 4 notator
-    int  reqAdapter = -1;                 // adaptateur joystick/série/parallèle : PortDongle::Type
-    bool reqAdapterButton = false;        // bouton Multiface / Ultimate Ripper (page Dongles)
+    int  reqPlugPort = -1, reqPlugDev = -1; // page Dongles : brancher reqPlugDev sur reqPlugPort
+    bool reqPortButton = false;           // bouton Multiface / Ultimate Ripper (page Dongles)
     std::string mt32Status;               // lecture : modèle chargé ou erreur
     // Mixeur (page Sound) : édité EN PLACE par la page ; mixDirty = appliquer, mixDone = persister.
-    float mixYm = 1.0f, mixDma = 1.0f, mixDrive = 1.0f, mixMt32 = 1.0f;
+    float mixYm = 1.0f, mixDma = 1.0f, mixDrive = 1.0f, mixMt32 = 1.0f, mixDac = 1.0f;
     bool  mixInit = false, mixDirty = false, mixDone = false;
     int  reqNetUsbee = -1;                // NetUSBee NE2000 + ISP1160 (0/1)
     int  reqUltraSatan = -1;              // UltraSatan sur les IDs ACSI 0-1 (0/1)
@@ -2129,12 +2130,11 @@ void drawConfigWindow(ConfigUi& ui) {
                         ui.reqModem, ui.reqEther, ui.reqNetUsbee);
         break;
     // ── Dongles ───────────────────────────────────────────────────────────────
-    // Tout ce qui se branchait sur un port pour qu'un logiciel le sonde : les clés
-    // Steinberg (port cartouche, cf. io/CubaseDongle.hpp) et les adaptateurs Steem
-    // (joystick / série / parallèle / boutons de cartouche, cf. io/PortDongle.hpp).
+    // Tout ce qui se branchait sur un port pour qu'un logiciel le sonde : les clés du
+    // port cartouche (io/CartridgeKey.hpp) et un périphérique par autre port
+    // (io/PortDevices.hpp) — modèle physique : ils coexistent.
     case kCfgDongle: {
-        // Clé Steinberg sur le port cartouche (/ROM3 $FB0000, invisible du TOS).
-        ImGui::TextDisabled("STEINBERG KEY (cartridge port, $FB0000)");
+        ImGui::TextDisabled("CARTRIDGE PORT KEY (/ROM3 $FB0000, invisible to TOS)");
         int dk = cfg.dongle == "cubase2" ? 1 : cfg.dongle == "cubase3" ? 2 : cfg.dongle == "auto" ? 3
                : cfg.dongle == "notator" ? 4 : 0;
         bool dkCh = false;
@@ -2146,37 +2146,49 @@ void drawConfigWindow(ConfigUi& ui) {
         if (dkCh) ui.reqDongle = dk;
         ImGui::TextDisabled("  PAL16R8 / 5C060 / EP600 state machines (MiSTery + TPH equations).");
         ImGui::TextDisabled("  Cubase Lite needs none. Black key: clocked by every CPU bus cycle - best effort.");
+        // Observabilité : ce que la clé a vu. Le jour où un logiciel dit « dongle not
+        // found », c'est ici qu'on regarde d'abord (puis --key-log / --key-replay).
+        if (ui.machine->dongle.attached()) {
+            const auto& k = ui.machine->dongle;
+            ImGui::Text("  Probes: %u   last byte: $%02X   state: $%04X%s",
+                        unsigned(k.probes()), unsigned(k.lastByte()), unsigned(k.state()),
+                        k.model() == CartridgeKey::Model::Notator ? (k.armed() ? "   armed" : "   not armed") : "");
+        }
         ImGui::Separator();
 
-        // Adaptateurs sur les autres ports : un seul à la fois (comme Steem).
-        ImGui::TextDisabled("JOYSTICK / SERIAL / PRINTER PORT ADAPTER (one at a time)");
-        const PortDongle::Type curAd = ui.machine->adapter.type();
-        int ad = int(curAd);
-        bool adCh = false;
-        for (int i = 0; i < int(PortDongle::Type::Count); ++i) {
-            const auto t = PortDongle::Type(i);
-            if (t == PortDongle::Type::Bat2 || t == PortDongle::Type::LeaderBoard
-             || t == PortDongle::Type::ProSound || t == PortDongle::Type::Multiface)
-                ImGui::Spacing();
-            adCh |= ImGui::RadioButton(PortDongle::label(t), &ad, i);
+        ImGui::TextDisabled("ONE DEVICE PER PORT (they coexist, like real hardware)");
+        static const char* const portNames[] = { "Joystick 0 (mouse port)", "Joystick 1", "RS-232", "Printer", "Cartridge button" };
+        for (int pi = 0; pi < int(PortDevices::Port::Count); ++pi) {
+            const auto port = PortDevices::Port(pi);
+            const PortDevices::Device cur = ui.machine->ports.at(port);
+            ImGui::SetNextItemWidth(260);
+            if (ImGui::BeginCombo(portNames[pi], PortDevices::label(cur))) {
+                for (int di = 0; di < int(PortDevices::Device::Count); ++di) {
+                    const auto d = PortDevices::Device(di);
+                    if (!PortDevices::fits(port, d)) continue;
+                    const bool home = d == PortDevices::Device::None || PortDevices::defaultPort(d) == port;
+                    char lab[96];
+                    std::snprintf(lab, sizeof lab, "%s%s", PortDevices::label(d), home ? "" : "  (wrong port for this game)");
+                    if (ImGui::Selectable(lab, cur == d)) { ui.reqPlugPort = pi; ui.reqPlugDev = di; }
+                }
+                ImGui::EndCombo();
+            }
         }
-        if (adCh) ui.reqAdapter = ad;
         ImGui::Spacing();
-        if (ui.machine->adapter.hasButton()) {
-            if (ImGui::Button(curAd == PortDongle::Type::Multiface ? "Press FREEZE button"
-                                                                    : "Press RIPPER button"))
-                ui.reqAdapterButton = true;
+        if (ui.machine->ports.hasButton()) {
+            const bool mf = ui.machine->ports.at(PortDevices::Port::CartButton) == PortDevices::Device::Multiface;
+            if (ImGui::Button(mf ? "Press FREEZE button" : "Press RIPPER button")) ui.reqPortButton = true;
             ImGui::SameLine();
-            ImGui::TextDisabled(curAd == PortDongle::Type::Multiface
-                                ? "pulls GPIP7 (monitor) low until next VBL - load the ROM as a cartridge"
-                                : "pulls RI (GPIP6) until next VBL - load the ROM as a cartridge");
+            ImGui::TextDisabled(mf ? "pulls GPIP7 (monitor) low until next VBL - load the ROM as a cartridge"
+                                   : "pulls RI (GPIP6) until next VBL - load the ROM as a cartridge");
         }
-        ImGui::TextWrapped("Joystick dongles override the directions the IKBD reports (Leader Board: "
-                           "up+down at once; Cricket & co: an oscillator). Serial dongles drive CTS/DCD "
-                           "from RTS/DTR. Pro Sound Designer is not a key: an 8-bit DAC on the printer "
-                           "port, used by Wings of Death / Lethal Xcess on an STF. Protocols from Steem "
-                           "SSE and WinUAE; Hatari emulates none of them. Not emulated (no public "
-                           "dump): Log 3, Pro-24, Avalon, Zodiac.");
+        ImGui::TextWrapped("Joystick keys override the directions the IKBD reports (Leader Board: up+down "
+                           "at once; Cricket & co: an oscillator) - a game only looks at one port, plug the "
+                           "key where it expects it. Serial keys drive CTS/DCD from RTS/DTR. Pro Sound "
+                           "Designer is not a key: an 8-bit DAC on the printer port (Wings of Death / "
+                           "Lethal Xcess on an STF), with its own fader on the Sound page. disks/dongles.txt "
+                           "plugs keys automatically when a matching disk is mounted. Protocols from Steem "
+                           "SSE and WinUAE; not emulated (no public dump): Log 3, Pro-24, Avalon, Zodiac.");
         break;
     }
 
@@ -2239,8 +2251,9 @@ void drawConfigWindow(ConfigUi& ui) {
             fader("DMA sound (STE)", ui.mixDma, isSte, "(ST: no DMA sound)");
             fader("Floppy drive", ui.mixDrive, ui.driveSoundAvail, "(no samples)");
             fader("Roland MT-32 / CM-32L", ui.mixMt32, Mt32Synth::available(), "(no libmt32emu)");
+            fader("Pro Sound DAC (printer port)", ui.mixDac, ui.machine && ui.machine->ports.usesPortBDac(), "(none plugged - Dongles page)");
             if (ImGui::SmallButton("Reset mixer")) {
-                ui.mixYm = ui.mixDma = ui.mixDrive = ui.mixMt32 = 1.0f; ui.mixDirty = ui.mixDone = true;
+                ui.mixYm = ui.mixDma = ui.mixDrive = ui.mixMt32 = ui.mixDac = 1.0f; ui.mixDirty = ui.mixDone = true;
             }
         }
         ImGui::Separator();
@@ -2590,6 +2603,19 @@ int main(int argc, char** argv) {
     const std::string diskPath = resolveData(pos.size() > 1 ? pos[1] : defDisk, exeDir);
     const std::string cartPath = cfg.cart.empty() ? std::string() : resolveData(cfg.cart, exeDir);
     const std::string disksDir = resolveData("disks", exeDir);   // dossier pour la Disk Library
+    // Table disks/dongles.txt : créée avec les titres connus si absente (jamais en
+    // borne : config figée), relue à chaque montage (on peut l'éditer à chaud).
+    auto loadDongleTable = [&]() -> std::vector<neost::DongleRule> {
+        const std::string path = disksDir + "/dongles.txt";
+        std::string text;
+        if (std::ifstream in(path); in) text.assign(std::istreambuf_iterator<char>(in), {});
+        else {
+            text = neost::defaultDongleTable();
+            if (!g_kiosk) if (std::ofstream out(path); out) out << text;
+        }
+        return neost::parseDongleTable(text);
+    };
+    loadDongleTable();   // crée disks/dongles.txt (titres connus) dès le premier lancement
     const std::string cartsDir = resolveData("carts", exeDir);   // dossier pour la Cart Library
     const std::string hdDir    = resolveData("hd", exeDir);      // dossier pour la fenêtre Hard Disks
     const std::string gemdosDir = resolveData("gemdos", exeDir); // lecteur GEMDOS livré avec le dépôt
@@ -2779,22 +2805,27 @@ int main(int argc, char** argv) {
     machine.midi.setLoopback(cfg.midiLoopback);   // fiche MIDI OUT→IN (OFF par défaut)
     // Clé Steinberg (dongle= dans neost.cfg) : /ROM3, cohabite avec le HD GEMDOS.
     if (!cfg.dongle.empty()) {
-        const CubaseDongle::Model dm = cfg.dongle == "cubase2" ? CubaseDongle::Model::Cubase2
-                                     : cfg.dongle == "cubase3" ? CubaseDongle::Model::Cubase3
-                                     : cfg.dongle == "auto"    ? CubaseDongle::Model::Auto
-                                     : cfg.dongle == "notator" ? CubaseDongle::Model::Notator
-                                     : CubaseDongle::Model::None;
+        const CartridgeKey::Model dm = cfg.dongle == "cubase2" ? CartridgeKey::Model::Cubase2
+                                     : cfg.dongle == "cubase3" ? CartridgeKey::Model::Cubase3
+                                     : cfg.dongle == "auto"    ? CartridgeKey::Model::Auto
+                                     : cfg.dongle == "notator" ? CartridgeKey::Model::Notator
+                                     : CartridgeKey::Model::None;
         if (!machine.setDongle(dm)) {
             g_stateMsg = "Steinberg key needs the cartridge port free (EtherNEC/NetUSBee)";
             g_stateMsgFrames = 150;
             cfg.dongle.clear();
         }
     }
-    // Adaptateur joystick/série/parallèle (adapter= dans neost.cfg).
-    if (!cfg.adapter.empty()) {
-        const PortDongle::Type at = PortDongle::fromId(cfg.adapter.c_str());
-        if (at == PortDongle::Type::None) cfg.adapter.clear();   // identifiant inconnu : on oublie
-        machine.setAdapter(at);
+    // Périphériques des ports (joy0= … cartbutton= dans neost.cfg).
+    {
+        std::string* slots[] = { &cfg.joy0, &cfg.joy1, &cfg.rs232, &cfg.printer, &cfg.cartbutton };
+        for (int pi = 0; pi < int(PortDevices::Port::Count); ++pi) {
+            if (slots[pi]->empty()) continue;
+            const PortDevices::Device d = PortDevices::fromId(slots[pi]->c_str());
+            if (d == PortDevices::Device::None || !machine.plugPort(PortDevices::Port(pi), d))
+                slots[pi]->clear();   // identifiant inconnu ou connecteur inadapté : on oublie
+        }
+        machine.psg.setPortBDacGain(cfg.mixDac);
     }
     // Sortie MIDI hôte (macOS) : synthé GM intégré et/ou port CoreMIDI virtuel. Dès
     // qu'une sortie est ouverte, l'ACIA y envoie MIDI OUT (au lieu du bouclage).
@@ -3711,7 +3742,7 @@ int main(int argc, char** argv) {
         cfgUi.curSd2    = cfg.sd2.empty()    ? std::string() : resolvePath(cfg.sd2);
         cfgUi.mt32Status = mt32.isOpen() ? (mt32.model() + " running") : mt32.lastError();
         if (!cfgUi.mixInit) {            // sème les faders depuis la config (une fois)
-            cfgUi.mixYm = cfg.mixYm; cfgUi.mixDma = cfg.mixDma;
+            cfgUi.mixYm = cfg.mixYm; cfgUi.mixDma = cfg.mixDma; cfgUi.mixDac = cfg.mixDac;
             cfgUi.mixDrive = cfg.mixDrive; cfgUi.mixMt32 = cfg.mixMt32; cfgUi.mixInit = true;
         }
 
@@ -3794,9 +3825,10 @@ int main(int argc, char** argv) {
                 cfgUi.reqEther = -1;
             }
             if (cfgUi.mixDirty) {
-                cfg.mixYm = cfgUi.mixYm; cfg.mixDma = cfgUi.mixDma;
+                cfg.mixYm = cfgUi.mixYm; cfg.mixDma = cfgUi.mixDma; cfg.mixDac = cfgUi.mixDac;
                 cfg.mixDrive = cfgUi.mixDrive; cfg.mixMt32 = cfgUi.mixMt32;
                 audio.setMixGains(cfg.mixYm, cfg.mixDma, cfg.mixDrive, cfg.mixMt32);
+                machine.psg.setPortBDacGain(cfg.mixDac);
                 cfgUi.mixDirty = false;
             }
             if (cfgUi.mixDone) { saveConfig(exeDir, cfg, &machine); cfgUi.mixDone = false; }
@@ -3807,17 +3839,21 @@ int main(int argc, char** argv) {
                                               cfgUi.reqMidiLoopback = -1;
                                               machine.midi.setLoopback(cfg.midiLoopback);
                                               saveConfig(exeDir, cfg, &machine); }
-            if (cfgUi.reqAdapter >= 0) {
-                const auto t = PortDongle::Type(cfgUi.reqAdapter); cfgUi.reqAdapter = -1;
-                machine.setAdapter(t);
-                cfg.adapter = t == PortDongle::Type::None ? "" : PortDongle::id(t);
-                saveConfig(exeDir, cfg, &machine);
+            if (cfgUi.reqPlugPort >= 0) {
+                const auto p = PortDevices::Port(cfgUi.reqPlugPort);
+                const auto d = PortDevices::Device(cfgUi.reqPlugDev);
+                cfgUi.reqPlugPort = cfgUi.reqPlugDev = -1;
+                if (machine.plugPort(p, d)) {
+                    std::string* slots[] = { &cfg.joy0, &cfg.joy1, &cfg.rs232, &cfg.printer, &cfg.cartbutton };
+                    *slots[int(p)] = d == PortDevices::Device::None ? "" : PortDevices::id(d);
+                    saveConfig(exeDir, cfg, &machine);
+                }
             }
-            if (cfgUi.reqAdapterButton) { cfgUi.reqAdapterButton = false; machine.pressAdapterButton(); }
+            if (cfgUi.reqPortButton) { cfgUi.reqPortButton = false; machine.pressPortButton(); }
             if (cfgUi.reqDongle >= 0) {
                 static const char* const names[] = { "", "cubase2", "cubase3", "auto", "notator" };
                 const int d = std::min(cfgUi.reqDongle, 4); cfgUi.reqDongle = -1;
-                if (machine.setDongle(CubaseDongle::Model(d))) {
+                if (machine.setDongle(CartridgeKey::Model(d))) {
                     cfg.dongle = names[d];
                     saveConfig(exeDir, cfg, &machine);
                 } else {
@@ -3969,6 +4005,7 @@ int main(int argc, char** argv) {
                     midiOutApply();
                     machine.midi.setLoopback(cfg.midiLoopback);
                     audio.setMixGains(cfg.mixYm, cfg.mixDma, cfg.mixDrive, cfg.mixMt32);
+                    machine.psg.setPortBDacGain(cfg.mixDac);
                     cfgUi.mixInit = false;
                     saveConfig(exeDir, cfg, &machine);
                     reqRebuild = true;        // modèle/RAM/FPU/ROM/cartouche/HD/moniteur/FDC (+ UltraSatan)
@@ -4467,6 +4504,26 @@ int main(int argc, char** argv) {
         // écrite dans neost.cfg et retentée à chaque boot.
         if (!reqMount.empty()) {
             if (machine.fdc.loadImage(reqMount)) {
+                // Clé du jeu (disks/dongles.txt) : on ne remplit que les emplacements VIDES.
+                if (cfg.autoDongle) {
+                    std::string plugged;
+                    for (const auto& r : neost::matchDongleRules(loadDongleTable(), reqMount)) {
+                        if (r.cart) {
+                            if (machine.dongle.attached() || !machine.setDongle(r.key)) continue;
+                            static const char* const kn[] = { "", "cubase2", "cubase3", "auto", "notator" };
+                            cfg.dongle = kn[int(r.key)]; plugged += std::string(plugged.empty() ? "" : ", ") + "cartridge key " + cfg.dongle;
+                        } else {
+                            if (machine.ports.at(r.port) != PortDevices::Device::None || !machine.plugPort(r.port, r.dev)) continue;
+                            std::string* slots[] = { &cfg.joy0, &cfg.joy1, &cfg.rs232, &cfg.printer, &cfg.cartbutton };
+                            *slots[int(r.port)] = PortDevices::id(r.dev);
+                            plugged += std::string(plugged.empty() ? "" : ", ") + PortDevices::label(r.dev) + " on " + PortDevices::portId(r.port);
+                        }
+                    }
+                    if (!plugged.empty()) {
+                        g_stateMsg = "Auto-plugged: " + plugged + " (disks/dongles.txt)"; g_stateMsgFrames = 240;
+                        if (!g_kiosk && !g_kioskLaunched) saveConfig(exeDir, cfg, &machine);
+                    }
+                }
                 // En BORNE, ne pas mémoriser la disquette insérée par un visiteur : même
                 // si saveConfig() refuse d'écrire ici, salir `cfg` suffirait à faire fuir
                 // ce disk= lors d'un saveConfig(force=true) ultérieur (dossiers ROM,

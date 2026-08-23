@@ -210,7 +210,7 @@ Machine::Machine(std::size_t ramBytes, CpuCore cpuCore, MachineType machine)
     // ET DTR→RI (GPIP6) — comme le câble de test du diagnostic « S RS232 ». Le port A
     // est actif BAS (bit=0 → ligne assertée). On rafraîchit l'IPL (un canal a pu lever).
     psg.setPortASink([this](uint8_t a) {
-        if (adapter.attached()) { adapter.onPortA(a, sched.now(), mfp); cpu.updateIpl(); }
+        if (ports.hasSerial()) { ports.onPortA(a, sched.now(), mfp); cpu.updateIpl(); }
         if (!mfp.loopback()) return;        // connecteur non branché → lignes inertes
         const bool rts = (a & 0x08) != 0;   // bit3 = 1 → RTS assertée (repos bit=0 → désassertée)
         const bool dtr = (a & 0x10) != 0;   // bit4 = 1 → DTR assertée
@@ -245,9 +245,9 @@ Machine::Machine(std::size_t ramBytes, CpuCore cpuCore, MachineType machine)
         cpu.updateIpl();
     });
     ikbd.setJoystickProbe([this](uint8_t& joy0, uint8_t& joy1) {
-        // Adaptateur sur un port joystick (Leader Board, Cricket Captain…) : recouvre
-        // les directions, par-dessus l'état hôte.
-        if (adapter.attached()) adapter.onJoystick(joy0, joy1);
+        // Clé sur un port joystick (Leader Board, Cricket Captain…) : recouvre les
+        // directions, par-dessus l'état hôte.
+        ports.onJoystick(joy0, joy1);
         // Hors fixture de bouclage : conserver l'état hôte déjà amorcé par l'IKBD
         // (manette USB / émulation clavier posée par le frontend via setJoystick).
         if (!mfp.loopback()) return;
@@ -525,7 +525,7 @@ void Machine::onVbl() {
     // ≈ 20032 µs (50 Hz) / 16700 µs (60 Hz) / 14028 µs (71 Hz mono).
     const int64_t kVblMicro = static_cast<int64_t>(lpf_) * cpl_ / 8;
     ikbd.onVbl(kVblMicro);
-    adapter.onVbl(mfp);   // relâche le bouton Multiface/URC enfoncé pendant la trame
+    ports.onVbl(mfp);   // relâche le bouton Multiface/URC enfoncé pendant la trame
 }
 
 // -----------------------------------------------------------------------------
@@ -668,8 +668,9 @@ static uint32_t cartFingerprint(const std::vector<uint8_t>& cart) {
 static uint32_t stateCrc32(const uint8_t* p, std::size_t n);   // défini plus bas
 void Machine::serializeState(StateArchive& ar) {
     uint32_t magic   = 0x4E535453u;   // 'NSTS'
-    uint16_t version = 15;            // v15 : + clé Notator dans CubaseDongle ;
-                                      // v14 : + CubaseDongle (clé Steinberg /ROM3) ;
+    uint16_t version = 16;            // v16 : + PortDevices (clés joystick/série, DAC, bouton) ;
+                                      // v15 : + clé Notator dans CartridgeKey ;
+                                      // v14 : + CartridgeKey (clé Steinberg /ROM3) ;
                                       // v13 : FujiNet RETIRÉ (matériel inexistant sur ST) —
                                       // FujiDevice, Acsi::fujiPending_ et le bit de drapeau
                                       // disparaissent, les bits suivants se décalent ;
@@ -778,7 +779,8 @@ void Machine::serializeState(StateArchive& ar) {
     ne2000.serialize(ar);   mapAt("usatan",  ar.saveSize());   // NE2000/EtherNEC (v10)
     usatan.serialize(ar);   mapAt("isp1160", ar.saveSize());   // UltraSatan (v12)
     isp1160.serialize(ar);  mapAt("dongle",  ar.saveSize());   // ISP1160/NetUSBee (v12)
-    dongle.serialize(ar);   mapAt("fin",     ar.saveSize());   // clé Cubase (v14)
+    dongle.serialize(ar);   mapAt("ports",   ar.saveSize());   // clé cartouche (v14/v15)
+    ports.serialize(ar);    mapAt("fin",     ar.saveSize());   // périphériques des ports (v16)
     if (ar.loading()) {
         // tbScheduledAt_ n'est pas dans le flux : chaque schedule(TIMER_B) lui est
         // apparié, donc il se re-dérive de l'échéance restaurée. Le laisser à la
@@ -787,7 +789,8 @@ void Machine::serializeState(StateArchive& ar) {
         // parti à la mauvaise position → une ligne raster décalée).
         const int64_t rem = sched.rawCyclesUntil(Scheduler::TIMER_B);
         tbScheduledAt_ = (rem == INT64_MIN) ? 0 : sched.now() + rem;
-        bus.dongleUds = dongle.wantsUds();   // la clé noire a pu (dé)verrouiller son choix
+        bus.refreshUds();   // la clé noire a pu (dé)verrouiller son choix
+        portsApply();       // les périphériques branchés font partie de l'état restauré
     }
 }
 
@@ -828,9 +831,9 @@ bool Machine::loadState(const uint8_t* data, std::size_t n) {
     uint32_t magic;   std::memcpy(&magic, data, 4);
     uint16_t version; std::memcpy(&version, data + 4, 2);
     if (magic != 0x4E535453u) return false;
-    if (version != 15) {
+    if (version != 16) {
         std::fprintf(stderr, "[state] rejected: unsupported format v%u (this build of "
-                     "NeoST writes v15) — older states are not compatible\n", version);
+                     "NeoST writes v16) — older states are not compatible\n", version);
         return false;
     }
     uint8_t  mt    = data[6];

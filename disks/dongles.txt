@@ -1,0 +1,22 @@
+# NeoST - which key to plug when a floppy image is mounted (disks/dongles.txt).
+# pattern (substring of the image name, case-insensitive) = port:device
+#   ports   : joy0 joy1 rs232 printer cartbutton   |   cart:model (cubase2 cubase3 auto notator)
+#   devices : leaderboard 10thframe cricket rugby soccer bat2 musicmaster jeannedarc prosound multiface urc
+# Only EMPTY slots are filled - an explicit setting on the Dongles page always wins.
+leader board    = joy1:leaderboard
+leaderboard     = joy1:leaderboard
+10th frame      = joy1:10thframe
+cricket captain = joy0:cricket
+rugby coach     = joy1:rugby
+soccer manager  = joy0:soccer
+b.a.t. ii       = rs232:bat2
+b.a.t. 2        = rs232:bat2
+bat ii          = rs232:bat2
+music master    = rs232:musicmaster
+jeanne d'arc    = rs232:jeannedarc
+notator         = cart:notator
+creator         = cart:notator
+cubase 2        = cart:cubase2
+cubase 3        = cart:cubase3
+cubase score    = cart:cubase3
+cubase audio    = cart:cubase3

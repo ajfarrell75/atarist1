@@ -162,11 +162,17 @@ public:
     void setOutputScale(float s) { outScale_ = s; }
     // STE : bypass du HPF interne — le mix YM+DMA est filtré en aval (DmaSound).
     void setHpfBypass(bool b) { hpfBypass_ = b; }
-    // DAC 8 bits sur le port parallèle (Pro Sound Designer, cf. io/PortDongle.hpp) :
+    // DAC 8 bits sur le port parallèle (Pro Sound Designer, cf. io/PortDevices.hpp) :
     // les écritures de R15 sont horodatées et rejouées comme un niveau continu ajouté
     // à la voie YM (R-2R non signé, 128 = repos ; le HPF aval ôte la composante continue).
-    void setPortBDac(bool on) { portBDac_ = on; audioRegs_[15] = regs_[15]; }
+    void setPortBDac(bool on) {
+        portBDac_ = on; audioRegs_[15] = regs_[15];
+        // Bloc DC PROPRE au DAC, amorcé sur le niveau courant : brancher le DAC ne
+        // produit pas d'échelon (sinon : un clic plein niveau quand R15 vaut 0 ou $FF).
+        dacLevel_ = dacHpX1_ = dacHpY0_ = on ? dacRaw(audioRegs_[15]) : 0.0f;
+    }
     bool portBDac() const { return portBDac_; }
+    void setPortBDacGain(float g) { dacGain_ = g; }   // fader page Sound (1 = neutre)
 
     // Choix du filtre de sortie selon la machine (port Hatari sound.c:1945-1952) :
     //  • STF/Mega ST  → LowPassFilter (condensateur C10 réel : filtre LES DEUX fronts),
@@ -298,7 +304,10 @@ private:
     float  outScale_ = 1.0f;
     bool   hpfBypass_ = false;   // STE : HPF déplacé sur le mix (non sérialisé, config machine)
     bool   portBDac_  = false;   // Pro Sound Designer : R15 → DAC (config, non sérialisé)
-    float  dacLevel_  = 0.0f;    // niveau courant du DAC (±0.5), ajouté avant le HPF
+    float  dacGain_   = 1.0f;    // fader utilisateur (config)
+    float  dacLevel_  = 0.0f;    // niveau brut courant du DAC (±0.5)
+    float  dacHpX1_ = 0.0f, dacHpY0_ = 0.0f;   // bloc DC du DAC (amorcé au branchement)
+    static float dacRaw(uint8_t r15) { return (float(r15) - 128.0f) / 256.0f; }
 
     // --- Modèle « push » horodaté (Phase C) ---------------------------------
     // Ombre des registres vue par la SYNTHÈSE (avancée par le rejeu des événements),

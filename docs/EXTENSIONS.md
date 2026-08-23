@@ -15,7 +15,7 @@
 > | [Modem Hayes](#modem-hayes-sur-rs-232---modem-gui-network) | pont RS-232 → TCP | équivalent des modems WiFi ESP8266 vendus pour ST |
 > | [Anneau MIDI](#anneau-midi-réseau--midimaze-en-ligne---midi-net-hpl) | MIDIMaze sur UDP | transpose un câblage MIDI réel |
 > | [Clé Steinberg](#clé-steinberg--dongle-cubase-sur-le-port-cartouche---dongle-gui-dongles) | PAL16R8 / EPLD sur /ROM3 | **matériel réel** (clés noire et rouge de Cubase) |
-> | [Adaptateurs de port](#adaptateurs-de-port--dongles-joystick--série--parallèle-et-boutons-de-cartouche---adapter-gui-dongles) | clés joystick/RS-232, DAC parallèle, boutons Multiface/URC | **matériel réel** (11 adaptateurs, inventaire Steem SSE) |
+> | [Périphériques des ports](#périphériques-des-ports--un-par-port--clés-joystick--série-dac-pro-sound-boutons---plug-gui-dongles) | clés joystick/RS-232, DAC parallèle, boutons Multiface/URC | **matériel réel** (11 adaptateurs, inventaire Steem SSE) |
 
 # Les extensions, une par une
 
@@ -207,6 +207,39 @@ d'adresse (A1-A8) d'une lecture « fantôme », la **réponse** revient sur D8-D
 | `auto` | — | — | — | heuristique MiSTery : premier accès `$FBxxxx` avec A7..A1 = 0 → rouge, sinon noire |
 | **C-Lab** (`notator`) | EP600 (= 5C060), 8 bascules D actives bas + 1 bascule d'armement | Notator, Creator (clé seule ou intégrée à l'Unitor-N) | **armement** : `FEEDB1 := STER` sur /ROM4 (STER = A8..A1 = `$75`, soit `$FA00EA`) ; **données** : désarmée → UDS de chaque cycle (comme la noire), armée → **descente** de /ROM3 (le CPU lit l'état *après* le coup d'horloge) ; resets asynchrones D9 (A4·A2) et D8 (A3·A1) pendant l'accès | fidèle aux équations TPH (JED EP600 décapsulé par Zippy, relevé Unnamed Villain, publié 10/2025 ; transcription C du firmware SidecarTridge `md-notator`) ; tout terme contient STER → l'armement remet les 8 bascules à 0, le motif bus exact ne compte donc pas |
 
+### Oracle : trace de référence et rejeu (`--key-log`, `--key-replay`)
+
+Aucun logiciel à clé n'est dans le dépôt : « fidèle aux équations » est une promesse
+tant que rien ne la mesure. L'oracle est une **trace de référence** — une ligne par
+signal du port cartouche, telle qu'un analyseur logique ou un SidecarTridge (`md-notator`
+voit /ROM3, /ROM4 et A1-A8) peut la produire sur une vraie machine :
+
+```
+R3 <A8..A1 hex> <octet D15..D8 lu>   lecture sous /ROM3 ($FBxxxx)
+R4 <A8..A1 hex>                      lecture sous /ROM4 ($FAxxxx) — armement Notator
+U  <A8..A1 hex>                      cycle /UDS hors fenêtre cartouche (clés cadencées par UDS)
+#  commentaire
+```
+
+`neost-headless --dongle MODEL --key-log FILE` écrit cette trace pendant une session ;
+`neost-headless --dongle MODEL --key-replay FILE` rejoue n'importe quelle trace (capture
+matérielle ou journal NeoST) contre la machine d'état **sans machine** et sort 0 si tous
+les `R3` concordent, 1 avec la première ligne en écart. C'est le test qui tranchera les
+incertitudes de chronologie (front de /ROM4, ordre UDS↔/ROM4 à l'armement) le jour où une
+capture existe — et il vaut pour les trois clés. ⚠ Une clé cadencée par UDS (noire,
+Notator) journalise **chaque** cycle bus : ~30 000 lignes par trame. Un auto-test rejoue
+une trace écrite par NeoST (0 écart) et une trace altérée (1 écart localisé). La page
+Dongles affiche en direct le nombre de sondages, le dernier octet rendu, l'état et
+l'armement.
+
+### Recette de capture matérielle (à faire quand une clé et un logiciel sont réunis)
+
+1. Sonder A1-A8, D8-D15, /ROM3, /ROM4, /UDS sur le port cartouche (analyseur logique ≥ 50 MHz,
+   ou firmware SidecarTridge dérivé de `md-notator` qui journalise au lieu de répondre).
+2. Échantillonner au front montant de /ROM3 (données valides) → `R3`, au front montant de
+   /ROM4 → `R4`, au front montant de /UDS hors $FA/$FB → `U`.
+3. `neost-headless roms/<tos>.img --dongle notator --key-replay capture.trace`.
+
 Pour la clé C-Lab, les accès `$FAxxxx` du **GEMDOS HD** de NeoST (qui vit sur /ROM4)
 **désarment** la clé (`FEEDB1 := 0`) — Notator le tolère s'il réarme à chaque contrôle,
 comme le ferait n'importe quel accès cartouche du TOS sur une vraie machine.
@@ -214,7 +247,8 @@ comme le ferait n'importe quel accès cartouche du TOS sur une vraie machine.
 Source des équations : cœur FPGA **MiSTery** (`atarist/cubase2_dongle.v`,
 `cubase3_dongle.v`, gyurco) — clé noire relevée par force brute sur une clé réelle
 (MasterOfGizmo, 2022), clé rouge depuis le JED de la puce décapsulée. Transcription en
-C++ dans `src/io/CubaseDongle.cpp`, épinglée par `neost-selftest` (propriétés : registres
+C++ dans `src/io/CartridgeKey.cpp` (classe `CartridgeKey`, abonnée au port cartouche via
+`core/CartDevice.hpp`), épinglée par `neost-selftest` (propriétés : registres
 à 0 au reset, motif de reset logiciel `%11011000` → 0 sur la noire, /UDS sans effet sur
 la rouge). Une lecture renvoie l'état **courant** (les bascules basculent en fin de
 cycle) ; octet faible `$FF`. Sérialisé dans le save-state (v14, drapeau bit 4).
@@ -227,32 +261,45 @@ A8 = bit de défi).
 
 ---
 
-## Adaptateurs de port — dongles joystick / série / parallèle et boutons de cartouche (`--adapter`, GUI Dongles)
+## Périphériques des ports — un par port : clés joystick / série, DAC Pro Sound, boutons (`--plug`, GUI Dongles)
 
 Tout ce qui se branchait sur un port **autre que la cartouche** pour qu'un logiciel le
-sonde. Classe `PortDongle` (`src/io/PortDongle.{hpp,cpp}`), un seul adaptateur à la fois
-(le « port 4 : Special Adapters » de Steem SSE). `--adapter NAME` en headless, `adapter=`
-dans `neost.cfg`, page **Dongles** de la configuration (où vit aussi la clé Steinberg).
-**OFF par défaut**, sans effet sur les étalons. État volatil non sérialisé (le type est une
-config).
+sonde. Classe `PortDevices` (`src/io/PortDevices.{hpp,cpp}`) : le modèle est **physique**,
+un périphérique optionnel par port — joystick 0, joystick 1, RS-232, imprimante, bouton de
+cartouche — et ils **coexistent** (Leader Board dans le joystick 1 + DAC Pro Sound sur
+l'imprimante + clé Cubase dans la cartouche, comme sur une vraie machine). On peut aussi se
+tromper de port, comme avec l'objet : une clé joystick entre dans les deux DE-9, le jeu
+n'en sonde qu'un (le GUI signale « wrong port for this game »). `--plug PORT=DEVICE`
+(répétable) ou `--adapter DEVICE` (port par défaut) en headless ; `joy0=`, `joy1=`,
+`rs232=`, `printer=`, `cartbutton=` dans `neost.cfg` (l'ancien `adapter=` est relu) ; page
+**Dongles**. **OFF par défaut**, sans effet sur les étalons. **Sérialisé** dans le
+save-state (v16) : l'oscillateur de Cricket et la date de Music Master font partie du
+déterminisme, et les périphériques branchés sont restaurés avec l'état.
 
-| `--adapter` | Logiciel | Port | Ce que fait la clé | Source |
-|-------------|----------|------|--------------------|--------|
+**Branchement automatique** : `disks/dongles.txt` (créé avec les titres connus s'il manque,
+éditable) associe un motif du nom d'image à un branchement (`leader board = joy1:leaderboard`,
+`notator = cart:notator`). Au montage d'une disquette (GUI, borne, `--disk`), NeoST remplit
+les emplacements **vides** seulement — un réglage explicite prime — et l'annonce. `auto_dongle=0`
+ou `--no-auto-dongle` pour désactiver. Logique pure dans `io/DongleTable`, auto-testée.
+
+| `DEVICE` | Logiciel | Port sondé | Ce que fait la clé | Source |
+|----------|----------|------|--------------------|--------|
 | `leaderboard`, `10thframe` | Leader Board, 10th Frame (Access) | joystick 1 | cavalier HAUT+BAS : le jeu lit les deux bits à 1, impossible avec un vrai joystick | Steem `ikbd.cpp`, WinUAE `JOY1DAT == 0x0101` |
 | `cricket`, `soccer` | Cricket Captain, Multi Player Soccer Manager (D&H) | joystick 0 | oscillateur : nibble direction `%1100` ↔ `%1101` à chaque sonde IKBD (« must continuously change state ») | Steem, WinUAE |
 | `rugby` | Rugby Coach (D&H) | joystick 1 | idem | Steem |
-| `bat2` | B.A.T. II (Ubi Soft) | RS-232 | CTS (GPIP2) lu à 0 en permanence (sur ST ; l'Amiga exige une impulsion DTR) | Steem `ior.cpp` |
+| `bat2` | B.A.T. II (Ubi Soft) | RS-232 | CTS (GPIP2) lu à 0 en permanence (sur ST ; l'Amiga exige une impulsion DTR). ⚠ NeoST et Hatari lisent déjà CTS à 0 au repos : la clé est redondante, gardée pour la cohérence avec Steem | Steem `ior.cpp` |
 | `musicmaster` | Music Master (Computer's Dream) | RS-232 | DTR recopié sur DCD (GPIP1) avec **~200 cycles** de retard : la première lecture après le basculement rend encore l'ancienne valeur | Steem « inspired by WinUAE » |
 | `jeannedarc` | Jeanne d'Arc (Chip) | RS-232 | DCD assertée quand le mot (RTS\|DTR) **décroît sans s'annuler** : `DCD = !(new && new < old)` | Steem `iow.cpp` |
-| `prosound` | Wings of Death, Lethal Xcess (Thalion) | parallèle | **pas une clé** : DAC 8 bits R-2R Pro Sound Designer (Eidersoft) sur le port imprimante — samples sur STF sans son DMA. R15 horodaté et rejoué par le YM2149 avant son HPF (`YM2149::setPortBDac`) | Steem `SSE_DONGLE_PROSOUND` |
+| `prosound` | Wings of Death, Lethal Xcess (Thalion) | parallèle | **pas une clé** : DAC 8 bits R-2R Pro Sound Designer (Eidersoft) sur le port imprimante — samples sur STF sans son DMA. R15 horodaté et rejoué par le YM2149 avec son propre bloc DC (amorcé au branchement : pas de clic) et son **fader** page Sound (`mix_dac=`) | Steem `SSE_DONGLE_PROSOUND` |
 | `multiface` | Multiface ST (Romantic Robot) | cartouche + câble moniteur | bouton **freeze** : GPIP7 (détection moniteur) tiré à 0 le temps de l'appui → IRQ niveau 7 prise par la ROM (`--cart`) ; relâché à la VBL suivante. Bouton : page Dongles, `--button-at N` | Steem `run.cpp`/`options.cpp` |
 | `urc` | Ultimate Ripper (Gotcha) | cartouche + port série | même idée sur la ligne RI (GPIP6) | Steem |
 
 Câblage NeoST : joystick → `Ikbd::setJoystickProbe` (par-dessus l'état hôte) ; série →
 abonné port A du PSG (`Machine`) + crochet de lecture `$FFFA01` (`Mfp::setGpipReadHook`,
 B.A.T. II / Music Master sont **sondés**, pas armés en IRQ) ou ligne MFP avec front AER
-(Jeanne d'Arc, boutons) ; parallèle → `YM2149::setPortBDac`. Auto-tests de logique pure
-dans `neost-selftest` (un par protocole).
+(Jeanne d'Arc, boutons) ; parallèle → `YM2149::setPortBDac`. `Machine::portsApply` remet
+les lignes au repos quand on débranche (DCD repos actif, RI, GPIP7). Auto-tests de logique
+pure dans `neost-selftest` (un par protocole, plus connecteurs et coexistence).
 
 ⚠ **Validation** : les protocoles sont transcrits de Steem/WinUAE, aucun des jeux à clé
 n'est dans le dépôt. Wings of Death (présent, `disks/stx`) prouve seulement que le DAC
