@@ -1,10 +1,19 @@
 # Changelog — NeoST
 
 (c) 2026 VERHILLE Arnaud. **La chronologie** : releases, puis les chantiers datés dans
-l'ordre inverse. Version courante : **0.5.2**.
+l'ordre inverse. Version courante : **0.5.4**.
 
 - « NeoST gère-t-il X ? » → [`docs/IMPLEMENTED.md`](docs/IMPLEMENTED.md) (inventaire par puce)
 - « Que reste-t-il ? » → [`TODO.md`](TODO.md)
+
+## 0.5.4 — dongles, ports, MIDI vérifié (2026-08-23)
+
+Depuis la 0.5.2 : **clés de protection** (Cubase rouge/noire, Notator/Creator, Leader
+Board, Cricket Captain, B.A.T. II, Music Master, Jeanne d'Arc, Multiface, Ultimate
+Ripper, DAC Pro Sound) avec page Dongles, `disks/dongles.txt` et oracle de rejeu ;
+**page Input par port** (souris / manette / clavier sur chaque DE-9) ; **Cubase Lite
+vérifié note à note** en headless, corpus MIDI piano/blues ; port MIDI ALSA sous Linux ;
+save-state v16. Détail dans les chantiers datés ci-dessous.
 
 ## Page Input : ce qu'on branche dans les deux ports joystick (2026-08-23)
 
