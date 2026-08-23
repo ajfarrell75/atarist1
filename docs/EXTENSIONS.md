@@ -14,7 +14,8 @@
 > | [EtherNEC](#ethernec--ne2000-sur-le-port-cartouche---ethernec-gui-network) | NE2000, port cartouche | **matériel réel** (montage T. Redelberger) |
 > | [Modem Hayes](#modem-hayes-sur-rs-232---modem-gui-network) | pont RS-232 → TCP | équivalent des modems WiFi ESP8266 vendus pour ST |
 > | [Anneau MIDI](#anneau-midi-réseau--midimaze-en-ligne---midi-net-hpl) | MIDIMaze sur UDP | transpose un câblage MIDI réel |
-> | [Clé Steinberg](#clé-steinberg--dongle-cubase-sur-le-port-cartouche---dongle-gui-midi) | PAL16R8 / EPLD sur /ROM3 | **matériel réel** (clés noire et rouge de Cubase) |
+> | [Clé Steinberg](#clé-steinberg--dongle-cubase-sur-le-port-cartouche---dongle-gui-dongles) | PAL16R8 / EPLD sur /ROM3 | **matériel réel** (clés noire et rouge de Cubase) |
+> | [Adaptateurs de port](#adaptateurs-de-port--dongles-joystick--série--parallèle-et-boutons-de-cartouche---adapter-gui-dongles) | clés joystick/RS-232, DAC parallèle, boutons Multiface/URC | **matériel réel** (11 adaptateurs, inventaire Steem SSE) |
 
 # Les extensions, une par une
 
@@ -192,7 +193,7 @@ l'ATL/ITL et le hub racine sont là, il manque un « device » derrière `HcRhPo
 * Save-states : **v13** (UltraSatan + ISP1160 sérialisés ; drapeaux d'en-tête bit2 = UltraSatan,
   bit3 = NetUSBee — les configs save/load doivent concorder).
 
-## Clé Steinberg — dongle Cubase sur le port cartouche (`--dongle`, GUI MIDI)
+## Clé Steinberg — dongle Cubase sur le port cartouche (`--dongle`, GUI Dongles)
 
 La protection de Cubase ST : une clé dans le port cartouche, lue en `$FB0000-$FBFFFF`
 (/ROM3 — le TOS ne sonde que /ROM4 `$FA0000`, la clé lui est invisible et cohabite avec
@@ -219,3 +220,57 @@ cubase3 --disk cubase310.st --frames 3000 --screenshot s.ppm` ; si bombes ou « 
 not found », tracer `--trace` autour des lectures `$FB0000` (la rouge lit avec A7..A1 = 0,
 A8 = bit de défi).
 
+---
+
+## Adaptateurs de port — dongles joystick / série / parallèle et boutons de cartouche (`--adapter`, GUI Dongles)
+
+Tout ce qui se branchait sur un port **autre que la cartouche** pour qu'un logiciel le
+sonde. Classe `PortDongle` (`src/io/PortDongle.{hpp,cpp}`), un seul adaptateur à la fois
+(le « port 4 : Special Adapters » de Steem SSE). `--adapter NAME` en headless, `adapter=`
+dans `neost.cfg`, page **Dongles** de la configuration (où vit aussi la clé Steinberg).
+**OFF par défaut**, sans effet sur les étalons. État volatil non sérialisé (le type est une
+config).
+
+| `--adapter` | Logiciel | Port | Ce que fait la clé | Source |
+|-------------|----------|------|--------------------|--------|
+| `leaderboard`, `10thframe` | Leader Board, 10th Frame (Access) | joystick 1 | cavalier HAUT+BAS : le jeu lit les deux bits à 1, impossible avec un vrai joystick | Steem `ikbd.cpp`, WinUAE `JOY1DAT == 0x0101` |
+| `cricket`, `soccer` | Cricket Captain, Multi Player Soccer Manager (D&H) | joystick 0 | oscillateur : nibble direction `%1100` ↔ `%1101` à chaque sonde IKBD (« must continuously change state ») | Steem, WinUAE |
+| `rugby` | Rugby Coach (D&H) | joystick 1 | idem | Steem |
+| `bat2` | B.A.T. II (Ubi Soft) | RS-232 | CTS (GPIP2) lu à 0 en permanence (sur ST ; l'Amiga exige une impulsion DTR) | Steem `ior.cpp` |
+| `musicmaster` | Music Master (Computer's Dream) | RS-232 | DTR recopié sur DCD (GPIP1) avec **~200 cycles** de retard : la première lecture après le basculement rend encore l'ancienne valeur | Steem « inspired by WinUAE » |
+| `jeannedarc` | Jeanne d'Arc (Chip) | RS-232 | DCD assertée quand le mot (RTS\|DTR) **décroît sans s'annuler** : `DCD = !(new && new < old)` | Steem `iow.cpp` |
+| `prosound` | Wings of Death, Lethal Xcess (Thalion) | parallèle | **pas une clé** : DAC 8 bits R-2R Pro Sound Designer (Eidersoft) sur le port imprimante — samples sur STF sans son DMA. R15 horodaté et rejoué par le YM2149 avant son HPF (`YM2149::setPortBDac`) | Steem `SSE_DONGLE_PROSOUND` |
+| `multiface` | Multiface ST (Romantic Robot) | cartouche + câble moniteur | bouton **freeze** : GPIP7 (détection moniteur) tiré à 0 le temps de l'appui → IRQ niveau 7 prise par la ROM (`--cart`) ; relâché à la VBL suivante. Bouton : page Dongles, `--button-at N` | Steem `run.cpp`/`options.cpp` |
+| `urc` | Ultimate Ripper (Gotcha) | cartouche + port série | même idée sur la ligne RI (GPIP6) | Steem |
+
+Câblage NeoST : joystick → `Ikbd::setJoystickProbe` (par-dessus l'état hôte) ; série →
+abonné port A du PSG (`Machine`) + crochet de lecture `$FFFA01` (`Mfp::setGpipReadHook`,
+B.A.T. II / Music Master sont **sondés**, pas armés en IRQ) ou ligne MFP avec front AER
+(Jeanne d'Arc, boutons) ; parallèle → `YM2149::setPortBDac`. Auto-tests de logique pure
+dans `neost-selftest` (un par protocole).
+
+⚠ **Validation** : les protocoles sont transcrits de Steem/WinUAE, aucun des jeux à clé
+n'est dans le dépôt. Wings of Death (présent, `disks/stx`) prouve seulement que le DAC
+atteint le mixeur (`--sound-dump` diffère d'un échelon continu filtré) — l'option « Pro
+Sound » du menu du jeu reste à exercer.
+
+### Inventaire des dongles ST connus (recherche 2026-08-23) et pourquoi le reste n'est pas émulé
+
+| Logiciel | Port | Matériel | Statut |
+|----------|------|----------|--------|
+| Cubase 2.01, Avalon 2.1, Synthworks Wavestation | cartouche | **clé noire** PAL/GAL16V8 (routine « A » du forum exxos) | Cubase 2 émulé (équations MiSTery) ; Avalon/Synthworks : même famille, **équations distinctes non relevées** |
+| Cubase 3.10, Score 2.0x, Audio Falcon | cartouche | **clé rouge** EPLD 5C060 | émulé |
+| Notator / Creator (C-Lab), Unitor-N, Log 3 (Emagic, 2 puces) | cartouche | EP600 ; JED extrait par décapsulation (Zippy, 2023) mais **non publié** ; lu dans les IRQ timer/MIDI | non émulable sans le relevé ; la communauté vise un clone CPLD |
+| Pro-24 / Twenty Four, Proscore | cartouche | GAL16V8 | aucun relevé public (Steem : « failed like an old dog ») ; Pro 24 v2.1 tourne sans clé |
+| Music Master (Computer's Dream) | série | — | émulé |
+| Zero-X, Virtuoso, SY77 SWS, X-Analyzer, SoundPool (clé + fichier licence) | cartouche | inconnu | aucun relevé |
+| Zodiac (astrologie) | joystick 1 | LED clignotante | protocole inconnu |
+| Dames Grand-Maître, Italy '90, Logistix, Scala, Striker Manager, Football Director 2 | joystick (Amiga) | résistances/condensateurs sur POTX/POTY | **Amiga seulement** (ports analogiques) — WinUAE |
+| Robocop 3 | — | — | sur ST : protection disque + codes du manuel, pas de clé |
+| NeoN Grafix 3D | LAN Falcon | boucle TX→RX dans un boîtier de starter | hors périmètre (Falcon) |
+| DynaBlaster, Jeanne d'Arc, B.A.T. II, Leader Board, 10th Frame, Cricket Captain, Rugby Coach | joystick / série | voir ci-dessus | émulés sauf DynaBlaster (protocole inconnu) |
+
+Sources : Steem SSE (`steem/headers/stports.h`, `ior.cpp`, `iow.cpp`, `ikbd.cpp`, `run.cpp`,
+miroir github.com/mattiasgustavsson/steem-crt), WinUAE `dongle.cpp`, AtariForumWiki
+« Dongle protections », atari-forum « Dongle Protections » (t=14437), « Notator Dongle Dump »
+(t=43078), « Cartridge keys and emulation » (exxosforum t=2781), MiSTery `cubase*_dongle.v`.

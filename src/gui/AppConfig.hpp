@@ -58,6 +58,9 @@ struct Config { std::string rom; std::string disk; std::string diskb; std::strin
                 // Clé Steinberg sur /ROM3 ($FB0000) : "" (aucune), cubase3 (rouge :
                 // Cubase 3.10/Score/Audio), cubase2 (noire : Cubase 2.01), auto.
                 std::string dongle;
+                // Adaptateur joystick/série/parallèle (page Dongles) : "" (aucun) ou un
+                // identifiant PortDongle::id — bat2, musicmaster, leaderboard, prosound…
+                std::string adapter;
                 bool ethernec = false; // NE2000/EtherNEC sur le port cartouche
                 bool netusbee = false; // NetUSBee : NE2000 + ISP1160 USB sur le port cartouche (exclusif d'ethernec)
                 bool ultrasatan = false; // UltraSatan sur les cibles ACSI 0-1 (slot 1 = acsi, slot 2 = sd2)

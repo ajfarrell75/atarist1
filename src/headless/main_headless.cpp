@@ -35,6 +35,7 @@
 #endif
 #include "core/Tracer.hpp"
 #include "io/CubaseDongle.hpp"
+#include "io/PortDongle.hpp"
 #include "core/Symbols.hpp"
 #include "core/AudioMix.hpp"   // chaîne de mixage partagée (--sound-dump)
 
@@ -109,6 +110,11 @@ void usage() {
         "  --dongle MODEL    Steinberg key on the cartridge port (/ROM3, $FB0000):\n"
         "                    cubase3 (red key: Cubase 3.10/Score/Audio), cubase2 (black\n"
         "                    key: Cubase 2.01, needs a 68000-exact bus pattern), auto\n"
+        "  --adapter NAME    dongle/adapter on the joystick, serial or printer port:\n"
+        "                    leaderboard, 10thframe, cricket, rugby, soccer (joystick),\n"
+        "                    bat2, musicmaster, jeannedarc (RS-232), prosound (8-bit DAC\n"
+        "                    on the printer port), multiface, urc (cartridge buttons)\n"
+        "  --button-at N     press the Multiface/Ultimate Ripper button at frame N\n"
         "  --midi-dump FILE  log every MIDI OUT byte as '<cpu cycle> <hex>' (one per\n"
         "                    line) — tools/midi_compare.py turns it into an SMF or\n"
         "                    checks it against the song a sequencer was asked to play\n"
@@ -904,6 +910,8 @@ int main(int argc, char** argv) {
     std::string sd1Img, sd2Img;                  // --sd1/--sd2 IMG : images des slots SD
     std::string midiNetPeer;                     // --midi-net host:port[:listen] : anneau MIDI UDP
     std::string dongleModel;                     // --dongle cubase2|cubase3|auto
+    std::string adapterName;                     // --adapter NAME (PortDongle::id)
+    int         buttonAtFrame = -1;              // --button-at N : bouton Multiface/URC
     std::string midiDumpPath;                    // --midi-dump FILE : journal « cycle octet » du MIDI OUT
     int         midiNetListen  = 6820;           // port d'écoute par défaut
     std::string soundDumpPath;                   // --sound-dump F : WAV 48 kHz de la boucle --frames
@@ -1018,6 +1026,8 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(a, "--sd2"))             { ultrasatan = true; sd2Img = next(a); }
         else if (!std::strcmp(a, "--midi-dump")) midiDumpPath = next(a);
         else if (!std::strcmp(a, "--dongle"))    dongleModel  = next(a);
+        else if (!std::strcmp(a, "--adapter"))   adapterName  = next(a);
+        else if (!std::strcmp(a, "--button-at")) buttonAtFrame = std::atoi(next(a));
         else if (!std::strcmp(a, "--azerty"))   g_azerty = true;
         else if (!std::strcmp(a, "--midi-net")) {
             // "host:port" ou "host:port:listen" (le port d'écoute par défaut est 6820).
@@ -1269,6 +1279,19 @@ int main(int argc, char** argv) {
         else
             std::fprintf(stderr, "[headless] --dongle refused: EtherNEC/NetUSBee decode the whole cartridge window\n");
     }
+    // Adaptateur joystick/série/parallèle (--adapter) : cf. io/PortDongle.hpp.
+    if (!adapterName.empty()) {
+        const PortDongle::Type t = PortDongle::fromId(adapterName.c_str());
+        if (t == PortDongle::Type::None) {
+            std::fprintf(stderr, "[headless] --adapter %s: unknown (", adapterName.c_str());
+            for (int i = 1; i < int(PortDongle::Type::Count); ++i)
+                std::fprintf(stderr, "%s%s", i > 1 ? ", " : "", PortDongle::id(PortDongle::Type(i)));
+            std::fprintf(stderr, ")\n");
+            return 2;
+        }
+        machine.setAdapter(t);
+        std::fprintf(stderr, "[headless] adapter: %s\n", PortDongle::label(t));
+    }
     // Anneau MIDI réseau (--midi-net) : MIDI OUT → UDP → pair aval ; datagrammes
     // de l'amont → MIDI IN. Débranche le bouclage interne de l'ACIA MIDI.
 #ifdef NEOST_WITH_NET
@@ -1515,6 +1538,10 @@ int main(int argc, char** argv) {
                 std::fprintf(stderr, "[headless] FAILED to open RAM dump %s\n", dumpPath.c_str());
                 outFail = true;
             }
+        }
+        if (buttonAtFrame >= 0 && frame == buttonAtFrame) {
+            machine.pressAdapterButton();
+            std::fprintf(stderr, "[headless] adapter button pressed at frame %d\n", frame);
         }
         if (joyAtFrame >= 0 && frame == joyAtFrame) {
             machine.ikbd.setJoystick(0, joyAt1);

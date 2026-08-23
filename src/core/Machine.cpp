@@ -210,6 +210,7 @@ Machine::Machine(std::size_t ramBytes, CpuCore cpuCore, MachineType machine)
     // ET DTR→RI (GPIP6) — comme le câble de test du diagnostic « S RS232 ». Le port A
     // est actif BAS (bit=0 → ligne assertée). On rafraîchit l'IPL (un canal a pu lever).
     psg.setPortASink([this](uint8_t a) {
+        if (adapter.attached()) { adapter.onPortA(a, sched.now(), mfp); cpu.updateIpl(); }
         if (!mfp.loopback()) return;        // connecteur non branché → lignes inertes
         const bool rts = (a & 0x08) != 0;   // bit3 = 1 → RTS assertée (repos bit=0 → désassertée)
         const bool dtr = (a & 0x10) != 0;   // bit4 = 1 → DTR assertée
@@ -244,6 +245,9 @@ Machine::Machine(std::size_t ramBytes, CpuCore cpuCore, MachineType machine)
         cpu.updateIpl();
     });
     ikbd.setJoystickProbe([this](uint8_t& joy0, uint8_t& joy1) {
+        // Adaptateur sur un port joystick (Leader Board, Cricket Captain…) : recouvre
+        // les directions, par-dessus l'état hôte.
+        if (adapter.attached()) adapter.onJoystick(joy0, joy1);
         // Hors fixture de bouclage : conserver l'état hôte déjà amorcé par l'IKBD
         // (manette USB / émulation clavier posée par le frontend via setJoystick).
         if (!mfp.loopback()) return;
@@ -521,6 +525,7 @@ void Machine::onVbl() {
     // ≈ 20032 µs (50 Hz) / 16700 µs (60 Hz) / 14028 µs (71 Hz mono).
     const int64_t kVblMicro = static_cast<int64_t>(lpf_) * cpl_ / 8;
     ikbd.onVbl(kVblMicro);
+    adapter.onVbl(mfp);   // relâche le bouton Multiface/URC enfoncé pendant la trame
 }
 
 // -----------------------------------------------------------------------------

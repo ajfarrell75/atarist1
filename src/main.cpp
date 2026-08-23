@@ -1900,6 +1900,8 @@ struct ConfigUi {
     bool reqMidiPanic = false;            // bouton « All notes off » de la page MIDI
     int  reqMidiLoopback = -1;            // case OUT->IN de la page MIDI
     int  reqDongle = -1;                  // clé Steinberg : 0 none, 1 cubase2, 2 cubase3, 3 auto
+    int  reqAdapter = -1;                 // adaptateur joystick/série/parallèle : PortDongle::Type
+    bool reqAdapterButton = false;        // bouton Multiface / Ultimate Ripper (page Dongles)
     std::string mt32Status;               // lecture : modèle chargé ou erreur
     // Mixeur (page Sound) : édité EN PLACE par la page ; mixDirty = appliquer, mixDone = persister.
     float mixYm = 1.0f, mixDma = 1.0f, mixDrive = 1.0f, mixMt32 = 1.0f;
@@ -1922,7 +1924,7 @@ struct ConfigUi {
 
 // Page ouverte. Statique : on revient là où on était en rouvrant la fenêtre.
 enum ConfigPage {
-    kCfgMachine = 0, kCfgMem, kCfgRom, kCfgHd, kCfgCart, kCfgNet,
+    kCfgMachine = 0, kCfgMem, kCfgRom, kCfgHd, kCfgCart, kCfgNet, kCfgDongle,
     kCfgScreen, kCfgSound, kCfgMidi, kCfgInput, kCfgEmul, kCfgProfiles, kCfgKiosk, kCfgCount
 };
 int g_cfgPage = kCfgMachine;
@@ -2012,6 +2014,7 @@ void drawConfigWindow(ConfigUi& ui) {
         ICON_FA_SAVE " ROM / TOS",     ICON_FA_HDD " Hard disks",
         ICON_FA_COMPACT_DISC " Cartridge",
         ICON_FA_WIFI " Network",
+        ICON_FA_KEY " Dongles",
         ICON_FA_DESKTOP " Screen",     ICON_FA_VOLUME_UP " Sound",
         ICON_FA_MUSIC " MIDI",
         ICON_FA_GAMEPAD " Input",      ICON_FA_BOLT " Emulation",
@@ -2125,6 +2128,56 @@ void drawConfigWindow(ConfigUi& ui) {
                         !ui.machine->bus.mountedCartPath().empty(),
                         ui.reqModem, ui.reqEther, ui.reqNetUsbee);
         break;
+    // ── Dongles ───────────────────────────────────────────────────────────────
+    // Tout ce qui se branchait sur un port pour qu'un logiciel le sonde : les clés
+    // Steinberg (port cartouche, cf. io/CubaseDongle.hpp) et les adaptateurs Steem
+    // (joystick / série / parallèle / boutons de cartouche, cf. io/PortDongle.hpp).
+    case kCfgDongle: {
+        // Clé Steinberg sur le port cartouche (/ROM3 $FB0000, invisible du TOS).
+        ImGui::TextDisabled("STEINBERG KEY (cartridge port, $FB0000)");
+        int dk = cfg.dongle == "cubase2" ? 1 : cfg.dongle == "cubase3" ? 2 : cfg.dongle == "auto" ? 3 : 0;
+        bool dkCh = false;
+        dkCh |= ImGui::RadioButton("None##key", &dk, 0); ImGui::SameLine();
+        dkCh |= ImGui::RadioButton("Red key (Cubase 3.1 / Score / Audio)", &dk, 2);
+        dkCh |= ImGui::RadioButton("Black key (Cubase 2.01)", &dk, 1); ImGui::SameLine();
+        dkCh |= ImGui::RadioButton("Auto", &dk, 3);
+        if (dkCh) ui.reqDongle = dk;
+        ImGui::TextDisabled("  PAL16R8 / 5C060 state machines (MiSTery equations). Cubase Lite needs none.");
+        ImGui::TextDisabled("  Black key: clocked by every CPU bus cycle - best effort.");
+        ImGui::Separator();
+
+        // Adaptateurs sur les autres ports : un seul à la fois (comme Steem).
+        ImGui::TextDisabled("JOYSTICK / SERIAL / PRINTER PORT ADAPTER (one at a time)");
+        const PortDongle::Type curAd = ui.machine->adapter.type();
+        int ad = int(curAd);
+        bool adCh = false;
+        for (int i = 0; i < int(PortDongle::Type::Count); ++i) {
+            const auto t = PortDongle::Type(i);
+            if (t == PortDongle::Type::Bat2 || t == PortDongle::Type::LeaderBoard
+             || t == PortDongle::Type::ProSound || t == PortDongle::Type::Multiface)
+                ImGui::Spacing();
+            adCh |= ImGui::RadioButton(PortDongle::label(t), &ad, i);
+        }
+        if (adCh) ui.reqAdapter = ad;
+        ImGui::Spacing();
+        if (ui.machine->adapter.hasButton()) {
+            if (ImGui::Button(curAd == PortDongle::Type::Multiface ? "Press FREEZE button"
+                                                                    : "Press RIPPER button"))
+                ui.reqAdapterButton = true;
+            ImGui::SameLine();
+            ImGui::TextDisabled(curAd == PortDongle::Type::Multiface
+                                ? "pulls GPIP7 (monitor) low until next VBL - load the ROM as a cartridge"
+                                : "pulls RI (GPIP6) until next VBL - load the ROM as a cartridge");
+        }
+        ImGui::TextWrapped("Joystick dongles override the directions the IKBD reports (Leader Board: "
+                           "up+down at once; Cricket & co: an oscillator). Serial dongles drive CTS/DCD "
+                           "from RTS/DTR. Pro Sound Designer is not a key: an 8-bit DAC on the printer "
+                           "port, used by Wings of Death / Lethal Xcess on an STF. Protocols from Steem "
+                           "SSE and WinUAE; Hatari emulates none of them. Not emulated (no public "
+                           "dump): Notator/Log 3, Pro-24, Avalon, Zodiac.");
+        break;
+    }
+
     case kCfgScreen: {
         ImGui::TextDisabled("Atari monitor");
         if (ImGui::RadioButton("Color (low/medium res)", ui.color))  ui.reqMonitor = 1;
@@ -2260,17 +2313,7 @@ void drawConfigWindow(ConfigUi& ui) {
         ImGui::TextDisabled("  A real ST has none. Cubase MIDI Thru = feedback.");
         ImGui::Separator();
 
-        // Clé Steinberg sur le port cartouche (/ROM3 $FB0000, invisible du TOS).
-        ImGui::TextDisabled("STEINBERG KEY (cartridge port)");
-        int dk = cfg.dongle == "cubase2" ? 1 : cfg.dongle == "cubase3" ? 2 : cfg.dongle == "auto" ? 3 : 0;
-        bool dkCh = false;
-        dkCh |= ImGui::RadioButton("None", &dk, 0); ImGui::SameLine();
-        dkCh |= ImGui::RadioButton("Red key (Cubase 3.1 / Score / Audio)", &dk, 2);
-        dkCh |= ImGui::RadioButton("Black key (Cubase 2.01)", &dk, 1); ImGui::SameLine();
-        dkCh |= ImGui::RadioButton("Auto", &dk, 3);
-        if (dkCh) ui.reqDongle = dk;
-        ImGui::TextDisabled("  PAL16R8 / 5C060 state machines at $FB0000. Cubase Lite needs none.");
-        ImGui::TextDisabled("  Black key: clocked by every CPU bus cycle - best effort.");
+        ImGui::TextDisabled("Steinberg key (Cubase 2/3): see the Dongles page.");
         ImGui::Separator();
 
         // Panique : indispensable dès qu'on coupe une sortie en plein accord.
@@ -2743,6 +2786,12 @@ int main(int argc, char** argv) {
             g_stateMsgFrames = 150;
             cfg.dongle.clear();
         }
+    }
+    // Adaptateur joystick/série/parallèle (adapter= dans neost.cfg).
+    if (!cfg.adapter.empty()) {
+        const PortDongle::Type at = PortDongle::fromId(cfg.adapter.c_str());
+        if (at == PortDongle::Type::None) cfg.adapter.clear();   // identifiant inconnu : on oublie
+        machine.setAdapter(at);
     }
     // Sortie MIDI hôte (macOS) : synthé GM intégré et/ou port CoreMIDI virtuel. Dès
     // qu'une sortie est ouverte, l'ACIA y envoie MIDI OUT (au lieu du bouclage).
@@ -3755,6 +3804,13 @@ int main(int argc, char** argv) {
                                               cfgUi.reqMidiLoopback = -1;
                                               machine.midi.setLoopback(cfg.midiLoopback);
                                               saveConfig(exeDir, cfg, &machine); }
+            if (cfgUi.reqAdapter >= 0) {
+                const auto t = PortDongle::Type(cfgUi.reqAdapter); cfgUi.reqAdapter = -1;
+                machine.setAdapter(t);
+                cfg.adapter = t == PortDongle::Type::None ? "" : PortDongle::id(t);
+                saveConfig(exeDir, cfg, &machine);
+            }
+            if (cfgUi.reqAdapterButton) { cfgUi.reqAdapterButton = false; machine.pressAdapterButton(); }
             if (cfgUi.reqDongle >= 0) {
                 static const char* const names[] = { "", "cubase2", "cubase3", "auto" };
                 const int d = cfgUi.reqDongle & 3; cfgUi.reqDongle = -1;

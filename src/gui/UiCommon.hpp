@@ -48,6 +48,8 @@
 #define ICON_FA_COG           "\xef\x80\x93"
 // WiFi U+F1EB (page Network) : même plage de police.
 #define ICON_FA_WIFI          "\xef\x87\xab"
+// Clé U+F084 (page Dongles) : même plage de police.
+#define ICON_FA_KEY           "\xef\x82\x84"
 
 // Bouton à ICÔNE SEULE, infobulle au survol. Renvoie true au clic.
 bool IconButton(const char* icon, const char* tooltip);

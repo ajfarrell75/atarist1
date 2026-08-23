@@ -140,7 +140,9 @@ uint8_t Mfp::read8(uint32_t addr) {
             // MFP_GPIP_ReadByte_Main : GPIP = (GPIP & DDR) | (entrées & ~DDR)).
             // ddr vaut 0 par défaut (tout en entrée) → le résultat reste exactement les entrées.
             const uint8_t v = gpipInput();
-            return uint8_t((gpip & ddr) | (v & ~ddr));
+            uint8_t r = uint8_t((gpip & ddr) | (v & ~ddr));
+            if (gpipHook_) gpipHook_(r);     // adaptateur sur le port série (PortDongle)
+            return r;
         }
         case 0x03: return aer;
         case 0x05: return ddr;
@@ -717,6 +719,7 @@ uint8_t Mfp::gpipInput() const {
     bool bit7 = colorMonitor_;                   // moniteur : couleur=1, mono=0
     if (hasDmaSound_) bit7 ^= xsint_;            // STE/Mega STE : XOR ligne XSINT son DMA
     if (!bit7)          v &= ~0x80;              // bit7 = moniteur^XSINT
+    if (monButton_)     v &= ~0x80;              // bouton freeze Multiface (PortDongle)
     if (riLine_)        v |= 0x40;               // bit6 = RS232 RI (niveau, 0 au repos)
     if (fdcLine_)       v &= ~0x20;              // bit5 = FDC
     if (aciaLineKbd_ || aciaLineMidi_) v &= ~0x10;  // bit4 = ACIA clavier OU MIDI (wire-OR)

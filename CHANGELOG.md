@@ -6,6 +6,22 @@ l'ordre inverse. Version courante : **0.5.2**.
 - « NeoST gère-t-il X ? » → [`docs/IMPLEMENTED.md`](docs/IMPLEMENTED.md) (inventaire par puce)
 - « Que reste-t-il ? » → [`TODO.md`](TODO.md)
 
+## Page « Dongles » et adaptateurs de port : `PortDongle` (2026-08-23)
+
+Après les clés Steinberg, **les autres** : recherche sur les dongles ST (Steem SSE, WinUAE,
+MiSTery, forums — inventaire dans `docs/EXTENSIONS.md`), puis transcription des onze
+adaptateurs que Steem émule. `--adapter NAME`, `adapter=`, nouvelle page **Dongles** de la
+configuration (la clé Steinberg y déménage depuis la page MIDI). Joystick : **Leader Board /
+10th Frame** (haut+bas), **Cricket Captain / Rugby Coach / Multi Player Soccer Manager**
+(oscillateur `%1100`/`%1101`). RS-232 : **B.A.T. II** (CTS à 0), **Music Master** (DTR → DCD
+retardé de 200 cycles), **Jeanne d'Arc** (DCD sur décroissance de RTS|DTR). Parallèle :
+**Pro Sound Designer**, DAC 8 bits sur le port imprimante (Wings of Death, Lethal Xcess sur
+STF) — R15 horodaté et rejoué par le YM avant son HPF. Boutons **Multiface ST** (GPIP7) et
+**Ultimate Ripper** (RI) : page Dongles ou `--button-at N`, relâchés à la VBL. Crochets :
+`Mfp::setGpipReadHook`/`setMonitorButton`, `YM2149::setPortBDac`, sonde joystick IKBD, abonné
+port A. **OFF par défaut**, étalons inchangés (`--tier full`), auto-tests par protocole.
+Non émulés faute de relevé public : Notator/Log 3, Pro-24, Avalon, Zodiac.
+
 ## Cubase Lite joue un SMF en headless, et on le vérifie note à note (2026-08-23)
 
 La chaîne « classiques du piano → Cubase Lite → Pianoteq » tenait déjà (sortie CoreMIDI

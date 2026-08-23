@@ -69,7 +69,7 @@ public:
                 // alors géré par le rejeu, PAS ici. Mode LEGACY (WASM/direct, pas d'horloge) :
                 // on réarme l'enveloppe tout de suite et synthesize lit regs_ en direct.
                 if (cycleClock_) {
-                    if (selected_ < 14)
+                    if (selected_ < 14 || (selected_ == 15 && portBDac_))
                         events_.push_back({ uint32_t(cycleClock_()), selected_, v });
                 } else if (selected_ == 13) {
                     envReload_ = true;
@@ -162,6 +162,11 @@ public:
     void setOutputScale(float s) { outScale_ = s; }
     // STE : bypass du HPF interne — le mix YM+DMA est filtré en aval (DmaSound).
     void setHpfBypass(bool b) { hpfBypass_ = b; }
+    // DAC 8 bits sur le port parallèle (Pro Sound Designer, cf. io/PortDongle.hpp) :
+    // les écritures de R15 sont horodatées et rejouées comme un niveau continu ajouté
+    // à la voie YM (R-2R non signé, 128 = repos ; le HPF aval ôte la composante continue).
+    void setPortBDac(bool on) { portBDac_ = on; audioRegs_[15] = regs_[15]; }
+    bool portBDac() const { return portBDac_; }
 
     // Choix du filtre de sortie selon la machine (port Hatari sound.c:1945-1952) :
     //  • STF/Mega ST  → LowPassFilter (condensateur C10 réel : filtre LES DEUX fronts),
@@ -292,6 +297,8 @@ private:
     // Échelle de sortie (1.0 ST, 0.5 STE) — propriété machine, voir setOutputScale().
     float  outScale_ = 1.0f;
     bool   hpfBypass_ = false;   // STE : HPF déplacé sur le mix (non sérialisé, config machine)
+    bool   portBDac_  = false;   // Pro Sound Designer : R15 → DAC (config, non sérialisé)
+    float  dacLevel_  = 0.0f;    // niveau courant du DAC (±0.5), ajouté avant le HPF
 
     // --- Modèle « push » horodaté (Phase C) ---------------------------------
     // Ombre des registres vue par la SYNTHÈSE (avancée par le rejeu des événements),

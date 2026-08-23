@@ -18,6 +18,8 @@
 #include "gui/AppConfig.hpp"
 #include "util/HostPath.hpp"
 #include "io/CubaseDongle.hpp"
+#include "io/PortDongle.hpp"
+#include "io/Mfp.hpp"
 
 #include <cstdio>
 #include <sstream>
@@ -349,8 +351,74 @@ static void testCubaseDongle() {
     }
 }
 
+// -----------------------------------------------------------------------------
+//  PortDongle — adaptateurs joystick/série/parallèle (protocoles Steem SSE / WinUAE).
+// -----------------------------------------------------------------------------
+static void testPortDongle() {
+    std::printf("PortDongle (adaptateurs joystick / série / boutons)\n");
+    checkBool("ids : aller-retour sur tous les types", [] {
+        for (int i = 0; i < int(PortDongle::Type::Count); ++i)
+            if (PortDongle::fromId(PortDongle::id(PortDongle::Type(i))) != PortDongle::Type(i)) return false;
+        return PortDongle::fromId("bogus") == PortDongle::Type::None && PortDongle::fromId(nullptr) == PortDongle::Type::None;
+    }(), true);
+    {   // Leader Board / 10th Frame : haut+bas sur le port 1, port 0 intact.
+        PortDongle d; d.setType(PortDongle::Type::LeaderBoard);
+        uint8_t j0 = 0x80, j1 = 0x04; d.onJoystick(j0, j1);
+        checkBool("leaderboard : joy1 |= haut+bas, joy0 intact", j0 == 0x80 && j1 == 0x07, true);
+    }
+    {   // Cricket : %1100 / %1101 alternés sur le port 0 ; Rugby sur le port 1.
+        PortDongle d; d.setType(PortDongle::Type::Cricket);
+        uint8_t j0 = 0, j1 = 0; d.onJoystick(j0, j1); const uint8_t a = j0;
+        j0 = 0; d.onJoystick(j0, j1); const uint8_t b = j0;
+        checkBool("cricket : oscille entre $C et $D sur joy0", ((a == 0xC && b == 0xD) || (a == 0xD && b == 0xC)) && j1 == 0, true);
+        PortDongle r; r.setType(PortDongle::Type::Rugby);
+        j0 = 0; j1 = 0; r.onJoystick(j0, j1);
+        checkBool("rugby : sur joy1", j0 == 0 && (j1 == 0xC || j1 == 0xD), true);
+    }
+    {   // B.A.T. II : CTS (bit2) forcé à 0, le reste intact.
+        PortDongle d; d.setType(PortDongle::Type::Bat2);
+        uint8_t v = 0xFF; d.gpipRead(v, 0);
+        checkBool("bat2 : GPIP bit2 (CTS) = 0", v == 0xFB, true);
+    }
+    {   // Music Master : DCD (bit1) suit DTR avec 200 cycles de retard.
+        Mfp mfp; PortDongle d; d.setType(PortDongle::Type::MusicMaster);
+        d.onPortA(0x10, 1000, mfp);             // DTR = 1 au cycle 1000
+        uint8_t v = 0xFD; d.gpipRead(v, 1100);  // < 200 cycles : ancienne valeur (0)
+        const bool early = (v & 0x02) == 0;
+        v = 0xFD; d.gpipRead(v, 1300);          // > 200 cycles : nouvelle valeur (1)
+        const bool late = (v & 0x02) != 0;
+        d.onPortA(0x00, 2000, mfp);             // DTR = 0
+        v = 0xFF; d.gpipRead(v, 2100); const bool early2 = (v & 0x02) != 0;   // encore 1
+        v = 0xFF; d.gpipRead(v, 2300); const bool late2  = (v & 0x02) == 0;   // puis 0
+        checkBool("musicmaster : DTR → DCD retardé de 200 cycles", early && late && early2 && late2, true);
+    }
+    {   // Jeanne d'Arc : DCD assertée quand (RTS|DTR) décroît sans s'annuler.
+        Mfp mfp; PortDongle d; d.setType(PortDongle::Type::JeanneDArc);
+        d.onPortA(0x18, 0, mfp);                // RTS+DTR
+        const bool a = (mfp.read8(0xFFFA01) & 0x02) != 0;   // pas de décroissance → DCD inactive (bit=1)
+        d.onPortA(0x08, 0, mfp);                // 0x18 → 0x08 : décroît, non nul → assertée (bit=0)
+        const bool b = (mfp.read8(0xFFFA01) & 0x02) == 0;
+        d.onPortA(0x00, 0, mfp);                // → 0 : s'annule → inactive
+        const bool c = (mfp.read8(0xFFFA01) & 0x02) != 0;
+        checkBool("jeannedarc : DCD = !(new && new < old)", a && b && c, true);
+    }
+    {   // Multiface : bouton → GPIP7 à 0 jusqu'à la VBL, quel que soit le moniteur.
+        Mfp mfp; mfp.setColorMonitor(true);
+        PortDongle d; d.setType(PortDongle::Type::Multiface);
+        const bool before = (mfp.read8(0xFFFA01) & 0x80) != 0;
+        d.pressButton(mfp);
+        const bool during = (mfp.read8(0xFFFA01) & 0x80) == 0 && d.buttonPressed();
+        d.onVbl(mfp);
+        const bool after = (mfp.read8(0xFFFA01) & 0x80) != 0 && !d.buttonPressed();
+        checkBool("multiface : GPIP7 bas pendant l'appui, relâché à la VBL", before && during && after, true);
+        PortDongle n; n.setType(PortDongle::Type::Bat2); n.pressButton(mfp);
+        checkBool("bouton : sans effet sur un autre adaptateur", !n.buttonPressed(), true);
+    }
+}
+
 int main() {
     testCubaseDongle();
+    testPortDongle();
     testWindowsPaths();
     testPosixPaths();
     testNativeDefaults();

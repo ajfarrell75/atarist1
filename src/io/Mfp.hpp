@@ -286,6 +286,14 @@ public:
     void setRs232Cts(bool a) { gpipSetLine(ctsLine_, a); }
     void setRs232Dcd(bool a) { gpipSetLine(dcdLine_, a); }
     void setRs232Ri (bool a) { gpipSetLine(riLine_, a); }   // cf. CTS/DCD : front selon l'AER
+    // Bouton « freeze » du Multiface ST : tire la ligne moniteur (GPIP7) à 0 le temps
+    // de l'appui, QUEL que soit le moniteur — c'est le câble qui intercepte la prise
+    // moniteur (cf. io/PortDongle.hpp). Front selon l'AER, comme toute entrée GPIP.
+    void setMonitorButton(bool pressed) { gpipSetLine(monButton_, pressed); }
+    // Recouvrement à la LECTURE de $FFFA01 (bits d'entrée, après DDR) par un
+    // adaptateur (B.A.T. II force CTS, Music Master retarde DCD — cf. PortDongle).
+    // Pas d'effet sur la détection de fronts : ces clés sont sondées, pas armées.
+    void setGpipReadHook(std::function<void(uint8_t&)> h) { gpipHook_ = std::move(h); }
 
     // Déclenche une source : positionne le bit IPR si le canal est activé (IER), sinon
     // l'EFFACE (port MFP_InputOnChannel). Date l'événement à l'horloge live ; raiseAt
@@ -333,6 +341,8 @@ public:
     bool    ctsLine_  = true;     // RS232 CTS (GPIP2, actif bas) — bouclage RTS
     bool    dcdLine_  = true;     // RS232 DCD (GPIP1, actif bas) — bouclage DTR
     bool    riLine_   = false;    // RS232 RI  (GPIP6, actif bas) — bouclage DTR
+    bool    monButton_ = false;   // Multiface : bouton freeze enfoncé → GPIP7 forcé à 0 (hors snapshot)
+    std::function<void(uint8_t&)> gpipHook_;   // recouvrement lecture GPIP (PortDongle, hors snapshot)
 
     // USART (RS232) : tampon de réception 1 OCTET (le 68901 n'a PAS de FIFO ; un
     // nouvel octet écrase le précédent = overrun). rxFull_ = RSR bit7 (Buffer Full).
