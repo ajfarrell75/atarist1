@@ -673,50 +673,37 @@ jobs:
           path: dist/*.zip
           if-no-files-found: error
 
-      # --- Le bundle est COMMITÉ : Pages sert la branche ---------------------
-      # La démo en ligne EST le dossier wasm/ du dépôt (build_type=legacy,
-      # main/(root)). Plutôt que de rendre la CI rouge quand il est périmé — ce
-      # que faisait la garde de fraîcheur, deux fois en trois jours (2026-08-19,
-      # 2026-08-21) — on le RÉPARE ici : le bundle qu'on vient de construire est
-      # recommité sur main. Il reste donc dans l'arbre de travail du mainteneur
-      # (un `git pull` après le run) et la démo suit les sources toute seule.
-      #
-      # `[skip ci]` : sans lui, le commit du bot relancerait ce workflow, qui
-      # recommiterait, à l'infini. Rien n'est commité si le bundle est identique
-      # (emcc est déterministe à version d'emsdk égale), donc pas de commit
-      # parasite à chaque push.
-      #
-      # Le push peut être refusé si main a bougé entre-temps : on repart alors du
-      # nouveau sommet en y REDÉPOSANT le bundle qu'on vient de construire (c'est
-      # un artefact — il n'y a jamais de fusion à faire, seulement la version la
-      # plus récente à poser), et on réessaie.
-      - name: Recommiter wasm/ (bundle à jour sur main)
+      # --- Pages est servi par la CI, pas par le dépôt -----------------------
+      # Le bundle n'est plus commité : on le dépose en ARTEFACT Pages et un job
+      # dédié le déploie. Deux raisons de ne pas revenir au dossier commité :
+      #   · en build_type=legacy, Pages publiait le DÉPÔT ENTIER — ROM comprises ;
+      #   · la CI recommittait le bundle à chaque push, d'où un commit de bot
+      #     systématique sur main (et des rebases à répétition pour le mainteneur).
+      # Un `cmake --build build-web --target neost-web` local régénère wasm/ pour
+      # qui veut la démo hors ligne ; le dossier est désormais gitignoré.
+      - name: Déposer le bundle comme artefact Pages
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        run: |
-          set -euo pipefail
-          tmp="$(mktemp -d)"
-          cp wasm/index.html wasm/index.js wasm/index.wasm wasm/index.data "$tmp/"
-          git config user.name  "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          for attempt in 1 2 3; do
-            git fetch --quiet origin main
-            git checkout --quiet -f -B ci-wasm origin/main
-            mkdir -p wasm && cp "$tmp"/index.* wasm/
-            git add wasm/
-            if git diff --cached --quiet; then
-              echo "bundle inchangé — rien à commiter"
-              exit 0
-            fi
-            git commit --quiet -m "wasm : bundle reconstruit par la CI pour ${GITHUB_SHA:0:7} [skip ci]"
-            if git push --quiet origin HEAD:main; then
-              echo "bundle poussé sur main (tentative $attempt)"
-              exit 0
-            fi
-            echo "push refusé (main a bougé) — nouvelle tentative"
-            sleep 5
-          done
-          echo "ERREUR : impossible de pousser le bundle après 3 tentatives" >&2
-          exit 1
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: wasm
+
+  # ------------------------------------------------------------- Pages -------
+  # Déploiement de la démo en ligne. L'artefact vient du job `wasm` ci-dessus :
+  # une seule construction Emscripten par push, pas deux.
+  pages:
+    needs: wasm
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write            # publier le déploiement
+      id-token: write         # OIDC exigé par deploy-pages
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4
 
   # ------------------------------------------------------ Windows x86_64 -----
   # MSYS2/MINGW64 et non MSVC : le code est écrit pour GCC/Clang (options -W…,

@@ -83,3 +83,7 @@ disks/etalons/usatan_sd.img
 roms/mt32/*.ROM
 roms/mt32/*.rom
 roms/mt32/*.bin
+
+# Bundle WASM : construit par la CI et servi par Pages, plus commité (2026-08-23).
+# Régénération locale : emcmake cmake -B build-web … --target neost-web
+wasm/

@@ -188,20 +188,22 @@ python3 -m http.server -d wasm 8000
 la CI). La page hôte est `web/shell.html` ; `wasm/index.html` est l'artefact GÉNÉRÉ, pas
 la source.
 
-⚠ **La démo en ligne EST le dossier `wasm/` commité** : Pages sert la branche
-(`build_type=legacy`, `main/(root)`). Mais depuis le 2026-08-22 **tu n'as plus à le
-reconstruire à la main** : sur push de `main`, le job `wasm` de `release.yml` compile le
-bundle et le **recommite** (`[skip ci]` pour ne pas boucler ; rien n'est commité s'il est
-identique). Le bundle reste donc dans l'arbre de travail — un `git pull` après le run le
-récupère — et la démo suit les sources toute seule.
+⚠ **`wasm/` n'est PLUS dans le dépôt** (2026-08-23) : il est gitignoré. La démo en ligne
+est **construite et déployée par la CI** — le job `wasm` de `release.yml` dépose le bundle
+en artefact Pages, le job `pages` le publie (`build_type=workflow`). Une seule
+construction Emscripten par push, et la démo suit les sources toute seule.
 
-C'est ce qui remplace la garde de fraîcheur `tools/wasm_stamp.sh` (supprimée) : elle
-signalait le bundle périmé en rendant la CI **rouge**, sans le réparer — deux fois en
-trois jours (2026-08-19, 2026-08-21). Réparer vaut mieux que signaler.
+Deux étapes intermédiaires ont été essayées et abandonnées, pour mémoire : la garde de
+fraîcheur `tools/wasm_stamp.sh` rendait la CI **rouge** quand le bundle était périmé sans
+le réparer (deux fois en trois jours) ; la **recommission** du bundle par la CI le
+réparait, mais posait un commit de bot sur `main` à chaque push.
 
-⚠ Pages servant la branche, le dépôt est publié **en entier** sur
-habib256.github.io/neost/ — ROM Atari et jeux compris (cf. `TODO.md` § contenu
-propriétaire). Choix assumé du mainteneur (2026-08-22).
+✅ Ce que la bascule règle au passage : en `build_type=legacy`, Pages publiait le dépôt
+**en entier** sur habib256.github.io/neost/ — ROM Atari et jeux compris. Le déploiement
+par artefact ne publie QUE le bundle.
+
+Pour une démo hors ligne : `emcmake cmake -B build-web -DCMAKE_BUILD_TYPE=Release
+-DNEOST_WEB_FREE_ONLY=ON && cmake --build build-web --target neost-web` régénère `wasm/`.
 
 **Windows** — MinGW-w64 dans un shell MSYS2/MINGW64,
 `NEOST_VERSION=<ver> packaging/windows/build_mingw.sh`. Tout est lié en statique et le

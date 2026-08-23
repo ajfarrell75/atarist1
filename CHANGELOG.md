@@ -6,6 +6,27 @@ l'ordre inverse. Version courante : **0.5.2**.
 - « NeoST gère-t-il X ? » → [`docs/IMPLEMENTED.md`](docs/IMPLEMENTED.md) (inventaire par puce)
 - « Que reste-t-il ? » → [`TODO.md`](TODO.md)
 
+## Pages servi par la CI : `wasm/` sort du dépôt (2026-08-23)
+
+**Le bundle WebAssembly n'est plus commité.** Le job `wasm` de `release.yml` le dépose
+en **artefact Pages** et un job `pages` le publie (`build_type=workflow`). Une seule
+construction Emscripten par push — le job existant sert les deux usages, l'archive de
+release et la démo en ligne. `wasm/` est gitignoré ; `cmake --build build-web --target
+neost-web` le régénère pour qui veut la démo hors ligne.
+
+**Ce que ça règle.** En `build_type=legacy`, Pages servait la branche : le dépôt était
+publié **en entier** sur habib256.github.io/neost/, ROM Atari et jeux compris — une
+contrepartie qui avait été assumée faute de mieux (cf. `TODO.md` § contenu propriétaire).
+Le déploiement par artefact ne publie QUE le bundle. Et la CI ne pose plus de commit de
+bot sur `main` à chaque push, ce que faisait la recommission du bundle.
+
+**L'URL change** : la démo passe de `/neost/wasm/` à la **racine** `/neost/`. Le lien du
+README suit.
+
+Troisième et dernier état d'un aller-retour assumé : garde de fraîcheur
+(`tools/wasm_stamp.sh`, rouge sans réparer) → recommission par la CI (réparait, mais
+commit de bot systématique) → déploiement par artefact.
+
 ## Cartes SD UltraSatan amorçables : `tools/make_hd_image.py` (2026-08-22)
 
 Un dossier hôte devient une carte SD que le **vrai TOS** monte en C:, pilote compris.
