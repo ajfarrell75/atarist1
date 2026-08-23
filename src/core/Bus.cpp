@@ -4,6 +4,7 @@
 //  (c) 2026 VERHILLE Arnaud — projet NeoST.
 // =============================================================================
 #include "core/Bus.hpp"
+#include "io/CubaseDongle.hpp"
 #include "core/StateArchive.hpp"
 #include "core/Shifter.hpp"
 #include "core/YM2149.hpp"
@@ -409,6 +410,13 @@ uint8_t Bus::read8Slow(uint32_t addr) {
         if (ne2000->cartRead(addr, v)) return ispHit ? ispVal : v;
     }
     if (ispHit) return ispVal;
+
+    // Clé Steinberg sur /ROM3 ($FB0000-$FBFFFF) : la clé répond à la place de la
+    // ROM cartouche dans cette banque (le TOS ne sonde que /ROM4 = $FA0000).
+    if (dongle && addr >= 0xFB0000u && addr < stmap::CART_END) {
+        const bool first = ioAccessWidth_ < 2 || (addr & 1) == 0;
+        return dongle->cartRead(addr, first);
+    }
 
     // Port cartouche ($FA0000-$FBFFFF) : si une cartouche est montée, on expose
     // sa ROM ; le TOS lit le magic à $FA0000 et amorce (diagnostic/applicative).

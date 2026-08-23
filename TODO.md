@@ -425,8 +425,12 @@ ACIA) ; si une vraie démo spec512 **overscan** (bordures ouvertes) est rapatri�
   `docs/EXTENSIONS.md` § NetUSBee, puis vérifier de bout en bout avec **STinG + ENEC.STX**
   côté ST (freeware, à récupérer) et un navigateur (CAB) sur theoldnet.com.
 
-- **MIDI OUT Linux/Windows** : `MidiOutMac` est CoreMIDI/AudioToolbox ; ALSA sequencer + FluidSynth
-  (Linux) et winmm (Windows) restent à écrire — le MT-32 (Munt), lui, est portable.
+- **MIDI OUT Windows** : `MidiOutHost` couvre CoreMIDI (macOS) et ALSA (Linux) ; winmm reste à
+  écrire — le MT-32 (Munt), lui, est portable.
+- **Clé Steinberg — validation** (2026-08-23) : `CubaseDongle` (rouge/noire, équations MiSTery) n'a
+  jamais vu un Cubase 3.10 / Score / 2.01 réel. Il faut une disquette originale (non crackée) pour
+  trancher ; la noire dépend en plus du motif bus exact de Moira. Option de confort : choisir une
+  **destination** CoreMIDI (`MIDIGetNumberOfDestinations`) au lieu de la seule source virtuelle.
 - **NetUSBee — périphériques USB hôte** (2026-08-21) : l'ISP1160 (`io/Isp1160`) est un hub racine
   VIDE ; brancher un clavier/souris HID puis un stockage de masse derrière `HcRhPortStatus` (PTD
   ATL → réponses du device). Les pilotes FreeMiNT `netusbee.ucd` + `usb.km` sont le banc d'essai.

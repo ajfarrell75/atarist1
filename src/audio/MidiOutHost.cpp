@@ -186,7 +186,13 @@ bool MidiOutHost::openVirtualPort() {
     if (src_) return true;
     MIDIClientRef client = 0;
     MIDIEndpointRef src = 0;
-    if (MIDIClientCreate(CFSTR("NeoST"), nullptr, nullptr, &client) != noErr) return false;
+    if (const OSStatus st = MIDIClientCreate(CFSTR("NeoST"), nullptr, nullptr, &client); st != noErr) {
+        // Muet jusqu'ici : le port « tombait » à 0 dans neost.cfg sans un mot. Cas vu :
+        // process sandboxé sans accès au serveur CoreMIDI (MIDIServer) → -10844/… .
+        std::fprintf(stderr, "[midi-out] MIDIClientCreate failed (OSStatus %d): no CoreMIDI "
+                     "access from this process?\n", int(st));
+        return false;
+    }
     if (MIDISourceCreate(client, CFSTR("NeoST MIDI OUT"), &src) != noErr) {
         MIDIClientDispose(client);
         std::fprintf(stderr, "[midi-out] cannot create the CoreMIDI virtual source\n");

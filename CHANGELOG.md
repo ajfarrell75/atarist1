@@ -6,6 +6,48 @@ l'ordre inverse. Version courante : **0.5.2**.
 - « NeoST gère-t-il X ? » → [`docs/IMPLEMENTED.md`](docs/IMPLEMENTED.md) (inventaire par puce)
 - « Que reste-t-il ? » → [`TODO.md`](TODO.md)
 
+## Cubase Lite joue un SMF en headless, et on le vérifie note à note (2026-08-23)
+
+La chaîne « classiques du piano → Cubase Lite → Pianoteq » tenait déjà (sortie CoreMIDI
+horodatée du 21/08), mais rien ne la **prouvait** sans oreille. Désormais :
+`neost-headless --midi-dump FILE` journalise chaque octet MIDI OUT daté de son cycle
+68000 ; `tools/midi_compare.py` le confronte au SMF donné au séquenceur (notes, ordre,
+vélocités, durées, pédale CC64, pente de tempo, gigue) ou le convertit en SMF (`--to-smf`) ;
+`tools/run_midi_sequencer.py` rejoue tout le scénario — boot TOS 1.04 sur un lecteur GEMDOS
+temporaire, **auto-lancement de Cubase** par la ligne `#Z` de `DESKTOP.INF`, *File → Import…*
+à la souris relative (`--mouse-at`), nom de fichier tapé au clavier **AZERTY** (nouveau
+`--azerty` : sur TOS FR, `M` tombait en virgule), Enter du pavé (`|`) = Play — et tranche :
+**PASS**, 200 notes, pente 1,001, gigue σ 0,4 ms. Étalon du palier `fast` (≈3 s).
+Corpus **piano classique**, un dossier 8.3 par compositeur (`disks/midi/BACH`, `MOZART`,
+`BEETHOVE`, `CHOPIN`, `HAYDN`, `SCARLATT` — 159 pièces : inventions, sinfonies et Clavier bien
+tempéré I de Bach, 17 sonates de Mozart, sonates de Beethoven/Haydn, préludes et mazurkas de
+Chopin ; partitions Humdrum de C. S. Sapp, CC BY-NC-SA, rendues par music21, sources et `.krn`
+sous `disks/midi/sources/`) ; le blues déménage en `BLUES/`. Un canal, une piste de notes par
+fichier — Pianoteq ne voit plus de note-on en double.
+Trois quirks **de Cubase Lite** trouvés par l'étalon et absorbés par `midi_simplify.py` :
+une armure (méta 0x59) en cours de morceau lui fait **jeter la piste de notes** à l'import
+(gardée au tick 0 seulement) ; doublure à l'unisson ou note répétée sans trou → note coupée à
+2 ms (`--detach` : fusion, troncature, tick de séparation) ; note-off un tick interne en
+avance (tolérance de durée à part). `disks/midi/README.md` : provenance, recette Pianoteq.
+
+## Clé Steinberg sur le port cartouche : `CubaseDongle` (2026-08-23)
+
+`--dongle cubase3|cubase2|auto`, page MIDI, `dongle=` — **OFF par défaut**. Clé **rouge**
+(Cubase 3.10 / Score / Audio : EPLD 5C060, 16 bascules T, A8 → D8, cadencée par /ROM3) et clé
+**noire** (Cubase 2.01 : PAL16R8, A1-A8 → D8-D15, cadencée par **chaque** front /UDS du CPU —
+crochet `udsDone` dans `NeostMoira`, un test de bool par accès). Banque `/ROM3 $FB0000-$FBFFFF`
+(pas `$FA0000` : le TOS ne sonde que /ROM4, la clé cohabite avec le HD GEMDOS). Équations
+transcrites de MiSTery (`cubase2_dongle.v`, `cubase3_dongle.v`) ; Hatari n'émule aucune clé.
+Save-state **v14** (état de la clé + drapeau). ⚠ Fidèle aux équations, **pas encore confrontée
+à un Cubase à clé** (aucun dans le dépôt) — cf. `docs/EXTENSIONS.md`, `TODO.md`.
+
+## Warnings de build éliminés (2026-08-23)
+
+`Ne2000.cpp` (constantes CR inutilisées), `SlirpBackend.cpp` (`register_poll_fd` dépréciés
+sous libslirp ≥ 4.8 : pragma + `SlirpCb` remplie en place, le constructeur de déplacement
+implicite déclenchait l'avertissement hors de portée du pragma), `CMakeLists.txt`
+(`neost_core` lié deux fois via `neost_net` PUBLIC → `ld: duplicate libraries`).
+
 ## Pages servi par la CI : `wasm/` sort du dépôt (2026-08-23)
 
 **Le bundle WebAssembly n'est plus commité.** Le job `wasm` de `release.yml` le dépose

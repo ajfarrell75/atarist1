@@ -1,0 +1,16 @@
+Fichiers MIDI simplifies pour sequenceur ST
+format 1, 96 PPQN, sans SysEx ni textes
+
+MAZURK07.MID mazurk07_chopin_op7_no1.mid
+MAZURK17.MID mazurk17_chopin_op17_no4.mid
+MAZURK24.MID mazurk24_chopin_op24_no4.mid
+MAZURKA6.MID mazurka6_chopin_op6_no1.mid
+PRELUD01.MID prelud01_chopin_op28_no1.mid
+PRELUD03.MID prelud03_chopin_op28_no3.mid
+PRELUD04.MID prelud04_chopin_op28_no4.mid
+PRELUD06.MID prelud06_chopin_op28_no6.mid
+PRELUD07.MID prelud07_chopin_op28_no7.mid
+PRELUD17.MID prelud17_chopin_op28_no17.mid
+PRELUD20.MID prelud20_chopin_op28_no20.mid
+PRELUD24.MID prelud24_chopin_op28_no24.mid
+RAINDROP.MID raindrop_chopin_prelude_op28_no15.mid

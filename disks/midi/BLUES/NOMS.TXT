@@ -1,0 +1,35 @@
+Fichiers MIDI simplifies pour sequenceur ST
+format 1, 96 PPQN, sans SysEx ni textes
+
+BLUESFOR.MID BluesForAlice.mid
+ALBERTAM.MID albertammonsblues.mid
+ALLOFYOU.MID allofyoucoleporter.mid
+BABYGRAN.MID babygrandraycharles.mid
+BLUE5.MID    blue5.mid
+BLUEMOON.MID bluemoon.mid
+BLUES1.MID   blues1.mid
+BLUES2.MID   blues2.mid
+BLUES3.MID   blues3.mid
+BLUES6.MID   blues6.mid
+BLUES7.MID   blues7.mid
+BLUES8.MID   blues8.mid
+BLUES9.MID   blues9.mid
+BLUESDRJ.MID bluesdrjohn.mid
+BLUESN.MID   bluesn.mid
+BOOGIE1.MID  boogie1.mid
+BOOGIE2.MID  boogie2.mid
+BOOGIE20.MID boogie20.mid
+BOOGIE4.MID  boogie4.mid
+FMBLUES2.MID fmblues2.mid
+GREATBAL.MID greatballsoffire.mid
+GREENONI.MID greenoni.mid
+HONKYTON.MID honkytonktrainBlues.mid
+ICANTSLE.MID icantsleep2.mid
+ICANTSLP.MID icantslp.mid
+ITHAD2BE.MID ithad2beyoutatum.mid
+JERRYLEW.MID jerrylewissockhopboogie.mid
+ROLLEM.MID   rollem.mid
+SLOWBLUE.MID slowblues.mid
+SWEETHO2.MID sweetho2.mid
+WHISPERN.MID whispernot.mid
+WHOLELOT.MID wholelotashakingoingon.mid

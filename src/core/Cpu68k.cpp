@@ -11,6 +11,7 @@
 #include "core/Cpu68k.hpp"
 #include "core/Blitter.hpp"
 #include "core/Bus.hpp"
+#include "io/CubaseDongle.hpp"
 #include "core/Scheduler.hpp"
 #include "core/StateArchive.hpp"
 #include "core/Tracer.hpp"
@@ -338,10 +339,14 @@ public:
         std::fprintf(stderr, "[BUS] %c pc=%06x a=%06x c=%lld m4=%d\n",
                      k, pc, a & 0xFFFFFFu, (long long)c, (int)(c & 3));
     }
-    moira::u8  read8 (moira::u32 a) const override { if (g_bus->blitterWinEnd >= 0 || g_bus->blitterCountCpu) noteBlitterPreStart(); if (g_bus->busFaultN(a, 1, false) && faultOrHalt(a, false)) return 0; moira::u8 v; if (g_cpuMul == 2) v = moira::u8(readMste16Mhz(a, 1)); else { chipWait8(a); if (g_busDiagPage >= 0) busDiag('r', a, getClock()); v = g_bus->read8(a); } latchDb8(v); return v; }
-    moira::u16 read16(moira::u32 a) const override { if (g_bus->blitterWinEnd >= 0 || g_bus->blitterCountCpu) noteBlitterPreStart(); if (g_bus->busFaultN(a, 2, false) && faultOrHalt(a, false)) return 0; moira::u16 v; if (g_cpuMul == 2) v = readMste16Mhz(a, 2); else { chipWait8(a); if (g_busDiagPage >= 0) busDiag('R', a, getClock()); v = g_bus->read16(a); } latchDb(v); return v; }
-    void write8 (moira::u32 a, moira::u8  v) const override { if (g_bus->blitterWinEnd >= 0 || g_bus->blitterCountCpu) noteBlitterPreStart(); if (g_bus->busFaultN(a, 1, true)) { if (faultOrHalt(a, true)) return; } latchDb8(v); if (g_cpuMul == 2) { writeMste16Mhz(a, 1, v); return; } chipWait8(a); g_bus->write8(a, v); }
-    void write16(moira::u32 a, moira::u16 v) const override { if (g_bus->blitterWinEnd >= 0 || g_bus->blitterCountCpu) noteBlitterPreStart(); if (g_bus->busFaultN(a, 2, true)) { if (faultOrHalt(a, true)) return; } latchDb(v); if (g_cpuMul == 2) { writeMste16Mhz(a, 2, v); return; } chipWait8(a); g_bus->write16(a, v); }
+    // Fin de cycle bus : /UDS remonte pour tout accès mot, ou octet à adresse PAIRE.
+    // C'est l'horloge de la clé Cubase 2 (PAL16R8), qui voit CHAQUE cycle du CPU —
+    // fetchs compris. Un seul test de bool quand aucune clé noire n'est branchée.
+    void udsDone(moira::u32 a, int size) const { if (g_bus->dongleUds && (size == 2 || !(a & 1))) g_bus->dongle->udsCycle(a); }
+    moira::u8  read8 (moira::u32 a) const override { if (g_bus->blitterWinEnd >= 0 || g_bus->blitterCountCpu) noteBlitterPreStart(); if (g_bus->busFaultN(a, 1, false) && faultOrHalt(a, false)) return 0; moira::u8 v; if (g_cpuMul == 2) v = moira::u8(readMste16Mhz(a, 1)); else { chipWait8(a); if (g_busDiagPage >= 0) busDiag('r', a, getClock()); v = g_bus->read8(a); } latchDb8(v); udsDone(a, 1); return v; }
+    moira::u16 read16(moira::u32 a) const override { if (g_bus->blitterWinEnd >= 0 || g_bus->blitterCountCpu) noteBlitterPreStart(); if (g_bus->busFaultN(a, 2, false) && faultOrHalt(a, false)) return 0; moira::u16 v; if (g_cpuMul == 2) v = readMste16Mhz(a, 2); else { chipWait8(a); if (g_busDiagPage >= 0) busDiag('R', a, getClock()); v = g_bus->read16(a); } latchDb(v); udsDone(a, 2); return v; }
+    void write8 (moira::u32 a, moira::u8  v) const override { if (g_bus->blitterWinEnd >= 0 || g_bus->blitterCountCpu) noteBlitterPreStart(); if (g_bus->busFaultN(a, 1, true)) { if (faultOrHalt(a, true)) return; } latchDb8(v); if (g_cpuMul == 2) { writeMste16Mhz(a, 1, v); udsDone(a, 1); return; } chipWait8(a); g_bus->write8(a, v); udsDone(a, 1); }
+    void write16(moira::u32 a, moira::u16 v) const override { if (g_bus->blitterWinEnd >= 0 || g_bus->blitterCountCpu) noteBlitterPreStart(); if (g_bus->busFaultN(a, 2, true)) { if (faultOrHalt(a, true)) return; } latchDb(v); if (g_cpuMul == 2) { writeMste16Mhz(a, 2, v); udsDone(a, 2); return; } chipWait8(a); g_bus->write16(a, v); udsDone(a, 2); }
     // Débogueur : watchpoint mémoire atteint (appelé par la couche dataflow de Moira
     // PENDANT l'accès, si CHECK_WP). Sémantique « break-after-access » : on note le hit
     // (adresse DONNÉE) et on préempte → le run() rend la main APRÈS l'instruction fautive.

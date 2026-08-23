@@ -59,6 +59,7 @@ void parseConfigLine(Config& c, std::string line) {
     else if (line.rfind("mix_dma=", 0) == 0) c.mixDma = float(std::atof(line.substr(8).c_str()));
     else if (line.rfind("mix_drive=", 0) == 0) c.mixDrive = float(std::atof(line.substr(10).c_str()));
     else if (line.rfind("mix_mt32=", 0) == 0) c.mixMt32 = float(std::atof(line.substr(9).c_str()));
+    else if (line.rfind("dongle=", 0) == 0) c.dongle = line.substr(7);
     else if (line.rfind("ethernec=", 0) == 0) c.ethernec = (line.substr(9) == "1");
     else if (line.rfind("netusbee=", 0) == 0) c.netusbee = (line.substr(9) == "1");
     else if (line.rfind("ultrasatan=", 0) == 0) c.ultrasatan = (line.substr(11) == "1");
@@ -148,6 +149,7 @@ void writeConfigKeys(std::ostream& f, const Config& w, bool full) {
       << "\nmt32_model=" << w.mt32Model
       << "\nmix_ym=" << w.mixYm << "\nmix_dma=" << w.mixDma
       << "\nmix_drive=" << w.mixDrive << "\nmix_mt32=" << w.mixMt32
+      << "\ndongle=" << w.dongle
       << "\nethernec=" << (w.ethernec ? 1 : 0)
       << "\nnetusbee=" << (w.netusbee ? 1 : 0)
       << "\nultrasatan=" << (w.ultrasatan ? 1 : 0)

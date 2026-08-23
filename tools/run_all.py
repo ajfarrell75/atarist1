@@ -51,6 +51,11 @@ FAST = [
     # palier ne relise jamais cette image.
     ("Disquette livrée (disks/diskA.st : FAT12 valide, conforme au générateur)",
      [sys.executable, str(TOOLS / "check_disk_assets.py")]),
+    # Séquenceur MIDI de bout en bout : Cubase Lite (TOS 1.04, MROS) importe un SMF et
+    # le joue ; ce qui sort de l'ACIA est comparé note à note au fichier (tempo, gigue,
+    # vélocités, pédale). Couvre ACIA 6850 + Timer A + GEMDOS HD + midi_simplify.py.
+    ("Séquenceur MIDI (Cubase Lite joue un SMF → notes/tempo comparés)",
+     [sys.executable, str(TOOLS / "run_midi_sequencer.py")]),
 ]
 FULL = FAST + [
     ("P2 provenance des références",

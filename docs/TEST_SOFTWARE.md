@@ -140,6 +140,29 @@ reproduit pas. → réf. NeoST : `Fdc` ; Hatari : `fdc.c`, `floppies/stx.c`.
 |--------|-----------|------------------|------------|
 | **Dungeon Master** | FTL | « **Fuzzy bits** » : flux affaibli volontairement → le WD1772 lit alternativement 0 ou 1 à chaque passage. + secteurs de tailles exotiques (8192 o) | Fidélité au flux physique (format `.STX`/`.IPF`) : timing de rotation exact + registres d'erreur du contrôleur. Une émulation logique échoue à lancer le jeu | « Support STX (Pasti) » + « Timing réel » (FDC cycle-exact) |
 
+## 4 bis. Séquenceurs MIDI — Cubase Lite joue un SMF (2026-08-23)
+
+Le séquenceur exerce d'un coup l'ACIA 6850 (`$FFFC04/06`, TDRE/TIE à 31 250 bauds),
+le Timer A du MFP (horloge MROS), le GEMDOS HD (`Pexec`, `Fopen/Fread`) et le
+convertisseur `tools/midi_simplify.py`. → réf. NeoST : `MidiAcia`, `Mfp`, `GemdosHd` ;
+Hatari : `acia.c`, `midi.c`, `gemdos.c`.
+
+| Étalon | Configuration | Ce qui est vérifié | Recette |
+|--------|---------------|--------------------|---------|
+| **Cubase Lite** (Steinberg 1996, MROS, sans clé) + `disks/midi/BLUES/ALBERTAM.MID` | **TOS 1.04 FR**, Mega ST, 1 Mo, mono, `--gemdos disks/midi` (EmuTOS : MROS panique, incompatibilité connue) | 200 notes : hauteur, ordre, **vélocité**, durée (±12 ms + 0,2 %), **pédale CC64**, **pente de tempo** (1,001, tolérance ±0,5 %), **gigue σ < 5 ms** (mesuré 0,4-1,7 ms) | `python3 tools/run_midi_sequencer.py` (palier `fast`, ≈3 s) ; `--song disks/midi/CHOPIN/RAINDROP.MID` pour une autre pièce ; `--keep` garde `midi.log` + la capture |
+
+Mécanique : `DESKTOP.INF` auto-lance `CB_LITE.PRG` (ligne `#Z`, TOS 1.04) ; souris
+relative `--mouse-at` vers *File → Import…* ; `--azerty` pour taper `SONG.MID` dans le
+sélecteur (TOS FR = AZERTY, sinon le M se perd) ; `|` = Enter du pavé = Play ;
+`--midi-dump` journalise chaque octet MIDI OUT daté du cycle 68000 ;
+`tools/midi_compare.py` compare (ou convertit le journal en SMF : `--to-smf`).
+
+Quirks **de Cubase Lite** mesurés ainsi (pas des bugs NeoST, cf. `disks/midi/README.md`) :
+note-off émis un tick interne en avance (−1,6 ms à 150 bpm, −5 ms à 55 bpm) ;
+doublure à l'unisson ou note répétée sans trou → note coupée à 2 ms (`--detach` du
+convertisseur) ; **armure (méta 0x59) en cours de morceau → piste de notes jetée à
+l'import** (le convertisseur ne garde que celle du tick 0).
+
 ## Suite headless NeoST (`tools/run_etalons.py`)
 
 Infra de non-régression par captures PPM (déterministe, sans GUI) :

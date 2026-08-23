@@ -55,6 +55,9 @@ struct Config { std::string rom; std::string disk; std::string diskb; std::strin
                 std::string mt32Model = "auto";     // auto | mt32 | cm32l (page Sound)
                 // Mixeur (page Sound) : gains par source, 0..2, 1 = neutre.
                 float mixYm = 1.0f, mixDma = 1.0f, mixDrive = 1.0f, mixMt32 = 1.0f;
+                // Clé Steinberg sur /ROM3 ($FB0000) : "" (aucune), cubase3 (rouge :
+                // Cubase 3.10/Score/Audio), cubase2 (noire : Cubase 2.01), auto.
+                std::string dongle;
                 bool ethernec = false; // NE2000/EtherNEC sur le port cartouche
                 bool netusbee = false; // NetUSBee : NE2000 + ISP1160 USB sur le port cartouche (exclusif d'ethernec)
                 bool ultrasatan = false; // UltraSatan sur les cibles ACSI 0-1 (slot 1 = acsi, slot 2 = sd2)

@@ -1,0 +1,6 @@
+Fichiers MIDI simplifies pour sequenceur ST
+format 1, 96 PPQN, sans SysEx ni textes
+
+HAYDN37.MID  haydn37_hobxvi22_mvt1.mid
+HAYDN50.MID  haydn50_hobxvi37_mvt1.mid
+HAYDN62.MID  haydn62_hobxvi52_mvt1.mid

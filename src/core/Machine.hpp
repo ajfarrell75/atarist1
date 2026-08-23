@@ -33,6 +33,7 @@
 #include "io/Ne2000.hpp"
 #include "io/UltraSatan.hpp"
 #include "io/Isp1160.hpp"
+#include "io/CubaseDongle.hpp"
 
 class Machine {
 public:
@@ -101,6 +102,7 @@ public:
         gemdos.reset();    // ferme les fichiers HD GEMDOS ouverts (no-op si inactif)
         scc.reset();       // SCC série (Mega STE) au repos
         midi.reset();      // ACIA MIDI (reset.c:111 ACIA_Reset + :124 Midi_Reset)
+        dongle.reset(); bus.dongleUds = dongle.wantsUds();   // clé Cubase : registres à 0
         bus.seedResetVectors();    // vecteurs SSP/PC $0-$7 : miroir ROM en RAM (stMemory.c)
         cpu.reset();
         frameStartInit_ = false;   // FIX1 : ré-ancre frameStart_ sur sched.now() à la 1re trame post-reset
@@ -120,6 +122,7 @@ public:
         gemdos.reset();    // ferme les fichiers HD GEMDOS ouverts (no-op si inactif)
         scc.reset();       // SCC série (Mega STE) au repos
         midi.reset();      // ACIA MIDI (reset.c:111 ACIA_Reset + :124 Midi_Reset)
+        dongle.reset(); bus.dongleUds = dongle.wantsUds();   // clé Cubase : registres à 0
         // $FF8001 remis à 0 au FROID (stMemory.c:93, bCold). ⚠ DIVERGENCE ASSUMÉE : à la
         // CONFIGURATION (constructeur / reconfigure), NeoST le pré-remplit au contraire
         // avec memConfigForBytes() alors qu'Hatari laisse 0 et compte sur le test mémoire
@@ -214,6 +217,8 @@ public:
     // Contrôleur hôte USB ISP1160 du NetUSBee (extension NeoST, INACTIF par défaut).
     // NetUSBee = ne2000 (RTL8019AS, câblage EtherNEC) + isp1160, même port cartouche.
     Isp1160   isp1160;
+    // Clé Steinberg (Cubase 2/3) sur /ROM3 — OFF par défaut. Cf. io/CubaseDongle.hpp.
+    CubaseDongle dongle;
     Scheduler sched;
 
     // Active la NE2000/EtherNEC. Refuse si une cartouche est montée (conflit de
@@ -239,6 +244,17 @@ public:
         return true;
     }
     void disableNetUsbee() { bus.isp1160 = nullptr; isp1160.setEnabled(false); disableEtherNec(); }
+
+    // Branche une clé Steinberg sur /ROM3 (None = débranche). Pas d'exclusivité avec
+    // le GEMDOS HD ($FA0000 = /ROM4) ; incompatible avec EtherNEC/NetUSBee qui
+    // décodent toute la fenêtre — refusé dans ce cas.
+    bool setDongle(CubaseDongle::Model m) {
+        if (m != CubaseDongle::Model::None && (ne2000.enabled() || isp1160.enabled())) return false;
+        dongle.setModel(m);
+        bus.dongle    = dongle.attached() ? &dongle : nullptr;
+        bus.dongleUds = dongle.wantsUds();
+        return true;
+    }
     bool netUsbeeEnabled() const { return isp1160.enabled(); }
 
     // Active l'UltraSatan sur les cibles ACSI `firstTarget` et `firstTarget+1`

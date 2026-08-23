@@ -1,0 +1,7 @@
+Fichiers MIDI simplifies pour sequenceur ST
+format 1, 96 PPQN, sans SysEx ni textes
+
+SCARK001.MID scark001_scarlatti_k1_l366.mid
+SCARK084.MID scark084_scarlatti_k84_l10.mid
+SCARK384.MID scark384_scarlatti_k384_l2.mid
+SCARLATT.MID scarlatt_sonata_k514_l1.mid
