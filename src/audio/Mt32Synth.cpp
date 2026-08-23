@@ -27,6 +27,16 @@ public:
     void printDebug(const char* fmt, va_list list) override {
         char buf[512];
         std::vsnprintf(buf, sizeof buf, fmt, list);
+        // Anti-répétition GÉNÉRAL. Un fichier General MIDI joué sur un MT-32 déclenche
+        // « Rhythm: Attempted to play unmapped key NN » à CHAQUE coup de percussion :
+        // des centaines de lignes identiques qui noient tout le reste du journal.
+        if (std::strncmp(buf, last_, sizeof last_ - 1) == 0) { ++repeats_; return; }
+        if (repeats_) {
+            std::fprintf(stderr, "[mt32] (message précédent répété %u fois)\n", repeats_);
+            repeats_ = 0;
+        }
+        std::snprintf(last_, sizeof last_, "%s", buf);
+
         if (std::strstr(buf, "not intended for this device manufacturer")) {
             if (foreignSysexSeen_) return;
             foreignSysexSeen_ = true;
@@ -41,6 +51,8 @@ public:
     }
 private:
     bool foreignSysexSeen_ = false;
+    char last_[512] = {0};
+    unsigned repeats_ = 0;
 };
 
 NeostReport& report() { static NeostReport r; return r; }

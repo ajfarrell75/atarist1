@@ -13,6 +13,7 @@
 // --- Pictogrammes Font Awesome 5 Free Solid (fonts/fa-solid-900.ttf, fusionnés dans
 // la police ImGui — cf. chargement dans main()). Chaînes UTF-8 des codepoints FA de la
 // zone à usage privé. À préfixer à un libellé : ICON_FA_REDO " Reset".
+#define ICON_FA_MUSIC         "\xef\x80\x81"   // U+F001 — page MIDI
 #define ICON_FA_STAR          "\xef\x80\x85"
 #define ICON_FA_POWER_OFF     "\xef\x80\x91"
 #define ICON_FA_REDO          "\xef\x80\x9e"

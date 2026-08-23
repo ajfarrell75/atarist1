@@ -49,7 +49,7 @@ public:
     // receiveExternal — exactement le câblage d'un anneau MIDI physique.
     void setMidiSink(std::function<void(uint8_t)> fn) { midiSink_ = std::move(fn); }
     // Variante DATÉE : reçoit aussi le cycle CPU d'émission — pour une sortie hôte qui
-    // replace chaque octet à son instant ST réel (cf. audio/MidiOutMac, gigue de trame).
+    // replace chaque octet à son instant ST réel (cf. audio/MidiOutHost, gigue de trame).
     void setMidiSinkTimed(std::function<void(uint8_t, int64_t)> fn) { midiSinkTimed_ = std::move(fn); }
     // Câble de bouclage MIDI OUT→IN (diagnostics). Config, hors save-state.
     void setLoopback(bool plugged) { loopback_ = plugged; }

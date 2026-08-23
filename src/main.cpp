@@ -248,7 +248,7 @@ static void saveConfig(const std::string& exeDir, Config& c, Machine* machine = 
 #include "imgui_internal.h"   // gestionnaire de réglages personnalisé (ImGuiSettingsHandler)
 #include "imgui_impl_glfw.h"
 #include "gui/KeyboardWindow.hpp"
-#include "audio/MidiOutMac.hpp"
+#include "audio/MidiOutHost.hpp"
 #include "audio/Mt32Synth.hpp"
 #include "imgui_impl_opengl2.h"
 #include "gui/UiCommon.hpp"    // pictogrammes Font Awesome + IconButton
@@ -1897,6 +1897,8 @@ struct ConfigUi {
     int  reqEther = -1;                   // EtherNEC NE2000 (0/1)
     // Sorties MIDI (page Sound) : synthé GM, port CoreMIDI, MT-32 (0/1) ; modèle 0 auto/1 MT-32/2 CM-32L.
     int  reqMidiOutGm = -1, reqMidiOutPort = -1, reqMidiOutMt32 = -1, reqMt32Model = -1;
+    bool reqMidiPanic = false;            // bouton « All notes off » de la page MIDI
+    int  reqMidiLoopback = -1;            // case OUT->IN de la page MIDI
     std::string mt32Status;               // lecture : modèle chargé ou erreur
     // Mixeur (page Sound) : édité EN PLACE par la page ; mixDirty = appliquer, mixDone = persister.
     float mixYm = 1.0f, mixDma = 1.0f, mixDrive = 1.0f, mixMt32 = 1.0f;
@@ -1920,7 +1922,7 @@ struct ConfigUi {
 // Page ouverte. Statique : on revient là où on était en rouvrant la fenêtre.
 enum ConfigPage {
     kCfgMachine = 0, kCfgMem, kCfgRom, kCfgHd, kCfgCart, kCfgNet,
-    kCfgScreen, kCfgSound, kCfgInput, kCfgEmul, kCfgProfiles, kCfgKiosk, kCfgCount
+    kCfgScreen, kCfgSound, kCfgMidi, kCfgInput, kCfgEmul, kCfgProfiles, kCfgKiosk, kCfgCount
 };
 int g_cfgPage = kCfgMachine;
 bool g_profilesDirty = false; // un profil vient d'être écrit/supprimé → relire le dossier
@@ -2010,6 +2012,7 @@ void drawConfigWindow(ConfigUi& ui) {
         ICON_FA_COMPACT_DISC " Cartridge",
         ICON_FA_WIFI " Network",
         ICON_FA_DESKTOP " Screen",     ICON_FA_VOLUME_UP " Sound",
+        ICON_FA_MUSIC " MIDI",
         ICON_FA_GAMEPAD " Input",      ICON_FA_BOLT " Emulation",
         ICON_FA_STAR " Profiles",      ICON_FA_DESKTOP " Kiosk",
     };
@@ -2184,29 +2187,84 @@ void drawConfigWindow(ConfigUi& ui) {
                 ui.mixYm = ui.mixDma = ui.mixDrive = ui.mixMt32 = 1.0f; ui.mixDirty = ui.mixDone = true;
             }
         }
-        // --- MIDI OUT (ACIA 6850 → hôte) -----------------------------------------
         ImGui::Separator();
+        ImGui::TextDisabled("MIDI OUT has its own page (MIDI).");
+        break;
+    }
+
+    // ── MIDI ──────────────────────────────────────────────────────────────────
+    // Page à part : la sortie MIDI n'est pas un réglage de volume, c'est un CÂBLAGE
+    // vers l'extérieur — et elle est le meilleur moyen d'entendre correctement du
+    // General MIDI, que le MT-32 ne sait pas jouer (cf. la note sur les cartes).
+    case kCfgMidi: {
         ImGui::TextDisabled("MIDI OUT of the ST (ACIA 6850)");
-        if (MidiOutMac::available()) {
-            bool gm = cfg.midiOutGm, port = cfg.midiOutPort;
-            if (ImGui::Checkbox("Built-in General MIDI synth (macOS)", &gm)) ui.reqMidiOutGm = gm ? 1 : 0;
-            if (ImGui::Checkbox("CoreMIDI virtual port \"NeoST MIDI OUT\"", &port)) ui.reqMidiOutPort = port ? 1 : 0;
+        ImGui::Separator();
+
+        // (a) Port virtuel : la voie RECOMMANDÉE pour du General MIDI.
+        if (MidiOutHost::portAvailable()) {
+            bool port = cfg.midiOutPort;
+            char lbl[96];
+            std::snprintf(lbl, sizeof lbl, "Virtual MIDI port \"NeoST MIDI OUT\" (%s)",
+                          MidiOutHost::portKindName());
+            if (ImGui::Checkbox(lbl, &port)) ui.reqMidiOutPort = port ? 1 : 0;
+            ImGui::TextDisabled("  For FluidSynth, Qsynth, a DAW, real gear.");
+            ImGui::TextDisabled("  Best choice for General MIDI files.");
+        } else {
+            ImGui::BeginDisabled(true);
+            bool no = false; ImGui::Checkbox("Virtual MIDI port \"NeoST MIDI OUT\"", &no);
+            ImGui::EndDisabled();
+            ImGui::TextDisabled("  Not in this build (needs libasound2-dev).");
         }
+        ImGui::Separator();
+
+        // (b) Synthé GM intégré : macOS uniquement, et on le DIT au lieu d'une case morte.
+        if (MidiOutHost::synthAvailable()) {
+            bool gm = cfg.midiOutGm;
+            if (ImGui::Checkbox("Built-in General MIDI synth", &gm)) ui.reqMidiOutGm = gm ? 1 : 0;
+            ImGui::TextDisabled("  Apple DLSMusicDevice, nothing to install.");
+        } else {
+            ImGui::BeginDisabled(true);
+            bool no = false; ImGui::Checkbox("Built-in General MIDI synth", &no);
+            ImGui::EndDisabled();
+            ImGui::TextDisabled("  macOS only. Elsewhere: use the port above");
+            ImGui::TextDisabled("  with FluidSynth.");
+        }
+        ImGui::Separator();
+
+        // (c) MT-32 / CM-32L.
         if (Mt32Synth::available()) {
             bool mt = cfg.midiOutMt32;
-            if (ImGui::Checkbox("Roland MT-32 / CM-32L (Munt)", &mt)) ui.reqMidiOutMt32 = mt ? 1 : 0;
+            if (ImGui::Checkbox("Roland MT-32 / CM-32L (Munt, emulated)", &mt))
+                ui.reqMidiOutMt32 = mt ? 1 : 0;
             const int cur = cfg.mt32Model == "mt32" ? 1 : cfg.mt32Model == "cm32l" ? 2 : 0;
-            ImGui::TextDisabled("Model:"); ImGui::SameLine();
+            ImGui::TextDisabled("  Model:"); ImGui::SameLine();
             if (ImGui::RadioButton("Auto", cur == 0))   ui.reqMt32Model = 0; ImGui::SameLine();
             if (ImGui::RadioButton("MT-32", cur == 1))  ui.reqMt32Model = 1; ImGui::SameLine();
             if (ImGui::RadioButton("CM-32L", cur == 2)) ui.reqMt32Model = 2;
-            ImGui::TextDisabled("ROMs: %s  -  %s", cfg.mt32Roms.c_str(),
+            ImGui::TextDisabled("  ROMs: %s  -  %s", cfg.mt32Roms.c_str(),
                                 ui.mt32Status.empty() ? "(off)" : ui.mt32Status.c_str());
-            ImGui::TextDisabled("Auto = CM-32L when its ROMs are present, else MT-32. Song-era patches");
-            ImGui::TextDisabled("(Cubase .ALL from 1991) were written for these units, not for GM.");
+            ImGui::TextDisabled("  Auto = CM-32L if its ROMs are there.");
+            ImGui::TextDisabled("  For era patches (Cubase .ALL, 1991).");
+            ImGui::TextColored(ImVec4(1.f, .7f, .35f, 1.f),
+                               "  GM files play WRONG here: LA map != GM map.");
         } else {
-            ImGui::TextDisabled("Roland MT-32 / CM-32L: libmt32emu missing at build time (brew install mt32emu).");
+            ImGui::TextDisabled("Roland MT-32 / CM-32L: built without libmt32emu.");
         }
+        ImGui::Separator();
+
+        // MIDI IN : la fiche de bouclage, jusqu'ici cachée dans le menu Machine.
+        ImGui::TextDisabled("MIDI IN");
+        bool loop = cfg.midiLoopback;   // cfg est CONST ici : on passe par une requête
+        if (ImGui::Checkbox("Loopback cable OUT->IN", &loop)) ui.reqMidiLoopback = loop ? 1 : 0;
+        ImGui::TextDisabled("  A real ST has none. Cubase MIDI Thru = feedback.");
+        ImGui::Separator();
+
+        // Panique : indispensable dès qu'on coupe une sortie en plein accord.
+        if (ImGui::Button("Panic - all notes off")) ui.reqMidiPanic = true;
+        ImGui::SameLine();
+        ImGui::TextDisabled("(CC 120/121/123 on the 16 channels)");
+        ImGui::TextWrapped("A synth never releases a note by itself: stop a program "
+                           "mid-chord and the notes hang until told otherwise.");
         break;
     }
     case kCfgInput: {
@@ -2662,7 +2720,7 @@ int main(int argc, char** argv) {
     machine.midi.setLoopback(cfg.midiLoopback);   // fiche MIDI OUT→IN (OFF par défaut)
     // Sortie MIDI hôte (macOS) : synthé GM intégré et/ou port CoreMIDI virtuel. Dès
     // qu'une sortie est ouverte, l'ACIA y envoie MIDI OUT (au lieu du bouclage).
-    MidiOutMac midiOut;
+    MidiOutHost midiOut;
     // Roland MT-32/CM-32L (Munt) : rendu DANS la sortie audio, daté au cycle (pas de gigue).
     Mt32Synth mt32;
     // Fréquence de sortie visée. Ce n'est PAS forcément celle qu'on obtiendra : le
@@ -3318,7 +3376,7 @@ int main(int argc, char** argv) {
                     machine.midi.setLoopback(cfg.midiLoopback);
                     saveConfig(exeDir, cfg, &machine);
                 }
-                if (MidiOutMac::available()) {
+                if (MidiOutHost::available()) {
                     if (ImGui::MenuItem("MIDI OUT " "\xe2\x86\x92" " built-in General MIDI synth", nullptr, &cfg.midiOutGm)) {
                         midiOutApply(); saveConfig(exeDir, cfg, &machine);
                     }
@@ -3661,6 +3719,24 @@ int main(int argc, char** argv) {
             if (cfgUi.reqMidiOutGm >= 0)   { cfg.midiOutGm   = cfgUi.reqMidiOutGm   == 1; cfgUi.reqMidiOutGm   = -1; midiOutApply(); saveConfig(exeDir, cfg, &machine); }
             if (cfgUi.reqMidiOutPort >= 0) { cfg.midiOutPort = cfgUi.reqMidiOutPort == 1; cfgUi.reqMidiOutPort = -1; midiOutApply(); saveConfig(exeDir, cfg, &machine); }
             if (cfgUi.reqMidiOutMt32 >= 0) { cfg.midiOutMt32 = cfgUi.reqMidiOutMt32 == 1; cfgUi.reqMidiOutMt32 = -1; midiOutApply(); saveConfig(exeDir, cfg, &machine); }
+            if (cfgUi.reqMidiLoopback >= 0) { cfg.midiLoopback = cfgUi.reqMidiLoopback == 1;
+                                              cfgUi.reqMidiLoopback = -1;
+                                              machine.midi.setLoopback(cfg.midiLoopback);
+                                              saveConfig(exeDir, cfg, &machine); }
+            // Panique : on la passe AUX DEUX destinations. Le MT-32 est un synthé à part
+            // (il ne voit pas le flux de MidiOutHost), donc lui envoyer les mêmes
+            // contrôleurs est le seul moyen de le faire taire.
+            if (cfgUi.reqMidiPanic) {
+                cfgUi.reqMidiPanic = false;
+                midiOut.panic();
+                for (int ch = 0; ch < 16; ++ch) {
+                    const uint8_t st = uint8_t(0xB0 | ch);
+                    for (uint8_t cc : {uint8_t(120), uint8_t(121), uint8_t(123)}) {
+                        mt32.byteAt(st, 0); mt32.byteAt(cc, 0); mt32.byteAt(0, 0);
+                    }
+                }
+                g_stateMsg = "MIDI panic: all notes off"; g_stateMsgFrames = 120;
+            }
             if (cfgUi.reqMt32Model >= 0) {
                 cfg.mt32Model = cfgUi.reqMt32Model == 1 ? "mt32" : cfgUi.reqMt32Model == 2 ? "cm32l" : "auto";
                 cfgUi.reqMt32Model = -1;

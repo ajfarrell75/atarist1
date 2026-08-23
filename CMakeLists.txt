@@ -427,6 +427,23 @@ endif()
 # code d'amont vit désormais dans l'arbre et se compile avec NeoST.
 # APRÈS le garde-fou GLFW à dessein : seul le GUI s'en sert, et le compiler pour rien
 # coûterait 26 fichiers aux cibles sans pile graphique (CI headless, Android, WASM).
+# ALSA (Linux) : port MIDI VIRTUEL « NeoST MIDI OUT » auquel n'importe quel synthé
+# logiciel s'abonne (FluidSynth, Qsynth, un DAW, un expandeur matériel). C'est
+# l'équivalent du port CoreMIDI de macOS — sans lui, la sortie MIDI de l'ACIA
+# n'atteignait RIEN sous Linux, et l'interface proposait une case morte.
+# Optionnel : sans libasound, le port reste simplement indisponible.
+if(UNIX AND NOT APPLE)
+    find_package(PkgConfig QUIET)
+    if(PkgConfig_FOUND)
+        pkg_check_modules(ALSA QUIET alsa)
+    endif()
+    if(ALSA_FOUND)
+        message(STATUS "NeoST: ALSA ${ALSA_VERSION} trouvée — port MIDI virtuel disponible")
+    else()
+        message(STATUS "NeoST: ALSA absente — pas de port MIDI virtuel (paquet libasound2-dev)")
+    endif()
+endif()
+
 add_subdirectory(extern/mt32emu)
 
 add_executable(neost
@@ -439,12 +456,17 @@ add_executable(neost
     src/gui/CrtEffectStack.cpp
     src/gui/KeyboardWindow.cpp
     src/gui/StbImage.cpp
-    src/audio/MidiOutMac.cpp
+    src/audio/MidiOutHost.cpp
     src/audio/Mt32Synth.cpp)
 # stb_image (extern/stb, domaine public) : décodage de la photo du clavier (pic/).
 target_include_directories(neost PRIVATE "${CMAKE_SOURCE_DIR}/extern/stb")
 # Plus de branche « absent » : la bibliothèque est dans l'arbre, donc toujours là.
 target_compile_definitions(neost PRIVATE NEOST_WITH_MT32=1)
+if(ALSA_FOUND)
+    target_compile_definitions(neost PRIVATE NEOST_MIDI_ALSA=1)
+    target_include_directories(neost PRIVATE ${ALSA_INCLUDE_DIRS})
+    target_link_libraries(neost PRIVATE ${ALSA_LINK_LIBRARIES})
+endif()
 target_link_libraries(neost PRIVATE MT32Emu::mt32emu)
 # ${CMAKE_DL_LIBS} : miniaudio charge sa backend par dlopen ; avant la glibc
 # 2.34 (bionic — l'image release Linux), libdl est séparée et doit être liée

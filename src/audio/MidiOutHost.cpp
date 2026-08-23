@@ -1,24 +1,28 @@
 // =============================================================================
-//  MidiOutMac.cpp — cf. MidiOutMac.hpp. API C d'AudioToolbox/CoreMIDI (pas
+//  MidiOutHost.cpp — cf. MidiOutHost.hpp. API C d'AudioToolbox/CoreMIDI (pas
 //  d'Objective-C) ; AUGraph est déprécié mais reste fonctionnel et suffit ici.
 //  (c) 2026 VERHILLE Arnaud — projet NeoST.
 // =============================================================================
-#include "audio/MidiOutMac.hpp"
+#include "audio/MidiOutHost.hpp"
 
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+
+#if defined(NEOST_MIDI_ALSA)
+#include <alsa/asoundlib.h>
+#endif
 
 #ifdef __APPLE__
 #include <AudioToolbox/AudioToolbox.h>
 #include <CoreMIDI/CoreMIDI.h>
 #endif
 
-MidiOutMac::MidiOutMac() {
+MidiOutHost::MidiOutHost() {
     sysex_.reserve(256);
     worker_ = std::thread([this] { workerLoop(); });
 }
-MidiOutMac::~MidiOutMac() {
+MidiOutHost::~MidiOutHost() {
     { std::lock_guard<std::mutex> lk(mtx_); stop_ = true; }
     cv_.notify_all();
     if (worker_.joinable()) worker_.join();
@@ -28,12 +32,12 @@ MidiOutMac::~MidiOutMac() {
 // -----------------------------------------------------------------------------
 //  Livraison horodatée
 // -----------------------------------------------------------------------------
-void MidiOutMac::anchor(int64_t cycle, std::chrono::steady_clock::time_point hostTime) {
+void MidiOutHost::anchor(int64_t cycle, std::chrono::steady_clock::time_point hostTime) {
     std::lock_guard<std::mutex> lk(mtx_);
     anchorCycle_ = cycle; anchorHost_ = hostTime; anchored_ = true;
 }
 
-void MidiOutMac::byteAt(uint8_t b, int64_t cycle) {
+void MidiOutHost::byteAt(uint8_t b, int64_t cycle) {
     std::chrono::steady_clock::time_point when;
     {
         std::lock_guard<std::mutex> lk(mtx_);
@@ -49,7 +53,7 @@ void MidiOutMac::byteAt(uint8_t b, int64_t cycle) {
     cv_.notify_one();
 }
 
-void MidiOutMac::workerLoop() {
+void MidiOutHost::workerLoop() {
     std::unique_lock<std::mutex> lk(mtx_);
     while (!stop_) {
         if (queue_.empty()) { cv_.wait(lk); continue; }
@@ -65,18 +69,38 @@ void MidiOutMac::workerLoop() {
     }
 }
 
-bool MidiOutMac::available() {
+bool MidiOutHost::synthAvailable() {
 #ifdef __APPLE__
+    return true;                        // DLSMusicDevice : rien d'équivalent ailleurs
+#else
+    return false;
+#endif
+}
+
+bool MidiOutHost::portAvailable() {
+#if defined(__APPLE__) || defined(NEOST_MIDI_ALSA)
     return true;
 #else
     return false;
 #endif
 }
 
+const char* MidiOutHost::portKindName() {
+#if defined(__APPLE__)
+    return "CoreMIDI";
+#elif defined(NEOST_MIDI_ALSA)
+    return "ALSA";
+#else
+    return "—";
+#endif
+}
+
+bool MidiOutHost::available() { return synthAvailable() || portAvailable(); }
+
 // -----------------------------------------------------------------------------
 //  Synthé GM intégré : DLSMusicDevice → DefaultOutput, via un AUGraph.
 // -----------------------------------------------------------------------------
-bool MidiOutMac::openSynth() {
+bool MidiOutHost::openSynth() {
 #ifdef __APPLE__
     if (synth_) return true;
     AUGraph graph = nullptr;
@@ -107,7 +131,7 @@ bool MidiOutMac::openSynth() {
 #endif
 }
 
-void MidiOutMac::closeSynth() {
+void MidiOutHost::closeSynth() {
 #ifdef __APPLE__
     std::lock_guard<std::mutex> lk(outMtx_);
     if (!graph_) return;
@@ -123,8 +147,42 @@ void MidiOutMac::closeSynth() {
 // -----------------------------------------------------------------------------
 //  Port CoreMIDI virtuel : les autres applications le voient comme une SOURCE.
 // -----------------------------------------------------------------------------
-bool MidiOutMac::openVirtualPort() {
-#ifdef __APPLE__
+bool MidiOutHost::openVirtualPort() {
+#if defined(NEOST_MIDI_ALSA)
+    if (seq_) return true;
+    snd_seq_t* seq = nullptr;
+    if (snd_seq_open(&seq, "default", SND_SEQ_OPEN_OUTPUT, 0) < 0) {
+        std::fprintf(stderr, "[midi-out] ALSA sequencer unavailable\n");
+        return false;
+    }
+    snd_seq_set_client_name(seq, "NeoST");
+    // Port en LECTURE et souscriptible : c'est une SOURCE, les synthés s'y abonnent
+    // (aconnect, qjackctl, l'onglet MIDI de Qsynth…). Type APPLICATION pour que les
+    // gestionnaires de connexions le rangent au bon endroit.
+    const int port = snd_seq_create_simple_port(
+        seq, "NeoST MIDI OUT",
+        SND_SEQ_PORT_CAP_READ | SND_SEQ_PORT_CAP_SUBS_READ,
+        SND_SEQ_PORT_TYPE_MIDI_GENERIC | SND_SEQ_PORT_TYPE_APPLICATION);
+    if (port < 0) {
+        snd_seq_close(seq);
+        std::fprintf(stderr, "[midi-out] cannot create the ALSA port\n");
+        return false;
+    }
+    // L'encodeur convertit le FLUX d'octets en événements du séquenceur — il gère
+    // running status et SysEx, qu'on n'a donc pas à réimplémenter ici. 4 Ko : de quoi
+    // contenir un dump de patch (les SysEx du parseur sont bornés plus haut).
+    snd_midi_event_t* enc = nullptr;
+    if (snd_midi_event_new(4096, &enc) < 0) {
+        snd_seq_delete_simple_port(seq, port); snd_seq_close(seq);
+        return false;
+    }
+    snd_midi_event_no_status(enc, 1);   // pas de running status en sortie : chaque
+                                        // événement du séquenceur est autonome
+    std::lock_guard<std::mutex> lk(outMtx_);
+    seq_ = seq; enc_ = enc; src_ = uint32_t(port) + 1;   // +1 : 0 signifie « fermé »
+    std::fprintf(stderr, "[midi-out] ALSA port \"NeoST MIDI OUT\" open — connect a synth to it\n");
+    return true;
+#elif defined(__APPLE__)
     if (src_) return true;
     MIDIClientRef client = 0;
     MIDIEndpointRef src = 0;
@@ -143,8 +201,16 @@ bool MidiOutMac::openVirtualPort() {
 #endif
 }
 
-void MidiOutMac::closeVirtualPort() {
-#ifdef __APPLE__
+void MidiOutHost::closeVirtualPort() {
+#if defined(NEOST_MIDI_ALSA)
+    std::lock_guard<std::mutex> lk(outMtx_);
+    if (enc_) { snd_midi_event_free(static_cast<snd_midi_event_t*>(enc_)); enc_ = nullptr; }
+    if (seq_) {
+        if (src_) snd_seq_delete_simple_port(static_cast<snd_seq_t*>(seq_), int(src_) - 1);
+        snd_seq_close(static_cast<snd_seq_t*>(seq_)); seq_ = nullptr;
+    }
+    src_ = 0;
+#elif defined(__APPLE__)
     std::lock_guard<std::mutex> lk(outMtx_);
     if (src_)    { MIDIEndpointDispose(src_); src_ = 0; }
     if (client_) { MIDIClientDispose(client_); client_ = 0; }
@@ -169,9 +235,9 @@ int dataBytesFor(uint8_t status) {
 }
 } // namespace
 
-void MidiOutMac::byte(uint8_t b) { parse(b); }
+void MidiOutHost::byte(uint8_t b) { parse(b); }
 
-void MidiOutMac::parse(uint8_t b) {
+void MidiOutHost::parse(uint8_t b) {
     // NEOST_MIDIOUT_TRACE=1 : horodatage HÔTE (ms) de chaque octet livré — à croiser
     // avec NEOST_MIDI_TRACE (cycles ST) pour juger la cadence de livraison.
     static const bool trace = std::getenv("NEOST_MIDIOUT_TRACE") != nullptr;
@@ -210,8 +276,43 @@ void MidiOutMac::parse(uint8_t b) {
     }
 }
 
-void MidiOutMac::emit(const uint8_t* msg, int len) {
-#ifdef __APPLE__
+// -----------------------------------------------------------------------------
+//  Panique MIDI
+// -----------------------------------------------------------------------------
+// Un synthé ne relâche JAMAIS une note de lui-même : si l'on coupe la sortie, qu'on
+// remet la machine à zéro ou que le programme ST plante pendant un accord, les notes
+// tiennent indéfiniment. On envoie donc la séquence standard sur les 16 canaux.
+// Ordre voulu : All Sound Off coupe même les résonances, Reset All Controllers remet
+// molette et pédale à zéro (une pédale de sustain restée enfoncée retiendrait les
+// notes malgré All Notes Off), All Notes Off termine.
+void MidiOutHost::panic() {
+    for (int ch = 0; ch < 16; ++ch) {
+        const uint8_t st = uint8_t(0xB0 | ch);
+        const uint8_t allSoundOff[3]   = {st, 120, 0};
+        const uint8_t resetCtrl[3]     = {st, 121, 0};
+        const uint8_t allNotesOff[3]   = {st, 123, 0};
+        emit(allSoundOff, 3);
+        emit(resetCtrl, 3);
+        emit(allNotesOff, 3);
+    }
+    // Le parseur d'octets est repris à zéro : un SysEx interrompu par la panique
+    // laisserait sinon l'analyse au milieu d'un message.
+    status_ = 0; needed_ = 0; got_ = 0; inSysex_ = false; sysex_.clear();
+}
+
+void MidiOutHost::emit(const uint8_t* msg, int len) {
+#if defined(NEOST_MIDI_ALSA)
+    std::lock_guard<std::mutex> lk(outMtx_);
+    if (!seq_ || !enc_ || !src_) return;
+    snd_seq_event_t ev;
+    snd_seq_ev_clear(&ev);
+    snd_seq_ev_set_source(&ev, int(src_) - 1);
+    snd_seq_ev_set_subs(&ev);            // vers TOUS les abonnés du port
+    snd_seq_ev_set_direct(&ev);          // pas de file : on est déjà horodaté en amont
+    if (snd_midi_event_encode(static_cast<snd_midi_event_t*>(enc_), msg, len, &ev) > 0
+        && ev.type != SND_SEQ_EVENT_NONE)
+        snd_seq_event_output_direct(static_cast<snd_seq_t*>(seq_), &ev);
+#elif defined(__APPLE__)
     std::lock_guard<std::mutex> lk(outMtx_);
     if (synth_ && len <= 3 && msg[0] < 0xF0)
         MusicDeviceMIDIEvent(static_cast<AudioUnit>(synth_), msg[0], len > 1 ? msg[1] : 0,
