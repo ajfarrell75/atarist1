@@ -231,7 +231,13 @@ public:
         ar(audioRegs_);
         ar.objVec(events_, 6, [](StateArchive& a, RegEvent& e) {
             a(e.cycle); a(e.reg); a(e.val);
-            a.check(e.reg < 14);        // borne posée par write8 ; indexe audioRegs_[16]
+            // Domaine EXACT de write8 : 0-13, PLUS R15 quand le DAC Pro Sound est
+            // branché (cf. le push conditionnel plus haut). La garde était restée à
+            // « < 14 » quand le DAC a élargi la borne côté écriture : un save-state
+            // parfaitement légitime, pris avec une écriture R15 encore en file, était
+            // alors REFUSÉ au chargement. R14 (port A) n'est jamais empilé.
+            a.check(e.reg < 14 || e.reg == 15,
+                    "YM2149::events_ : registre hors du domaine de write8 (0-13, ou 15 sous DAC Pro Sound)");
         });
         // Latches MMIO
         ar(regReadData_);
