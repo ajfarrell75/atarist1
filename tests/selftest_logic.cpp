@@ -580,6 +580,16 @@ static void testMidiTdre() {
     int envoyes = 0;
     for (int i = 0; i < 50 && tdre(); ++i) { midi.write8(kData, uint8_t(i)); ++envoyes; }
     checkBool("scrutation : 1 seul octet avant l'attente", envoyes == 1, true);
+
+    // Débordement du récepteur : le 6850 perd le NOUVEL octet et garde l'ancien
+    // (acia.c, état STOP_BIT). Jeter le plus ancien faisait disparaître le STATUS
+    // d'un message MIDI et laissait des octets de données orphelins.
+    midi.setLoopback(true);
+    midi.reset(); midi.write8(kCtrl, 0x03); midi.write8(kCtrl, 0x00);
+    midi.write8(kData, 0x90); midi.write8(kData, 0x3C); midi.write8(kData, 0x40);
+    const uint8_t o1 = midi.read8(kData), o2 = midi.read8(kData);
+    checkBool("débordement : le status $90 survit", o1 == 0x90, true);
+    checkBool("débordement : puis $3C",             o2 == 0x3C, true);
 }
 
 // -----------------------------------------------------------------------------

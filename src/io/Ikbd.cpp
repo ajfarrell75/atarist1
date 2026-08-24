@@ -175,9 +175,10 @@ void Ikbd::write8(uint32_t addr, uint8_t v) {
     if ((addr & 2) == 0) {
         // $FFFC00 : registre de contrôle (diviseur, format, bit7 = RX int enable).
         // Bits 5-6 = contrôle émetteur : 01 arme l'IRQ d'émission (TIE), cf. ACIA
-        // 6850 et acia.c ACIA_Write_CR. Hors TIE, TDRE reste câblé à 1 : le modèle
-        // d'émission ne s'active QUE quand un logiciel pilote l'IKBD par IRQ TX
-        // (ex. jeu armant CR=$b6 au lieu de $96, type Hades Nebula).
+        // 6850 et acia.c ACIA_Write_CR. TIE ne décide QUE de l'interruption : le
+        // temps de transmission, lui, est modélisé dans tous les cas (cf. write
+        // des données plus bas) — un pilote qui SCRUTE TDRE est freiné comme un
+        // pilote qui interrompt (jeu armant CR=$b6 au lieu de $96, Hades Nebula).
         control_ = v;
         txEnableInt_ = ((v & 0x60) == 0x20);
         // ⚠ Changer les bits d'émission ne remet PAS l'émetteur au repos : seul le

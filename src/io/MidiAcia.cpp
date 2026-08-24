@@ -96,10 +96,16 @@ void MidiAcia::write8(uint32_t addr, uint8_t v) {
 }
 
 void MidiAcia::pushRx(uint8_t v) {
-    // Profondeur physique d'un 6850 : RDR + registre à décalage. Au-delà, l'octet le
-    // plus ancien tombe — ce qui modélise en prime l'overrun réel du composant (le
-    // bit OVRN reste non modélisé, cf. HATARI_DIVERGENCES.md).
-    if (rx_.size() >= kMidiRxMax) rx_.pop_front();
+    // Profondeur physique d'un 6850 : RDR + registre à décalage. Récepteur PLEIN :
+    // c'est le NOUVEL octet qui tombe, le RDR gardant l'ancien — acia.c, état
+    // STOP_BIT : « if ((SR & RDRF) == 0) { RDR = RSR; SR |= RDRF; } else RX_Overrun = 1 ».
+    // NeoST jetait au contraire le PLUS ANCIEN, ce qui est le pire choix pour du
+    // MIDI : sur un note-on $90 $3C $40 lu trop tard, le STATUS disparaissait et il
+    // ne restait que deux octets de données orphelins ($3C $40) — parseur
+    // désynchronisé. Le matériel perd le 3e octet et garde $90 $3C.
+    // Le bit OVRN lui-même reste non modélisé ICI (il l'est sur l'ACIA clavier,
+    // cf. Ikbd::rxOverrun_) — divergence inventoriée, cf. HATARI_DIVERGENCES.md.
+    if (rx_.size() >= kMidiRxMax) return;   // rdrf_ est déjà vrai : rien à ré-armer
     rx_.push_back(v);
     rdrf_ = true;                    // un octet disponible (RDRF)
     raiseIfReady();
