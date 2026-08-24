@@ -74,6 +74,14 @@ void Mfp::reset() {
     // le sink PSG tire — psg.reset() (R15=0) ne le fait pas, un BUSY asserté par le
     // bouclage ou la capture imprimante restait donc coincé après reset.
     busyLine_ = false;
+    // RI (GPIP6) : MÊME raison que CTS/DCD et BUSY ci-dessus — une entrée, jamais
+    // recalculée à la lecture (repos BAS, cf. gpipInput). Deux sources la tirent et
+    // aucune ne la relâchait après un reset machine :
+    //  · bouclage RS-232 (DTR→RI), comme la désassertion CTS/DCD décrite plus haut ;
+    //  · bouton Ultimate Ripper, RELÂCHÉ à la VBL par PortDevices::onVbl — or
+    //    Machine::reset appelle ports.reset(), qui remet pressed_ à faux : la VBL
+    //    sortait aussitôt et la ligne restait assertée POUR TOUJOURS.
+    riLine_ = false;
     monButton_ = false;                   // bouton Multiface relâché (PortDevices::reset l'oublie aussi)
     rxByte_ = 0; rxFull_ = false; rxOverrun_ = false;   // USART : tampon vidé (pas de RXFULL fantôme)
     serialBaud_ = 0; serialUcr_ = 0;      // suivi débit série remis (sinon serialBaud() rapporte l'avant-reset)
@@ -699,6 +707,25 @@ bool Mfp::mfpSelfTest() {
     for (int i = 1; i < 25; ++i)
         timerProbe.scheduleTimerAt(2, 0, /*fromCounter=*/false);
     chk("TimerC reste accumulé x25", timerSched.rawCyclesUntil(Scheduler::TIMER_C), 1002656);
+
+    // --- (e) reset() RELÂCHE toutes les lignes d'ENTRÉE ------------------------------
+    // Ce sont des entrées, jamais recalculées à la lecture : celle qu'un reset oublie
+    // reste coincée POUR TOUJOURS. RI l'était (bouclage DTR→RI, et bouton Ultimate
+    // Ripper dont le relâchement à la VBL ne vient jamais — Machine::reset remet
+    // PortDevices::pressed_ à faux avant). En DERNIER : reset() touche tout l'état.
+    {
+        Mfp probe;
+        probe.ddr = 0; probe.hasDmaSound_ = false; probe.colorMonitor_ = true;
+        probe.riLine_ = true; probe.busyLine_ = true; probe.monButton_ = true;
+        probe.ctsLine_ = probe.dcdLine_ = false;   // désassertées (repos = ACTIVES)
+        probe.reset();
+        chk("reset : RI (bit6) relâchée",   (probe.gpipInput() & 0x40) ? 1 : 0, 0);
+        chk("reset : BUSY (bit0) relâchée", (probe.gpipInput() & 0x01) ? 1 : 0, 1);
+        chk("reset : CTS (bit2) au repos",  (probe.gpipInput() & 0x04) ? 1 : 0, 0);
+        chk("reset : DCD (bit1) au repos",  (probe.gpipInput() & 0x02) ? 1 : 0, 0);
+        chk("reset : bouton Multiface (bit7) relâché", (probe.gpipInput() & 0x80) ? 1 : 0, 1);
+        chk("reset : GPIP d'entrée pristine", probe.gpipInput(), 0xB1);
+    }
 
     std::fprintf(stderr, "[mfp-selftest] %d OK, %d FAIL\n", pass, fail);
     return fail == 0;
