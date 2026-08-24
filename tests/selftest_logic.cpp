@@ -651,6 +651,19 @@ static void testRtcSecond() {
     // Trois secondes machine = exactement trois tics (pas d'arrondi qui en perde un).
     clk = 4 * kSec;
     checkBool("3 s de plus = 3 tics", rtc.getDateTime().sec == 3, true);
+
+    // TIMER EN = bit3 du registre MODE ($FFFC3B) : à 0 le COMPTEUR est arrêté.
+    // Vérifié sur machine réelle émulée : TOS 1.02 et EmuTOS écrivent $9 puis $8 au
+    // boot — ils ne basculent que le bit0 (banque) et laissent TIMER EN posé. Seule
+    // la cartouche Atari Field Service le coupe, pour figer l'heure avant relecture.
+    constexpr uint32_t kMode = 0xFFFC21 + 13 * 2;
+    rtc.write8(kMode, 0x00);                       // compteur arrêté
+    const int fige = rtc.getDateTime().sec;
+    clk += 5 * kSec;
+    checkBool("TIMER EN coupé : l'heure est figée", rtc.getDateTime().sec == fige, true);
+    rtc.write8(kMode, 0x08);                       // compteur réarmé
+    clk += kSec;
+    checkBool("TIMER EN réarmé : l'heure repart", rtc.getDateTime().sec == fige + 1, true);
 }
 
 int main() {

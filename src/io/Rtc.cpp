@@ -69,6 +69,13 @@ void Rtc::catchUp() {
     int64_t secs = (t - baseCycle_) / secondCycles_;
     if (secs <= 0) return;
     baseCycle_ += secs * secondCycles_;                 // avance la phase d'un multiple entier de 1 s
+    // TIMER EN (bit3 du registre MODE, RP5C15) à 0 → le COMPTEUR est arrêté : l'heure
+    // ne bouge pas. La phase vient d'être avancée ci-dessus, sinon tout le temps passé
+    // à l'arrêt ressortirait d'un bloc au redémarrage. Vérifié : TOS 1.02 et EmuTOS
+    // écrivent $9 puis $8 au boot (ils ne basculent que le bit0 de banque), donc le
+    // bit3 est POSÉ en usage normal ; seule la cartouche Atari Field Service le coupe,
+    // délibérément, pour figer l'heure avant de la relire (test L).
+    if (!(mode_ & 0x08)) return;
     if (secs > 90000) secs = 90000;              // borne le travail (>1 jour) : la date exacte
                                                  // au-delà n'intéresse aucun diagnostic
     while (secs-- > 0) tickOneSecond();

@@ -77,7 +77,11 @@ private:
     // 13 chiffres BCD : sec.u sec.t min.u min.t h.u h.t weekday j.u j.t mois.u mois.t an.u an.t
     // Base de secours valide ; remplacée au démarrage par initFromHostTime().
     uint8_t d_[13]  = {0,0,0,0,0,0,0,1,0,1,0,0,0};
-    uint8_t mode_   = 0;                     // $FFFC3B (bit0 = banque)
+    // $FFFC3B. bit0 = banque ; bit3 = TIMER EN (RP5C15) : à 0 le COMPTEUR EST ARRÊTÉ.
+    // Défaut TIMER EN posé : sur une vraie Mega ST l'horloge est sauvegardée par pile
+    // et compte depuis l'usine ; démarrer à 0 figerait l'heure tant qu'aucun logiciel
+    // n'écrit le registre (le TOS ne l'écrit jamais).
+    uint8_t mode_   = 0x08;
     uint8_t test_   = 0;                     // $FFFC3D
     uint8_t reset_  = 0;                     // $FFFC3F
 
