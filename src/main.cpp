@@ -419,6 +419,35 @@ void onGlfwError(int code, const char* desc) {
     std::fprintf(stderr, "GLFW error %d: %s\n", code, desc);
 }
 
+// --- Auto-plug (disks/dongles.txt) : mémoire de ce QU'ON a branché ------------------
+// Le montage à chaud enchaîne les jeux (ludothèque, borne). L'auto-plug ne remplissait
+// que les emplacements vides et ne retirait JAMAIS rien : la clé du jeu précédent
+// restait en place. Une clé Leader Board oubliée sur le port 1 force HAUT+BAS en
+// permanence (PortDevices::joyOverlay) — la manette du jeu suivant est cassée, et
+// cfg.joy1 ayant été persisté, ça survit au redémarrage.
+// On note donc ce que l'auto-plug a posé, pour le retirer au montage suivant. On ne
+// retire QUE ce qu'on a posé ET qui n'a pas bougé depuis : la page Dongles reste
+// souveraine.
+static PortDevices::Device g_autoPortDev[int(PortDevices::Port::Count)] = {};
+static CartridgeKey::Model g_autoCartKey = CartridgeKey::Model::None;
+
+static void autoDongleRetract(Machine& machine, Config& cfg) {
+    std::string* slots[] = { &cfg.joy0, &cfg.joy1, &cfg.rs232, &cfg.printer, &cfg.cartbutton };
+    for (int p = 0; p < int(PortDevices::Port::Count); ++p) {
+        const PortDevices::Device d = g_autoPortDev[p];
+        if (d == PortDevices::Device::None) continue;
+        g_autoPortDev[p] = PortDevices::Device::None;
+        if (machine.ports.at(PortDevices::Port(p)) != d) continue;   // l'utilisateur l'a changé
+        machine.plugPort(PortDevices::Port(p), PortDevices::Device::None);
+        slots[p]->clear();
+    }
+    if (g_autoCartKey != CartridgeKey::Model::None) {
+        const CartridgeKey::Model k = g_autoCartKey;
+        g_autoCartKey = CartridgeKey::Model::None;
+        if (machine.dongle.model() == k) { machine.setDongle(CartridgeKey::Model::None); cfg.dongle.clear(); }
+    }
+}
+
 // Callback bouton souris : ÉVÉNEMENTIEL (capte chaque transition, même un
 // double-clic rapide qu'une scrutation par trame manquerait). Envoie un paquet
 // IKBD sans mouvement portant l'état courant des boutons.
@@ -2904,6 +2933,17 @@ int main(int argc, char** argv) {
         }
         machine.psg.setPortBDacGain(cfg.mixDac);
     }
+    // Un périphérique que dongles.txt EXPLIQUE pour la disquette montée au démarrage
+    // est réputé image-dérivé : on le marque comme auto-branché (sans rien brancher ni
+    // débrancher ici) pour qu'un montage à chaud ultérieur le retire. Sans ça, la clé
+    // qu'un auto-plug d'une session PRÉCÉDENTE a persistée dans neost.cfg est
+    // indiscernable d'un choix de l'utilisateur, et resterait collée au jeu suivant.
+    if (cfg.autoDongle && !diskPath.empty()) {
+        for (const auto& r : neost::matchDongleRules(loadDongleTable(), diskPath)) {
+            if (r.cart) { if (machine.dongle.model() == r.key) g_autoCartKey = r.key; }
+            else if (machine.ports.at(r.port) == r.dev) g_autoPortDev[int(r.port)] = r.dev;
+        }
+    }
     // Sortie MIDI hôte (macOS) : synthé GM intégré et/ou port CoreMIDI virtuel. Dès
     // qu'une sortie est ouverte, l'ACIA y envoie MIDI OUT (au lieu du bouclage).
     MidiOutHost midiOut;
@@ -4598,6 +4638,9 @@ int main(int argc, char** argv) {
         // écrite dans neost.cfg et retentée à chaque boot.
         if (!reqMount.empty()) {
             if (machine.fdc.loadImage(reqMount)) {
+                // La clé auto-branchée pour l'image PRÉCÉDENTE s'en va d'abord (cf.
+                // autoDongleRetract) : elle n'a rien à faire dans le jeu suivant.
+                autoDongleRetract(machine, cfg);
                 // Clé du jeu (disks/dongles.txt) : on ne remplit que les emplacements VIDES.
                 if (cfg.autoDongle) {
                     std::string plugged;
@@ -4605,11 +4648,13 @@ int main(int argc, char** argv) {
                         if (r.cart) {
                             if (machine.dongle.attached() || !machine.setDongle(r.key)) continue;
                             static const char* const kn[] = { "", "cubase2", "cubase3", "auto", "notator" };
-                            cfg.dongle = kn[int(r.key)]; plugged += std::string(plugged.empty() ? "" : ", ") + "cartridge key " + cfg.dongle;
+                            cfg.dongle = kn[int(r.key)]; g_autoCartKey = r.key;
+                            plugged += std::string(plugged.empty() ? "" : ", ") + "cartridge key " + cfg.dongle;
                         } else {
                             if (machine.ports.at(r.port) != PortDevices::Device::None || !machine.plugPort(r.port, r.dev)) continue;
                             std::string* slots[] = { &cfg.joy0, &cfg.joy1, &cfg.rs232, &cfg.printer, &cfg.cartbutton };
                             *slots[int(r.port)] = PortDevices::id(r.dev);
+                            g_autoPortDev[int(r.port)] = r.dev;
                             plugged += std::string(plugged.empty() ? "" : ", ") + PortDevices::label(r.dev) + " on " + PortDevices::portId(r.port);
                         }
                     }
@@ -4632,6 +4677,7 @@ int main(int argc, char** argv) {
         }
         if (reqEject) {
             machine.fdc.eject();
+            autoDongleRetract(machine, cfg);   // la clé partait avec la disquette
             cfg.disk.clear(); saveConfig(exeDir, cfg, &machine);
         }
         // Lecteur B : même discipline que A. Le cœur le gère depuis toujours
