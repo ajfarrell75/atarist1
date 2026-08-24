@@ -166,7 +166,17 @@ int enecSelfTest(Machine& machine) {
 
     NetBackendLoop loop;
     machine.ne2000.setBackend(&loop);
+
+    // Exclusivité clé Steinberg / EtherNEC, dans LES DEUX SENS. setDongle refusait
+    // bien la clé quand le réseau est là, mais enableEtherNec ne testait pas la clé :
+    // brancher la clé d'abord (ce que faisait l'auto-plug de dongles.txt, exécuté
+    // avant --ethernec) laissait les DEUX décoder le port cartouche.
+    check(machine.setDongle(CartridgeKey::Model::Cubase2), "cle seule : acceptee");
+    check(!machine.enableEtherNec(), "EtherNEC refuse tant que la cle est la");
+    check(machine.setDongle(CartridgeKey::Model::None), "cle debranchee");
+
     if (!machine.enableEtherNec()) { std::fprintf(stderr, "[enec-selftest] enable failed\n"); return 1; }
+    check(!machine.setDongle(CartridgeKey::Model::Cubase2), "cle refusee tant que l'EtherNEC est la");
 
     Bus& bus = machine.bus;
     // Accès EtherNEC : tout est une LECTURE dans la fenêtre cartouche.
@@ -1196,19 +1206,6 @@ int main(int argc, char** argv) {
         return 1;
     }
     machine.loadDisk(diskPath);   // lecteur A (optionnel)
-    // Clé du jeu (disks/dongles.txt à côté de l'image, sinon table livrée) : comme le
-    // GUI, seulement les emplacements vides — --dongle / --plug explicites priment.
-    if (!noAutoDongle && !diskPath.empty()) {
-        std::string text;
-        const std::string tbl = (std::filesystem::path(diskPath).parent_path() / "dongles.txt").string();
-        if (std::ifstream in(tbl); in) text.assign(std::istreambuf_iterator<char>(in), {});
-        else text = neost::defaultDongleTable();
-        for (const auto& r : neost::matchDongleRules(neost::parseDongleTable(text), diskPath)) {
-            if (r.cart) { if (!machine.dongle.attached() && machine.setDongle(r.key)) std::fprintf(stderr, "[headless] auto-plug: cartridge key %d (dongles.txt)\n", int(r.key)); }
-            else if (machine.ports.at(r.port) == PortDevices::Device::None && machine.plugPort(r.port, r.dev))
-                std::fprintf(stderr, "[headless] auto-plug: %s on %s (dongles.txt)\n", PortDevices::label(r.dev), PortDevices::portId(r.port));
-        }
-    }
     if (!diskBPath.empty()) machine.loadDiskB(diskBPath);   // lecteur B (optionnel)
     machine.fdc.setFastFdc(fastFdc);   // FDC rapide (--fastfdc) : accès disque ÷10
     // Disque dur GEMDOS (--gemdos) : installe la cartouche système à $FA0000 →
@@ -1294,6 +1291,23 @@ int main(int argc, char** argv) {
                          netusbeeFlag ? "netusbee" : "ethernec");
     } else if (slirpFlag) {
         std::fprintf(stderr, "[headless] --slirp ignored: needs --ethernec or --netusbee\n");
+    }
+    // Clé du jeu (disks/dongles.txt à côté de l'image, sinon table livrée) : comme le
+    // GUI, seulement les emplacements vides — --dongle / --plug explicites priment.
+    // ⚠ APRÈS l'activation réseau : la clé cartouche est exclusive de l'EtherNEC, et
+    // brancher la table AVANT laissait les deux cohabiter (setDongle n'avait alors
+    // rien à refuser). Un drapeau explicite doit primer sur un branchement déduit
+    // d'un NOM DE FICHIER — ici setDongle refuse, et --ethernec l'emporte.
+    if (!noAutoDongle && !diskPath.empty()) {
+        std::string text;
+        const std::string tbl = (std::filesystem::path(diskPath).parent_path() / "dongles.txt").string();
+        if (std::ifstream in(tbl); in) text.assign(std::istreambuf_iterator<char>(in), {});
+        else text = neost::defaultDongleTable();
+        for (const auto& r : neost::matchDongleRules(neost::parseDongleTable(text), diskPath)) {
+            if (r.cart) { if (!machine.dongle.attached() && machine.setDongle(r.key)) std::fprintf(stderr, "[headless] auto-plug: cartridge key %d (dongles.txt)\n", int(r.key)); }
+            else if (machine.ports.at(r.port) == PortDevices::Device::None && machine.plugPort(r.port, r.dev))
+                std::fprintf(stderr, "[headless] auto-plug: %s on %s (dongles.txt)\n", PortDevices::label(r.dev), PortDevices::portId(r.port));
+        }
     }
     // Clé Steinberg (--dongle) : répond dans $FB0000-$FBFFFF, invisible du TOS.
     if (!dongleModel.empty()) {

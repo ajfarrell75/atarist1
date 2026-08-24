@@ -319,6 +319,15 @@ bool  g_kbdJoy = false;                // émulation joystick au clavier (flèch
 int   g_kbdJoyPort = 1;                // port ST visé par l'émulation clavier (0/1)
 bool  g_port0Auto = false;             // port 0 : "auto" (2e manette y va seule) vs "mouse" (défaut)
 bool  g_port0Joystick = false;         // calculé chaque trame : un joystick OCCUPE le port 0 → souris débranchée
+// La souris hôte atteint-elle le ST ? Question posée par les DEUX chemins d'entrée
+// souris — le mouvement (scruté par trame) et les boutons (callback événementiel) —
+// justement parce que leur divergence est ce qui a laissé les clics traverser un
+// port 0 occupé par un joystick. Deux raisons de couper :
+//  · g_port0Joystick : un joystick occupe le port souris (comme sur un vrai ST) ;
+//  · g_kioskDiskMenu : l'overlay borne a la main — le clavier (onKey) et la manette
+//    sont déjà avalés au même titre, et le ST est GELÉ dessous (kioskPaused), donc
+//    tout Δ envoyé s'empilerait dans l'accumulateur IKBD pour ressortir d'un bloc.
+static bool mouseReachesSt() { return !g_port0Joystick && !g_kioskDiskMenu; }
 float g_joyDeadzone = 0.30f;           // zone morte centrale des sticks analogiques [0,0.95]
 uint8_t g_lastJoy0 = 0, g_lastJoy1 = 0; // dernier octet composé posé sur l'IKBD (fenêtre Joystick)
 // Affectation des manettes hôte aux ports ST, par GUID (stable au rebranchement —
@@ -420,9 +429,7 @@ void onMouseButton(GLFWwindow* w, int button, int action, int /*mods*/) {
         if (action == GLFW_PRESS && !g_kiosk) g_mouseCaptureToggleReq = true;
         return;
     }
-    // Port 0 occupé par un joystick : la souris est DÉBRANCHÉE du ST — les clics
-    // non plus ne passent pas (ils partageraient la ligne feu du joystick port 0).
-    if (!g_ikbd || !g_mouseCaptured || g_port0Joystick) return;
+    if (!g_ikbd || !g_mouseCaptured || !mouseReachesSt()) return;
     const bool l = glfwGetMouseButton(w, GLFW_MOUSE_BUTTON_LEFT)  == GLFW_PRESS;
     const bool r = glfwGetMouseButton(w, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
     if (g_dbgMouse) std::fprintf(stderr, "[mouse] button  L=%d R=%d\n", l, r);
@@ -2832,6 +2839,15 @@ int main(int argc, char** argv) {
                 return;
             }
             if (machine.netUsbeeEnabled()) return;   // la NE2000 est déjà là (NetUSBee)
+            // Même pré-test que pour la cartouche : la clé Steinberg est exclusive de
+            // l'EtherNEC (enableEtherNec la refuse). Sans ce message, la case restait
+            // cochée alors que rien ne s'activait.
+            if (machine.dongle.attached()) {
+                g_stateMsg = "EtherNEC needs the cartridge port free (a Steinberg key is plugged)";
+                g_stateMsgFrames = 150;
+                cfg.ethernec = false;
+                return;
+            }
             machine.ne2000.setBackend(&etherNull);
             machine.enableEtherNec();
         } else if (!machine.netUsbeeEnabled()) {
@@ -2847,6 +2863,12 @@ int main(int argc, char** argv) {
                 return;
             }
             if (machine.netUsbeeEnabled()) return;
+            if (machine.dongle.attached()) {           // cf. etherApply : exclusivité clé/réseau
+                g_stateMsg = "NetUSBee needs the cartridge port free (a Steinberg key is plugged)";
+                g_stateMsgFrames = 150;
+                cfg.netusbee = false;
+                return;
+            }
             machine.disableEtherNec();                 // la NE2000 repart avec le NetUSBee
             machine.ne2000.setBackend(&etherNull);
             machine.enableNetUsbee();
@@ -3295,10 +3317,10 @@ int main(int argc, char** argv) {
             if (dx || dy) {
                 lastMx += dx; lastMy += dy;     // on ne consomme QUE l'entier → le reste
                                                 // fractionnaire s'accumule (drags lents)
-                // Port 0 pris par un joystick = souris débranchée : on CONSOMME quand
-                // même le delta, sinon il s'accumule et part en un saut géant au
-                // rebranchement de la souris.
-                if (!g_port0Joystick) {
+                // Souris débranchée du ST (joystick sur le port 0, ou overlay borne
+                // ouvert) : on CONSOMME quand même le delta, sinon il s'accumule et
+                // part en un saut géant au retour.
+                if (mouseReachesSt()) {
                     const bool l = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT)  == GLFW_PRESS;
                     const bool r = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
                     if (g_dbgMouse) std::fprintf(stderr, "[mouse] move dx=%d dy=%d L=%d R=%d\n", dx, dy, l, r);
@@ -4036,6 +4058,7 @@ int main(int argc, char** argv) {
                     g_autoZoom = cfg.autoZoom;
                     g_crtOn    = cfg.crt; g_crtParams = cfg.crtParams;
                     g_kbdJoyPort  = cfg.joyport;
+                    g_port0Auto   = (cfg.port0 == "auto");   // cf. init au démarrage
                     g_joyDeadzone = cfg.joydeadzone;
                     joymapParse(cfg.joymap);
                     audio.setMasterVolume(cfg.volume);
