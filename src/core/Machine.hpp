@@ -234,6 +234,11 @@ public:
     // reset comme un power-cycle de la carte.
     bool enableEtherNec() {
         if (!bus.cart.empty()) return false;   // cartouche présente : conflit
+        // Clé Steinberg déjà branchée : MÊME exclusivité que dans setDongle, mais dans
+        // l'autre sens. Ne la tester que là-bas rendait l'interdit dépendant de l'ORDRE
+        // (clé d'abord → les deux cohabitaient sur le port cartouche, alors que réseau
+        // d'abord était refusé). L'EtherNEC décode toute la fenêtre : c'est exclusif.
+        if (dongle.attached()) return false;
         ne2000.setEnabled(true);
         ne2000.reset();
         bus.ne2000 = &ne2000;

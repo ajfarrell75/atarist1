@@ -2832,6 +2832,15 @@ int main(int argc, char** argv) {
                 return;
             }
             if (machine.netUsbeeEnabled()) return;   // la NE2000 est déjà là (NetUSBee)
+            // Même pré-test que pour la cartouche : la clé Steinberg est exclusive de
+            // l'EtherNEC (enableEtherNec la refuse). Sans ce message, la case restait
+            // cochée alors que rien ne s'activait.
+            if (machine.dongle.attached()) {
+                g_stateMsg = "EtherNEC needs the cartridge port free (a Steinberg key is plugged)";
+                g_stateMsgFrames = 150;
+                cfg.ethernec = false;
+                return;
+            }
             machine.ne2000.setBackend(&etherNull);
             machine.enableEtherNec();
         } else if (!machine.netUsbeeEnabled()) {
@@ -2847,6 +2856,12 @@ int main(int argc, char** argv) {
                 return;
             }
             if (machine.netUsbeeEnabled()) return;
+            if (machine.dongle.attached()) {           // cf. etherApply : exclusivité clé/réseau
+                g_stateMsg = "NetUSBee needs the cartridge port free (a Steinberg key is plugged)";
+                g_stateMsgFrames = 150;
+                cfg.netusbee = false;
+                return;
+            }
             machine.disableEtherNec();                 // la NE2000 repart avec le NetUSBee
             machine.ne2000.setBackend(&etherNull);
             machine.enableNetUsbee();
