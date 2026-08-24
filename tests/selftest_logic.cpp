@@ -25,6 +25,7 @@
 #include "core/StateArchive.hpp"
 #include "io/MidiAcia.hpp"
 #include "io/Ikbd.hpp"
+#include "io/Rtc.hpp"
 
 #include <cstdio>
 #include <cstring>
@@ -618,6 +619,40 @@ static void testIkbdTdre() {
     checkBool("master reset : émetteur au repos", tdre() == 1, true);
 }
 
+// -----------------------------------------------------------------------------
+//  RTC RP5C15 — la seconde se compte en CYCLES. Elle doit valoir une seconde de la
+//  base de temps de la MACHINE (trame × Hz), pas une constante : sinon l'horloge
+//  dérive contre le reste, et un logiciel qui attend « une seconde » en comptant
+//  ses trames retombe juste avant le tic. Ni machine ni ROM : une horloge factice.
+// -----------------------------------------------------------------------------
+static void testRtcSecond() {
+    std::printf("RTC RP5C15 (une seconde = base de temps machine)\n");
+    const int64_t kSec = 160256 * 50;        // PAL 50 Hz : cycles d'une trame × Hz
+    int64_t clk = 0;
+    Rtc rtc;
+    rtc.setClock([&clk] { return clk; });
+    rtc.setSecondCycles(kSec);
+    Rtc::DateTime dt{};
+    dt.sec = 59; dt.min = 59; dt.hour = 23; dt.wday = 6; dt.day = 31; dt.month = 12; dt.year = 99;
+    rtc.setDateTime(dt);
+    (void)rtc.getDateTime();                 // amorce la phase du diviseur sur clk = 0
+
+    clk = kSec - 1;
+    checkBool("juste avant la seconde : pas de tic", rtc.getDateTime().sec == 59, true);
+    // ⚠ Régression : avec la constante figée d'avant (8021248 au lieu de 8012800),
+    // ce tic tombait 8448 cycles TROP TARD — la cartouche Atari Field Service (test
+    // L, Mega ST) attendait une seconde comptée en trames et lisait « C1 clock
+    // increment error ».
+    clk = kSec;
+    const Rtc::DateTime a = rtc.getDateTime();
+    checkBool("à la seconde pile : tic",          a.sec == 0 && a.min == 0 && a.hour == 0, true);
+    checkBool("débordement calendaire complet",   a.day == 1 && a.month == 1 && a.year == 0, true);
+    checkBool("jour de semaine avancé",           a.wday == 0, true);
+    // Trois secondes machine = exactement trois tics (pas d'arrondi qui en perde un).
+    clk = 4 * kSec;
+    checkBool("3 s de plus = 3 tics", rtc.getDateTime().sec == 3, true);
+}
+
 int main() {
     testDongleTable();
     testCartridgeKey();
@@ -625,6 +660,7 @@ int main() {
     testYmEventDomain();
     testMidiTdre();
     testIkbdTdre();
+    testRtcSecond();
     testWindowsPaths();
     testPosixPaths();
     testNativeDefaults();

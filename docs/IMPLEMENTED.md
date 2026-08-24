@@ -1320,7 +1320,11 @@ Pour ce qui reste → [`../TODO.md`](../TODO.md).
   permanence. Cf. `docs/HATARI_DIVERGENCES.md` §2ᵉ passe (BUS-LEAK).
 - **RTC RP5C15** (Mega ST/Mega STE, `$FFFC21-$FFFC3F`) : modèle paresseux déterministe
   (cycle CPU du dernier top de seconde + rattrapage), registre RESET, débordement BCD
-  calendaire. Corrige « C0 No clock installed » + « C1 clock increment error ».
+  calendaire. La seconde vaut une seconde de la BASE DE TEMPS DE LA MACHINE
+  (trame × Hz, posée par `Machine::beginFrame_`) et non une constante : sinon
+  l'horloge dérivait de 0,105 % contre le reste. Corrige « C0 No clock installed »
+  + « C1 clock increment error » (cartouche Atari Field Service v4.4, test L sur
+  Mega ST — vérifié : `Pass`, rollover de siècle inclus).
 - **Persistance RTC entre sessions** (`neost.cfg` : clés `rtc=` date/heure BCD,
   `rtc_saved=` horodatage hôte) : reprise au boot avec rattrapage du temps écoulé ;
   snapshot à chaque sauvegarde de config (`saveConfig` / `snapshotRtc`).
