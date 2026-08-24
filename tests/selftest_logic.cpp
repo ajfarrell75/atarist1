@@ -216,6 +216,22 @@ static void testConfigParser() {
         checkBool("volume borné à 1.0",                   c.volume == 1.0f, true);
         parseConfigLine(c, "volume=-3");
         checkBool("volume borné à 0.0",                   c.volume == 0.0f, true);
+        // ⚠ NaN : toute comparaison est fausse, donc « if (v<0) … if (v>1) … » le
+        // laissait passer INTACT. Un gain NaN fige les filtres du YM (hpfX1_/hpfY0_)
+        // → plus aucun son jusqu'au reset, même après avoir remis le curseur.
+        parseConfigLine(c, "volume=nan");
+        checkBool("volume NaN ramené au défaut",          c.volume == 1.0f, true);
+        // Faders du mixeur (page Sound, curseur 0..200 %) : mêmes garde-fous.
+        parseConfigLine(c, "mix_ym=nan");
+        checkBool("mix_ym NaN ramené au défaut",          c.mixYm == 1.0f, true);
+        parseConfigLine(c, "mix_dac=nan");
+        checkBool("mix_dac NaN ramené au défaut",         c.mixDac == 1.0f, true);
+        parseConfigLine(c, "mix_dma=1e30");
+        checkBool("mix_dma aberrant borné à 2.0",         c.mixDma == 2.0f, true);
+        parseConfigLine(c, "mix_drive=-1");
+        checkBool("mix_drive négatif borné à 0.0",        c.mixDrive == 0.0f, true);
+        parseConfigLine(c, "mix_mt32=1.5");
+        checkBool("mix_mt32 valide conservé",             c.mixMt32 == 1.5f, true);
     }
     // Une clé inconnue (fichier d'une version future) ne doit RIEN faire.
     {
