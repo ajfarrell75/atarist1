@@ -98,7 +98,8 @@ public:
     // Journal des accès (format de TRACE DE RÉFÉRENCE, cf. docs/EXTENSIONS.md) :
     //   R3 <A8..A1 hex> <octet fort lu>   lecture $FBxxxx (1er octet de l'accès)
     //   R4 <A8..A1 hex>                   lecture $FAxxxx (clé Notator : armement)
-    //   U  <A8..A1 hex>                   cycle /UDS dans la fenêtre cartouche
+    //   U  <A8..A1 hex>                   cycle /UDS HORS fenêtre cartouche (ceux de la
+    //                                     fenêtre sont déjà impliqués par R3/R4)
     // Une capture matérielle (analyseur logique, SidecarTridge) mise à ce format se
     // REJOUE contre la machine d'état : replay() compare chaque R3 et signale le
     // premier écart. C'est l'oracle qui manque tant qu'aucun logiciel à clé n'est là.
