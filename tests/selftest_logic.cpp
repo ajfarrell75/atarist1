@@ -24,6 +24,7 @@
 #include "core/YM2149.hpp"
 #include "core/StateArchive.hpp"
 #include "io/MidiAcia.hpp"
+#include "io/Ikbd.hpp"
 
 #include <cstdio>
 #include <cstring>
@@ -581,12 +582,39 @@ static void testMidiTdre() {
     checkBool("scrutation : 1 seul octet avant l'attente", envoyes == 1, true);
 }
 
+// -----------------------------------------------------------------------------
+//  ACIA du CLAVIER — même 6850, même règle : acia.c ACIA_Write_TDR efface TDRE
+//  hors de toute condition, et il sert AUSSI cette ACIA-là (acia.c:643). C'est le
+//  frein de la boucle d'attente d'Ikbdws (TOS), qui scrute au lieu d'interrompre.
+// -----------------------------------------------------------------------------
+static void testIkbdTdre() {
+    std::printf("ACIA clavier (TDRE, frein de l'émetteur)\n");
+    Mfp mfp; Scheduler sched; Ikbd ikbd(mfp);
+    ikbd.setScheduler(&sched);
+    constexpr uint32_t kCtrl = 0xFFFC00, kData = 0xFFFC02;
+    auto tdre = [&] { return (ikbd.read8(kCtrl) >> 1) & 1; };
+
+    auto ecritUnOctet = [&](uint8_t cr) {
+        ikbd.write8(kCtrl, 0x03);            // master reset
+        ikbd.write8(kCtrl, cr);
+        ikbd.write8(kData, 0x12);            // commande IKBD quelconque
+        return tdre();
+    };
+    checkBool("TIE armé : TDRE tombe",        ecritUnOctet(0x20) == 0, true);
+    // ⚠ Régression : TDRE n'était modélisé QUE sous TIE — la boucle « btst #1 »
+    // d'Ikbdws passait sans attendre, tous les octets d'une commande au même cycle.
+    checkBool("TIE coupé : TDRE tombe aussi", ecritUnOctet(0x96) == 0, true);
+    ikbd.write8(kCtrl, 0x03);
+    checkBool("master reset : émetteur au repos", tdre() == 1, true);
+}
+
 int main() {
     testDongleTable();
     testCartridgeKey();
     testPortDevices();
     testYmEventDomain();
     testMidiTdre();
+    testIkbdTdre();
     testWindowsPaths();
     testPosixPaths();
     testNativeDefaults();
