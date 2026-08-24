@@ -36,6 +36,10 @@ public:
     // sur sched.now() + le delta intra-quantum du CPU (cf. Cpu68k::cyclesRunInQuantum)
     // pour un cycle exact même au milieu d'une lecture MMIO.
     void setClock(std::function<int64_t()> now) { now_ = std::move(now); }
+    // Longueur d'une seconde, en cycles CPU, telle que la machine émulée la vit
+    // (trame × Hz). Posée par Machine à chaque trame : la géométrie vidéo change
+    // (50/60/71 Hz) et l'horloge doit suivre la MÊME base de temps que le reste.
+    void setSecondCycles(int64_t c) { if (c > 0) secondCycles_ = c; }
 
     uint8_t read8(uint32_t addr);            // $FFFC21-$FFFC3F (adresses impaires)
     void    write8(uint32_t addr, uint8_t v);
@@ -57,10 +61,17 @@ private:
     void catchUp();          // applique les secondes entières écoulées depuis baseCycle_
     void tickOneSecond();    // +1 s avec retenue calendaire BCD complète (jusqu'à l'année)
 
-    static constexpr int64_t CPU_HZ = 8021248;   // 1 seconde émulée = fréquence CPU
+    // Longueur d'UNE SECONDE en cycles CPU. Valeur de repli = fréquence CPU PAL ;
+    // la Machine la recale sur la base de temps RÉELLE de la trame émulée (cf.
+    // setSecondCycles). Une constante figée faisait dériver l'horloge contre le
+    // reste de la machine — cf. secondCycles_.
+    static constexpr int64_t CPU_HZ = 8021248;
 
     std::function<int64_t()> now_;
     int64_t baseCycle_ = 0;  // cycle du dernier top de seconde (phase du diviseur 1 Hz)
+    // Cycles pour une seconde, recalé chaque trame par la Machine sur la géométrie
+    // vidéo courante (trame × Hz). Config dérivée → hors save-state.
+    int64_t secondCycles_ = CPU_HZ;
     bool    primed_    = false;  // baseCycle_ calé sur le 1er accès (évite un rattrapage géant au boot)
 
     // 13 chiffres BCD : sec.u sec.t min.u min.t h.u h.t weekday j.u j.t mois.u mois.t an.u an.t

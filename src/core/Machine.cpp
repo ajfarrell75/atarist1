@@ -610,6 +610,12 @@ void Machine::beginFrame_() {
                      (long long)frameStart_, (int)(frameStart_ & 3), lpf_, cpl_);
     scheduleFrameEvents();
     frameEnd_ = frameStart_ + static_cast<int64_t>(lpf_) * cpl_;
+    // L'horloge temps réel compte les secondes en CYCLES : on lui donne la longueur
+    // d'une seconde telle que la MACHINE la vit (trame verrouillée × Hz), et non une
+    // constante. Sinon le RTC dérive contre la base de temps de tout le reste — et un
+    // logiciel qui attend « une seconde » en comptant ses trames (la cartouche Atari
+    // Field Service, test L) retombe systématiquement juste AVANT le tic.
+    rtc.setSecondCycles(static_cast<int64_t>(lpf_) * cpl_ * shifter.refreshHz());
     frameInProgress_ = true;
 }
 

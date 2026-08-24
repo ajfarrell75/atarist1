@@ -66,9 +66,9 @@ void Rtc::catchUp() {
     if (!now_) return;
     const int64_t t = now_();
     if (!primed_) { baseCycle_ = t; primed_ = true; return; }  // 1er accès : on cale la phase
-    int64_t secs = (t - baseCycle_) / CPU_HZ;
+    int64_t secs = (t - baseCycle_) / secondCycles_;
     if (secs <= 0) return;
-    baseCycle_ += secs * CPU_HZ;                 // avance la phase d'un multiple entier de 1 s
+    baseCycle_ += secs * secondCycles_;                 // avance la phase d'un multiple entier de 1 s
     if (secs > 90000) secs = 90000;              // borne le travail (>1 jour) : la date exacte
                                                  // au-delà n'intéresse aucun diagnostic
     while (secs-- > 0) tickOneSecond();
