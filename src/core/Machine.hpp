@@ -271,11 +271,21 @@ public:
         return true;
     }
     // Re-câble les crochets selon les périphériques branchés (après plug, load d'état).
-    void portsApply() {
+    // `fromLoad` : au PLUG, on remet au repos les lignes qu'un périphérique précédent
+    // a pu laisser hors repos ; au LOAD, ces lignes (cts/dcd/riLine_) viennent d'être
+    // RESTAURÉES par mfp.serialize — les forcer ici écraserait l'état restauré (Jeanne
+    // d'Arc mi-protection, bouclage DTR) et gpipSetLine pourrait lever une IRQ GPIP
+    // fantôme au chargement. Seule GPIP7 (monButton_, hors snapshot) est re-dérivée.
+    void portsApply(bool fromLoad = false) {
         psg.setPortBDac(ports.usesPortBDac());
-        // Lignes qu'un périphérique précédent a pu laisser hors repos : bouton (GPIP7),
-        // RI (GPIP6), DCD (Jeanne d'Arc — repos ACTIF, cf. Mfp::reset).
-        mfp.setMonitorButton(false); mfp.setRs232Ri(false); mfp.setRs232Dcd(true);
+        if (fromLoad) {
+            mfp.setMonitorButton(ports.buttonPressed() &&
+                ports.at(PortDevices::Port::CartButton) == PortDevices::Device::Multiface);
+        } else {
+            // Lignes qu'un périphérique précédent a pu laisser hors repos : bouton (GPIP7),
+            // RI (GPIP6), DCD (Jeanne d'Arc — repos ACTIF, cf. Mfp::reset).
+            mfp.setMonitorButton(false); mfp.setRs232Ri(false); mfp.setRs232Dcd(true);
+        }
         if (ports.hasSerial())
             mfp.setGpipReadHook([this](uint8_t& v) { ports.gpipRead(v, sched.now()); });
         else

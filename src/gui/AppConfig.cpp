@@ -4,6 +4,7 @@
 // =============================================================================
 #include "gui/AppConfig.hpp"
 
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -17,6 +18,16 @@ namespace fs = std::filesystem;
 namespace neost::appconfig {
 
 std::string cfgPath(const std::string& exeDir) { return exeDir + "/../neost.cfg"; }
+
+// Gain d'une voie du mixeur, borné comme le curseur de la page Sound (0..200 %).
+// Test EN POSITIF : NaN (fichier corrompu, « mix_ym=nan ») échoue toute comparaison
+// et passerait au travers d'un « if (v < 0) … if (v > 2) … ». Un gain NaN se propage
+// dans la synthèse et FIGE l'état des filtres (YM2149 hpfX1_/hpfY0_) : plus aucun son
+// jusqu'au reset machine, même après avoir remis le curseur en place.
+static float mixGain(const std::string& s) {
+    const float v = std::strtof(s.c_str(), nullptr);
+    return std::isnan(v) ? 1.0f : std::clamp(v, 0.0f, 2.0f);
+}
 
 bool parseRtcConfig(const std::string& s, Rtc::DateTime& dt) {
     return std::sscanf(s.c_str(), "%d,%d,%d,%d,%d,%d,%d",
@@ -55,17 +66,17 @@ void parseConfigLine(Config& c, std::string line) {
     else if (line.rfind("midi_out_mt32=", 0) == 0) c.midiOutMt32 = (line.substr(14) == "1");
     else if (line.rfind("mt32_roms=", 0) == 0) c.mt32Roms = line.substr(10);
     else if (line.rfind("mt32_model=", 0) == 0) c.mt32Model = line.substr(11);
-    else if (line.rfind("mix_ym=", 0) == 0) c.mixYm = float(std::atof(line.substr(7).c_str()));
-    else if (line.rfind("mix_dma=", 0) == 0) c.mixDma = float(std::atof(line.substr(8).c_str()));
-    else if (line.rfind("mix_drive=", 0) == 0) c.mixDrive = float(std::atof(line.substr(10).c_str()));
-    else if (line.rfind("mix_mt32=", 0) == 0) c.mixMt32 = float(std::atof(line.substr(9).c_str()));
+    else if (line.rfind("mix_ym=", 0) == 0) c.mixYm = mixGain(line.substr(7));
+    else if (line.rfind("mix_dma=", 0) == 0) c.mixDma = mixGain(line.substr(8));
+    else if (line.rfind("mix_drive=", 0) == 0) c.mixDrive = mixGain(line.substr(10));
+    else if (line.rfind("mix_mt32=", 0) == 0) c.mixMt32 = mixGain(line.substr(9));
     else if (line.rfind("dongle=", 0) == 0) c.dongle = line.substr(7);
     else if (line.rfind("joy0=", 0) == 0) c.joy0 = line.substr(5);
     else if (line.rfind("joy1=", 0) == 0) c.joy1 = line.substr(5);
     else if (line.rfind("rs232=", 0) == 0) c.rs232 = line.substr(6);
     else if (line.rfind("printer=", 0) == 0) c.printer = line.substr(8);
     else if (line.rfind("cartbutton=", 0) == 0) c.cartbutton = line.substr(11);
-    else if (line.rfind("mix_dac=", 0) == 0) c.mixDac = float(std::atof(line.substr(8).c_str()));
+    else if (line.rfind("mix_dac=", 0) == 0) c.mixDac = mixGain(line.substr(8));
     else if (line.rfind("auto_dongle=", 0) == 0) c.autoDongle = (line.substr(12) != "0");
     else if (line.rfind("adapter=", 0) == 0) {           // ancien format : un seul adaptateur
         const std::string a = line.substr(8);
@@ -101,9 +112,14 @@ void parseConfigLine(Config& c, std::string line) {
     }
     else if (line.rfind("fastfdc=", 0) == 0) c.fastfdc = (line.substr(8) == "1");
     else if (line.rfind("volume=", 0) == 0) {
+        // ⚠ Le NaN doit être écarté AVANT le bornage : « if (v < 0) … if (v > 1) … »
+        // le laissait passer intact (toute comparaison avec NaN est fausse). Un volume
+        // NaN se propage dans la synthèse et FIGE l'état des filtres audio (YM2149
+        // hpfX1_/hpfY0_) : plus aucun son jusqu'au reset machine. Hors NaN, on garde le
+        // bornage au plus proche (volume=-3 → 0, volume=42 → 1).
         c.volume = std::strtof(line.substr(7).c_str(), nullptr);
-        if (c.volume < 0.0f) c.volume = 0.0f;
-        if (c.volume > 1.0f) c.volume = 1.0f;
+        if (std::isnan(c.volume)) c.volume = 1.0f;
+        else c.volume = std::clamp(c.volume, 0.0f, 1.0f);
     }
     else if (line.rfind("audio_latency_ms=", 0) == 0) c.audioLatencyMs = std::atoi(line.substr(17).c_str());
     else if (line.rfind("drivesound=", 0) == 0) c.driveSound = (line.substr(11) == "1");

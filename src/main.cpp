@@ -420,7 +420,9 @@ void onMouseButton(GLFWwindow* w, int button, int action, int /*mods*/) {
         if (action == GLFW_PRESS && !g_kiosk) g_mouseCaptureToggleReq = true;
         return;
     }
-    if (!g_ikbd || !g_mouseCaptured) return;
+    // Port 0 occupé par un joystick : la souris est DÉBRANCHÉE du ST — les clics
+    // non plus ne passent pas (ils partageraient la ligne feu du joystick port 0).
+    if (!g_ikbd || !g_mouseCaptured || g_port0Joystick) return;
     const bool l = glfwGetMouseButton(w, GLFW_MOUSE_BUTTON_LEFT)  == GLFW_PRESS;
     const bool r = glfwGetMouseButton(w, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
     if (g_dbgMouse) std::fprintf(stderr, "[mouse] button  L=%d R=%d\n", l, r);
@@ -3287,16 +3289,21 @@ int main(int argc, char** argv) {
         }
 
 
-        if (g_mouseCaptured && !g_port0Joystick) {   // mouvement relatif → paquet IKBD (boutons inclus) ; port 0 pris par un joystick = pas de souris
+        if (g_mouseCaptured) {                  // mouvement relatif → paquet IKBD (boutons inclus)
             double mx, my; glfwGetCursorPos(window, &mx, &my);
             const int dx = int(mx - lastMx), dy = int(my - lastMy);
             if (dx || dy) {
                 lastMx += dx; lastMy += dy;     // on ne consomme QUE l'entier → le reste
                                                 // fractionnaire s'accumule (drags lents)
-                const bool l = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT)  == GLFW_PRESS;
-                const bool r = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
-                if (g_dbgMouse) std::fprintf(stderr, "[mouse] move dx=%d dy=%d L=%d R=%d\n", dx, dy, l, r);
-                machine.ikbd.mouseEvent(dx * MOUSE_X_SIGN, dy * MOUSE_Y_SIGN, l, r);
+                // Port 0 pris par un joystick = souris débranchée : on CONSOMME quand
+                // même le delta, sinon il s'accumule et part en un saut géant au
+                // rebranchement de la souris.
+                if (!g_port0Joystick) {
+                    const bool l = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT)  == GLFW_PRESS;
+                    const bool r = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
+                    if (g_dbgMouse) std::fprintf(stderr, "[mouse] move dx=%d dy=%d L=%d R=%d\n", dx, dy, l, r);
+                    machine.ikbd.mouseEvent(dx * MOUSE_X_SIGN, dy * MOUSE_Y_SIGN, l, r);
+                }
             }
         }
 

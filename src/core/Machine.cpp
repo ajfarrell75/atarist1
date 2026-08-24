@@ -790,7 +790,7 @@ void Machine::serializeState(StateArchive& ar) {
         const int64_t rem = sched.rawCyclesUntil(Scheduler::TIMER_B);
         tbScheduledAt_ = (rem == INT64_MIN) ? 0 : sched.now() + rem;
         bus.refreshUds();   // la clé noire a pu (dé)verrouiller son choix
-        portsApply();       // les périphériques branchés font partie de l'état restauré
+        portsApply(/*fromLoad=*/true);   // re-câble hooks/DAC SANS toucher aux lignes GPIP restaurées
     }
 }
 
