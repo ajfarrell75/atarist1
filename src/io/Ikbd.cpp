@@ -180,16 +180,18 @@ void Ikbd::write8(uint32_t addr, uint8_t v) {
         // (ex. jeu armant CR=$b6 au lieu de $96, type Hades Nebula).
         control_ = v;
         txEnableInt_ = ((v & 0x60) == 0x20);
-        if (!txEnableInt_) {                 // TIE coupé → registre d'émission réputé prêt
-            tdre_ = true;
-            if (sched_) sched_->cancel(Scheduler::IKBD_TX);
-        }
+        // ⚠ Changer les bits d'émission ne remet PAS l'émetteur au repos : seul le
+        // master reset le fait (6850). L'ancien « TIE coupé → tdre_ = true » rendait
+        // l'émetteur prêt à chaque écriture du CR, ce qui annulait le temps de
+        // transmission pour un pilote retouchant le CR entre deux octets.
         // Bits 0-1 = 11 → master reset de l'ACIA (cf. acia.c ACIA_MasterReset) :
         // SR repart à TDRE seul → RDRF/OVRN effacés. La file IKBD et la livraison
         // en vol sont CONSERVÉES (elles vivent côté 6301, pas côté ACIA).
         if ((v & 0x03) == 0x03) {
             rdrf_ = false;
             rxOverrun_ = ovrn_ = srRead_ = false;
+            tdre_ = true;
+            if (sched_) sched_->cancel(Scheduler::IKBD_TX);
         }
         raiseIfReady();
         return;
@@ -199,7 +201,13 @@ void Ikbd::write8(uint32_t addr, uint8_t v) {
     // onTxEmpty), ce qui re-lève l'IRQ « transmetteur prêt » et cadence l'envoi
     // des commandes piloté par interruption. Le parseur reçoit l'octet tout de
     // suite (NeoST ne perd jamais d'octet) : TDRE ne sert qu'au statut et à l'IRQ TX.
-    if (txEnableInt_ && sched_) {
+    // TDRE tombe à CHAQUE écriture, TIE ou non — port de acia.c ACIA_Write_TDR
+    // (« pACIA->SR &= ~ACIA_SR_BIT_TDRE », hors de toute condition), qui sert
+    // AUSSI l'ACIA du clavier (acia.c:643). Ne le modéliser que sous TIE laissait
+    // la boucle d'attente TDRE d'un pilote qui SCRUTE — le cas d'Ikbdws du TOS —
+    // passer sans jamais attendre : les octets d'une commande IKBD partaient tous
+    // au même cycle au lieu d'être cadencés par la liaison série.
+    if (sched_) {
         tdre_ = false;
         sched_->schedule(Scheduler::IKBD_TX, sched_->now() + kAciaTxByteCycles);
         raiseIfReady();                      // TDRE tombé → désarme l'IRQ TX jusqu'au re-remplissage
