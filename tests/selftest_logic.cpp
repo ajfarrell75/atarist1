@@ -23,6 +23,7 @@
 #include "io/Mfp.hpp"
 #include "core/YM2149.hpp"
 #include "core/StateArchive.hpp"
+#include "io/MidiAcia.hpp"
 
 #include <cstdio>
 #include <cstring>
@@ -540,11 +541,52 @@ static void testYmEventDomain() {
     checkBool("R15 sous DAC Pro Sound : etat accepte", roundTrip(15), true);
 }
 
+// -----------------------------------------------------------------------------
+//  ACIA MIDI 6850 — TDRE (« émetteur prêt ») doit tomber à CHAQUE écriture de
+//  données, que l'IRQ d'émission soit armée ou non : c'est le seul frein d'un
+//  pilote qui SCRUTE le statut. Ni machine ni ROM : un Mfp, un Scheduler, une ACIA.
+// -----------------------------------------------------------------------------
+static void testMidiTdre() {
+    std::printf("ACIA MIDI (TDRE, frein de l'émetteur)\n");
+    Mfp mfp; Scheduler sched; MidiAcia midi(mfp);
+    midi.setScheduler(&sched);
+    constexpr uint32_t kCtrl = 0xFFFC04, kData = 0xFFFC06;
+    auto tdre = [&] { return (midi.read8(kCtrl) >> 1) & 1; };
+
+    // `cr` = valeur du registre de contrôle (bits 5-6 = 01 → IRQ d'émission armée).
+    auto ecritUnOctet = [&](uint8_t cr) {
+        midi.reset();
+        midi.write8(kCtrl, 0x03);            // master reset
+        midi.write8(kCtrl, cr);
+        midi.write8(kData, 0x90);
+        return tdre();
+    };
+    checkBool("TIE armé : TDRE tombe",   ecritUnOctet(0x20) == 0, true);
+    // ⚠ Régression : TDRE n'était modélisé QUE sous TIE. Un pilote scrutant le
+    // statut (le cas de Notator, cf. Hatari midi.c:243) le voyait éternellement à
+    // 1 et émettait sans jamais attendre — 1000 octets collés au même cycle.
+    checkBool("TIE coupé : TDRE tombe aussi", ecritUnOctet(0x00) == 0, true);
+    checkBool("RIE seul : TDRE tombe aussi",  ecritUnOctet(0x80) == 0, true);
+
+    // Le master reset, LUI, remet bien l'émetteur au repos.
+    midi.reset(); midi.write8(kCtrl, 0x00); midi.write8(kData, 0x90);
+    checkBool("émetteur occupé après écriture", tdre() == 0, true);
+    midi.write8(kCtrl, 0x03);
+    checkBool("master reset : émetteur au repos", tdre() == 1, true);
+
+    // Un pilote qui scrute n'enchaîne pas les octets sans attendre.
+    midi.reset(); midi.write8(kCtrl, 0x03); midi.write8(kCtrl, 0x00);
+    int envoyes = 0;
+    for (int i = 0; i < 50 && tdre(); ++i) { midi.write8(kData, uint8_t(i)); ++envoyes; }
+    checkBool("scrutation : 1 seul octet avant l'attente", envoyes == 1, true);
+}
+
 int main() {
     testDongleTable();
     testCartridgeKey();
     testPortDevices();
     testYmEventDomain();
+    testMidiTdre();
     testWindowsPaths();
     testPosixPaths();
     testNativeDefaults();

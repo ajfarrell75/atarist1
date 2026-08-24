@@ -48,24 +48,37 @@ void MidiAcia::write8(uint32_t addr, uint8_t v) {
         // bits 0-1 = 11 → master reset.
         control_ = v;
         txEnableInt_ = ((v & 0x60) == 0x20);
-        if (!txEnableInt_) {                 // TIE coupé → émetteur réputé prêt
+        // ⚠ Changer les bits d'émission ne remet PAS l'émetteur au repos : seul le
+        // master reset le fait. L'ancien « TIE coupé → tdre_ = true » rendait
+        // l'émetteur instantanément prêt à chaque écriture du CR, ce qui annulait
+        // le temps de transmission pour tout pilote retouchant le CR entre octets.
+        // Master reset (bits 0-1 = 11) : efface RDRF et remet l'émetteur au repos
+        // (SR → TDRE seul, cf. acia.c ACIA_MasterReset) mais NE PURGE PAS la file
+        // RX — le 6850 ne perd pas l'octet en transit (note ikbd.c « don't clear
+        // bytes in transit »). RDRF distinct de la file → on peut l'effacer tout en
+        // gardant l'octet relisible.
+        if ((v & 0x03) == 0x03) {
+            rdrf_ = false;
             tdre_ = true;
             if (sched_) sched_->cancel(Scheduler::MIDI_TX);
         }
-        // Master reset (bits 0-1 = 11) : efface RDRF (SR → TDRE seul, cf. acia.c
-        // ACIA_MasterReset) mais NE PURGE PAS la file RX — le 6850 ne perd pas
-        // l'octet en transit (note ikbd.c « don't clear bytes in transit »). RDRF
-        // distinct de la file → on peut l'effacer tout en gardant l'octet relisible.
-        if ((v & 0x03) == 0x03) rdrf_ = false;
         raiseIfReady();
         return;
     }
-    // $FFFC06 : octet émis sur MIDI OUT. Sous TIE, TDRE tombe (transmetteur
-    // occupé) et se re-remplit ~1 octet MIDI plus tard (Scheduler::MIDI_TX →
-    // onTxEmpty) : c'est l'IRQ qui cadence la sortie des séquenceurs. L'octet
-    // est bouclé aussitôt sur MIDI IN (câble OUT→IN) — NeoST ne perd jamais
-    // l'octet émis, TDRE ne sert qu'au statut et à l'IRQ TX.
-    if (txEnableInt_ && sched_) {
+    // $FFFC06 : octet émis sur MIDI OUT. TDRE tombe (transmetteur occupé) et se
+    // re-remplit ~1 octet MIDI plus tard (Scheduler::MIDI_TX → onTxEmpty) : c'est
+    // ce qui cadence la sortie d'un séquenceur, par IRQ sous TIE et par SCRUTATION
+    // du statut sinon. L'octet lui-même est bouclé aussitôt sur MIDI IN (câble
+    // OUT→IN) — NeoST ne perd jamais l'octet émis, TDRE ne porte que le rythme.
+    // TDRE tombe à CHAQUE écriture, que TIE soit armé OU NON. Port de Hatari
+    // midi.c Midi_Data_WriteByte, où « MidiStatusRegister &= ~ACIA_SR_TX_EMPTY »
+    // est hors de toute condition, sous le commentaire « required to accurately
+    // emulate the TDRE bit in status register (fix the program 'Notator') ».
+    // Ne le modéliser que sous TIE laissait un pilote qui SCRUTE TDRE — le cas
+    // classique, et celui de Notator — le voir éternellement à 1 : il émettait
+    // sans jamais attendre, tous les octets collés au même cycle (mesuré : 1000
+    // octets d'affilée). Le tempo d'un séquenceur en dépend.
+    if (sched_) {
         tdre_ = false;
         sched_->schedule(Scheduler::MIDI_TX, sched_->now() + kMidiTxByteCycles);
     }
