@@ -21,6 +21,8 @@
 #include "io/PortDevices.hpp"
 #include "io/DongleTable.hpp"
 #include "io/Mfp.hpp"
+#include "core/YM2149.hpp"
+#include "core/StateArchive.hpp"
 
 #include <cstdio>
 #include <cstring>
@@ -509,10 +511,40 @@ static void testDongleTable() {
     checkBool("analyse : commentaires, espaces, lignes invalides comptées", r2.size() == 1 && bad == 3 && r2[0].pattern == "foo", true);
 }
 
+// -----------------------------------------------------------------------------
+//  YM2149 — file d'écritures horodatées : le DOMAINE des registres empilés par
+//  write8 et la garde qui le vérifie au chargement doivent coïncider. Ni machine
+//  ni ROM : un YM2149 nu et une StateArchive suffisent.
+// -----------------------------------------------------------------------------
+static void testYmEventDomain() {
+    std::printf("YM2149 (domaine des écritures horodatées)\n");
+    // Aller-retour d'un événement portant `reg`, comme le fait Machine::saveState.
+    auto roundTrip = [](uint8_t reg) {
+        YM2149 psg;
+        psg.reset();
+        psg.setCycleClock([] { return int64_t(0); });   // active le modèle « push »
+        if (reg == 15) psg.setPortBDac(true);           // DAC Pro Sound branché
+        psg.write8(0xFF8800, reg);
+        psg.write8(0xFF8802, 0x40);
+        std::vector<uint8_t> buf;
+        { StateArchive s = StateArchive::saver(buf); psg.serialize(s); }
+        YM2149 back;
+        StateArchive l = StateArchive::loader(buf.data(), buf.size());
+        back.serialize(l);
+        return l.ok();
+    };
+    checkBool("R13 (enveloppe) : etat accepte", roundTrip(13), true);
+    // ⚠ Régression : le DAC Pro Sound a élargi le push de write8 à R15, mais la
+    // garde de relecture exigeait encore reg < 14 — un save-state LÉGITIME pris avec
+    // une écriture R15 en file était refusé au chargement (« invariant rejected »).
+    checkBool("R15 sous DAC Pro Sound : etat accepte", roundTrip(15), true);
+}
+
 int main() {
     testDongleTable();
     testCartridgeKey();
     testPortDevices();
+    testYmEventDomain();
     testWindowsPaths();
     testPosixPaths();
     testNativeDefaults();
