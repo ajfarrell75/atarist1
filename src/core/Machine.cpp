@@ -674,7 +674,10 @@ static uint32_t cartFingerprint(const std::vector<uint8_t>& cart) {
 static uint32_t stateCrc32(const uint8_t* p, std::size_t n);   // défini plus bas
 void Machine::serializeState(StateArchive& ar) {
     uint32_t magic   = 0x4E535453u;   // 'NSTS'
-    uint16_t version = 16;            // v16 : + PortDevices (clés joystick/série, DAC, bouton) ;
+    uint16_t version = 17;            // v17 : Rtc::mode_ bit3 = TIMER EN désormais HONORÉ
+                                      // (un état v16 pouvait porter mode_=0, qui fige
+                                      // maintenant le compteur) ;
+                                      // v16 : + PortDevices (clés joystick/série, DAC, bouton) ;
                                       // v15 : + clé Notator dans CartridgeKey ;
                                       // v14 : + CartridgeKey (clé Steinberg /ROM3) ;
                                       // v13 : FujiNet RETIRÉ (matériel inexistant sur ST) —
@@ -837,7 +840,7 @@ bool Machine::loadState(const uint8_t* data, std::size_t n) {
     uint32_t magic;   std::memcpy(&magic, data, 4);
     uint16_t version; std::memcpy(&version, data + 4, 2);
     if (magic != 0x4E535453u) return false;
-    if (version != 16) {
+    if (version != 17) {
         std::fprintf(stderr, "[state] rejected: unsupported format v%u (this build of "
                      "NeoST writes v16) — older states are not compatible\n", version);
         return false;

@@ -1322,9 +1322,15 @@ Pour ce qui reste → [`../TODO.md`](../TODO.md).
   (cycle CPU du dernier top de seconde + rattrapage), registre RESET, débordement BCD
   calendaire. La seconde vaut une seconde de la BASE DE TEMPS DE LA MACHINE
   (trame × Hz, posée par `Machine::beginFrame_`) et non une constante : sinon
-  l'horloge dérivait de 0,105 % contre le reste. Corrige « C0 No clock installed »
-  + « C1 clock increment error » (cartouche Atari Field Service v4.4, test L sur
-  Mega ST — vérifié : `Pass`, rollover de siècle inclus).
+  l'horloge dérivait de 0,105 % contre le reste. **TIMER EN** (bit3 du registre
+  mode) honoré : à 0 le compteur est arrêté — TOS 1.02 et EmuTOS écrivent `$9`
+  puis `$8` au boot (ils ne basculent que le bit0 de banque), seule la cartouche
+  de diagnostic le coupe pour figer l'heure. Corrige « C0 No clock installed »
+  + « C1 clock increment error » : la batterie **Z de la cartouche Atari Field
+  Service v4.4 passe INTÉGRALEMENT sur Mega ST** (RAM, ROM, couleur, clavier,
+  audio, MFP/Glue/vidéo, horloge avec rollover de siècle, blitter).
+  ⚠ Non modélisé : la sortie CLKOUT du RP5C15 — aucun consommateur observé
+  (Hatari ne la modélise pas non plus, elle n'apparaît que dans son brochage).
 - **Persistance RTC entre sessions** (`neost.cfg` : clés `rtc=` date/heure BCD,
   `rtc_saved=` horodatage hôte) : reprise au boot avec rattrapage du temps écoulé ;
   snapshot à chaque sauvegarde de config (`saveConfig` / `snapshotRtc`).
