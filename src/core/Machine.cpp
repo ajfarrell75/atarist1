@@ -210,6 +210,20 @@ Machine::Machine(std::size_t ramBytes, CpuCore cpuCore, MachineType machine)
     // ET DTR→RI (GPIP6) — comme le câble de test du diagnostic « S RS232 ». Le port A
     // est actif BAS (bit=0 → ligne assertée). On rafraîchit l'IPL (un canal a pu lever).
     psg.setPortASink([this](uint8_t a) {
+        // SÉLECTION LECTEUR/FACE — port de psg.c:419-420, qui appelle FDC_SetDriveSide à
+        // CHAQUE écriture du port A. C'est une POUSSÉE, et elle est indispensable : le FDC
+        // de NeoST se contentait de RELIRE le PSG depuis ses propres accès registre
+        // (Fdc::refreshDriveSide n'était appelé que par executeCommand et les accès MMIO),
+        // si bien qu'un programme qui écrit sa commande FDC AVANT de sélectionner le lecteur
+        // restait bloqué avec driveSel_ = -1 pour toujours : la commande partait sans
+        // lecteur, indexTime_ restait à 0, et INTRQ/GPIP5 n'était jamais levé. Symptôme :
+        // Stardust sur STE gelait en noir après son menu (le CPU tournait dans
+        // « tst.b D5 / bne $261e » en attente d'une IRQ FDC qui ne venait plus), là où
+        // Hatari atteint « INSERT DISK 2 IN ANY DRIVE ». Cf. TODO.md § D-PSG.
+        // refreshDriveSide() est idempotent (il ne ré-ancre l'index QUE si le lecteur change,
+        // Fdc.cpp) — l'appeler à chaque écriture du port A est donc sûr, et c'est
+        // exactement ce que fait Hatari.
+        fdc.refreshDriveSide();
         if (ports.hasSerial()) { ports.onPortA(a, sched.now(), mfp); cpu.updateIpl(); }
         if (!mfp.loopback()) return;        // connecteur non branché → lignes inertes
         // ⚠ Le port A du PSG est ACTIF BAS : bit=0 → ligne ASSERTÉE. Convention établie
