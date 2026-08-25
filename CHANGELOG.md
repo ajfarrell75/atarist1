@@ -15,6 +15,60 @@ Ripper, DAC Pro Sound) avec page Dongles, `disks/dongles.txt` et oracle de rejeu
 vérifié note à note** en headless, corpus MIDI piano/blues ; port MIDI ALSA sous Linux ;
 save-state v16. Détail dans les chantiers datés ci-dessous.
 
+## Le blitter a enfin un étalon — et il trouve une divergence (A1+A2+A3) (2026-08-26)
+
+**A1 — le palier PIXEL garde désormais la barrière.** `tests.yml`, le job qui tourne à chaque
+push, ne lançait que `--tier fast`, **qui ne compare aucun pixel**.
+`--tier full` n'existait que dans `release.yml`, donc une régression de rendu partait sur `main`
+et n'était vue qu'à la publication suivante. Nouveau job **`pixel`** : `--tier full` à chaque
+push et pull_request, plus `--verify-refs`, plus le dépôt des captures d'écart en artefact quand
+il échoue. Coût ~1-2 min. Deux cas mesurés que le `fast` ne voyait pas :
+`NEOST_SYNC_DISPATCH=1` casse `nocooper_greetings` à 98,97 %, et le chantier BL3/BL4 (base de
+temps du blitter) serait passé au vert.
+
+**A2 — `tools/make_blitter_test.py` + étalon `blitter_timer`.** Le trou mesuré la veille :
+`NEOST_BLIT_TRACE=1` rendait **0 blit** sur l'intégralité du corpus pixel, entièrement en
+`machine=st`. Le nouvel étalon (EmuTOS 256 Ko, STE, 512 Ko) contraint **deux** propriétés dans une
+seule image : la **datation** — lignes 0-99, l'octet TADR relu après chaque blit non-hog, Timer A
+en mode délai prescaler /200, donc 1 tic = 200 cyc : insensible au jitter sous-tic, sensible à la
+classe BL3 (1088 cyc ≈ 5 tics) — et les **données** — lignes 120-127, destination de 100 blits
+16×8 mots depuis un motif à pas `$3B27` qui balaie les 4 plans. ~400 tranches non-hog par run.
+
+**Dents vérifiées, pas supposées.** L'image diffère de **406 px** entre le commit `6bc2ce3`
+(AVANT BL3/BL4) et l'état corrigé — **toutes** dans la zone TADR, **zéro** dans la zone de
+données, soit la signature exacte d'un écart de datation sans écart de données. Cet étalon aurait
+donc attrapé BL3/BL4. Il détecte aussi `NEOST_RAM_SLOT=0` (269 px) et `NEOST_SYNC_DISPATCH=1`
+(198 px), et ignore `NEOST_IACK_SYNC=0` (0 px) — ce qui est **correct** depuis BL4, la dette
+étant soldée par accès et non plus au point d'IACK.
+
+**Et il a trouvé une divergence dès sa première exécution — BL5.** NeoST vs oracle Hatari :
+**397 px / 114816**. Le chemin de **données est byte-identique** (0 px sur la destination) ;
+l'écart est **entièrement de datation**, 99 lignes TADR sur 100, avec une dérive qui
+**s'accumule** de +1 à +43 tics sur 100 blits, soit ≈ **86 cycles par blit non-hog**. L'oracle est
+stable (3 runs Hatari = 0 px entre eux), ce n'est donc pas un artefact de boot. **BL3/BL4 avaient
+rapproché** NeoST de l'oracle sans fermer l'écart : 463 px avant → 397 px après. Piste inscrite
+en BL5 : NeoST facture l'arbitration une fois par **blit**, Hatari une fois par **tranche**.
+
+**A3 — le corpus livrable progresse.** `blitter_timer` est créé d'emblée sur ROM **libre** : le
+corpus qui survivrait au retrait des TOS Atari propriétaires passe de **5 à 6 étalons**, et la
+**seule** couverture du blitter est du côté libre.
+
+**Le chemin HOG aussi — et il localise BL5.** Étalon jumeau **`blitter_hog`** (même programme,
+`ctrl=$C0`, donc `Blitter::start` au lieu de `Blitter::onSlice`) : ce chemin n'était exercé par
+aucun test ni aucun titre. Contrôle de non-trivialité : 380 px d'écart avec `blitter_timer`, dont
+**0 px en zone de données**. Et il passe **`ref_kind: oracle` à 0 px** — conformité, pas seulement
+non-régression. Conséquence directe : **BL5 est spécifique au NON-HOG**, donc à la fenêtre CPU
+entre deux tranches, et non à la facturation du blit (identique dans les deux modes).
+
+⚠ **Deux hypothèses posées puis réfutées le jour même** sur BL5, consignées pour ne pas les
+rouvrir : (1) « NeoST facture l'arbitration par blit, Hatari par tranche » — faux,
+`Blitter_Start` est ré-appelé à chaque tranche ; (2) « l'oracle tourne le chemin non-CE et son
+forfait de 256 cyc » — faux aussi, le défaut d'Hatari ici EST le cycle-exact (mesuré : forcer
+`--cpu-exact off --compatible off` change l'image, 397 → 328 px). ⚠ Ces deux options déplacent la
+comparaison de 69 px et `hatari_oracle.sh` n'en passe aucune : toute reprise doit les épingler.
+
+⚠ Restent non couverts : le MFP en mode bloc et le stall FIFO du FDC (D3).
+
 ## La sélection de lecteur du PSG atteint enfin le FDC (`D-PSG`) (2026-08-25)
 
 **Ce qui n'allait pas.** Le FDC ne **relisait** le port A du PSG (R14 : lecteur A/B, face) que

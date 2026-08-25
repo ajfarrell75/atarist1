@@ -1,9 +1,15 @@
 # =============================================================================
 #  Tests — ce que les jobs de PACKAGING ne couvrent pas.
 #
-#  `release.yml` lance déjà `run_all.py --tier full` dans ses jobs Linux, mais il
-#  ne compile QUE ce que la release livre, en Release, sans libslirp. Deux zones
-#  restaient donc hors CI :
+#  ⚠ MISE À JOUR 2026-08-26 (chantier A1) — le palier PIXEL garde désormais le push.
+#  `release.yml` lançait bien `run_all.py --tier full`, mais SEULEMENT à la
+#  publication : une régression de rendu partait donc sur `main` et n'était vue que
+#  des semaines plus tard. Le job `pixel` ci-dessous le lance à chaque push et
+#  pull_request. Le palier `fast` des deux autres jobs ne compare AUCUN pixel — il
+#  ne remplace pas celui-ci, il couvre autre chose (slirp compilé, sanitizers).
+#
+#  `release.yml` ne compile QUE ce que la release livre, en Release, sans libslirp.
+#  Deux zones restaient donc hors CI :
 #
 #   1. `slirp`      — `src/net/SlirpBackend.cpp` ne se compilait NULLE PART :
 #                     absent de la CI (libslirp-dev jamais installé, donc coquille
@@ -76,6 +82,53 @@ jobs:
 
       - name: Palier fast (le reste du filet, avec SLIRP compilé)
         run: python3 tools/run_all.py --tier fast
+
+  # -------------------------------------------------------------------- pixel --
+  pixel:
+    name: Palier PIXEL (--tier full)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Dépendances
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake g++ libglfw3-dev libgl1-mesa-dev python3-pil
+
+      - name: Configurer
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Compiler
+        run: cmake --build build -j"$(nproc)" --target neost-headless neost-selftest
+
+      # LA raison d'être de ce job (chantier A1, cf. TODO.md § Dette d'architecture).
+      # `--tier fast` ne compare AUCUN pixel : il valide des parseurs et des verdicts.
+      # Tant que le palier pixel n'a tourné QUE dans release.yml, une régression de
+      # RENDU partait sur `main` et n'était vue qu'à la publication suivante.
+      # Deux cas MESURÉS que le fast ne voit pas :
+      #   · NEOST_SYNC_DISPATCH=1 casse `nocooper_greetings` à 98,97 % (113633/114816) ;
+      #   · le chantier BL3/BL4 (base de temps du blitter) serait passé au vert.
+      # Il tourne en ~1-2 min de plus que le fast : le coût est sans commune mesure
+      # avec celui d'une régression de rendu découverte des semaines plus tard.
+      - name: Palier full (étalons PIXEL — le SEUL palier qui compare des images)
+        run: python3 tools/run_all.py --tier full
+
+      # Filet de dernier recours : si les ROM Atari propriétaires quittent le dépôt,
+      # `run_etalons.py` RECENSE les étalons non exécutés au lieu d'échouer
+      # (rom_is_free()). Vert avec une couverture amputée ressemblerait à vert tout
+      # court — on rend donc le décompte VISIBLE dans le journal du job.
+      - name: Contrôle de provenance des références
+        run: python3 tools/run_etalons.py --verify-refs
+
+      - name: Capture des écarts en cas d'échec
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: etalons-diff
+          path: tests/out/
+          if-no-files-found: ignore
 
   # -------------------------------------------------------------- sanitizers --
   sanitizers:

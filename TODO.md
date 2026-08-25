@@ -104,7 +104,7 @@ sont pas des bugs mais des **propriétés manquantes du système de développeme
 classées par risque. Le plan de refonte des paliers de test existe déjà plus bas
 (§ *Système de régression*) ; ce qui suit le précise et le complète.
 
-### A1 — 🚨 Le palier qui compare des pixels n'est PAS branché sur la barrière (effort **XS**)
+### A1 ✅ — Le palier PIXEL garde désormais la barrière (FAIT le 2026-08-26)
 
 `.github/workflows/tests.yml` — le job qui tourne **à chaque push** — lance `run_all.py
 --tier fast`. `--tier full`, le **seul** palier qui compare des pixels, ne tourne que dans
@@ -114,25 +114,52 @@ est parti.
 Deux illustrations mesurées le même jour : `NEOST_SYNC_DISPATCH=1` casse `nocooper_greetings` à
 **98,97 %** sans que le `fast` ne bronche ; et BL3/BL4 — une modification de la **base de temps du
 cœur** — serait passé la CI au vert (il n'a été validé au pixel que parce qu'un `--tier full` a
-été lancé À LA MAIN). 🎯 **Brancher `--tier full` sur le push.** C'est le correctif le moins cher
-du fichier et il protège tout le reste.
+été lancé À LA MAIN).
+✅ **CORRIGÉ** : nouveau job **`pixel`** dans `.github/workflows/tests.yml`, qui lance
+`run_all.py --tier full` **à chaque push et pull_request** (+ `--verify-refs`, + dépôt des
+captures d'écart en artefact quand il échoue). Il coûte ~1-2 min de plus que le `fast`.
+⚠ Il ne remplace pas les deux autres jobs : leur `--tier fast` couvre autre chose (slirp
+compilé, sanitizers Debug+ASan).
 
-### A2 — Le filet est aveugle là où le code est le plus dur (effort **S/M**)
+### A2 ✅ — Le blitter a enfin un étalon (FAIT le 2026-08-26)
 
 `NEOST_BLIT_TRACE=1` rend **0 blit** sur l'intégralité du corpus pixel : il est tout entier en
 `machine=st`, où le blitter n'existe pas. Même trou pour le MFP en mode bloc et le stall FIFO du
 FDC (D3). Conséquence directe : la preuve de BL3/BL4 tient à des runs **manuels** de *Lethal
-Xcess* sur un `.stx` **non redistribuable**. 🎯 Un `tools/make_blitter_test.py` (secteur de boot
-STE autonome : blits non-hog pendant qu'un timer MFP tourne, capture pixel + contrôle de dérive
-du timer) couvrirait **BL3 et BL4** sur ROM libre. La machinerie existe : **17 générateurs
-`make_*_test.py`** sont déjà là, et ils ont servi à découpler 4 étalons des ROM propriétaires.
+Xcess* sur un `.stx` **non redistribuable**.
+✅ **CORRIGÉ** : `tools/make_blitter_test.py` + étalon **`blitter_timer`** (EmuTOS 256 Ko, STE,
+512 Ko). Une seule image contraint deux choses : la **datation** (lignes 0-99 = l'octet TADR relu
+après chaque blit non-hog, Timer A en mode délai prescaler /200 — 1 tic = 200 cyc, donc insensible
+au jitter sous-tic et sensible à la classe BL3) et les **données** (lignes 120-127 = destination
+de 100 blits 16×8 mots depuis un motif à pas $3B27 balayant les 4 plans). ~400 tranches non-hog
+par run, donc le chemin `Blitter::onSlice` est massivement exercé.
+**Dents VÉRIFIÉES, pas supposées** : l'image diffère de **406 px** entre le commit `6bc2ce3`
+(AVANT BL3/BL4) et l'état corrigé, **toutes** dans la zone TADR et **zéro** dans la zone de
+données — cet étalon aurait attrapé BL3/BL4. Il détecte aussi `NEOST_RAM_SLOT=0` (269 px) et
+`NEOST_SYNC_DISPATCH=1` (198 px).
+⚠ **Et il a trouvé une divergence dès sa première exécution** : **BL5**, dérive cumulative de
+~86 cyc par blit non-hog contre l'oracle (cf. `docs/HATARI_DIVERGENCES.md`). D'où
+`ref_kind: snapshot` et non `oracle` — même démarche que `overscan_top`.
+✅ **Le chemin HOG est couvert aussi** : étalon jumeau **`blitter_hog`** (même programme,
+`ctrl=$C0`), qui emprunte `Blitter::start` au lieu de `Blitter::onSlice`. Il n'était exercé par
+AUCUN test ni AUCUN titre (recensement Lethal Xcess : 5764 blits, tous `ctrl=$80`). Contrôle de
+non-trivialité : 380 px d'écart avec `blitter_timer`, dont **0 px en zone de données** — même
+transfert, seul le partage de bus change. Et il passe en **`ref_kind: oracle` à 0 px**, donc il
+prouve la **conformité**, pas seulement la non-régression.
+🎯 **Reste ouvert** : le MFP en mode bloc et le stall FIFO du FDC (D3) n'ont toujours pas
+d'étalon — ce sont les deux derniers trous de couverture identifiés.
 
-### A3 — Le corpus de régression n'est pas livrable (cf. § BLOQUANT RELEASE)
+### A3 ◐ — Le corpus de régression n'est pas livrable (AVANCÉ le 2026-08-26)
 
 La couverture repose sur ~80 jeux commerciaux crackés et 44 ROM propriétaires. **Le filet de
 sécurité ne peut pas être distribué avec le projet**, et un contributeur externe ne peut pas
 reproduire la validation. C'est le même dossier que le bloquant release, vu sous l'angle
 ingénierie : chaque étalon **généré** qui remplace un étalon à disque commercial paie deux fois.
+◐ **Avancé** : `blitter_timer` est créé **d'emblée sur ROM libre**, donc le corpus qui survivrait
+au retrait des TOS Atari passe de **5 à 6 étalons** (`etos_ste_boot`, `overscan_top`, `trace_odd`,
+`scroll_8264`, `scroll_8265`, `blitter_timer`) — et la **seule** couverture du blitter est du côté
+libre. Restent 7 étalons adossés à des ROM propriétaires : `spectrum512_diapo{,2,_ste}`,
+`cuddly_demos`, `union_demo`, `nocooper`, `nocooper_greetings`.
 
 ### A4 — L'instrument n'est pas testé (effort **S**)
 
