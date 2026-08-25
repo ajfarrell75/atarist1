@@ -202,6 +202,15 @@ public:
         if (ar.loading()) { updateFloppyDensity(0); updateFloppyDensity(1); }
     }
 
+    // Relit lecteur/face depuis le port A du PSG ; au CHANGEMENT de lecteur, réinitialise
+    // la référence d'index du modèle rotationnel (port de FDC_SetDriveSide, fdc.c).
+    // PUBLIC (et non plus privé) parce que le PSG doit POUSSER : Hatari appelle
+    // FDC_SetDriveSide depuis l'écriture du port A (psg.c:419-420), et NeoST fait de même
+    // via Machine (setPortASink). Sans cette poussée, un programme qui écrit sa commande
+    // FDC AVANT de sélectionner le lecteur reste bloqué avec driveSel_ = -1 — cf. D-PSG.
+    // Idempotent : ne ré-ancre l'index que si le lecteur a effectivement changé.
+    void     refreshDriveSide();
+
 private:
     // Une disquette montée (lecteur A ou B).
     struct FloppyDisk {
@@ -272,7 +281,6 @@ private:
     int64_t  nextIndexCycles() const;           // cycles FDC avant la prochaine impulsion (−1 si pas de média)
 
     // --- Machine à états des commandes (cf. Hatari FDC_Update*Cmd) -------------
-    void     refreshDriveSide();                // relit lecteur/face du PSG (réinit l'index au changement)
     void     executeCommand(uint8_t cmd);       // décode CR, lance la commande, programme le 1er événement
     void     updateStr(uint8_t dis, uint8_t en) { str_ = uint8_t((str_ & ~dis) | en); }
     bool     setMotorOn(uint8_t cr);            // démarre le moteur ; renvoie true si spin-up nécessaire

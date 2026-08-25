@@ -777,7 +777,7 @@ int Cpu68k::run(int cycles) {
     // mais celle-ci reste continue → les deltas restent exacts.
     quantumStartBus_ = busOfClock(c0);
     // DIAG (NEOST_QDELTA_DIAG=<seuil>, inerte si la variable n'est pas posée) — sonde
-    // de non-régression du chantier B3, dans l'esprit de NEOST_IACK_DISP ci-dessus.
+    // de non-régression du chantier BL3, dans l'esprit de NEOST_IACK_DISP ci-dessus.
     // Mesure, À L'ENTRÉE du quantum, l'écart entre les deux horloges :
     //     delta = busOfClock(horloge CPU) − sched.now()
     // Tout cycle facturé à l'horloge CPU hors quantum sans être crédité à
@@ -922,11 +922,11 @@ int Cpu68k::run(int cycles) {
 // PENDANT l'exécution d'une instruction (depuis read8/write8 d'un registre aligné 4
 // cycles) : on avance l'horloge du cœur, ce qui rallonge l'instruction en cours et
 // décale tous les accès suivants (la contention de bus du vrai matériel).
-// ⚠ INVARIANT DE FACTURATION (chantier B3) — cette primitive n'avance QUE l'horloge du
+// ⚠ INVARIANT DE FACTURATION (chantier BL3) — cette primitive n'avance QUE l'horloge du
 // cœur. Tant que l'appel a lieu DANS un run(), c'est suffisant : `ran` (retour de run,
 // mesuré depuis quantumStartBus_) le capte et Machine::runFrame le reverse à
 // sched.now(). Un appel HORS run(), lui, échapperait à l'ordonnanceur — c'était le bug
-// B3. Le SEUL facturateur hors quantum est Blitter::billCycles depuis Blitter::onSlice,
+// BL3. Le SEUL facturateur hors quantum est Blitter::billCycles depuis Blitter::onSlice,
 // et il crédite lui-même l'ordonnanceur (Scheduler::addStolenCycles) ; les cinq autres
 // appelants (Shifter ×2, addPsgWaitCycles, addMfpWaitCycles, addAciaWaitCycles) sont
 // tous sur un chemin d'accès mémoire, donc dans le quantum.

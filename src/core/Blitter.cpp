@@ -89,7 +89,7 @@ void Blitter::writeWord(uint32_t addr, uint16_t v) {
 // Blitter_FlushCycles (blitter.c:342-375). Appelé pour CHAQUE accès bus (4 cycles) et
 // pour chaque arbitration (prise 4/8, restitution 4), JAMAIS en lot : c'est la
 // granularité d'Hatari, et c'est elle qui permet à une échéance tombant au milieu
-// d'une tranche d'être servie à l'heure (chantier B4). Moira avance son horloge — le
+// d'une tranche d'être servie à l'heure (chantier BL4). Moira avance son horloge — le
 // CPU « attend » que le blitter rende le bus, cf. addBusWaitCycles.
 void Blitter::billCycles(int n) {
     if (n <= 0 || !bus_.cpu) return;
@@ -281,7 +281,7 @@ void Blitter::start() {
 // « perd » arbitration + part du blitter, puis garde le bus pour 64 accès bus CPU
 // RÉELS (comptés par noteCpuBusAccess, qui datera la tranche suivante).
 void Blitter::onSlice() {
-    // Chantier B4 : les accès bus dispatchent désormais l'ordonnanceur (billCycles →
+    // Chantier BL4 : les accès bus dispatchent désormais l'ordonnanceur (billCycles →
     // addStolenCycles → syncTo), donc un callback peut tourner PENDANT la tranche. Rien
     // ne réarme Scheduler::BLITTER dans cette fenêtre (l'échéance a été consommée avant
     // l'appel, et noteCpuBusAccess suppose un accès bus CPU, impossible ici), mais on

@@ -15,6 +15,97 @@ Ripper, DAC Pro Sound) avec page Dongles, `disks/dongles.txt` et oracle de rejeu
 vérifié note à note** en headless, corpus MIDI piano/blues ; port MIDI ALSA sous Linux ;
 save-state v16. Détail dans les chantiers datés ci-dessous.
 
+## La sélection de lecteur du PSG atteint enfin le FDC (`D-PSG`) (2026-08-25)
+
+**Ce qui n'allait pas.** Le FDC ne **relisait** le port A du PSG (R14 : lecteur A/B, face) que
+depuis ses propres accès registre — `Fdc::refreshDriveSide()` n'avait que trois appelants, tous
+des accès CPU aux registres FDC — et le sink port A du YM2149 n'avait qu'un abonné, qui ne
+faisait que le bouclage RS-232. **Le chemin PSG→FDC n'existait pas.** Hatari, lui, **pousse** :
+`psg.c:419-420` appelle `FDC_SetDriveSide` à *chaque* écriture du port A. Conséquence : tout
+programme qui écrit sa commande FDC **avant** de sélectionner le lecteur restait bloqué avec
+`driveSel_ = -1` — commande partie sans lecteur, `indexTime_` à 0, INTRQ/GPIP5 jamais levé.
+
+**La mesure.** *Stardust* sur STE : écran noir définitif après le menu trainer, le CPU tournant
+dans `tst.b D5 / bne $261e` en attente d'une IRQ FDC qui ne venait plus. Trace :
+`[fdc-st] cmd=1 state=2 drv=-1 idxTime=0 str=c5` puis **silence FDC total** sur 90 s de temps ST
+(4714 lignes en tout).
+
+**Ce qui a changé.** `Machine::setPortASink` appelle désormais `Fdc::refreshDriveSide()`
+(passée publique) à chaque écriture du port A, avant le bouclage RS-232 — port direct du
+comportement d'Hatari. La fonction est idempotente : elle ne ré-ancre l'index que si le lecteur
+a effectivement changé.
+
+**Résultat mesuré.** `drv=0` au lieu de `drv=-1`, INTRQ levé, **374 294** lignes FDC au lieu de
+4714, et Stardust STE joue son **intro défilante** (14 couleurs) puis fond au noir et va chercher
+la disquette 2 dans le **lecteur B** (`drv=1`, `idxTime=0`, lecteur vide) — le comportement de
+l'oracle. `--tier full` : tous les paliers OK ; Lethal Xcess `megast` inchangé (132 cyc).
+⚠ Les disquettes 2 et 3 sont **absentes du dépôt** : le titre n'est pas jouable pour autant.
+C'est une correction de **fidélité**. ◑ Résidu : l'oracle affichait « INSERT DISK 2 IN ANY
+DRIVE » là où NeoST fond au noir puis poll le lecteur B.
+
+## Headless : `--joy-at`, `--joy-script` et `--mouse-at` deviennent répétables (`OUTIL-1`) (2026-08-25)
+
+Ces trois options étaient des **scalaires** là où `--keys-at` / `--key-down` / `--key-up` sont
+des vecteurs : la dernière occurrence de la ligne de commande écrasait les précédentes **sans le
+moindre avertissement**. Ce n'est pas un détail — le balayage du catalogue du même jour a montré
+que ce seul piège fabriquait des « bugs » qui n'existaient pas : *Xenon 2*, *Flood* et *Dynamite
+Dux* étaient tous rapportés bloqués, tous jouables une fois la repro corrigée. Les trois passent
+en `std::vector`, l'aide porte « (repeatable) », et les sites d'application bouclent sur les
+listes (chevauchement : le dernier de la ligne gagne sur les trames communes ; des scripts
+disjoints jouent tous). Vérifié : `--joy-at 10 0x80 --joy-at 30 0x08` produit désormais **deux**
+lignes « joystick applied », une seule avant.
+
+⚠ Piège de mise en œuvre, consigné : `--joy-at` consomme **deux** arguments, donc un
+`emplace_back(next(a), next(a))` aurait un ordre d'évaluation **non spécifié** et inverserait la
+trame et la valeur au gré du compilateur — les temporaires nommés sont obligatoires.
+
+Reste ouvert (cf. `TODO.md`) : `--keys-at` ne tient la touche que **2 trames ≈ 40 ms**, ce qui
+fausse toute A/B contre un `--cmd-fifo` d'Hatari (~600 ms) — un verdict « confirmé à l'oracle » a
+déjà été rendu FAUX par cet écart ; et `stScancode()` ne mappe pas le pavé numérique.
+
+## Bug hunt : les 67 disques du dépôt passés au headless (2026-08-25)
+
+**Couverture intégrale, catalogue sain.** Les 67 images de `disks/st` et `disks/stx` ont été
+bootées en headless. **66 sans divergence démontrée.** Le brut donnait 8 anomalies ; **7 tombent**
+en réfutation adversariale, dont 5 à l'oracle Hatari ou au réflexe RAM. Les sept sont versées
+dans `docs/CASE_STUDIES.md` — New Zealand Story (manque de RAM : `$FC0BD8` est la routine
+d'affichage des **bombes** du TOS, pas une boucle mystérieuse), Xenon 2, Flood, Dynamite Dux,
+disquettes STX de données seules en A:, Great Giana Sisters, Pipe Dream. *Arkanoid*, tranché
+FIDÈLE lors de la passe précédente mais jamais versé, y est également fermé et retiré du
+catalogue des bugs ouverts.
+
+**Un seul bug d'émulation survit — `D-PSG`** (fiche complète dans `TODO.md`) : la sélection de
+lecteur/face écrite dans le **port A du PSG** n'est jamais poussée vers le FDC. Hatari pousse à
+chaque écriture (`psg.c:419-420` → `FDC_SetDriveSide`) ; côté NeoST `Fdc::refreshDriveSide()`
+n'est appelé que depuis des accès CPU aux registres FDC — **le chemin PSG→FDC n'existe pas**.
+Tout programme qui écrit sa commande FDC *avant* de sélectionner le lecteur reste bloqué avec
+`drv=-1`. Symptôme : Stardust sur STE, écran noir définitif après le menu trainer. Oracle :
+Hatari atteint « INSERT DISK 2 IN ANY DRIVE ».
+
+**Aucune régression** du chantier blitter du même jour : le seul échec STE-only du catalogue est
+`D-PSG`, dont la trace montre un FDC arrêté et non un décalage de base de temps ; Lethal Xcess,
+Wings of Death et `faster_atari_ste` passent sur machine à blitter.
+
+**Le principal fabricant de faux positifs est un défaut d'OUTILLAGE**, pas d'émulation :
+`--joy-at`, `--joy-script` et `--mouse-at` ne sont **pas répétables** (scalaires, dernière
+occurrence gagnante, sans avertissement) — à eux seuls ils ont produit **trois** des huit
+« bloquants ». Et `--keys-at` ne tient la touche que **2 trames ≈ 40 ms**, ce qui rend toute A/B
+contre un `--cmd-fifo` d'Hatari (~600 ms) **faussée** : un verdict « confirmé à l'oracle » a été
+rendu FAUX par cet écart. Recensé `OUTIL-1` dans `TODO.md`.
+
+**Corrections d'inventaire.** *V3* : « CyclesPerVBL ±4 » **retiré, faux positif prouvé** — chez
+Hatari ce compteur n'est vivant qu'en mode VDI, la VBL normale vient de la chaîne
+`ShifterLines[].StartCycle`, que NeoST porte déjà. *D3* : **confirmé et chiffré** (Hatari 4127
+cyc/flush, NeoST 4173, modèle sans stall 4096) avec un avertissement neuf — **à ne pas appliquer
+seul**, D3 isolé porterait l'erreur de +45 à +77 cyc, et sous `--fastfdc` l'écart actuel est de
+**+14 %**, pas 1,1 %. *MFP* : écart confirmé et exhibé, mais le patch proposé est **rejeté** (il
+réactiverait le dispatch sync-driven déjà réfuté, ~1590 fois par trame) ; la borne annoncée
+« ≤ 1 instruction » est corrigée en **157 cycles** mesurés.
+
+⚠ **Leçon d'outillage** : un balayage de masse laisse des images de disque **modifiées dans
+l'arbre git** (le jeu écrit sur sa disquette). Une image a dû être restaurée. Il manque un
+`--disk-ro`.
+
 ## Les cycles volés par le blitter avancent enfin l'horloge des timers (2026-08-25)
 
 **Ce qui n'allait pas.** NeoST avait DEUX bases de temps dès que le blitter volait le bus
@@ -67,7 +158,7 @@ compteur de 132 à ~265 cyc, un retard intra-tranche borné (136 cyc, 264 sur tr
 qui était le prix du crédit groupé. Le passage au dispatch **par accès** (ci-dessus) l'a
 supprimé : le compteur **redescend à 132** sur `megast`, `ste` et `megaste` — soit la valeur
 ST, mais cette fois sans plus rien masquer, là où AVANT tout le chantier il cachait un saut
-cumulatif de 1088. Divergences recensées **B3** et **B4**, toutes deux ✅, dans
+cumulatif de 1088. Divergences recensées **BL3** et **BL4**, toutes deux ✅, dans
 `docs/HATARI_DIVERGENCES.md`.
 
 **Validation de la ré-entrance.** Build à assertions ACTIVES (`-UNDEBUG` — attention,

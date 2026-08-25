@@ -76,9 +76,13 @@ void usage() {
         "  --keys-at N STR   type STR from frame N on (repeatable): 4 frames per char,\n"
         "                    extended scancodes arrows <>[], Esc =, F1-F5 !@#$%%\n"
         "  --joy-at N VAL    set the port 1 joystick to VAL at frame N (same bits as --joy)\n"
+        "                    (repeatable)\n"
         "  --joy-script N S  joystick script from frame N: U/D/L/R/F/. = one frame each\n"
+        "                    (repeatable; while a script runs it drives port 1 every frame,\n"
+        "                     so a static --joy cannot hold during that window)\n"
         "  --mouse-at N S    mouse script from frame N: L/R/U/D = +/-8 px, 1/2 = left/\n"
         "                    right click, . = idle (one frame each)\n"
+        "                    (repeatable)\n"
         "  --joy P1[,P0]     hold a joystick state (bits up$01 down$02 l$04 r$08 fire$80)\n"
         "  --disk FILE       mount an image in drive A (default disks/diskA.st)\n"
         "  --diskb FILE      mount an image in drive B (second drive)\n"
@@ -1021,18 +1025,28 @@ int main(int argc, char** argv) {
     // toutes les 4 trames). C = caractère de la table stScancode ('[' ']' '<' '>'…).
     // RÉPÉTABLES (paires down/up successives).
     std::vector<std::pair<int, char>> keyDownList, keyUpList;
-    int         joyAtFrame  = -1;     // --joy-at N P1 : pose l'état joystick port 1 à la trame N
-    uint8_t     joyAt1      = 0;
+    // --joy-at N P1 : pose l'état joystick port 1 à la trame N.
+    // ⚠ RÉPÉTABLE depuis le 2026-08-25 (chantier OUTIL-1). C'était un SCALAIRE : la dernière
+    // occurrence de la ligne de commande écrasait les précédentes SANS AUCUN avertissement,
+    // et le balayage du catalogue a montré que ce piège fabriquait à lui seul des « bugs »
+    // qui n'existaient pas (Xenon 2, Flood, Dynamite Dux — tous jouables une fois la repro
+    // corrigée). Même correction pour --mouse-at et --joy-script ci-dessous.
+    std::vector<std::pair<int, uint8_t>> joyAtList;
     // --mouse-at N "SCRIPT" : pilote la souris (mode REL) à partir de la trame N pour
     // naviguer un menu souris (ex. Vroom). Un token = une trame ; L/R/U/D = déplacement
     // (±8 px), '1' = clic gauche, '2' = clic droit (appui+relâche sur 2 trames), '.' = idle.
-    int         mouseAtFrame = -1;
-    std::string mouseAt;
+    // RÉPÉTABLE. Si deux scripts se CHEVAUCHENT sur une trame, le DERNIER de la ligne de
+    // commande gagne (ils sont appliqués dans l'ordre) ; s'ils ne se chevauchent pas, ils
+    // jouent tous les deux.
+    std::vector<std::pair<int, std::string>> mouseAtList;
     // --joy-script N "SCRIPT" : pose l'état joystick port 1 trame par trame à partir de N.
     // Tokens : U/D/L/R = direction, F = feu, '.' = neutre. Permet de PULSER (presser puis
     // relâcher) le feu et de bouger une sélection dans un menu joystick (ex. Vroom).
-    int         joyScrFrame = -1;
-    std::string joyScr;
+    // RÉPÉTABLE (même règle de chevauchement que --mouse-at).
+    // ⚠ Tant qu'un script est ACTIF il écrit l'état du port 1 à CHAQUE trame, y compris
+    // l'état neutre pour un '.' : un `--joy` statique ne peut donc pas « tenir » pendant
+    // cette fenêtre. C'est voulu (un script décrit l'état complet, trame par trame).
+    std::vector<std::pair<int, std::string>> joyScrList;
     // --dump-at N ADDR LEN FILE : dump brut de LEN octets de RAM à partir d'ADDR
     // (hex) après la trame N — diff de buffers contre l'oracle Hatari (débogueur
     // « m addr len »). Lectures via bus.read8 (RAM : sans effet de bord).
@@ -1134,9 +1148,14 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(a, "--keys-at"))     { const int f = std::atoi(next(a)); keysAtList.emplace_back(f, next(a)); }
         else if (!std::strcmp(a, "--key-down"))    { const int f = std::atoi(next(a)); keyDownList.emplace_back(f, next(a)[0]); }
         else if (!std::strcmp(a, "--key-up"))      { const int f = std::atoi(next(a)); keyUpList.emplace_back(f, next(a)[0]); }
-        else if (!std::strcmp(a, "--joy-at"))      { joyAtFrame = std::atoi(next(a)); joyAt1 = (uint8_t)std::strtoul(next(a), nullptr, 0); }
-        else if (!std::strcmp(a, "--mouse-at"))    { mouseAtFrame = std::atoi(next(a)); mouseAt = next(a); }
-        else if (!std::strcmp(a, "--joy-script"))  { joyScrFrame = std::atoi(next(a)); joyScr = next(a); }
+        // ⚠ --joy-at prend DEUX arguments : les temporaires sont OBLIGATOIRES. Un
+        // emplace_back(next(a), next(a)) aurait un ordre d'évaluation NON SPÉCIFIÉ, et
+        // inverserait la trame et la valeur au gré du compilateur.
+        else if (!std::strcmp(a, "--joy-at"))      { const int f = std::atoi(next(a));
+                                                     const uint8_t v = (uint8_t)std::strtoul(next(a), nullptr, 0);
+                                                     joyAtList.emplace_back(f, v); }
+        else if (!std::strcmp(a, "--mouse-at"))    { const int f = std::atoi(next(a)); mouseAtList.emplace_back(f, next(a)); }
+        else if (!std::strcmp(a, "--joy-script"))  { const int f = std::atoi(next(a)); joyScrList.emplace_back(f, next(a)); }
         else if (!std::strcmp(a, "--dump-at"))     { dumpAtFrame = std::atoi(next(a));
                                                      dumpAddr = (uint32_t)std::strtoul(next(a), nullptr, 16);
                                                      dumpLen  = (uint32_t)std::strtoul(next(a), nullptr, 0);
@@ -1649,15 +1668,20 @@ int main(int argc, char** argv) {
             machine.pressPortButton();
             std::fprintf(stderr, "[headless] cartridge button pressed at frame %d\n", frame);
         }
-        if (joyAtFrame >= 0 && frame == joyAtFrame) {
-            machine.ikbd.setJoystick(0, joyAt1);
-            machine.bus.stePads.setJoystick(0, joyAt1);   // joypads STE ($FF9200/02)
-            std::fprintf(stderr, "[headless] joystick applied at frame %d: port1=$%02X\n", frame, joyAt1);
+        for (const auto& ja : joyAtList) {
+            if (frame != ja.first) continue;
+            machine.ikbd.setJoystick(0, ja.second);
+            machine.bus.stePads.setJoystick(0, ja.second);   // joypads STE ($FF9200/02)
+            std::fprintf(stderr, "[headless] joystick applied at frame %d: port1=$%02X\n", frame, ja.second);
         }
         // Script souris daté (--mouse-at) : 1 token = 1 trame. Pilote un menu souris.
-        if (mouseAtFrame >= 0 && frame >= mouseAtFrame) {
-            const int idx = frame - mouseAtFrame;
+        for (const auto& ms : mouseAtList) {
+            const std::string& mouseAt = ms.second;
+            if (frame < ms.first) continue;
+            const int idx = frame - ms.first;
             if (idx < (int)mouseAt.size()) {
+                // Statiques : l'état des BOUTONS est global à la souris, pas au script —
+                // deux scripts successifs ne doivent pas perdre un appui en cours.
                 static bool mClickL = false, mClickR = false;
                 const char t = mouseAt[idx];
                 int dx = 0, dy = 0; bool l = false, r = false;
@@ -1681,8 +1705,10 @@ int main(int argc, char** argv) {
         }
         // Script joystick daté (--joy-script) : 1 token = 1 trame. Pulse feu / déplace
         // une sélection dans un menu joystick (ex. menu Vroom atteint au feu).
-        if (joyScrFrame >= 0 && frame >= joyScrFrame) {
-            const int idx = frame - joyScrFrame;
+        for (const auto& js : joyScrList) {
+            const std::string& joyScr = js.second;
+            if (frame < js.first) continue;
+            const int idx = frame - js.first;
             if (idx < (int)joyScr.size()) {
                 uint8_t st = 0;
                 switch (joyScr[idx]) {
