@@ -91,7 +91,7 @@ private:
     // Fenêtre PRE_START de 4 cycles avant chaque prise de bus non-hog (cf. .cpp) :
     // armée dans Bus::blitterWinStart/End, consultée par les callbacks mémoire de
     // Moira (Cpu68k.cpp) qui signalent un accès CPU tombé dedans.
-    void armPreStartWindow(int64_t now);
+    void armPreStartWindow(int64_t now, int cycles = 4);   // fenêtre PRE_START (8 au démarrage, 4 à la reprise)
     void clearPreStartWindow();
     uint16_t readWord(uint32_t addr);
     void     writeWord(uint32_t addr, uint16_t v);

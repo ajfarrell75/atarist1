@@ -15,6 +15,28 @@ Ripper, DAC Pro Sound) avec page Dongles, `disks/dongles.txt` et oracle de rejeu
 vérifié note à note** en headless, corpus MIDI piano/blues ; port MIDI ALSA sous Linux ;
 save-state v16. Détail dans les chantiers datés ci-dessous.
 
+## BL5 : chaque blit démarrait 4 cycles trop tôt (2026-08-26)
+
+**Trouvé par l'étalon `blitter_timer` posé le jour même**, puis instruit jusqu'à la cause.
+Hatari pose `Blitter_CyclesBeforeStart = 4 + 4` au **démarrage** d'un blit — son propre
+commentaire : « 4 cycles to complete current bus write to ctrl reg + 4 cycles before blitter
+request the bus » — mais `= 4` seulement à la **reprise** d'une tranche non-hog. NeoST utilisait
+`kPreStartCycles = 4` dans les **deux** cas. La fenêtre PRE_START est désormais paramétrée
+(8 au démarrage, 4 à la reprise, `kStartDelayCycles`).
+
+**Mesuré** : dérive de datation **86 → 20 cycles par blit**, écart à l'oracle **397 → 299 px**.
+Le mode HOG reste à **0 px** (`blitter_hog`, référence oracle) et **aucun autre étalon pixel ne
+bouge** — le changement est confiné au chemin de démarrage du blitter.
+
+⚠ **Trois hypothèses formulées puis réfutées** avant d'arriver là, consignées dans BL5 pour ne
+pas les rouvrir : l'arbitration par blit vs par tranche (faux — `Blitter_Start` est ré-appelé à
+chaque tranche) ; l'oracle tournant le chemin non-CE et son forfait de 256 cyc (faux — le défaut
+d'Hatari ici EST le cycle-exact) ; et l'overlap CPU parallèle, qui serait un effet **par
+tranche** (faux — doubler la taille du blit ne double pas la dérive : elle est **par blit**, et
+c'est cette mesure qui a mené à la vraie cause).
+
+**Résidu ouvert : ~20 cyc/blit**, cause non établie.
+
 ## Le blitter a enfin un étalon — et il trouve une divergence (A1+A2+A3) (2026-08-26)
 
 **A1 — le palier PIXEL garde désormais la barrière.** `tests.yml`, le job qui tourne à chaque
