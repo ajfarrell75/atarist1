@@ -212,8 +212,14 @@ Machine::Machine(std::size_t ramBytes, CpuCore cpuCore, MachineType machine)
     psg.setPortASink([this](uint8_t a) {
         if (ports.hasSerial()) { ports.onPortA(a, sched.now(), mfp); cpu.updateIpl(); }
         if (!mfp.loopback()) return;        // connecteur non branché → lignes inertes
-        const bool rts = (a & 0x08) != 0;   // bit3 = 1 → RTS assertée (repos bit=0 → désassertée)
-        const bool dtr = (a & 0x10) != 0;   // bit4 = 1 → DTR assertée
+        // ⚠ Le port A du PSG est ACTIF BAS : bit=0 → ligne ASSERTÉE. Convention établie
+        // sur CE registre chez Hatari — psg.c:223 le met à $FF au reset (« no drive
+        // selected »), et la sélection lecteur s'y teste par « (PORTA & (1<<1)) == 0 »
+        // (psg.c:400). Le code testait « != 0 » : au repos ($FF) le bouclage assertait
+        // donc CTS/DCD/RI, et toute bascule les faisait bouger À L'ENVERS. Les deux
+        // cartouches Field Service (test S) concluaient « No loopback connector ».
+        const bool rts = (a & 0x08) == 0;   // bit3 = 0 → RTS assertée
+        const bool dtr = (a & 0x10) == 0;   // bit4 = 0 → DTR assertée
         mfp.setRs232Cts(rts);
         mfp.setRs232Dcd(dtr);
         mfp.setRs232Ri(dtr);

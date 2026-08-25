@@ -130,6 +130,7 @@ void usage() {
         "  --spec512-selftest self-test of the Spectrum 512 re-render (palette/pixel) then exit\n"
         "  --bus-selftest    self-test of the bus error model (whitelist) then exit\n"
         "  --mfp-selftest    self-test of the MFP (GPIP/edges/Timer B) then exit\n"
+        "  --serloop-selftest self-test of the RS232 loopback line polarity then exit\n"
         "  --msa-selftest    self-test of the .msa re-encoding (round-trip) then exit\n"
         "  --enec-selftest   self-test of the NE2000/EtherNEC (cartridge-port wire\n"
         "                    protocol, loopback backend) then exit\n"
@@ -157,6 +158,41 @@ void usage() {
 //  trame émise revient en réception → on la relit via Remote DMA. Aucune E/S
 //  réseau. Cf. docs/EXTENSIONS.md § EtherNEC.
 // =============================================================================
+// =============================================================================
+//  Connecteur de bouclage RS-232 : les lignes de contrôle doivent RECOPIER les
+//  sorties RTS/DTR du PSG, qui sont ACTIVES BAS (Hatari psg.c:223 — port A à $ff
+//  au reset, « no drive selected » ; sélection lecteur testée par
+//  « (PORTA & (1<<1)) == 0 », psg.c:400). Le câblage vit dans une lambda de
+//  Machine, donc il faut une Machine : pas testable depuis neost-selftest.
+// =============================================================================
+int serialLoopbackSelfTest(Machine& machine) {
+    int passed = 0, failed = 0;
+    auto check = [&](bool ok, const char* what) {
+        std::fprintf(stderr, "[serloop-selftest] %-42s %s\n", what, ok ? "OK" : "FAIL");
+        (ok ? passed : failed)++;
+    };
+    machine.mfp.setLoopback(true);
+    auto portA = [&](uint8_t v) {
+        machine.psg.write8(0xFF8800, 14);
+        machine.psg.write8(0xFF8802, v);
+        return machine.bus.read8(0xFFFA01);          // GPIP : CTS=bit2, DCD=bit1 (0 = assertée)
+    };
+    // ⚠ Régression : la polarité était inversée (« bit != 0 » au lieu de « == 0 »).
+    // Au repos ($ff) le bouclage assertait CTS/DCD, et toute bascule les faisait
+    // bouger À L'ENVERS — les deux cartouches Field Service (test S) concluaient
+    // « No loopback connector ».
+    uint8_t g = portA(0xFF);
+    check((g & 0x04) && (g & 0x02), "repos $ff : CTS et DCD inactives");
+    g = portA(0xF7);
+    check(!(g & 0x04) && (g & 0x02), "bit3=0 : RTS assertee -> CTS seule");
+    g = portA(0xEF);
+    check((g & 0x04) && !(g & 0x02), "bit4=0 : DTR assertee -> DCD seule");
+    g = portA(0xE7);
+    check(!(g & 0x04) && !(g & 0x02), "bit3=0 et bit4=0 : les deux assertees");
+    std::fprintf(stderr, "[serloop-selftest] %d passed, %d failed\n", passed, failed);
+    return failed == 0 ? 0 : 1;
+}
+
 int enecSelfTest(Machine& machine) {
     int passed = 0, failed = 0;
     auto check = [&](bool ok, const char* what) {
@@ -959,6 +995,7 @@ int main(int argc, char** argv) {
     bool        glueSelfTest = false; // auto-test déterministe de la machine Glue (bordures)
     bool        spec512SelfTest = false; // auto-test déterministe du re-rendu Spectrum 512
     bool        busSelfTest  = false;  // auto-test déterministe du modèle de bus error
+    bool        serLoopSelfTest = false;  // auto-test polarité des lignes du bouclage RS-232
     bool        mfpSelfTest  = false;  // auto-test déterministe du MFP (GPIP/fronts/Timer B)
     bool        msaSelfTest  = false;  // auto-test déterministe du ré-encodage .msa
     bool        enecSelfTestFlag = false; // auto-test déterministe NE2000/EtherNEC (fil)
@@ -1077,6 +1114,7 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(a, "--spec512-selftest")) spec512SelfTest = true;
         else if (!std::strcmp(a, "--bus-selftest")) busSelfTest = true;
         else if (!std::strcmp(a, "--mfp-selftest")) mfpSelfTest = true;
+        else if (!std::strcmp(a, "--serloop-selftest")) serLoopSelfTest = true;
         else if (!std::strcmp(a, "--msa-selftest")) msaSelfTest = true;
         else if (!std::strcmp(a, "--enec-selftest")) enecSelfTestFlag = true;
         else if (!std::strcmp(a, "--usatan-selftest")) usatanSelfTestFlag = true;
@@ -1194,6 +1232,7 @@ int main(int argc, char** argv) {
     if (spec512SelfTest) return machine.shifter.spec512SelfTest() ? 0 : 1;
     if (busSelfTest) return machine.bus.busSelfTest() ? 0 : 1;
     if (mfpSelfTest) return machine.mfp.mfpSelfTest() ? 0 : 1;
+    if (serLoopSelfTest) return serialLoopbackSelfTest(machine);
     if (msaSelfTest) return machine.fdc.msaSelfTest() ? 0 : 1;
     if (enecSelfTestFlag) return enecSelfTest(machine);
     if (usatanSelfTestFlag) return usatanSelfTest(machine);
