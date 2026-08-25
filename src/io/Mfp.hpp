@@ -340,7 +340,7 @@ public:
     // logiciel qui attend CTS avant d'émettre aurait bouclé indéfiniment.
     bool    ctsLine_  = true;     // RS232 CTS (GPIP2, actif bas) — bouclage RTS
     bool    dcdLine_  = true;     // RS232 DCD (GPIP1, actif bas) — bouclage DTR
-    bool    riLine_   = false;    // RS232 RI  (GPIP6, actif bas) — bouclage DTR
+    bool    riLine_   = true;     // RS232 RI (GPIP6) : ACTIF BAS, repos ASSERTÉ — cf. CTS/DCD
     bool    monButton_ = false;   // Multiface : bouton freeze enfoncé → GPIP7 forcé à 0 (hors snapshot)
     std::function<void(uint8_t&)> gpipHook_;   // recouvrement lecture GPIP (PortDevices, hors snapshot)
 

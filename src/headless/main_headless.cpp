@@ -189,6 +189,10 @@ int serialLoopbackSelfTest(Machine& machine) {
     check((g & 0x04) && !(g & 0x02), "bit4=0 : DTR assertee -> DCD seule");
     g = portA(0xE7);
     check(!(g & 0x04) && !(g & 0x02), "bit3=0 et bit4=0 : les deux assertees");
+    // RI (GPIP6) suit DTR comme DCD : la cartouche Atari Field Service teste
+    // « RI-DTR » (S9) et « DCD-DTR » (SA) comme le MÊME signal. Active BASSE.
+    check(!(portA(0xEF) & 0x40), "bit4=0 : DTR assertee -> RI assertee aussi");
+    check( (portA(0xFF) & 0x40), "repos $ff : RI desassertee");
     std::fprintf(stderr, "[serloop-selftest] %d passed, %d failed\n", passed, failed);
     return failed == 0 ? 0 : 1;
 }
