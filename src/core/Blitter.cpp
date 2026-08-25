@@ -28,6 +28,16 @@ namespace {
     // arbitration de restitution blitter → CPU (Blitter_BusArbitration).
     constexpr int kPreStartCycles   = 4;
     constexpr int kArbOut           = 4;
+    // Délai avant la prise de bus au DÉMARRAGE d'un blit — port de
+    // `Blitter_CyclesBeforeStart = 4 + 4` (blitter.c, branche BLITTER_RUN_CE de
+    // Blitter_Control_WriteByte), dont le commentaire d'Hatari dit : « 4 cycles to
+    // complete current bus write to ctrl reg + 4 cycles before blitter request the bus ».
+    // ⚠ C'est 8 au DÉMARRAGE (écriture de $FF8A3C) mais 4 seulement à la REPRISE d'une
+    // tranche non-hog (Blitter_HOG_CPU_mem_access_after pose 4). NeoST utilisait 4 dans
+    // les DEUX cas : chaque blit démarrait donc 4 cycles trop tôt. Mesuré par l'étalon
+    // `blitter_timer` (chantier BL5) : la dérive vs l'oracle est bien PAR BLIT et non par
+    // tranche — doubler la taille du blit (4 → 8 tranches) ne la double pas.
+    constexpr int kStartDelayCycles = 4 + 4;
     // Coût d'UN accès bus du blitter, lecture comme écriture — port de
     // BLITTER_CYCLES_PER_BUS_READ / _WRITE (blitter.c). Facturé accès par accès, cf.
     // Blitter::billCycles.
@@ -266,8 +276,8 @@ void Blitter::start() {
         // Blitter_HOG_CPU_BusCountError = 0, blitter.c:1457) — un accès volé dans
         // une fenêtre PÉRIMÉE (avant un restart/reprise) ne compte pas.
         busCountError_ = false;
-        armPreStartWindow(sched_->liveNow());
-        sched_->schedule(Scheduler::BLITTER, sched_->liveNow() + kPreStartCycles);
+        armPreStartWindow(sched_->liveNow(), kStartDelayCycles);
+        sched_->schedule(Scheduler::BLITTER, sched_->liveNow() + kStartDelayCycles);
     } else {
         onSlice();
     }
@@ -327,9 +337,9 @@ void Blitter::noteCpuBusAccess(int64_t now) {
 // blitter n'a pas encore le bus — il compte pourtant déjà les accès. Un accès bus
 // CPU dans la fenêtre (signalé par les accès mémoire de Moira via Bus) lui
 // vole un accès : la tranche suivante n'en fera que 63.
-void Blitter::armPreStartWindow(int64_t now) {
+void Blitter::armPreStartWindow(int64_t now, int cycles) {
     bus_.blitterWinStart = now;
-    bus_.blitterWinEnd   = now + kPreStartCycles;
+    bus_.blitterWinEnd   = now + cycles;
 }
 
 void Blitter::clearPreStartWindow() {
