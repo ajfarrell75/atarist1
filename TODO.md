@@ -97,6 +97,103 @@ Autres points de conformité relevés à la même passe (non bloquants mais à t
 
 ---
 
+## 🏛 Dette d'architecture — revue du 2026-08-25
+
+Revue transverse faite après le chantier blitter (BL3/BL4) et le balayage des 67 disques. Ce ne
+sont pas des bugs mais des **propriétés manquantes du système de développement lui-même** —
+classées par risque. Le plan de refonte des paliers de test existe déjà plus bas
+(§ *Système de régression*) ; ce qui suit le précise et le complète.
+
+### A1 — 🚨 Le palier qui compare des pixels n'est PAS branché sur la barrière (effort **XS**)
+
+`.github/workflows/tests.yml` — le job qui tourne **à chaque push** — lance `run_all.py
+--tier fast`. `--tier full`, le **seul** palier qui compare des pixels, ne tourne que dans
+`release.yml`. La protection existe, elle est bonne, et elle se déclenche **après** que le code
+est parti.
+
+Deux illustrations mesurées le même jour : `NEOST_SYNC_DISPATCH=1` casse `nocooper_greetings` à
+**98,97 %** sans que le `fast` ne bronche ; et BL3/BL4 — une modification de la **base de temps du
+cœur** — serait passé la CI au vert (il n'a été validé au pixel que parce qu'un `--tier full` a
+été lancé À LA MAIN). 🎯 **Brancher `--tier full` sur le push.** C'est le correctif le moins cher
+du fichier et il protège tout le reste.
+
+### A2 — Le filet est aveugle là où le code est le plus dur (effort **S/M**)
+
+`NEOST_BLIT_TRACE=1` rend **0 blit** sur l'intégralité du corpus pixel : il est tout entier en
+`machine=st`, où le blitter n'existe pas. Même trou pour le MFP en mode bloc et le stall FIFO du
+FDC (D3). Conséquence directe : la preuve de BL3/BL4 tient à des runs **manuels** de *Lethal
+Xcess* sur un `.stx` **non redistribuable**. 🎯 Un `tools/make_blitter_test.py` (secteur de boot
+STE autonome : blits non-hog pendant qu'un timer MFP tourne, capture pixel + contrôle de dérive
+du timer) couvrirait **BL3 et BL4** sur ROM libre. La machinerie existe : **17 générateurs
+`make_*_test.py`** sont déjà là, et ils ont servi à découpler 4 étalons des ROM propriétaires.
+
+### A3 — Le corpus de régression n'est pas livrable (cf. § BLOQUANT RELEASE)
+
+La couverture repose sur ~80 jeux commerciaux crackés et 44 ROM propriétaires. **Le filet de
+sécurité ne peut pas être distribué avec le projet**, et un contributeur externe ne peut pas
+reproduire la validation. C'est le même dossier que le bloquant release, vu sous l'angle
+ingénierie : chaque étalon **généré** qui remplace un étalon à disque commercial paie deux fois.
+
+### A4 — L'instrument n'est pas testé (effort **S**)
+
+`neost-headless` **EST** le framework de test, et il a des modes d'échec **silencieux**. Sur la
+passe du 2026-08-25, **trois** « bloquants » sur huit venaient de l'instrument et non du système
+mesuré (cf. `OUTIL-1`). Le piège résiduel le plus dangereux : `--keys-at` tient la touche
+**40 ms** là où `--cmd-fifo` d'Hatari tient **~600 ms**, ce qui invalide silencieusement toute
+comparaison à l'oracle — un verdict « confirmé à l'oracle » a été rendu **FAUX** par cet écart.
+🎯 `neost-selftest` couvre « la logique pure » : le **parsing d'arguments en est**. Un test qui
+vérifie que `--joy-at` deux fois s'applique deux fois aurait attrapé `OUTIL-1` avant qu'il ne
+fabrique de faux bugs.
+
+### A5 — L'oracle est une dépendance critique traitée comme un accessoire (effort **S**)
+
+Toute la méthode imposée du projet repose sur Hatari. Or `extern/hatari` est **gitignoré**, n'est
+**pas un sous-module**, peut être **absent** sur une machine fraîche, n'est épinglé à **aucun
+commit** (l'inventaire note lui-même que ses numéros de ligne ont glissé entre `c9906f1` et
+`981f291`), sème son RNG sur `time(NULL)` (d'où le besoin d'`oracle_scan`), et **ne sait pas
+injecter de joystick** — ce qui exclut du cross-check toute une classe de jeux d'action.
+🎯 L'épingler (sous-module, ou SHA + script de build vérifié), et verser la recette de pilotage
+au joystick (`[Joystick1] nJoystickMode = 2` + `kFire = f` + `hatari-event keydown f`) dans
+`docs/HATARI_AUTOMATION.md`.
+
+### A6 — Aucun budget de performance (effort **S**)
+
+BL4 ajoute un `syncTo` **par accès bus** du blitter (~370 k appels supplémentaires sur 6000
+trames de *Lethal Xcess*). **Personne ne l'a mesuré**, et rien dans la CI ne l'aurait vu. Un
+émulateur temps réel dont le **mode borne sur Raspberry Pi** est une cible déclarée devrait avoir
+une barrière de **débit** (trames/s sur un boot de référence), pas seulement de justesse.
+Le `cycle-bench` existant garde le modèle de cycle, pas le temps mur.
+
+### A7 — La base de connaissance n'a aucun contrôle d'intégrité (effort **XS**)
+
+`docs/HATARI_DIVERGENCES.md` est une base de données maintenue à la main. Constaté le même jour :
+deux numérotations **en collision** (`B` sous-système vs `B` sévérité — corrigé en `BL*`), des
+ancres pointant vers des **symboles disparus** (`Blitter::stallCpu` après renommage), un canal
+décrit à la fois « complet mais OFF » et « ON par défaut ». Le coût réel est la **REDÉCOUVERTE** :
+`D4` a été retrouvé comme faux positif par **trois** agents indépendants dans la même passe, et
+*Arkanoid* était tranché depuis une passe **sans avoir jamais été versé** dans `CASE_STUDIES`.
+🎯 Un contrôle CI qui vérifie que chaque `fichier:symbole` cité existe encore (`grep`) coûte dix
+lignes et empêche la dérive silencieuse.
+
+### A8 — Le GUI est un angle mort total (effort **M**)
+
+Aucun test ne couvre le frontend, et c'est **précisément là que vivent les rapports utilisateur
+restants** : *Wings of Death* (cœur émulé disculpé, suspect n°1 = underrun de la boucle audio,
+`src/audio/Audio.cpp:176-178`), *Beyond the Ice Palace* (chemin double-clic GEM ≠ AUTO), *Lethal
+Xcess* titre « à 8 % ». Le cœur est très bien couvert ; **ce que l'utilisateur voit ne l'est pas
+du tout**.
+
+### ⚠ Deux erreurs de méthode commises le 2026-08-25, consignées pour ne pas les refaire
+
+- **Un seuil absolu sur une grandeur dépendante de la charge.** `timer IRQ max lateness` avait été
+  inscrit ici comme sonde de non-régression « doit rester à **132** ». Faux : 147, 156, 157 et 163
+  relevés sur d'autres titres. Corrigé — cette métrique se compare **à charge identique**, jamais
+  à un seuil. Un faux garde-fou coûte plus cher qu'aucun garde-fou.
+- **Justesse validée, coût ignoré.** BL4 a été validé au pixel et au barème sans **aucune** mesure
+  de débit, alors que le changement multiplie les appels au dispatch (cf. A6).
+
+---
+
 ## Catalogue logiciels — bugs OUVERTS
 
 Rapports terrain non expliqués. TOS 1.02fr sauf mention. Chemins sous `disks/st/` (`.st`)
@@ -344,8 +441,11 @@ alertes. Voir aussi : le chemin
 **Constat.** Une régression de palette spec512 (rapport terrain) n'a **PAS** été détectée : l'unique
 étalon spec512 est un slice trop étroit (1 disque auto-diapo, **borderless**, ST/tos102uk, 2 trames,
 headless). Trois trous : (a) **couverture** — GUI, images bordées/beam-racing, autres résolutions,
-res-tricks non testés ; (b) **automatisation** — la suite est manuelle (aucun hook/CI), une régression
-ne remonte que si on pense à lancer `run_etalons.py` ; (c) **provenance des réfs** — `compare` préfère
+res-tricks non testés (⚠ et **aucun étalon n'exerce le blitter**, mesuré le 2026-08-25 → A2) ;
+(b) **automatisation** — ⚠ **partiellement périmé** : la CI existe désormais
+(`.github/workflows/tests.yml`) mais elle ne garde le push qu'avec `--tier fast`, qui ne compare
+**aucun pixel** ; `--tier full` n'est lancé que par `release.yml`, donc **après** le commit
+(→ **A1**, correctif XS) ; (c) **provenance des réfs** — `compare` préfère
 la self-capture `.ppm` à l'oracle `.png` → une réf ré-« blessée » peut figer un bug.
 
 Refonte proposée, en **pyramide à paliers** (chaque test s'auto-verdicte → code de sortie ; les paliers
