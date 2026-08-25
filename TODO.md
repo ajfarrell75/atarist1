@@ -109,14 +109,21 @@ Hatari.
 | **Beyond the Ice Palace** (D-BUG) | Rapport GUI : écran scramblé en jeu. **NON reproduit en headless** : gameplay PROPRE (ST et STE, 1 Mo, boot AUTO). ⚠ Le PRG exige > 512 Ko (BSS dépack 384 Ko → TPA ~471 Ko) : en 512 Ko le TOS skippe l'AUTO — comportement CORRECT (pas un bug). Le chemin GUI = double-clic bureau GEM (Pexec sous AES) ≠ AUTO — à reproduire avec la config GUI exacte. | Recette headless : copier le disque + `mmd ::AUTO` + `mcopy` ; `--mem 1m --keys-at 4000 "n" --keys-at 6200 " " --keys-at 9600 " " --keys-at 12000 "y" --keys-at 14500 "s" --keys-at 16000 " " --keys-at 19600 "y"` → jeu ≈ trame 21000. |
 | **Shadow Warriors** (2Hot2Handle) | Après SPACE : titre + musique OK ; le bouton joystick ne lance pas le jeu. (Castle Warrior, lui, fonctionne.) | À diff'er Hatari. |
 | **Wings of Death** (`.stx`) | Après bouton : titre **corrompu** + son ralenti ; SPACE lance le jeu, qui tourne ensuite très bien. | Corruption titre (vidéo) + son chargement. |
-| **Lethal Xcess sur Mega ST** (`.stx`) | ⛔ **NOUVEAU (2026-08-19)** : le jeu **se bloque** en `machine=megast` alors qu'il va **en jeu** en `machine=st` — MÊME ROM, mêmes disques, mêmes entrées (vérifié avec `etos192fr` ET `tos102uk`). Ce n'est donc pas « le piège megast » côté utilisateur, c'est un écart de NeoST à instruire. | Mesuré : les **796 premières commandes FDC sont IDENTIQUES** aux deux profils (`NEOST_FDC_DEBUG=1`), puis le jeu émet un Force Interrupt (`cmd=d0`) et **cesse de demander des données** ; il tourne alors en boucle sur `$14206 : tst.w $13a16 / btst #5,$fa01` = attente d'IRQ FDC (GPIP bit 5) qui n'arrive plus. En `st` le jeu reprend 40 s plus tard (`cmd=13` puis pistes 49-50) et démarre. IRQ prises identiques (vecteurs $48/$46/$1C) dans la fenêtre. Recette : `--disk Disk_1.STX --diskb Disk_2.STX --keys-at 3000 " " --joy-script 16500 "FFFF" --joy-at 21000 0x80`, écran en jeu ≈ trame 21500 en `st`. ⚠ **Cross-check Hatari BLOQUÉ** : `--cmd-fifo` n'injecte que des scancodes ST, pas de bit joystick — il faut un autre biais pour piloter le tir sous l'oracle. |
+| **Lethal Xcess sur Mega ST** (`.stx`) | ✅ **CORRIGÉ (2026-08-25)** — c'était **B3** : les cycles de stall du blitter étaient facturés HORS de l'horloge de l'ordonnanceur. `Blitter::onSlice` (tranche non-hog) est le callback de l'échéance `Scheduler::BLITTER`, donc il tourne ENTRE deux `cpu.run()` : ses cycles n'entraient ni dans `ran` ni dans `sched.now()`. La dette (mesurée : 8 tranches × 136 = **1088 cycles bus**) était résorbée d'un coup par le `syncTo` du hook d'IACK juste avant le handler Timer A, ce qui mangeait 2 tics de prescaler → `Mfp::readTimerData` rendait TADR = `$3C` et la garde `$14C2E` du jeu tombait dans son `ILLEGAL`. Corrigé par `Blitter::billCycles` → `Scheduler::addStolenCycles` (port de `Blitter_AddCycles`, `blitter.c:351-352`). ⚠ Le symptôme FDC ci-contre était un **LEURRE** : identique à la milliseconde près en `machine=st`, où le jeu démarre. | Le bug frappait les **trois** machines à blitter, pas seulement Mega ST : `megast` cassait trame 5552, `ste` (`tos106uk`) et `megaste` (`tos206uk`) trame 5523 — écran noir à 1 couleur. Après correctif : aucun `BREAK`, 26-29 couleurs, écran de jeu, sur les trois. Repro : `--machine megast --mem 1m --disk Lethal_Xcess_Disk_1.STX --diskb Lethal_Xcess_Disk_2.STX --keys-at 3000 " " --joy-at 4000 0x80 --frames 6000 --break 14C2E`. Sonde de non-régression : `NEOST_QDELTA_DIAG=1` (le delta d'entrée de quantum doit rester PLAT à 40, jamais d'escalier). Détail → `CHANGELOG.md` (2026-08-25) et divergence **B3** de `docs/HATARI_DIVERGENCES.md`. ⚠ **Cross-check Hatari toujours BLOQUÉ** : `--cmd-fifo` n'injecte que des scancodes ST, pas de bit joystick — il faut un autre biais pour piloter le tir sous l'oracle. |
 
-Deux suivis mineurs laissés ouverts sur des cas par ailleurs tranchés :
+Un suivi mineur laissé ouvert sur un cas par ailleurs tranché :
 - **Lethal Xcess** — titre « buggé à ~8 % » constaté en GUI (2026-07-02), probablement la
   même calibration `$8209` que l'in-game déjà réparé ; à re-vérifier en GUI.
-- **Stardust** — sur ST, NeoST reste en écran noir là où Hatari **halte** (double-fault) :
-  la détection double-fault ne se déclenche pas sur cette séquence. Faible valeur (ne
-  concerne qu'un jeu STE lancé par erreur sur ST).
+
+**CLOS (2026-08-25)** — *Stardust sur ST : « NeoST reste noir là où Hatari halte »* : **non
+reproduit**. Mesure : NeoST **HALTE**, sur la MÊME instruction que Hatari (`$FC5082`,
+`move.l A3,-(A7)` avec A7 = `$4E7340E7` impair, après la bus error `$FFFF8900` prise en
+`$387FC`) — plus une seule instruction n'est exécutée après la trame ~1826 et l'écran est
+noir des deux côtés. La cause de l'observation de 2026-07-09 est **indéterminée** (le
+chemin de halt exercé existait déjà à cette date). Seule vraie divergence restante,
+corrigée : le halt était **silencieux** — il est désormais journalisé
+(`[cpu] 68000 halted: …`, cf. `src/core/Cpu68k.cpp`), comme Hatari
+(`gui-sdl/dlgHalt.c:66-71`).
 
 > ⚠ **Avant de déclarer un bug : vérifier la RAM, puis la ROM.** Le réflexe et les cas
 > qu'il a tranchés → [`docs/CASE_STUDIES.md`](docs/CASE_STUDIES.md).
@@ -288,6 +295,23 @@ verts) — voir `CHANGELOG.md § Frontend`. Les 3 points fonctionnels relevés �
   MegaSTE). Aujourd'hui : EmuTOS 256 Ko par défaut.
 - **NVRAM / préférences TOS MegaSTE** (résolution / boot device) si TOS 2.x l'exige.
 - **Cartridge port** `$FA0000-$FBFFFF` générique (au-delà du système GEMDOS) — réf. `cart.c`.
+
+**Trou de couverture MESURÉ : aucun étalon n'exerce le blitter (2026-08-25).** `NEOST_BLIT_TRACE=1`
+rend **0 blit** sur `scroll_8264`, `scroll_8265` et `etos_ste_boot` (les étalons STE) ; tous les
+autres sont `machine=st`, où le blitter n'existe pas. Conséquence : un `--tier full` **vert ne
+prouve rien** sur le blitter — il prouve la non-régression de la base de temps, pas la correction
+**B3** ni **B4**. Toute leur preuve tient à des runs *Lethal Xcess* lancés à la main, sur un
+`.stx` non redistribuable. 🎯 **À faire** : un étalon **généré** (esprit
+`tools/make_scroll_test.py`) — secteur de boot STE autonome qui enchaîne des blits **non-hog**
+pendant qu'un timer MFP tourne, capture pixel + contrôle que le timer n'a pas dérivé. C'est
+l'étalon qui couvrirait les DEUX : B3 (pas de dérive cumulée) et B4 (le timer sert à l'heure
+même quand son échéance tombe au MILIEU d'une tranche). Sans lui, la prochaine refonte de
+l'ordonnanceur les re-cassera sans qu'aucun palier ne bronche. Palliatifs immédiats : la sonde
+`NEOST_QDELTA_DIAG=1` (le delta doit rester **plat**, jamais d'escalier) et la métrique
+`timer IRQ max lateness`, qui doit rester à **132** sur machine à blitter — c'est elle qui
+avait signé le crédit groupé (~265) avant B4. Voir aussi : le chemin
+**HOG** du blitter n'est exercé par **aucun** titre testé — recensement sur *Lethal Xcess*
+`megast`, 6000 trames : 5764 blits, **tous** `ctrl=$80`, le bit HOG (`$40`) n'est jamais posé.
 
 ### Système de régression (refonte — déclenché par la casse spec512 non détectée, 2026-07-09)
 

@@ -237,6 +237,14 @@ tail t.txt                                   # localiser la boucle d'attente (PC
 #   continu (make_dmasnd_test) sort au même niveau dans les deux cas. Chercher la raie à
 #   ~997 Hz dans le WAV — son absence = modèle push non armé (cf. setCycleClock).
 
+#   BASE DE TEMPS : NEOST_QDELTA_DIAG=<seuil> imprime, à chaque entrée de Cpu68k::run,
+#   l'écart busOfClock(horloge CPU) − sched.now() quand il atteint <seuil> (récap tous les
+#   100000 runs). C'est la sonde de non-régression de B3 (cycles volés par le blitter non
+#   facturés à l'ordonnanceur, cf. docs/HATARI_DIVERGENCES.md). ⚠ Ce delta vaut 40 en régime
+#   NORMAL — décalage de RESET, constant, absorbé au 1er IACK, SANS rapport avec le blitter.
+#   Ce qu'on traque est un ESCALIER (136, 272, … 1088 avant le correctif). Inerte si la
+#   variable n'est pas posée. Blitter : NEOST_BLIT_TRACE=1 journalise chaque blit démarré.
+
 # Suite étalons (captures + régression) : tools/run_etalons.py — voir docs/TEST_SOFTWARE.md
 python3 tools/fetch_etalons.py && python3 tools/run_etalons.py --update-ref
 python3 tools/run_etalons.py

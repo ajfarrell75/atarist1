@@ -1811,6 +1811,13 @@ int main(int argc, char** argv) {
 
     std::fprintf(stderr, "[headless] %llu instructions traced\n",
                  (unsigned long long)tracer.instructionCount());
+    // CPU halté (double faute de bus/adresse) : le reste du run n'a exécuté AUCUNE
+    // instruction, l'écran capturé est celui du gel. Sans cette ligne, un harnais ne
+    // distingue pas un gel d'un run normal (Hatari, lui, sort en erreur sous
+    // --run-vbls — gui-sdl/dlgHalt.c:66-71). Rien n'est imprimé sur un run sain.
+    if (machine.cpu.halted())
+        std::fprintf(stderr, "[headless] CPU halted (double bus/address error) — "
+                             "the machine was frozen before the end of the run\n");
     // Métrique précision cycle : pire retard d'IRQ timer MFP + préemptions du
     // timeslice CPU (cf. Scheduler). Retard faible = quantum « sous la ligne ».
     std::fprintf(stderr, "[headless] timer IRQ max lateness = %lld cyc | preemptions = %ld\n",

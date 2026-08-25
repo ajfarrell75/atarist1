@@ -86,7 +86,7 @@ private:
     void start();                            // BUSY écrit à 1 : démarre/reprend le blit
     bool runSlice(int maxBusAccesses);       // ≤ N accès bus (-1 = tout) ; true = terminé
     void finishTransfer();                   // y_count = 0 : BUSY/HOG effacés + IRQ GPIP3
-    void stallCpu(int64_t busAccesses, int arbCycles);   // 4 cyc/accès + arbitration (Moira)
+    void billCycles(int n);                  // facture + dispatche n cyc volés (par accès)
     void pauseTransfer();                    // BUSY effacé pendant un blit : tranche annulée
     // Fenêtre PRE_START de 4 cycles avant chaque prise de bus non-hog (cf. .cpp) :
     // armée dans Bus::blitterWinStart/End, consultée par les callbacks mémoire de

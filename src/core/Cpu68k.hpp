@@ -89,6 +89,13 @@ public:
     // pour la protection mémoire du GLUE ($0-$7FF et IO réservés superviseur).
     bool supervisor() const;
 
+    // Le 68000 a-t-il assuré /HALT (double faute de bus/adresse) ? Il ne redémarre
+    // que sur un reset machine : plus une seule instruction n'est exécutée, l'écran
+    // reste figé. À consulter par un harnais (headless) pour distinguer « figé » de
+    // « tourne encore » — Hatari, lui, quitte avec un code non nul sous --run-vbls
+    // (gui-sdl/dlgHalt.c:66-71).
+    bool halted() const;
+
     // Wait states de bus (port LIVE de Hatari M68000_SyncCpuBus) : sur le 68000, les
     // registres couleur ($FF8240-5F), résolution ($FF8260) et scroll fin ($FF8264/65)
     // du Shifter ne s'accèdent que sur une frontière de bus de 4 cycles ; un accès qui
@@ -121,6 +128,14 @@ public:
     // lecture MMIO en plein milieu (p.ex. le RTC) verrait donc un cycle périmé. Ce
     // delta permet de reconstituer le cycle ABSOLU exact = sched.now() + ce delta.
     int64_t cyclesRunInQuantum() const;
+    // Vrai pendant un appel run(), faux à une frontière d'événement (donc dans un
+    // callback de Scheduler::runTo). DISCRIMINANT DE FACTURATION : un stall facturé
+    // DANS le quantum est capté par `ran` puis reversé à l'ordonnanceur par le
+    // runTo(now + ran) de Machine::runFrame ; un stall facturé HORS quantum ne l'est
+    // par personne et doit être crédité explicitement à l'ordonnanceur (cf.
+    // Blitter::billCycles → Scheduler::addStolenCycles). Créditer les DEUX
+    // double-compterait le mode HOG du blitter.
+    bool inRun() const { return inRun_; }
     // Rebase du quantum + dispatch des événements échus, au point d'IACK réel
     // (≙ CycInt_Process d'Hatari avant l'élection du vecteur). Cf. .cpp.
     void rebaseQuantumAndSync();

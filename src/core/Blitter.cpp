@@ -28,6 +28,10 @@ namespace {
     // arbitration de restitution blitter → CPU (Blitter_BusArbitration).
     constexpr int kPreStartCycles   = 4;
     constexpr int kArbOut           = 4;
+    // Coût d'UN accès bus du blitter, lecture comme écriture — port de
+    // BLITTER_CYCLES_PER_BUS_READ / _WRITE (blitter.c). Facturé accès par accès, cf.
+    // Blitter::billCycles.
+    constexpr int kCyclesPerBusAccess = 4;
 
     // Masques matériels appliqués À L'ÉCRITURE des registres (la relecture montre
     // la valeur masquée, comme Hatari) : HOP & 3 (Blitter_HalftoneOp_WriteByte,
@@ -66,25 +70,46 @@ void Blitter::reset() {
 uint16_t Blitter::readWord(uint32_t addr) {
     ++sliceBus_;
     addr &= 0xFFFFFE;
-    if (bus_.busFault(addr)) return 0x0000;
-    return bus_.read16(addr);
+    const uint16_t v = bus_.busFault(addr) ? 0x0000 : bus_.read16(addr);
+    // Port de Blitter_ReadWord (blitter.c:428-441) : l'accès est effectué D'ABORD,
+    // PUIS ses 4 cycles sont facturés ET dispatchés (Blitter_AddCycles suivi de
+    // Blitter_FlushCycles). La facturation est inconditionnelle — une zone fautive
+    // coûte le même temps de bus qu'une lecture normale.
+    billCycles(kCyclesPerBusAccess);
+    return v;
 }
 void Blitter::writeWord(uint32_t addr, uint16_t v) {
     ++sliceBus_;
     addr &= 0xFFFFFE;
-    if (bus_.busFault(addr) || addr < 0x8) return;
-    bus_.write16(addr, v);
+    if (!bus_.busFault(addr) && addr >= 0x8) bus_.write16(addr, v);
+    billCycles(kCyclesPerBusAccess);   // cf. readWord (Blitter_WriteWord, blitter.c:444-453)
 }
 
-// Facture le temps de bus du blitter au CPU : 4 cycles par accès + les cycles
-// d'arbitration (prise 4/8, restitution 4). Moira avance son horloge (le CPU
-// « attend » que le blitter rende le bus, cf. addBusWaitCycles).
-void Blitter::stallCpu(int64_t busAccesses, int arbCycles) {
-    // Saturé : cf. sliceBus_ (Blitter.hpp) — un blit HOG dégénéré dépasse la capacité
-    // d'un int, et un produit qui déborde donnait un stall négatif, donc perdu.
-    const int64_t cycles = busAccesses * 4 + arbCycles;
-    if (busAccesses > 0 && bus_.cpu)
-        bus_.cpu->addBusWaitCycles(int(std::min<int64_t>(cycles, 0x7FFFFFFF)));
+// Facture le temps de bus volé par le blitter — port de Blitter_AddCycles suivi de
+// Blitter_FlushCycles (blitter.c:342-375). Appelé pour CHAQUE accès bus (4 cycles) et
+// pour chaque arbitration (prise 4/8, restitution 4), JAMAIS en lot : c'est la
+// granularité d'Hatari, et c'est elle qui permet à une échéance tombant au milieu
+// d'une tranche d'être servie à l'heure (chantier B4). Moira avance son horloge — le
+// CPU « attend » que le blitter rende le bus, cf. addBusWaitCycles.
+void Blitter::billCycles(int n) {
+    if (n <= 0 || !bus_.cpu) return;
+    bus_.cpu->addBusWaitCycles(n);
+    // UNE SEULE BASE DE TEMPS (port de Blitter_AddCycles, blitter.c:351-352) : chez
+    // Hatari les cycles du blitter incrémentent le MÊME compteur que ceux du CPU,
+    // celui que CycInt lit pour ses échéances. Ici deux chemins de facturation
+    // coexistent et il ne faut créditer l'ordonnanceur QUE sur l'un des deux :
+    //  · DANS le quantum (mode HOG : `start()` n'est atteint que depuis une écriture
+    //    $FF8A3C, donc depuis un callback mémoire de Moira) → l'avance de l'horloge
+    //    du cœur est DÉJÀ comptée par `ran` (retour de Cpu68k::run) puis reversée par
+    //    le `sched.runTo(now + ran)` de Machine::runFrame. Créditer ici la compterait
+    //    DEUX FOIS, et l'ordonnanceur prendrait de l'AVANCE sur l'horloge CPU — le
+    //    symétrique exact du bug corrigé.
+    //  · HORS quantum (tranche non-hog : `onSlice` est le callback de l'échéance
+    //    Scheduler::BLITTER, il tourne dans Scheduler::runTo, donc ENTRE deux
+    //    cpu.run()) → personne ne les compte. C'était le bug : sched.now() restait en
+    //    retard, puis sautait d'un coup au rebase d'IACK suivant.
+    // Le discriminant est le flag `inRun()` du CPU, cf. Cpu68k::inRun.
+    if (sched_ && !bus_.cpu->inRun()) sched_->addStolenCycles(n);
 }
 
 uint8_t Blitter::read8(uint32_t addr) {
@@ -222,9 +247,13 @@ void Blitter::start() {
     const int arbIn = (bus_.machine == MachineType::MegaSte) ? 8 : 4;
 
     if (reg_[0x3C] & 0x40) {               // mode HOG : bus gardé jusqu'à y_count=0
+        // Arbitration facturée à SA position (Blitter_BusArbitration, blitter.c:395-421) :
+        // prise du bus AVANT le transfert, restitution APRÈS — et non les deux en lot
+        // à la fin. Les 4 cycles de chaque accès sont facturés par readWord/writeWord.
+        billCycles(arbIn);
         sliceBus_ = 0;
         inSlice_ = true; runSlice(-1); inSlice_ = false;
-        stallCpu(sliceBus_, arbIn + kArbOut);   // CPU stallé : arbitration + tout le blit
+        billCycles(kArbOut);
         return;
     }
     // Non-hog : sur le vrai matériel, le blitter ne prend pas le bus tout de
@@ -248,20 +277,27 @@ void Blitter::start() {
 // un accès CPU est tombé dans la fenêtre PRE_START (le blitter le compte à tort
 // comme sien, cf. blitter.c:69-79) — avec suspension MID-WORD si le budget tombe
 // entre deux accès d'un même mot. Ici on est à une frontière d'événement : avancer
-// l'horloge CPU (stallCpu) retarde d'autant le prochain bloc d'exécution — le CPU
+// l'horloge CPU (billCycles) retarde d'autant le prochain bloc d'exécution — le CPU
 // « perd » arbitration + part du blitter, puis garde le bus pour 64 accès bus CPU
 // RÉELS (comptés par noteCpuBusAccess, qui datera la tranche suivante).
 void Blitter::onSlice() {
+    // Chantier B4 : les accès bus dispatchent désormais l'ordonnanceur (billCycles →
+    // addStolenCycles → syncTo), donc un callback peut tourner PENDANT la tranche. Rien
+    // ne réarme Scheduler::BLITTER dans cette fenêtre (l'échéance a été consommée avant
+    // l'appel, et noteCpuBusAccess suppose un accès bus CPU, impossible ici), mais on
+    // ne s'en remet pas à ce raisonnement : garde explicite, comme write8/write16.
+    if (inSlice_) return;
     if (!(reg_[0x3C] & 0x80)) { clearPreStartWindow(); return; }   // pause/reset
     const int arbIn  = (bus_.machine == MachineType::MegaSte) ? 8 : 4;
     const int budget = kNonHogBusBlitter - (busCountError_ ? 1 : 0);
     busCountError_ = false;
     clearPreStartWindow();
+    billCycles(arbIn);                     // prise du bus, AVANT les accès (cf. start)
     sliceBus_ = 0;
     inSlice_ = true;
     const bool done = runSlice(budget);
     inSlice_ = false;
-    stallCpu(sliceBus_, arbIn + kArbOut);
+    billCycles(kArbOut);                   // restitution au CPU
     if (!done) {
         // Part CPU non-hog : armer le comptage des accès bus CPU (port
         // BLITTER_PHASE_COUNT_CPU_BUS + CountBusCpu = 0, blitter.c:937). Le CPU ne

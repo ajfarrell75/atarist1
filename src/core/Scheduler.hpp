@@ -162,6 +162,52 @@ public:
         else now_ = cycle;
     }
 
+    // Cycles de bus VOLÉS au CPU par un AUTRE maître de bus (le blitter) — port de
+    // `Blitter_AddCycles` (hatari/src/blitter.c:342-354, symbole `all_cycles`).
+    //
+    // Chez Hatari il n'y a qu'UNE base de temps : le blitter fait
+    //     nCyclesMainCounter       += all_cycles;      // blitter.c:351
+    //     CyclesGlobalClockCounter += all_cycles;      // blitter.c:352
+    // c'est-à-dire EXACTEMENT les deux compteurs que le CPU incrémente lui aussi
+    // (m68000.h, M68000_AddCycles*) et que CycInt lit pour dater ET servir ses
+    // échéances (cycInt.h, `CycInt_Process` boucle sur CyclesGlobalClockCounter). Un
+    // cycle volé par le blitter avance donc la base de temps des timers.
+    //
+    // NeoST avait DEUX bases de temps dès que la facturation avait lieu hors quantum
+    // CPU : `Cpu68k::addBusWaitCycles` n'avance que l'horloge du cœur Moira, et `ran`
+    // (retour de `Cpu68k::run`, mesuré depuis un `quantumStartBus_` RÉANCRÉ sur
+    // l'horloge CPU à CHAQUE entrée) ne peut pas rattraper ce qui s'est passé AVANT
+    // l'entrée du quantum. Ces cycles n'étaient donc dans NI `ran` NI `now_` : perdus
+    // pour l'ordonnanceur, qui prenait un retard cumulé blit après blit, puis rattrapé
+    // D'UN SEUL COUP par le `syncTo` du hook d'IACK (`Cpu68k::rebaseQuantumAndSync`).
+    // Ce saut mangeait des tics de prescaler MFP — cf. `Mfp::readTimerData`, qui
+    // reconstruit TADR depuis `due_ - liveNow()`.
+    //
+    // DISPATCH IMMÉDIAT (port de `Blitter_FlushCycles`, blitter.c:356-375) — chantier
+    // B4. Hatari ne se contente pas d'avancer ses compteurs : il appelle
+    // `CycInt_Process()` après CHAQUE accès de 4 cycles, depuis le handler CycInt du
+    // blitter lui-même (`INTERRUPT_BLITTER`). Sa boucle de dispatch est donc
+    // RÉ-ENTRANTE par construction — `while (ActiveInt <= now) CycInt_CallActiveHandler()`
+    // (cycInt.h:85-88), sans masque anti-relance. On porte ce comportement tel quel :
+    // `syncTo` sert ICI MÊME les échéances franchies par les cycles volés, au cycle où
+    // elles tombent, au lieu d'attendre la fin de la tranche.
+    //
+    // La ré-entrance de `runTo` est assurée par son `DispatchGuard` : `fired` et
+    // `minAll` sont déjà des LOCALES (chaque trame a les siennes), `firingDue_` est
+    // sauvegardé/restauré, et `nextDue_` est recalculé par un balayage complet à la
+    // sortie de chaque trame. Le seul appelant réel (`Blitter::billCycles` depuis
+    // `Blitter::readWord`/`writeWord`) ne peut pas rentrer dans `Blitter::onSlice` :
+    // la source BLITTER a été consommée avant l'appel du callback et n'est replanifiée
+    // que par `noteCpuBusAccess` (accès bus CPU, impossible pendant la tranche), et
+    // `onSlice` porte de toute façon la garde `inSlice_`.
+    //
+    // AUCUN ÉTAT PERSISTANT n'est introduit : la dette n'est jamais différée, elle est
+    // consommée dans l'appel, et `now_` est déjà sérialisé.
+    void addStolenCycles(int64_t cycles) {
+        if (cycles <= 0) return;
+        syncTo(now_ + cycles);   // O(1) tant que rien n'est dû (cache nextDue_)
+    }
+
     // Cycles CPU restants avant l'échéance de la source `s`, mesurés depuis
     // l'horloge LIVE (sous-instruction). Renvoie -1 si la source n'est pas armée.
     // Équivalent de `CycInt_FindCyclesRemaining` d'Hatari : permet à une puce (le
@@ -199,6 +245,21 @@ public:
     void runTo(int64_t cycle) {
         now_ = cycle;
         assert(armedInvariant() && "armed_ désynchronisé de due_");
+        // RÉ-ENTRANCE (chantier B4) — `runTo` peut être appelé DEPUIS un callback, via
+        // Scheduler::addStolenCycles (accès bus du blitter) ou via un syncTo. C'est le
+        // modèle d'Hatari, dont `CycInt_Process` est ré-entré depuis le handler du
+        // blitter (cycInt.h:85-88 + blitter.c:366). `fired` et `minAll` sont des
+        // LOCALES, donc propres à chaque trame ; `nextDue_` est recalculé par un
+        // balayage complet à la sortie de chaque trame. Restait `firingDue_`, ancre
+        // anti-dérive de l'événement EN COURS (cf. firingDue()) : une trame imbriquée
+        // l'écrasait puis le remettait à kInactive, faisant perdre son ancre au
+        // callback extérieur — d'où cette sauvegarde/restauration RAII, qui tient aussi
+        // si un callback sort par exception (bus error).
+        struct FiringGuard {
+            int64_t& f; int64_t prev;
+            explicit FiringGuard(int64_t& b) : f(b), prev(b) {}
+            ~FiringGuard() { f = prev; }
+        } firingGuard{firingDue_};
         uint32_t fired = 0;
         static_assert(SRC_COUNT <= 32, "masque fired sur 32 bits");
         // Minimum de TOUTES les échéances armées, tenu à jour par la passe ci-dessous.
@@ -238,7 +299,8 @@ public:
             armed_ &= ~(1u << best);
             if (cb_[best]) cb_[best]();           // …le callback peut replanifier
         }
-        firingDue_ = kInactive;
+        // (firingDue_ est restauré par firingGuard à la sortie : kInactive pour une
+        //  trame de premier niveau, l'ancre de l'appelant pour une trame imbriquée.)
         // Les callbacks ont pu (re)planifier : minAll, calculé par la DERNIÈRE passe,
         // porte déjà le résultat du balayage complet (cf. sa déclaration).
         nextDue_ = (minAll == kNever) ? kInactive : minAll;
