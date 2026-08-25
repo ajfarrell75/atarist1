@@ -697,6 +697,15 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "[web] floppy not found (%s).\n", diskPath.c_str());
     machine.mfp.setColorMonitor(true);  // couleur (basse rés) par défaut
 
+    // FDC RAPIDE par défaut en WASM (délais commande/transfert ÷10, ≙ --fastfdc du
+    // headless et la case « Fast floppy » du GUI). Le navigateur est le seul frontend
+    // où l'on ne peut RIEN régler avant de démarrer : pas de neost.cfg, pas de ligne
+    // de commande. Or une disquette chargée à la vitesse d'un vrai lecteur donne un
+    // écran figé de plusieurs dizaines de secondes — le visiteur d'une page conclut
+    // que l'émulateur est planté avant d'avoir vu quoi que ce soit. Les autres
+    // frontends gardent le défaut FIDÈLE (lent), qui reste ce que les étalons mesurent.
+    machine.fdc.setFastFdc(true);
+
     // MODÈLE « PUSH » (comme le GUI et le headless) : on ARME l'horodatage des
     // écritures du PSG et des transitions PLAY/STOP du son DMA. Dès lors chaque
     // écriture porte son cycle DANS la trame, et produceAudioFrame les REJOUE à
