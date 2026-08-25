@@ -19,6 +19,7 @@
 #include "io/Scc.hpp"
 
 #include <cstdio>
+#include <cstdlib>      // getenv/strtol (diags sous variable d'environnement)
 #include <stdexcept>
 
 #include "Moira.h"
@@ -37,6 +38,13 @@ namespace {
     // halte le CPU. On reproduit ce halt au lieu de récurser → l'hôte ne segfault
     // plus et le mode headless peut vider sa trace/série.
     bool    g_inBusError = false;
+    // Vecteur de l'exception de GROUPE 0 en cours de prise (2 = bus error,
+    // 3 = address error), 0 hors exception. Latché par willExecute(M68kException…)
+    // et effacé par didExecute(M68kException…) : si l'exception se termine
+    // normalement il retombe à 0 ; si elle lève DoubleFault (SSP impair, ou
+    // nouvelle faute pendant l'empilement) il vaut ENCORE le vecteur fautif quand
+    // cpuDidHalt() est notifié — c'est ce qui permet de NOMMER la cause du halt.
+    int     g_grp0Vector = 0;
     // Pendant cpu.reset() (lecture SSP/PC) le cœur consomme ~40 cyc via sync(). On NE
     // dispatche PAS l'ordonnanceur alors : sinon sched.now() serait traîné à 40 et la 1ʳᵉ
     // trame s'ancrerait là (frameStart_=40) au lieu de 0 → grille faisceau décalée de 40 cyc
@@ -219,6 +227,56 @@ public:
         g_vblPending = g_hblPending = false;   // ≙ pendingInterrupts = 0
         g_bus->peripheralReset();
         neostUpdateIpl();
+    }
+
+    // ---- Traçage des exceptions de groupe 0 (bus error / address error) --------
+    // Moira notifie ces deux délégués À L'ENTRÉE (MoiraExceptions_cpp.h:268 et :305)
+    // et À LA SORTIE (:296 et :333) de execAddressError/execBusError. On s'en sert
+    // uniquement pour retenir le vecteur en cours de prise : c'est la seule donnée
+    // FIABLE dont dispose cpuDidHalt() (cf. plus bas — reg.pc0 a déjà été avancé par
+    // le prefetch de l'instruction fautive, il ne désigne PAS la faute).
+    void willExecute(moira::M68kException exc, moira::u16 vector) override {
+        if (exc == moira::M68kException::BUS_ERROR ||
+            exc == moira::M68kException::ADDRESS_ERROR) g_grp0Vector = int(vector);
+    }
+    void didExecute(moira::M68kException exc, moira::u16) override {
+        if (exc == moira::M68kException::BUS_ERROR ||
+            exc == moira::M68kException::ADDRESS_ERROR) g_grp0Vector = 0;
+    }
+
+    // ---- Halt du 68000 -------------------------------------------------------
+    // Moira notifie ce hook depuis halt() (Moira.cpp:511-518), appelé par les
+    // catch DoubleFault/AddressError/BusError de processException (Moira.cpp:457-479)
+    // et par le catch(...) de reset() (Moira.cpp:236-239). NeoST s'y arrêtait en
+    // SILENCE : l'écran se fige définitivement et RIEN n'explique pourquoi. Hatari,
+    // lui, l'annonce — gui-sdl/dlgHalt.c:66-71 journalise « Detected double
+    // bus/address error => CPU halted! » (puis quitte sous --run-vbls, ou ouvre un
+    // dialogue reset chaud/froid/débogueur/quitter). On porte l'INFORMATION, pas la
+    // boîte de dialogue.
+    //
+    // Cas concret : Stardust (jeu STE) lancé sur ST lit $FFFF8900 (son DMA STE,
+    // absent du ST) → bus error ; le handler du TOS recharge ensuite un A7 IMPAIR
+    // depuis une pile utilisateur corrompue et le push suivant prend une erreur
+    // d'adresse avec SSP impair = double faute (porte Hatari newcpu.c:3076-3079,
+    // porte Moira MoiraExceptions_cpp.h:281-282). Le halt lui-même est FIDÈLE
+    // (mesuré : même instruction que Hatari) — seule l'observabilité manquait.
+    //
+    // ⚠ On n'affiche PAS de PC : getPC0() vaut ici l'instruction SUIVANTE, le
+    // prefetch de l'instruction fautive (MoiraDataflow_cpp.h:586 `reg.pc0 = reg.pc`)
+    // ayant lieu AVANT le test d'alignement (MoiraExec_cpp.h:2874-2886). Hatari
+    // n'en affiche pas non plus dans son message. Le vecteur et le SSP, eux, sont
+    // exacts au moment de la faute.
+    void cpuDidHalt() override {
+        if (g_inReset) {
+            std::fprintf(stderr,
+                "[cpu] 68000 halted: reset vector fetch failed (SSP/PC unreadable).\n");
+            return;
+        }
+        std::fprintf(stderr,
+            "[cpu] 68000 halted: double bus/address error while taking exception "
+            "vector %d (SSP=$%08X).\n"
+            "      The emulated machine is frozen until reset.\n",
+            g_grp0Vector, static_cast<unsigned>(getSP()));
     }
 
     [[noreturn]] void raiseBusError(moira::u32 addr, bool write) const {
@@ -718,6 +776,38 @@ int Cpu68k::run(int cycles) {
     // une écriture $FF8E21 en plein quantum rebase la conversion (g_cpuBias),
     // mais celle-ci reste continue → les deltas restent exacts.
     quantumStartBus_ = busOfClock(c0);
+    // DIAG (NEOST_QDELTA_DIAG=<seuil>, inerte si la variable n'est pas posée) — sonde
+    // de non-régression du chantier B3, dans l'esprit de NEOST_IACK_DISP ci-dessus.
+    // Mesure, À L'ENTRÉE du quantum, l'écart entre les deux horloges :
+    //     delta = busOfClock(horloge CPU) − sched.now()
+    // Tout cycle facturé à l'horloge CPU hors quantum sans être crédité à
+    // l'ordonnanceur creuse ce delta : il n'est ni dans `ran` (mesuré depuis
+    // quantumStartBus_, réancré juste au-dessus) ni dans now_. C'était le cas des
+    // tranches non-hog du blitter — escalier de 136 en 136 jusqu'à 1088 juste avant le
+    // plantage de Lethal Xcess en megast ; depuis Blitter::billCycles →
+    // Scheduler::addStolenCycles, il reste PLAT.
+    // ⚠ delta n'est PAS nul au démarrage : il vaut 40 (Moira::reset lit SSP/PC avant que
+    // l'ordonnanceur ne démarre). CONSTANT, absorbé au 1ᵉʳ rebase d'IACK, SANS RAPPORT
+    // avec le blitter — ne pas chercher à le « corriger ».
+    {
+        static const long qdiag = []{ const char* s = std::getenv("NEOST_QDELTA_DIAG");
+                                      return s ? std::strtol(s, nullptr, 0) : -1; }();
+        if (qdiag >= 0 && g_sched) {
+            const int64_t delta = quantumStartBus_ - g_sched->now();
+            static long    runs = 0, nonZero = 0;
+            static int64_t maxDelta = 0, sumDelta = 0;
+            ++runs;
+            if (delta != 0) { ++nonZero; sumDelta += delta; if (delta > maxDelta) maxDelta = delta; }
+            if (delta >= qdiag)
+                std::fprintf(stderr, "[QDELTA] run#%ld busNow=%lld schedNow=%lld delta=%lld\n",
+                             runs, (long long)quantumStartBus_,
+                             (long long)g_sched->now(), (long long)delta);
+            if (runs % 100000 == 0)
+                std::fprintf(stderr, "[QDELTA] recap runs=%ld nonzero=%ld (%.3f %%) max=%lld sum=%lld\n",
+                             runs, nonZero, 100.0 * double(nonZero) / double(runs),
+                             (long long)maxDelta, (long long)sumDelta);
+        }
+    }
     g_endSlice = false;                              // un éventuel résidu de préemption ne doit pas couper le 1er pas
     const int64_t targetBus = quantumStartBus_ + cycles;
     while (busOfClock(g_moira->getClock()) < targetBus) {
@@ -832,6 +922,19 @@ int Cpu68k::run(int cycles) {
 // PENDANT l'exécution d'une instruction (depuis read8/write8 d'un registre aligné 4
 // cycles) : on avance l'horloge du cœur, ce qui rallonge l'instruction en cours et
 // décale tous les accès suivants (la contention de bus du vrai matériel).
+// ⚠ INVARIANT DE FACTURATION (chantier B3) — cette primitive n'avance QUE l'horloge du
+// cœur. Tant que l'appel a lieu DANS un run(), c'est suffisant : `ran` (retour de run,
+// mesuré depuis quantumStartBus_) le capte et Machine::runFrame le reverse à
+// sched.now(). Un appel HORS run(), lui, échapperait à l'ordonnanceur — c'était le bug
+// B3. Le SEUL facturateur hors quantum est Blitter::billCycles depuis Blitter::onSlice,
+// et il crédite lui-même l'ordonnanceur (Scheduler::addStolenCycles) ; les cinq autres
+// appelants (Shifter ×2, addPsgWaitCycles, addMfpWaitCycles, addAciaWaitCycles) sont
+// tous sur un chemin d'accès mémoire, donc dans le quantum.
+// On n'a délibérément PAS mis le crédit ici, ni d'assert « jamais hors run » : les
+// helpers ci-dessous sont AUSSI atteignables par une lecture d'OBSERVATION hors machine
+// — p.ex. serialLoopbackSelfTest (src/headless/main_headless.cpp) fait
+// `machine.bus.read8(0xFFFA01)`, que Bus::read8 route vers addMfpWaitCycles(). Un hook
+// générique ferait avancer l'horloge ÉMULÉE au gré d'une simple lecture de débogage.
 void Cpu68k::addBusWaitCycles(int n) {
     if (n <= 0) return;
     // `n` est en cycles BUS (8 MHz) : à 16 MHz l'horloge du cœur compte des cycles
@@ -991,6 +1094,8 @@ bool Cpu68k::megaSte16Mhz() const { return g_cpuMul == 2; }
 bool Cpu68k::supervisor() const {
     return (g_moira->getSR() & 0x2000) != 0;
 }
+
+bool Cpu68k::halted() const { return g_moira->isHalted(); }
 
 void Cpu68k::updateIpl() {
     neostUpdateIpl();

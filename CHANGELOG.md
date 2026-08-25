@@ -15,6 +15,83 @@ Ripper, DAC Pro Sound) avec page Dongles, `disks/dongles.txt` et oracle de rejeu
 vérifié note à note** en headless, corpus MIDI piano/blues ; port MIDI ALSA sous Linux ;
 save-state v16. Détail dans les chantiers datés ci-dessous.
 
+## Les cycles volés par le blitter avancent enfin l'horloge des timers (2026-08-25)
+
+**Ce qui n'allait pas.** NeoST avait DEUX bases de temps dès que le blitter volait le bus
+en dehors d'un quantum CPU. `Blitter::billCycles` → `Cpu68k::addBusWaitCycles` n'avance que
+l'horloge du cœur Moira ; or `Blitter::onSlice` (tranche non-hog) est le **callback de
+l'échéance `Scheduler::BLITTER`** : il tourne dans `Scheduler::runTo`, donc **entre** deux
+`cpu.run()`. Ces cycles n'étaient donc ni dans `ran` (retour de `Cpu68k::run`, mesuré
+depuis un `quantumStartBus_` réancré sur l'horloge CPU à chaque entrée) ni dans
+`sched.now()` : **perdus** pour l'ordonnanceur. Chez Hatari le problème n'existe pas —
+`Blitter_AddCycles` (`blitter.c:351-352`) écrit dans `nCyclesMainCounter` /
+`CyclesGlobalClockCounter`, les compteurs mêmes que le CPU incrémente et que `CycInt` lit
+pour dater ses échéances (`cycInt.h`, `CycInt_Process`).
+
+**La mesure.** Sonde `NEOST_QDELTA_DIAG` (delta = horloge CPU − `sched.now()` à l'entrée du
+quantum) sur *Lethal Xcess* en `megast`, 6000 trames : delta plat à **40** (décalage de
+reset, sans rapport) pendant ~7 millions d'entrées de `run()`, puis **escalier de 136 en
+136 sur les 21 dernières** — 8 tranches non-hog × 136 cyc = **1088 cycles bus** de dette,
+résorbée d'un seul coup par le `syncTo` du hook d'IACK juste avant le handler Timer A. Ce
+saut mangeait les 2 tics de prescaler de marge : `Mfp::readTimerData` rendait TADR = `$3C`
+au lieu de `$3D`/`$3E`, et la garde `$14C2E` du jeu tombait dans son `ILLEGAL`. Le
+symptôme FDC noté au TODO le 2026-08-19 (`cmd=d0` puis silence) était un **leurre** :
+identique en `machine=st`, où le jeu démarre.
+
+**Ce qui a changé.** `Blitter::billCycles` crédite désormais l'ordonnanceur
+(`Scheduler::addStolenCycles`) **en plus** de l'horloge Moira, mais **uniquement** hors
+quantum (discriminant `Cpu68k::inRun` — dans le quantum, le mode HOG est déjà capté par
+`ran` puis reversé par le `runTo(now + ran)` de `Machine::runFrame` ; créditer les deux
+double-compterait). La facturation est **par accès**, pas en lot : `Blitter::billCycles`
+(port de `Blitter_AddCycles` + `Blitter_FlushCycles`) est appelé par `readWord`/`writeWord`
+pour leurs 4 cycles et à chaque **arbitration**, à sa position réelle — prise du bus AVANT
+le transfert, restitution APRÈS. `addStolenCycles` **dispatche** (`syncTo`) au lieu
+d'avancer `now_` en silence, si bien qu'une échéance tombant au milieu d'une tranche est
+servie **au cycle où elle tombe**. C'est le modèle d'Hatari, dont `CycInt_Process`
+(`cycInt.h:85-88`) est ré-entré depuis le handler `INTERRUPT_BLITTER` lui-même. La
+ré-entrance de `Scheduler::runTo` est acquise : `fired`/`minAll` étaient déjà des locales,
+seul `firingDue_` — l'ancre anti-dérive de l'événement en cours — manquait, il est
+désormais sauvegardé/restauré par un garde RAII. **Aucun état persistant ajouté, format
+de save-state inchangé.**
+
+**Résultat.** *Lethal Xcess* : plus aucun `BREAK $14C2E`, et le jeu va **en jeu** sur les
+**trois** machines à blitter — `megast` (trame 5552 avant), `ste` et `megaste` (trame 5523
+avant, écran noir à 1 couleur ; désormais 26-29 couleurs, écran de jeu). `machine=st` :
+capture 26000 trames **bit-identique** et métriques au cycle près (le patch y est inerte,
+pas de blitter). Boot EmuTOS `megast` nu : capture bit-identique et `timer IRQ max
+lateness` **3334 → 161 cyc**. `--tier full` : tous les paliers OK.
+
+**Sur la métrique `timer IRQ max lateness`.** Une étape intermédiaire de ce chantier
+créditait l'ordonnanceur en **fin de tranche** : elle réparait le jeu mais faisait monter ce
+compteur de 132 à ~265 cyc, un retard intra-tranche borné (136 cyc, 264 sur tranche pleine)
+qui était le prix du crédit groupé. Le passage au dispatch **par accès** (ci-dessus) l'a
+supprimé : le compteur **redescend à 132** sur `megast`, `ste` et `megaste` — soit la valeur
+ST, mais cette fois sans plus rien masquer, là où AVANT tout le chantier il cachait un saut
+cumulatif de 1088. Divergences recensées **B3** et **B4**, toutes deux ✅, dans
+`docs/HATARI_DIVERGENCES.md`.
+
+**Validation de la ré-entrance.** Build à assertions ACTIVES (`-UNDEBUG` — attention,
+`RelWithDebInfo` réinjecte `-DNDEBUG` APRÈS `CMAKE_CXX_FLAGS`, il faut passer par
+`CMAKE_CXX_FLAGS_RELWITHDEBINFO`) : *Lethal Xcess* `megast` 26000 trames, ~1,6 M
+préemptions, des milliers de tranches à 64 dispatches imbriqués chacune — **aucune**
+assertion de `runTo` déclenchée (`armedInvariant`, `nextDue_ == scanNextDue()`). Idem
+`ste`/`megaste`.
+
+## Le halt du 68000 s'annonce (double faute de bus/adresse) (2026-08-25)
+
+Un `cpuDidHalt()` était disponible côté Moira mais non surchargé : NeoST **arrêtait le
+CPU en silence** sur une double faute. Écran figé, aucune explication — c'est ce qui avait
+fait ouvrir le faux bug « Stardust sur ST : NeoST reste noir là où Hatari halte ».
+**Vérification (2026-08-25) : NeoST HALTE déjà, sur la MÊME instruction que Hatari**
+(`$FC5082`, `A7=$4E7340E7` impair, après la bus error `$FFFF8900` d'un jeu STE lancé sur
+ST) ; 0 instruction exécutée après la trame ~1826, écran noir des deux côtés. Ajouté :
+le message `[cpu] 68000 halted: double bus/address error while taking exception vector N
+(SSP=$…)` (vecteur latché par les délégués d'exception de groupe 0 — `reg.pc0` a déjà
+été avancé par le prefetch, il ne désigne PAS la faute, donc aucun PC n'est affiché,
+comme Hatari `gui-sdl/dlgHalt.c:66-71`), le cas distinct « reset vector fetch failed »
+(`Moira::reset`), l'accesseur `Cpu68k::halted()` et une ligne de bilan headless.
+**Aucun changement de comportement émulé** ; suivis TODO/CASE_STUDIES clos.
+
 ## Page Input : ce qu'on branche dans les deux ports joystick (2026-08-23)
 
 Vue **par port** au lieu d'une liste de manettes : « Port 0 (mouse port) » = souris
