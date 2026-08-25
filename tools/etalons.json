@@ -1,339 +1,339 @@
 {
-  "_comment": "Logiciels étalons NeoST — freeware / domaine public uniquement. Voir docs/TEST_SOFTWARE.md. ⚠ COUVERTURE (12 étalons machine) : st ×8 / ste ×4 ; 512k ×10 / 1m ×2. ROM : etos256us ×3 + etos192fr ×2 (LIBRES — tournent partout) ; tos102uk ×6 + tos162us ×1 (PROPRIÉTAIRES — run_etalons.py les SAUTE et les recense si la ROM est absente, cf. rom_is_free()). MegaST, MegaSTE, TOS 1.00/1.04/1.06/2.06 ne sont couverts par AUCUN étalon — une suite verte ne prouve RIEN hors de ces configs. La ROM fixe la fréquence de balayage (suffixe us = 60 Hz, uk/fr/de/es = 50 Hz) et cela CHANGE l'image des démos : les images Spectrum 512 sont calculées pour le 50 Hz et sortent déchirées en NTSC, sur ST comme sur STE, identiquement sous Hatari (fidèle, pas un bug). Les 4 étalons à disque GÉNÉRÉ (overscan_top, trace_odd, scroll_8264/65) ont été migrés sur EmuTOS le 2026-08-19 : leur secteur de boot est autonome, l'image ne dépend pas du TOS — vérifié à 0 px des deux côtés, oracle Hatari inclus.",
-  "etalons": [
-    {
-      "id": "glue_selftest",
-      "name": "Glue bordures (auto-test déterministe)",
-      "subsystem": "shifter/glue",
-      "type": "glue_selftest",
-      "max_diff_px": 0
-    },
-    {
-      "id": "spec512_selftest",
-      "name": "Spectrum 512 re-rendu (auto-test déterministe palette-par-pixel)",
-      "subsystem": "shifter/spec512",
-      "type": "spec512_selftest",
-      "max_diff_px": 0
-    },
-    {
-      "id": "bus_selftest",
-      "name": "Bus error whitelist (auto-test déterministe par octet)",
-      "subsystem": "bus/mmu",
-      "type": "bus_selftest",
-      "max_diff_px": 0
-    },
-    {
-      "id": "mfp_selftest",
-      "name": "MFP GPIP / fronts / Timer B (auto-test déterministe)",
-      "subsystem": "mfp/irq",
-      "type": "mfp_selftest",
-      "max_diff_px": 0
-    },
-    {
-      "id": "serloop_selftest",
-      "name": "Bouclage RS-232 — polarité des lignes de contrôle (auto-test)",
-      "subsystem": "mfp/irq",
-      "type": "serloop_selftest",
-      "max_diff_px": 0
-    },
-    {
-      "id": "msa_selftest",
-      "name": "Ré-encodage .msa/.dim (aller-retour + persistance fichier)",
-      "subsystem": "fdc/images",
-      "type": "msa_selftest",
-      "max_diff_px": 0
-    },
-    {
-      "id": "enec_selftest",
-      "name": "NE2000/EtherNEC — protocole fil port cartouche (auto-test déterministe, boucle)",
-      "subsystem": "cart/ethernec",
-      "type": "enec_selftest",
-      "max_diff_px": 0
-    },
-    {
-      "id": "usatan_selftest",
-      "name": "UltraSatan — protocole fil ACSI (INQUIRY JOOKIE, paquets ICD 'US', RTC, slot vide)",
-      "subsystem": "acsi/ultrasatan",
-      "type": "usatan_selftest",
-      "max_diff_px": 0
-    },
-    {
-      "id": "netusbee_selftest",
-      "name": "NetUSBee — ISP1160 port cartouche (ID, registres, ATL) + NE2000 en coexistence",
-      "subsystem": "cart/netusbee",
-      "type": "netusbee_selftest",
-      "max_diff_px": 0
-    },
-    {
-      "id": "etos_ste_boot",
-      "name": "Boot EmuTOS STE (bureau)",
-      "subsystem": "integration",
-      "rom": "roms/etos256us.img",
-      "machine": "ste",
-      "mem": "512k",
-      "cpu": "moira",
-      "frames": 250,
-      "frame": 240,
-      "crop": "buffer_noled",
-      "max_diff_px": 64,
-      "ref_kind": "snapshot"
-    },
-    {
-      "id": "spectrum512_diapo",
-      "name": "Spectrum 512 auto diapo (frame stable)",
-      "subsystem": "shifter/spec512",
-      "rom": "roms/tos102uk.img",
-      "disk": "disks/etalons/spectrum_512_auto_diapo.st",
-      "machine": "st",
-      "mem": "512k",
-      "cpu": "moira",
-      "fastfdc": true,
-      "frames": 1200,
-      "frame": 1199,
-      "crop": "buffer_noled",
-      "max_diff_px": 0,
-      "oracle_fastfdc": true,
-      "ref_kind": "oracle",
-      "oracle_scan": 90,
-      "scan_note": "oracle_scan ajouté le 2026-08-19 : tout étalon qui BOOTE UN DISQUE hérite de la nondéterminisme d'Hatari (RNG semé sur time(NULL) → position angulaire initiale de la disquette aléatoire → durée de boot, donc numérotation des trames, variable). Sans fenêtre, --oracle réinstalle une référence décalée et l'étalon devient rouge sans qu'aucun pixel n'ait bougé. Cf. oracle_scan_pick() dans run_etalons.py."
-    },
-    {
-      "id": "spectrum512_diapo2",
-      "name": "Spectrum 512 auto diapo (image exigeante — frontières de cellules serrées)",
-      "subsystem": "shifter/spec512",
-      "rom": "roms/tos102uk.img",
-      "disk": "disks/etalons/spectrum_512_auto_diapo.st",
-      "machine": "st",
-      "mem": "512k",
-      "cpu": "moira",
-      "fastfdc": true,
-      "frames": 1651,
-      "frame": 1650,
-      "crop": "buffer_noled",
-      "max_diff_px": 0,
-      "oracle_fastfdc": true,
-      "ref_kind": "oracle",
-      "oracle_scan": 90,
-      "scan_note": "oracle_scan ajouté le 2026-08-19 : tout étalon qui BOOTE UN DISQUE hérite de la nondéterminisme d'Hatari (RNG semé sur time(NULL) → position angulaire initiale de la disquette aléatoire → durée de boot, donc numérotation des trames, variable). Sans fenêtre, --oracle réinstalle une référence décalée et l'étalon devient rouge sans qu'aucun pixel n'ait bougé. Cf. oracle_scan_pick() dans run_etalons.py."
-    },
-    {
-      "id": "spectrum512_diapo_ste",
-      "name": "Spectrum 512 auto diapo en NTSC 60 Hz (déchirement FIDÈLE — cause = 60 Hz, PAS le STE)",
-      "subsystem": "shifter/spec512",
-      "rom": "roms/tos162us.img",
-      "disk": "disks/etalons/spectrum_512_auto_diapo.st",
-      "machine": "ste",
-      "mem": "512k",
-      "cpu": "moira",
-      "fastfdc": true,
-      "frames": 1651,
-      "frame": 1650,
-      "crop": "buffer_noled",
-      "max_diff_px": 0,
-      "oracle_fastfdc": true,
-      "note": "ATTRIBUTION CORRIGÉE le 2026-08-01 : le déchirement des palettes n'est PAS un effet du STE — c'est le 60 Hz. La ROM tos162us démarre en NTSC 60 Hz, or les images spec512 de ce disque sont calculées pour le 50 Hz. Contre-épreuve : MÊME machine STE avec tos162uk (PAL) → image PARFAITE (dégradé lisse, 0 px vs oracle Hatari STE PAL). Et symétriquement, un ST avec tos102us (60 Hz) déchire exactement pareil. L'étalon reste valide tel quel (NeoST == oracle Hatari byte-exact sur la plage f1645-1660) : il verrouille le rendu 60 Hz. Référence = oracle Hatari STE (spectrum512_diapo_ste.png), PAS une self-capture. Cf. docs/TEST_SOFTWARE.md § Configuration : PAL/NTSC.",
-      "ref_kind": "oracle",
-      "oracle_scan": 90,
-      "scan_note": "oracle_scan ajouté le 2026-08-19 : tout étalon qui BOOTE UN DISQUE hérite de la nondéterminisme d'Hatari (RNG semé sur time(NULL) → position angulaire initiale de la disquette aléatoire → durée de boot, donc numérotation des trames, variable). Sans fenêtre, --oracle réinstalle une référence décalée et l'étalon devient rouge sans qu'aucun pixel n'ait bougé. Cf. oracle_scan_pick() dans run_etalons.py."
-    },
-    {
-      "id": "overscan_top",
-      "uniform_ok": true,
-      "name": "Overscan retrait bordure HAUTE (make_overscan_test)",
-      "subsystem": "shifter/glue",
-      "rom": "roms/etos192fr.img",
-      "rom_note": "ROM LIBRE (EmuTOS) le 2026-08-19 : ce disque est un secteur de boot AUTONOME (move.w #$2700,sr, registres video/palette/base ecran poses par le programme) - le TOS ne fait que le charger, donc l'image ne depend PAS de lui. Verifie : capture EmuTOS vs capture tos102uk.img = 0 px sur 114816, et la reference tests/reference/overscan_top.ppm est INCHANGEE (0 px). Migre pour que l'etalon survive au retrait des TOS Atari proprietaires du depot.",
-      "disk": "disks/etalons/overscan_top.st",
-      "disk_generate": "tools/make_overscan_test.py",
-      "machine": "st",
-      "mem": "512k",
-      "cpu": "moira",
-      "frames": 400,
-      "frame": 380,
-      "crop": "buffer",
-      "max_diff_px": 0,
-      "ref_note": "RESIDU ORACLE MESURE le 2026-08-19 : NeoST vs Hatari 2.6.1-devel (meme disque, meme ROM) = 194 px / 114816 (0,17 %), TOUS sur les 8 PREMIERES lignes du buffer (y=0..7 ; 1er ecart x=32,y=0 : NeoST #000000, Hatari #666666). Identique sous EmuTOS et sous tos102uk (donc INDEPENDANT de la ROM ; Hatari EmuTOS vs Hatari tos102uk = 0 px). La reference reste une SELF-CAPTURE (ref_kind=snapshot) : elle garde la non-regression, elle ne prouve PAS la conformite a l'oracle sur ces 8 lignes. Cf. docs/HATARI_DIVERGENCES.md.",
-      "ref_kind": "snapshot"
-    },
-    {
-      "id": "trace_odd",
-      "uniform_ok": true,
-      "name": "Vecteur TRACE impair → address error (fuite d'exception CPU)",
-      "subsystem": "cpu/exceptions",
-      "rom": "roms/etos192fr.img",
-      "rom_note": "ROM LIBRE (EmuTOS) le 2026-08-19 : ce disque est un secteur de boot AUTONOME (move.w #$2700,sr, registres video/palette/base ecran poses par le programme) - le TOS ne fait que le charger, donc l'image ne depend PAS de lui. Verifie : capture EmuTOS vs capture tos102uk.img = 0 px sur 114816, et la reference tests/reference/trace_odd.ppm est INCHANGEE (0 px). Migre pour que l'etalon survive au retrait des TOS Atari proprietaires du depot.",
-      "disk": "disks/etalons/trace_odd.st",
-      "disk_generate": "tools/make_trace_odd_test.py",
-      "machine": "st",
-      "mem": "512k",
-      "cpu": "moira",
-      "fastfdc": true,
-      "frames": 300,
-      "frame": 290,
-      "crop": "buffer_noled",
-      "max_diff_px": 0,
-      "ref_note": "RESIDU ORACLE MESURE le 2026-08-19 : NeoST vs Hatari 2.6.1-devel = 22 px / 114816 (0,02 %), 6 scanlines, 1er ecart x=402,y=2 (NeoST #00EE00, Hatari #00B200 : meme teinte, intensite differente). Meme famille que le residu d'overscan_top (premieres lignes de trame). Reference = self-capture (ref_kind=snapshot). Cf. docs/HATARI_DIVERGENCES.md.",
-      "ref_kind": "snapshot"
-    },
-    {
-      "id": "cuddly_demos",
-      "name": "The Cuddly Demos (boot menu)",
-      "subsystem": "shifter/borders",
-      "rom": "roms/tos102uk.img",
-      "disk": "disks/etalons/cuddly_demos.msa",
-      "machine": "st",
-      "mem": "512k",
-      "cpu": "moira",
-      "fastfdc": true,
-      "frames": 3500,
-      "frame": 3500,
-      "crop": "buffer_noled",
-      "max_diff_px": 0,
-      "fetch": {
-        "url": "https://ftp.untergrund.net/users/ltk_tscc/fujiology/ST/T/TCB/CUDDLY_P.ZIP",
-        "member": "CUDDLY_P.MSA",
-        "save_as": "disks/etalons/cuddly_demos.msa"
-      },
-      "optional": true,
-      "ref_kind": "oracle",
-      "oracle_fastfdc": true,
-      "note": "RÉACTIVÉ le 2026-08-19, et la raison de la désactivation (2026-08-01, « phase d'animation différente », au mieux 16023 px) est RÉFUTÉE : NeoST rend cette démo BYTE-IDENTIQUEMENT à Hatari — mesuré 0 px / 114766 sur 220 trames CONSÉCUTIVES. Ce qui manquait n'était pas un correctif d'émulation mais la bonne trame oracle : Hatari sème son RNG sur l'horloge hôte (Hatari_srand(time(NULL)), sdl/main_sdl.c) et tire au hasard la POSITION ANGULAIRE INITIALE de la disquette (fdc.c) — la durée du boot, donc la numérotation des trames de l'AVI, CHANGE d'un run à l'autre : mesuré, la même trame NeoST tombait sur n+61 dans un run et n-2 dans un autre. Un balayage à `frame` figé ne pouvait pas converger. D'où oracle_scan: 150 — --oracle extrait la FENÊTRE et retient la trame IDENTIQUE à la capture NeoST (jamais la moins pire). Côté NeoST tout est déterministe : une fois la référence commise, la comparaison l'est aussi.",
-      "oracle_scan": 150
-    },
-    {
-      "id": "union_demo",
-      "name": "The Union Demo (menu interactif)",
-      "subsystem": "mfp/irq",
-      "rom": "roms/tos102uk.img",
-      "disk": "disks/etalons/union_demo.msa",
-      "machine": "st",
-      "mem": "512k",
-      "cpu": "moira",
-      "fastfdc": true,
-      "frames": 4000,
-      "frame": 3900,
-      "crop": "buffer_noled",
-      "max_diff_px": 800,
-      "fetch": {
-        "url": "https://www.planetemu.net/roms/atari-st-demos",
-        "hint": "The Union Demo — rapatrier à la main si fetch auto échoue (freeware)."
-      },
-      "optional": true,
-      "ref_kind": "snapshot"
-    },
-    {
-      "id": "scroll_8265",
-      "name": "Scroll fin STE $8265 (avec prefetch) — make_scroll_test",
-      "subsystem": "shifter/hscroll",
-      "rom": "roms/etos256us.img",
-      "rom_note": "ROM LIBRE (EmuTOS) le 2026-08-19 : ce disque est un secteur de boot AUTONOME (move.w #$2700,sr, registres video/palette/base ecran poses par le programme) - le TOS ne fait que le charger, donc l'image ne depend PAS de lui. Verifie : capture EmuTOS vs capture tos162us.img = 0 px sur 114816, et la reference tests/reference/scroll_8265.ppm est INCHANGEE (0 px). Migre pour que l'etalon survive au retrait des TOS Atari proprietaires du depot.",
-      "disk": "disks/etalons/scroll_8265.st",
-      "disk_generate": "tools/make_scroll_test.py",
-      "machine": "ste",
-      "mem": "512k",
-      "cpu": "moira",
-      "frames": 400,
-      "frame": 380,
-      "crop": "buffer_noled",
-      "max_diff_px": 0,
-      "ref_note": "Reference ORACLE (Hatari 2.6.1-devel, EmuTOS 256 Ko US, 832x552) posee le 2026-08-19 : NeoST == Hatari a 0 px sur cet etalon, la self-capture .ppm n'apportait donc rien de plus qu'une non-regression contre soi-meme. Regenerer avec : run_etalons.py --oracle --only scroll_8265",
-      "ref_kind": "oracle",
-      "oracle_scan": 90,
-      "scan_note": "oracle_scan ajouté le 2026-08-19 : tout étalon qui BOOTE UN DISQUE hérite de la nondéterminisme d'Hatari (RNG semé sur time(NULL) → position angulaire initiale de la disquette aléatoire → durée de boot, donc numérotation des trames, variable). Sans fenêtre, --oracle réinstalle une référence décalée et l'étalon devient rouge sans qu'aucun pixel n'ait bougé. Cf. oracle_scan_pick() dans run_etalons.py."
-    },
-    {
-      "id": "scroll_8264",
-      "name": "Scroll fin STE $8264 (sans prefetch) — make_scroll_test",
-      "subsystem": "shifter/hscroll",
-      "rom": "roms/etos256us.img",
-      "rom_note": "ROM LIBRE (EmuTOS) le 2026-08-19 : ce disque est un secteur de boot AUTONOME (move.w #$2700,sr, registres video/palette/base ecran poses par le programme) - le TOS ne fait que le charger, donc l'image ne depend PAS de lui. Verifie : capture EmuTOS vs capture tos162us.img = 0 px sur 114816, et la reference tests/reference/scroll_8264.ppm est INCHANGEE (0 px). Migre pour que l'etalon survive au retrait des TOS Atari proprietaires du depot.",
-      "disk": "disks/etalons/scroll_8264.st",
-      "disk_generate": "tools/make_scroll_test.py",
-      "machine": "ste",
-      "mem": "512k",
-      "cpu": "moira",
-      "frames": 400,
-      "frame": 380,
-      "crop": "buffer_noled",
-      "max_diff_px": 0,
-      "ref_note": "Reference ORACLE (Hatari 2.6.1-devel, EmuTOS 256 Ko US, 832x552) posee le 2026-08-19 : NeoST == Hatari a 0 px sur cet etalon, la self-capture .ppm n'apportait donc rien de plus qu'une non-regression contre soi-meme. Regenerer avec : run_etalons.py --oracle --only scroll_8264",
-      "ref_kind": "oracle",
-      "oracle_scan": 90,
-      "scan_note": "oracle_scan ajouté le 2026-08-19 : tout étalon qui BOOTE UN DISQUE hérite de la nondéterminisme d'Hatari (RNG semé sur time(NULL) → position angulaire initiale de la disquette aléatoire → durée de boot, donc numérotation des trames, variable). Sans fenêtre, --oracle réinstalle une référence décalée et l'étalon devient rouge sans qu'aucun pixel n'ait bougé. Cf. oracle_scan_pick() dans run_etalons.py."
-    },
-    {
-      "id": "nocooper",
-      "name": "No Cooper (1984) — écran principal (overscan med-res, étalon V2)",
-      "subsystem": "shifter/res-tricks",
-      "rom": "roms/tos102uk.img",
-      "disk": "disks/etalons/nocooper.msa",
-      "machine": "st",
-      "mem": "1m",
-      "cpu": "moira",
-      "fastfdc": true,
-      "keys_at": [
-        900,
-        " "
-      ],
-      "frames": 6802,
-      "frame": 6790,
-      "crop": "buffer_noled",
-      "max_diff_px": 0,
-      "fetch": {
-        "url": "https://ftp.untergrund.net/users/ltk_tscc/fujiology/ST/0_9/1984/NOCOOPER.ZIP",
-        "member": "NOCOOPER.MSA",
-        "save_as": "disks/etalons/nocooper.msa"
-      },
-      "optional": true,
-      "note": "Étalon V2 (Video_WriteToGlueRes) : l'écran principal ouvre les bordures G/D en MED-RES (la nappe traverse bord à bord chez Hatari). RÉSOLU 2026-07-12 (bug hunt) : la capture par-ligne au faisceau étendue aux trames « palette seule » (spec512Active_, endVideoLine) a fermé le résidu V2 assumé de 891 px — 0 px vs oracle. Référence = tests/reference/nocooper.png (copie de nocooper_oracle.png, oracle Hatari WS3, touche espace tenue vbl ~900, frame 6788 ↔ NeoST --frames 6800, Δ=-11) RECALÉ 2026-08-01 : --frames 6800 → 6801. Deux correctifs de FIDÉLITÉ du boot (instruction RESET câblée, puis reset Glue posé en direct comme IoMem_WriteByte au lieu de passer par le bus) ont décalé la démo d'une trame. Vérifié que ce n'est PAS une régression de rendu : balayage 6798→6802, l'image est 0 px vs oracle à 6801 (bit-identique), et les trames voisines reproduisent les écarts observés. Méthode à réutiliser avant tout re-calage. RECALÉ 2026-08-06 : 6801 → 6802 (IACK MFP vectorisé 12→16 cyc, mesuré à l'oracle sur Super Hang-On — le boot glisse d'une trame). Méthode de la note appliquée : balayage 6794→6808, 0 px (bit-identique oracle) à 6801 en numérotation --shot-every, voisines conformes (6800 : 12,88 %, 6802 : 15,06 %).",
-      "ref_kind": "oracle",
-      "oracle_scan": 90,
-      "scan_note": "oracle_scan ajouté le 2026-08-19 : tout étalon qui BOOTE UN DISQUE hérite de la nondéterminisme d'Hatari (RNG semé sur time(NULL) → position angulaire initiale de la disquette aléatoire → durée de boot, donc numérotation des trames, variable). Sans fenêtre, --oracle réinstalle une référence décalée et l'étalon devient rouge sans qu'aucun pixel n'ait bougé. Cf. oracle_scan_pick() dans run_etalons.py."
-    },
-    {
-      "id": "nocooper_greetings",
-      "name": "No Cooper — écran greetings (overscan MED-RES, étalon V2 principal)",
-      "subsystem": "shifter/res-tricks",
-      "rom": "roms/tos102uk.img",
-      "disk": "disks/etalons/nocooper.msa",
-      "machine": "st",
-      "mem": "1m",
-      "cpu": "moira",
-      "fastfdc": true,
-      "keys_at": [
-        [
-          900,
-          " "
-        ],
-        [
-          7200,
-          " "
-        ],
-        [
-          13500,
-          " "
-        ],
-        [
-          19000,
-          " "
-        ],
-        [
-          24500,
-          " "
-        ]
-      ],
-      "frames": 29500,
-      "frame": 29200,
-      "crop": "buffer_noled",
-      "max_diff_px": 0,
-      "fetch": {
-        "url": "https://ftp.untergrund.net/users/ltk_tscc/fujiology/ST/0_9/1984/NOCOOPER.ZIP",
-        "member": "NOCOOPER.MSA",
-        "save_as": "disks/etalons/nocooper.msa"
-      },
-      "optional": true,
-      "note": "V2 VALIDÉ 0 px vs oracle (2026-07-08) : chaque ligne fait hi@0/lo@12/MED@20 (LINE_LEFT_MED_CYCLE_1) + 60@376/50@384 + stab hi@444/lo@456 → page greetings med-res 4 bordures ouvertes. Écran STATIQUE → pas d'alignement de phase requis. Cible oracle archivée : tests/reference/nocooper_greetings_oracle.png.",
-      "ref_kind": "snapshot"
-    }
-  ]
+ "_comment": "Logiciels étalons NeoST — freeware / domaine public uniquement. Voir docs/TEST_SOFTWARE.md. ⚠ COUVERTURE (12 étalons machine) : st ×8 / ste ×4 ; 512k ×10 / 1m ×2. ROM : etos256us ×3 + etos192fr ×2 (LIBRES — tournent partout) ; tos102uk ×6 + tos162us ×1 (PROPRIÉTAIRES — run_etalons.py les SAUTE et les recense si la ROM est absente, cf. rom_is_free()). MegaST, MegaSTE, TOS 1.00/1.04/1.06/2.06 ne sont couverts par AUCUN étalon — une suite verte ne prouve RIEN hors de ces configs. La ROM fixe la fréquence de balayage (suffixe us = 60 Hz, uk/fr/de/es = 50 Hz) et cela CHANGE l'image des démos : les images Spectrum 512 sont calculées pour le 50 Hz et sortent déchirées en NTSC, sur ST comme sur STE, identiquement sous Hatari (fidèle, pas un bug). Les 4 étalons à disque GÉNÉRÉ (overscan_top, trace_odd, scroll_8264/65) ont été migrés sur EmuTOS le 2026-08-19 : leur secteur de boot est autonome, l'image ne dépend pas du TOS — vérifié à 0 px des deux côtés, oracle Hatari inclus.",
+ "etalons": [
+  {
+   "id": "glue_selftest",
+   "name": "Glue bordures (auto-test déterministe)",
+   "subsystem": "shifter/glue",
+   "type": "glue_selftest",
+   "max_diff_px": 0
+  },
+  {
+   "id": "spec512_selftest",
+   "name": "Spectrum 512 re-rendu (auto-test déterministe palette-par-pixel)",
+   "subsystem": "shifter/spec512",
+   "type": "spec512_selftest",
+   "max_diff_px": 0
+  },
+  {
+   "id": "bus_selftest",
+   "name": "Bus error whitelist (auto-test déterministe par octet)",
+   "subsystem": "bus/mmu",
+   "type": "bus_selftest",
+   "max_diff_px": 0
+  },
+  {
+   "id": "mfp_selftest",
+   "name": "MFP GPIP / fronts / Timer B (auto-test déterministe)",
+   "subsystem": "mfp/irq",
+   "type": "mfp_selftest",
+   "max_diff_px": 0
+  },
+  {
+   "id": "serloop_selftest",
+   "name": "Bouclage RS-232 — polarité des lignes de contrôle (auto-test)",
+   "subsystem": "mfp/irq",
+   "type": "serloop_selftest",
+   "max_diff_px": 0
+  },
+  {
+   "id": "msa_selftest",
+   "name": "Ré-encodage .msa/.dim (aller-retour + persistance fichier)",
+   "subsystem": "fdc/images",
+   "type": "msa_selftest",
+   "max_diff_px": 0
+  },
+  {
+   "id": "enec_selftest",
+   "name": "NE2000/EtherNEC — protocole fil port cartouche (auto-test déterministe, boucle)",
+   "subsystem": "cart/ethernec",
+   "type": "enec_selftest",
+   "max_diff_px": 0
+  },
+  {
+   "id": "usatan_selftest",
+   "name": "UltraSatan — protocole fil ACSI (INQUIRY JOOKIE, paquets ICD 'US', RTC, slot vide)",
+   "subsystem": "acsi/ultrasatan",
+   "type": "usatan_selftest",
+   "max_diff_px": 0
+  },
+  {
+   "id": "netusbee_selftest",
+   "name": "NetUSBee — ISP1160 port cartouche (ID, registres, ATL) + NE2000 en coexistence",
+   "subsystem": "cart/netusbee",
+   "type": "netusbee_selftest",
+   "max_diff_px": 0
+  },
+  {
+   "id": "etos_ste_boot",
+   "name": "Boot EmuTOS STE (bureau)",
+   "subsystem": "integration",
+   "rom": "roms/etos256us.img",
+   "machine": "ste",
+   "mem": "512k",
+   "cpu": "moira",
+   "frames": 250,
+   "frame": 240,
+   "crop": "buffer_noled",
+   "max_diff_px": 64,
+   "ref_kind": "snapshot"
+  },
+  {
+   "id": "spectrum512_diapo",
+   "name": "Spectrum 512 auto diapo (frame stable)",
+   "subsystem": "shifter/spec512",
+   "rom": "roms/tos102uk.img",
+   "disk": "disks/etalons/spectrum_512_auto_diapo.st",
+   "machine": "st",
+   "mem": "512k",
+   "cpu": "moira",
+   "fastfdc": true,
+   "frames": 1200,
+   "frame": 1199,
+   "crop": "buffer_noled",
+   "max_diff_px": 0,
+   "oracle_fastfdc": true,
+   "ref_kind": "oracle",
+   "oracle_scan": 90,
+   "scan_note": "oracle_scan ajouté le 2026-08-19 : tout étalon qui BOOTE UN DISQUE hérite de la nondéterminisme d'Hatari (RNG semé sur time(NULL) → position angulaire initiale de la disquette aléatoire → durée de boot, donc numérotation des trames, variable). Sans fenêtre, --oracle réinstalle une référence décalée et l'étalon devient rouge sans qu'aucun pixel n'ait bougé. Cf. oracle_scan_pick() dans run_etalons.py."
+  },
+  {
+   "id": "spectrum512_diapo2",
+   "name": "Spectrum 512 auto diapo (image exigeante — frontières de cellules serrées)",
+   "subsystem": "shifter/spec512",
+   "rom": "roms/tos102uk.img",
+   "disk": "disks/etalons/spectrum_512_auto_diapo.st",
+   "machine": "st",
+   "mem": "512k",
+   "cpu": "moira",
+   "fastfdc": true,
+   "frames": 1651,
+   "frame": 1650,
+   "crop": "buffer_noled",
+   "max_diff_px": 0,
+   "oracle_fastfdc": true,
+   "ref_kind": "oracle",
+   "oracle_scan": 90,
+   "scan_note": "oracle_scan ajouté le 2026-08-19 : tout étalon qui BOOTE UN DISQUE hérite de la nondéterminisme d'Hatari (RNG semé sur time(NULL) → position angulaire initiale de la disquette aléatoire → durée de boot, donc numérotation des trames, variable). Sans fenêtre, --oracle réinstalle une référence décalée et l'étalon devient rouge sans qu'aucun pixel n'ait bougé. Cf. oracle_scan_pick() dans run_etalons.py."
+  },
+  {
+   "id": "spectrum512_diapo_ste",
+   "name": "Spectrum 512 auto diapo en NTSC 60 Hz (déchirement FIDÈLE — cause = 60 Hz, PAS le STE)",
+   "subsystem": "shifter/spec512",
+   "rom": "roms/tos162us.img",
+   "disk": "disks/etalons/spectrum_512_auto_diapo.st",
+   "machine": "ste",
+   "mem": "512k",
+   "cpu": "moira",
+   "fastfdc": true,
+   "frames": 1651,
+   "frame": 1650,
+   "crop": "buffer_noled",
+   "max_diff_px": 0,
+   "oracle_fastfdc": true,
+   "note": "ATTRIBUTION CORRIGÉE le 2026-08-01 : le déchirement des palettes n'est PAS un effet du STE — c'est le 60 Hz. La ROM tos162us démarre en NTSC 60 Hz, or les images spec512 de ce disque sont calculées pour le 50 Hz. Contre-épreuve : MÊME machine STE avec tos162uk (PAL) → image PARFAITE (dégradé lisse, 0 px vs oracle Hatari STE PAL). Et symétriquement, un ST avec tos102us (60 Hz) déchire exactement pareil. L'étalon reste valide tel quel (NeoST == oracle Hatari byte-exact sur la plage f1645-1660) : il verrouille le rendu 60 Hz. Référence = oracle Hatari STE (spectrum512_diapo_ste.png), PAS une self-capture. Cf. docs/TEST_SOFTWARE.md § Configuration : PAL/NTSC.",
+   "ref_kind": "oracle",
+   "oracle_scan": 90,
+   "scan_note": "oracle_scan ajouté le 2026-08-19 : tout étalon qui BOOTE UN DISQUE hérite de la nondéterminisme d'Hatari (RNG semé sur time(NULL) → position angulaire initiale de la disquette aléatoire → durée de boot, donc numérotation des trames, variable). Sans fenêtre, --oracle réinstalle une référence décalée et l'étalon devient rouge sans qu'aucun pixel n'ait bougé. Cf. oracle_scan_pick() dans run_etalons.py."
+  },
+  {
+   "id": "overscan_top",
+   "uniform_ok": true,
+   "name": "Overscan retrait bordure HAUTE (make_overscan_test)",
+   "subsystem": "shifter/glue",
+   "rom": "roms/etos192fr.img",
+   "rom_note": "ROM LIBRE (EmuTOS) le 2026-08-19 : ce disque est un secteur de boot AUTONOME (move.w #$2700,sr, registres video/palette/base ecran poses par le programme) - le TOS ne fait que le charger, donc l'image ne depend PAS de lui. Verifie : capture EmuTOS vs capture tos102uk.img = 0 px sur 114816, et la reference tests/reference/overscan_top.ppm est INCHANGEE (0 px). Migre pour que l'etalon survive au retrait des TOS Atari proprietaires du depot.",
+   "disk": "disks/etalons/overscan_top.st",
+   "disk_generate": "tools/make_overscan_test.py",
+   "machine": "st",
+   "mem": "512k",
+   "cpu": "moira",
+   "frames": 400,
+   "frame": 380,
+   "crop": "buffer",
+   "max_diff_px": 0,
+   "ref_note": "RESIDU ORACLE MESURE le 2026-08-19 : NeoST vs Hatari 2.6.1-devel (meme disque, meme ROM) = 194 px / 114816 (0,17 %), TOUS sur les 8 PREMIERES lignes du buffer (y=0..7 ; 1er ecart x=32,y=0 : NeoST #000000, Hatari #666666). Identique sous EmuTOS et sous tos102uk (donc INDEPENDANT de la ROM ; Hatari EmuTOS vs Hatari tos102uk = 0 px). La reference reste une SELF-CAPTURE (ref_kind=snapshot) : elle garde la non-regression, elle ne prouve PAS la conformite a l'oracle sur ces 8 lignes. Cf. docs/HATARI_DIVERGENCES.md.",
+   "ref_kind": "snapshot"
+  },
+  {
+   "id": "trace_odd",
+   "uniform_ok": true,
+   "name": "Vecteur TRACE impair → address error (fuite d'exception CPU)",
+   "subsystem": "cpu/exceptions",
+   "rom": "roms/etos192fr.img",
+   "rom_note": "ROM LIBRE (EmuTOS) le 2026-08-19 : ce disque est un secteur de boot AUTONOME (move.w #$2700,sr, registres video/palette/base ecran poses par le programme) - le TOS ne fait que le charger, donc l'image ne depend PAS de lui. Verifie : capture EmuTOS vs capture tos102uk.img = 0 px sur 114816, et la reference tests/reference/trace_odd.ppm est INCHANGEE (0 px). Migre pour que l'etalon survive au retrait des TOS Atari proprietaires du depot.",
+   "disk": "disks/etalons/trace_odd.st",
+   "disk_generate": "tools/make_trace_odd_test.py",
+   "machine": "st",
+   "mem": "512k",
+   "cpu": "moira",
+   "fastfdc": true,
+   "frames": 300,
+   "frame": 290,
+   "crop": "buffer_noled",
+   "max_diff_px": 0,
+   "ref_note": "RESIDU ORACLE MESURE le 2026-08-19 : NeoST vs Hatari 2.6.1-devel = 22 px / 114816 (0,02 %), 6 scanlines, 1er ecart x=402,y=2 (NeoST #00EE00, Hatari #00B200 : meme teinte, intensite differente). Meme famille que le residu d'overscan_top (premieres lignes de trame). Reference = self-capture (ref_kind=snapshot). Cf. docs/HATARI_DIVERGENCES.md.",
+   "ref_kind": "snapshot"
+  },
+  {
+   "id": "cuddly_demos",
+   "name": "The Cuddly Demos (boot menu)",
+   "subsystem": "shifter/borders",
+   "rom": "roms/tos102uk.img",
+   "disk": "disks/etalons/cuddly_demos.msa",
+   "machine": "st",
+   "mem": "512k",
+   "cpu": "moira",
+   "fastfdc": true,
+   "frames": 3500,
+   "frame": 3500,
+   "crop": "buffer_noled",
+   "max_diff_px": 0,
+   "fetch": {
+    "url": "https://ftp.untergrund.net/users/ltk_tscc/fujiology/ST/T/TCB/CUDDLY_P.ZIP",
+    "member": "CUDDLY_P.MSA",
+    "save_as": "disks/etalons/cuddly_demos.msa"
+   },
+   "optional": true,
+   "ref_kind": "oracle",
+   "oracle_fastfdc": true,
+   "note": "RÉACTIVÉ le 2026-08-19, et la raison de la désactivation (2026-08-01, « phase d'animation différente », au mieux 16023 px) est RÉFUTÉE : NeoST rend cette démo BYTE-IDENTIQUEMENT à Hatari — mesuré 0 px / 114766 sur 220 trames CONSÉCUTIVES. Ce qui manquait n'était pas un correctif d'émulation mais la bonne trame oracle : Hatari sème son RNG sur l'horloge hôte (Hatari_srand(time(NULL)), sdl/main_sdl.c) et tire au hasard la POSITION ANGULAIRE INITIALE de la disquette (fdc.c) — la durée du boot, donc la numérotation des trames de l'AVI, CHANGE d'un run à l'autre : mesuré, la même trame NeoST tombait sur n+61 dans un run et n-2 dans un autre. Un balayage à `frame` figé ne pouvait pas converger. D'où oracle_scan: 150 — --oracle extrait la FENÊTRE et retient la trame IDENTIQUE à la capture NeoST (jamais la moins pire). Côté NeoST tout est déterministe : une fois la référence commise, la comparaison l'est aussi.",
+   "oracle_scan": 150
+  },
+  {
+   "id": "union_demo",
+   "name": "The Union Demo (menu interactif)",
+   "subsystem": "mfp/irq",
+   "rom": "roms/tos102uk.img",
+   "disk": "disks/etalons/union_demo.msa",
+   "machine": "st",
+   "mem": "512k",
+   "cpu": "moira",
+   "fastfdc": true,
+   "frames": 4000,
+   "frame": 3900,
+   "crop": "buffer_noled",
+   "max_diff_px": 800,
+   "fetch": {
+    "url": "https://www.planetemu.net/roms/atari-st-demos",
+    "hint": "The Union Demo — rapatrier à la main si fetch auto échoue (freeware)."
+   },
+   "optional": true,
+   "ref_kind": "snapshot"
+  },
+  {
+   "id": "scroll_8265",
+   "name": "Scroll fin STE $8265 (avec prefetch) — make_scroll_test",
+   "subsystem": "shifter/hscroll",
+   "rom": "roms/etos256us.img",
+   "rom_note": "ROM LIBRE (EmuTOS) le 2026-08-19 : ce disque est un secteur de boot AUTONOME (move.w #$2700,sr, registres video/palette/base ecran poses par le programme) - le TOS ne fait que le charger, donc l'image ne depend PAS de lui. Verifie : capture EmuTOS vs capture tos162us.img = 0 px sur 114816, et la reference tests/reference/scroll_8265.ppm est INCHANGEE (0 px). Migre pour que l'etalon survive au retrait des TOS Atari proprietaires du depot.",
+   "disk": "disks/etalons/scroll_8265.st",
+   "disk_generate": "tools/make_scroll_test.py",
+   "machine": "ste",
+   "mem": "512k",
+   "cpu": "moira",
+   "frames": 400,
+   "frame": 380,
+   "crop": "buffer_noled",
+   "max_diff_px": 0,
+   "ref_note": "Reference ORACLE (Hatari 2.6.1-devel, EmuTOS 256 Ko US, 832x552) posee le 2026-08-19 : NeoST == Hatari a 0 px sur cet etalon, la self-capture .ppm n'apportait donc rien de plus qu'une non-regression contre soi-meme. Regenerer avec : run_etalons.py --oracle --only scroll_8265",
+   "ref_kind": "oracle",
+   "oracle_scan": 90,
+   "scan_note": "oracle_scan ajouté le 2026-08-19 : tout étalon qui BOOTE UN DISQUE hérite de la nondéterminisme d'Hatari (RNG semé sur time(NULL) → position angulaire initiale de la disquette aléatoire → durée de boot, donc numérotation des trames, variable). Sans fenêtre, --oracle réinstalle une référence décalée et l'étalon devient rouge sans qu'aucun pixel n'ait bougé. Cf. oracle_scan_pick() dans run_etalons.py."
+  },
+  {
+   "id": "scroll_8264",
+   "name": "Scroll fin STE $8264 (sans prefetch) — make_scroll_test",
+   "subsystem": "shifter/hscroll",
+   "rom": "roms/etos256us.img",
+   "rom_note": "ROM LIBRE (EmuTOS) le 2026-08-19 : ce disque est un secteur de boot AUTONOME (move.w #$2700,sr, registres video/palette/base ecran poses par le programme) - le TOS ne fait que le charger, donc l'image ne depend PAS de lui. Verifie : capture EmuTOS vs capture tos162us.img = 0 px sur 114816, et la reference tests/reference/scroll_8264.ppm est INCHANGEE (0 px). Migre pour que l'etalon survive au retrait des TOS Atari proprietaires du depot.",
+   "disk": "disks/etalons/scroll_8264.st",
+   "disk_generate": "tools/make_scroll_test.py",
+   "machine": "ste",
+   "mem": "512k",
+   "cpu": "moira",
+   "frames": 400,
+   "frame": 380,
+   "crop": "buffer_noled",
+   "max_diff_px": 0,
+   "ref_note": "Reference ORACLE (Hatari 2.6.1-devel, EmuTOS 256 Ko US, 832x552) posee le 2026-08-19 : NeoST == Hatari a 0 px sur cet etalon, la self-capture .ppm n'apportait donc rien de plus qu'une non-regression contre soi-meme. Regenerer avec : run_etalons.py --oracle --only scroll_8264",
+   "ref_kind": "oracle",
+   "oracle_scan": 90,
+   "scan_note": "oracle_scan ajouté le 2026-08-19 : tout étalon qui BOOTE UN DISQUE hérite de la nondéterminisme d'Hatari (RNG semé sur time(NULL) → position angulaire initiale de la disquette aléatoire → durée de boot, donc numérotation des trames, variable). Sans fenêtre, --oracle réinstalle une référence décalée et l'étalon devient rouge sans qu'aucun pixel n'ait bougé. Cf. oracle_scan_pick() dans run_etalons.py."
+  },
+  {
+   "id": "nocooper",
+   "name": "No Cooper (1984) — écran principal (overscan med-res, étalon V2)",
+   "subsystem": "shifter/res-tricks",
+   "rom": "roms/tos102uk.img",
+   "disk": "disks/etalons/nocooper.msa",
+   "machine": "st",
+   "mem": "1m",
+   "cpu": "moira",
+   "fastfdc": true,
+   "keys_at": [
+    900,
+    " "
+   ],
+   "frames": 6802,
+   "frame": 6790,
+   "crop": "buffer_noled",
+   "max_diff_px": 0,
+   "fetch": {
+    "url": "https://ftp.untergrund.net/users/ltk_tscc/fujiology/ST/0_9/1984/NOCOOPER.ZIP",
+    "member": "NOCOOPER.MSA",
+    "save_as": "disks/etalons/nocooper.msa"
+   },
+   "optional": true,
+   "note": "Étalon V2 (Video_WriteToGlueRes) : l'écran principal ouvre les bordures G/D en MED-RES (la nappe traverse bord à bord chez Hatari). RÉSOLU 2026-07-12 (bug hunt) : la capture par-ligne au faisceau étendue aux trames « palette seule » (spec512Active_, endVideoLine) a fermé le résidu V2 assumé de 891 px — 0 px vs oracle. Référence = tests/reference/nocooper.png (copie de nocooper_oracle.png, oracle Hatari WS3, touche espace tenue vbl ~900, frame 6788 ↔ NeoST --frames 6800, Δ=-11) RECALÉ 2026-08-01 : --frames 6800 → 6801. Deux correctifs de FIDÉLITÉ du boot (instruction RESET câblée, puis reset Glue posé en direct comme IoMem_WriteByte au lieu de passer par le bus) ont décalé la démo d'une trame. Vérifié que ce n'est PAS une régression de rendu : balayage 6798→6802, l'image est 0 px vs oracle à 6801 (bit-identique), et les trames voisines reproduisent les écarts observés. Méthode à réutiliser avant tout re-calage. RECALÉ 2026-08-06 : 6801 → 6802 (IACK MFP vectorisé 12→16 cyc, mesuré à l'oracle sur Super Hang-On — le boot glisse d'une trame). Méthode de la note appliquée : balayage 6794→6808, 0 px (bit-identique oracle) à 6801 en numérotation --shot-every, voisines conformes (6800 : 12,88 %, 6802 : 15,06 %).",
+   "ref_kind": "oracle",
+   "oracle_scan": 90,
+   "scan_note": "oracle_scan ajouté le 2026-08-19 : tout étalon qui BOOTE UN DISQUE hérite de la nondéterminisme d'Hatari (RNG semé sur time(NULL) → position angulaire initiale de la disquette aléatoire → durée de boot, donc numérotation des trames, variable). Sans fenêtre, --oracle réinstalle une référence décalée et l'étalon devient rouge sans qu'aucun pixel n'ait bougé. Cf. oracle_scan_pick() dans run_etalons.py."
+  },
+  {
+   "id": "nocooper_greetings",
+   "name": "No Cooper — écran greetings (overscan MED-RES, étalon V2 principal)",
+   "subsystem": "shifter/res-tricks",
+   "rom": "roms/tos102uk.img",
+   "disk": "disks/etalons/nocooper.msa",
+   "machine": "st",
+   "mem": "1m",
+   "cpu": "moira",
+   "fastfdc": true,
+   "keys_at": [
+    [
+     900,
+     " "
+    ],
+    [
+     7200,
+     " "
+    ],
+    [
+     13500,
+     " "
+    ],
+    [
+     19000,
+     " "
+    ],
+    [
+     24500,
+     " "
+    ]
+   ],
+   "frames": 29500,
+   "frame": 29200,
+   "crop": "buffer_noled",
+   "max_diff_px": 0,
+   "fetch": {
+    "url": "https://ftp.untergrund.net/users/ltk_tscc/fujiology/ST/0_9/1984/NOCOOPER.ZIP",
+    "member": "NOCOOPER.MSA",
+    "save_as": "disks/etalons/nocooper.msa"
+   },
+   "optional": true,
+   "note": "V2 VALIDÉ 0 px vs oracle (2026-07-08) : chaque ligne fait hi@0/lo@12/MED@20 (LINE_LEFT_MED_CYCLE_1) + 60@376/50@384 + stab hi@444/lo@456 → page greetings med-res 4 bordures ouvertes. Écran STATIQUE → pas d'alignement de phase requis. Cible oracle archivée : tests/reference/nocooper_greetings_oracle.png.",
+   "ref_kind": "snapshot"
+  }
+ ]
 }
