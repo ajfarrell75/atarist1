@@ -236,6 +236,7 @@ def run_one(entry: dict, args) -> bool:
                      "spec512_selftest": "--spec512-selftest",
                      "bus_selftest": "--bus-selftest",
                      "mfp_selftest": "--mfp-selftest",
+                     "serloop_selftest": "--serloop-selftest",
                      "msa_selftest": "--msa-selftest",
                      "enec_selftest": "--enec-selftest",
                      "usatan_selftest": "--usatan-selftest",
