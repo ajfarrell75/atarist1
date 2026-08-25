@@ -184,7 +184,7 @@ public:
     // reconstruit TADR depuis `due_ - liveNow()`.
     //
     // DISPATCH IMMÉDIAT (port de `Blitter_FlushCycles`, blitter.c:356-375) — chantier
-    // B4. Hatari ne se contente pas d'avancer ses compteurs : il appelle
+    // BL4. Hatari ne se contente pas d'avancer ses compteurs : il appelle
     // `CycInt_Process()` après CHAQUE accès de 4 cycles, depuis le handler CycInt du
     // blitter lui-même (`INTERRUPT_BLITTER`). Sa boucle de dispatch est donc
     // RÉ-ENTRANTE par construction — `while (ActiveInt <= now) CycInt_CallActiveHandler()`
@@ -245,7 +245,7 @@ public:
     void runTo(int64_t cycle) {
         now_ = cycle;
         assert(armedInvariant() && "armed_ désynchronisé de due_");
-        // RÉ-ENTRANCE (chantier B4) — `runTo` peut être appelé DEPUIS un callback, via
+        // RÉ-ENTRANCE (chantier BL4) — `runTo` peut être appelé DEPUIS un callback, via
         // Scheduler::addStolenCycles (accès bus du blitter) ou via un syncTo. C'est le
         // modèle d'Hatari, dont `CycInt_Process` est ré-entré depuis le handler du
         // blitter (cycInt.h:85-88 + blitter.c:366). `fired` et `minAll` sont des

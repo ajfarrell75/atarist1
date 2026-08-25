@@ -105,11 +105,33 @@ Hatari.
 
 | Jeu | Symptôme | Piste / renvoi |
 |-----|----------|----------------|
-| **Arkanoid (1987)** (Imagine) | Atteint l'écran-titre mais ne franchit pas la partie (boucle `$31736`/`$26E7`). | Gel FDC `$31736` **résolu** (modèle rotationnel) ; reste une cause distincte (protection ? 2ᵉ chargement ? IRQ ?). 🎯 étalon FDC/protection. |
 | **Beyond the Ice Palace** (D-BUG) | Rapport GUI : écran scramblé en jeu. **NON reproduit en headless** : gameplay PROPRE (ST et STE, 1 Mo, boot AUTO). ⚠ Le PRG exige > 512 Ko (BSS dépack 384 Ko → TPA ~471 Ko) : en 512 Ko le TOS skippe l'AUTO — comportement CORRECT (pas un bug). Le chemin GUI = double-clic bureau GEM (Pexec sous AES) ≠ AUTO — à reproduire avec la config GUI exacte. | Recette headless : copier le disque + `mmd ::AUTO` + `mcopy` ; `--mem 1m --keys-at 4000 "n" --keys-at 6200 " " --keys-at 9600 " " --keys-at 12000 "y" --keys-at 14500 "s" --keys-at 16000 " " --keys-at 19600 "y"` → jeu ≈ trame 21000. |
 | **Shadow Warriors** (2Hot2Handle) | Après SPACE : titre + musique OK ; le bouton joystick ne lance pas le jeu. (Castle Warrior, lui, fonctionne.) | À diff'er Hatari. |
-| **Wings of Death** (`.stx`) | Après bouton : titre **corrompu** + son ralenti ; SPACE lance le jeu, qui tourne ensuite très bien. | Corruption titre (vidéo) + son chargement. |
-| **Lethal Xcess sur Mega ST** (`.stx`) | ✅ **CORRIGÉ (2026-08-25)** — c'était **B3** : les cycles de stall du blitter étaient facturés HORS de l'horloge de l'ordonnanceur. `Blitter::onSlice` (tranche non-hog) est le callback de l'échéance `Scheduler::BLITTER`, donc il tourne ENTRE deux `cpu.run()` : ses cycles n'entraient ni dans `ran` ni dans `sched.now()`. La dette (mesurée : 8 tranches × 136 = **1088 cycles bus**) était résorbée d'un coup par le `syncTo` du hook d'IACK juste avant le handler Timer A, ce qui mangeait 2 tics de prescaler → `Mfp::readTimerData` rendait TADR = `$3C` et la garde `$14C2E` du jeu tombait dans son `ILLEGAL`. Corrigé par `Blitter::billCycles` → `Scheduler::addStolenCycles` (port de `Blitter_AddCycles`, `blitter.c:351-352`). ⚠ Le symptôme FDC ci-contre était un **LEURRE** : identique à la milliseconde près en `machine=st`, où le jeu démarre. | Le bug frappait les **trois** machines à blitter, pas seulement Mega ST : `megast` cassait trame 5552, `ste` (`tos106uk`) et `megaste` (`tos206uk`) trame 5523 — écran noir à 1 couleur. Après correctif : aucun `BREAK`, 26-29 couleurs, écran de jeu, sur les trois. Repro : `--machine megast --mem 1m --disk Lethal_Xcess_Disk_1.STX --diskb Lethal_Xcess_Disk_2.STX --keys-at 3000 " " --joy-at 4000 0x80 --frames 6000 --break 14C2E`. Sonde de non-régression : `NEOST_QDELTA_DIAG=1` (le delta d'entrée de quantum doit rester PLAT à 40, jamais d'escalier). Détail → `CHANGELOG.md` (2026-08-25) et divergence **B3** de `docs/HATARI_DIVERGENCES.md`. ⚠ **Cross-check Hatari toujours BLOQUÉ** : `--cmd-fifo` n'injecte que des scancodes ST, pas de bit joystick — il faut un autre biais pour piloter le tir sous l'oracle. |
+| **Wings of Death** (`.stx`) | ~~Après bouton : titre **corrompu**~~ **NON REPRODUIT en headless (2026-08-25)** : logo Thalion puis titre **154 couleurs PROPRES**, en `st/1m/tos102fr` comme en `ste/1m/tos106uk` — vérifié par deux agents indépendamment. Reste à instruire : **le son ralenti SEUL** (non évaluable par capture PPM). | ⚠ Sur cet écran c'est **ESPACE** qui avance, pas le feu. Cœur émulé disculpé le 2026-08-25 (vidéo byte-identique à l'oracle, cadence YM à ±0,1 s sur 26 s) → suspect n°1 = le **frontend** : lancer le GUI sans sandbox et guetter `[Audio] ring underrun … emulation loop: X real frames/s` (`src/audio/Audio.cpp:176-178`), puis `crt=0`, puis `mix_drive=0`. ⚠ `--sound-dump` **exclut** les bruits de lecteur (`AudioMix.hpp:16-19`) alors que l'utilisateur a `drivesound=1`. |
+| **Lethal Xcess sur Mega ST** (`.stx`) | ✅ **CORRIGÉ (2026-08-25)** — c'était **BL3** : les cycles de stall du blitter étaient facturés HORS de l'horloge de l'ordonnanceur. `Blitter::onSlice` (tranche non-hog) est le callback de l'échéance `Scheduler::BLITTER`, donc il tourne ENTRE deux `cpu.run()` : ses cycles n'entraient ni dans `ran` ni dans `sched.now()`. La dette (mesurée : 8 tranches × 136 = **1088 cycles bus**) était résorbée d'un coup par le `syncTo` du hook d'IACK juste avant le handler Timer A, ce qui mangeait 2 tics de prescaler → `Mfp::readTimerData` rendait TADR = `$3C` et la garde `$14C2E` du jeu tombait dans son `ILLEGAL`. Corrigé par `Blitter::billCycles` → `Scheduler::addStolenCycles` (port de `Blitter_AddCycles`, `blitter.c:351-352`). ⚠ Le symptôme FDC ci-contre était un **LEURRE** : identique à la milliseconde près en `machine=st`, où le jeu démarre. | Le bug frappait les **trois** machines à blitter, pas seulement Mega ST : `megast` cassait trame 5552, `ste` (`tos106uk`) et `megaste` (`tos206uk`) trame 5523 — écran noir à 1 couleur. Après correctif : aucun `BREAK`, 26-29 couleurs, écran de jeu, sur les trois. Repro : `--machine megast --mem 1m --disk Lethal_Xcess_Disk_1.STX --diskb Lethal_Xcess_Disk_2.STX --keys-at 3000 " " --joy-at 4000 0x80 --frames 6000 --break 14C2E`. Sonde de non-régression : `NEOST_QDELTA_DIAG=1` (le delta d'entrée de quantum doit rester PLAT à 40, jamais d'escalier). Détail → `CHANGELOG.md` (2026-08-25) et divergence **BL3** de `docs/HATARI_DIVERGENCES.md`. ⚠ **Cross-check Hatari toujours BLOQUÉ** : `--cmd-fifo` n'injecte que des scancodes ST, pas de bit joystick — il faut un autre biais pour piloter le tir sous l'oracle. |
+
+**CLOS (2026-08-25)** — *`D-PSG` : Stardust sur STE, gel noir après le menu trainer* :
+**CORRIGÉ**. La sélection de lecteur/face écrite dans le port A du PSG est désormais **POUSSÉE**
+vers le FDC (`Machine::setPortASink` → `Fdc::refreshDriveSide`, port de `psg.c:419-420` →
+`FDC_SetDriveSide`) ; `refreshDriveSide()` est passée publique pour ça. Avant : le FDC ne
+RELISAIT le PSG que depuis ses propres accès registre, donc un programme qui écrit sa commande
+FDC AVANT de sélectionner le lecteur restait à `driveSel_ = -1` pour toujours. Mesuré après
+correctif : `drv=0` au lieu de `drv=-1`, INTRQ levé, **374 294 lignes FDC** au lieu de 4714, et
+Stardust STE joue son **intro défilante** puis va chercher la disquette 2 dans le **lecteur B**
+(`drv=1`, `idxTime=0` — lecteur vide) — le comportement de l'oracle. ⚠ Les disquettes 2 et 3
+étant absentes du dépôt, le titre n'est **pas** jouable pour autant : c'était une correction de
+FIDÉLITÉ, comme annoncé. ◑ Résidu non élucidé : l'oracle affichait « INSERT DISK 2 IN ANY
+DRIVE » là où NeoST fond au noir puis poll le lecteur B ; à revoir si les disquettes
+manquantes réapparaissent. Validé : `--tier full` TOUS LES PALIERS OK, Lethal Xcess `megast`
+intact.
+
+**CLOS (2026-08-25)** — *Arkanoid (1987) : boucle `$31736`/`$26E7`* : **FIDÈLE**, pas un bug
+NeoST. Hatari boucle **identiquement** sous TOS 1.02 (état machine byte-identique) et
+**débloque identiquement** sous TOS 1.00 US/UK, où le jeu est jouable dans NeoST. La boucle est
+l'attente clavier « 1 ou 2 joueurs » du titre : les pistes « protection / 2ᵉ chargement / IRQ »
+sont **rayées** (aucun vecteur $47 pendant le gel). Le marqueur 🎯 « étalon FDC/protection » est
+retiré : ce cas n'en est pas un. ⚠ Le disque cité n'est plus dans le dépôt (`45f9a65`).
+Preuves et recette → `docs/CASE_STUDIES.md`.
 
 Un suivi mineur laissé ouvert sur un cas par ailleurs tranché :
 - **Lethal Xcess** — titre « buggé à ~8 % » constaté en GUI (2026-07-02), probablement la
@@ -300,16 +322,20 @@ verts) — voir `CHANGELOG.md § Frontend`. Les 3 points fonctionnels relevés �
 rend **0 blit** sur `scroll_8264`, `scroll_8265` et `etos_ste_boot` (les étalons STE) ; tous les
 autres sont `machine=st`, où le blitter n'existe pas. Conséquence : un `--tier full` **vert ne
 prouve rien** sur le blitter — il prouve la non-régression de la base de temps, pas la correction
-**B3** ni **B4**. Toute leur preuve tient à des runs *Lethal Xcess* lancés à la main, sur un
+**BL3** ni **BL4**. Toute leur preuve tient à des runs *Lethal Xcess* lancés à la main, sur un
 `.stx` non redistribuable. 🎯 **À faire** : un étalon **généré** (esprit
 `tools/make_scroll_test.py`) — secteur de boot STE autonome qui enchaîne des blits **non-hog**
 pendant qu'un timer MFP tourne, capture pixel + contrôle que le timer n'a pas dérivé. C'est
-l'étalon qui couvrirait les DEUX : B3 (pas de dérive cumulée) et B4 (le timer sert à l'heure
+l'étalon qui couvrirait les DEUX : BL3 (pas de dérive cumulée) et BL4 (le timer sert à l'heure
 même quand son échéance tombe au MILIEU d'une tranche). Sans lui, la prochaine refonte de
 l'ordonnanceur les re-cassera sans qu'aucun palier ne bronche. Palliatifs immédiats : la sonde
 `NEOST_QDELTA_DIAG=1` (le delta doit rester **plat**, jamais d'escalier) et la métrique
-`timer IRQ max lateness`, qui doit rester à **132** sur machine à blitter — c'est elle qui
-avait signé le crédit groupé (~265) avant B4. Voir aussi : le chemin
+`timer IRQ max lateness` — c'est elle qui avait signé le crédit groupé (~265) avant BL4.
+⚠ **Cette métrique dépend de la CHARGE, ce n'est pas une constante** : la valeur **132** vaut
+pour la repro *Lethal Xcess* `megast`/`ste`/`megaste` (celle qui sert d'A/B), mais un balayage
+du 2026-08-25 relève **147, 156, 157 et 163** sur d'autres titres en `machine=st`. À comparer
+donc **à charge identique**, jamais à un seuil absolu — sans quoi elle produit de fausses
+alertes. Voir aussi : le chemin
 **HOG** du blitter n'est exercé par **aucun** titre testé — recensement sur *Lethal Xcess*
 `megast`, 6000 trames : 5764 blits, **tous** `ctrl=$80`, le bit HOG (`$40`) n'est jamais posé.
 
@@ -389,6 +415,34 @@ ACIA) ; si une vraie démo spec512 **overscan** (bordures ouvertes) est rapatri�
 étalon oracle (l'auto_diapo, lui, est 100 % borderless).
 
 ### Outillage / qualité
+- ✅ **OUTIL-1 — `--joy-at`, `--joy-script` et `--mouse-at` RENDUS RÉPÉTABLES (2026-08-25)**.
+  Les trois sont passés en `std::vector` comme `--keys-at`, l'aide porte « (repeatable) », et les
+  trois sites d'application bouclent sur les listes (règle de chevauchement : le dernier de la
+  ligne de commande gagne sur les trames communes ; des scripts disjoints jouent tous). Vérifié :
+  `--joy-at 10 0x80 --joy-at 30 0x08` produit désormais **deux** lignes « joystick applied »
+  (une seule avant). ⚠ Piège de mise en œuvre à ne pas reproduire ailleurs : `--joy-at` consomme
+  DEUX arguments, donc `emplace_back(next(a), next(a))` aurait un ordre d'évaluation **non
+  spécifié** — les temporaires nommés sont obligatoires. **Reste ouvert** de ce dossier : c'étaient des **scalaires**
+  là où `--keys-at` / `--key-down` / `--key-up` sont des **vecteurs** (`:1134-1136`) : la dernière
+  occurrence gagne, **sans le moindre avertissement**. C'est le **principal fabricant de faux
+  positifs du projet** — à lui seul il a produit **trois des huit « bloquants »** de la passe du
+  2026-08-25 (Xenon 2, Flood, Dynamite Dux, tous jouables avec un script unique). Deux corollaires
+  du même dossier :
+  · `--joy-script` appelle `setJoystick(0, st)` à **chaque** trame (`:1696`) → il remet le port 0
+    à zéro en silence, et `--joy 0x80,0x80` ne peut pas tenir avec lui ;
+  · `--keys-at` ne tient la touche que **2 trames ≈ 40 ms** (make +0 / break +2, `:1620-1631`) —
+    trop court pour certaines cracktros, et surtout **incomparable** à un `--cmd-fifo`
+    `keydown`/`keyup` d'Hatari (~600 ms). ⚠ **Toute A/B contre l'oracle doit égaliser la DURÉE
+    d'appui** : un verdict « confirmé à l'oracle » a déjà été rendu FAUX par cet écart.
+  Reste à faire : une option de **durée d'appui** pour `--keys-at` (les 2 trames sont câblées en
+  dur), et le pavé numérique — `stScancode()` ne mappe pas le **pavé
+  numérique** (seuls `.` 0x71 et Enter 0x72), d'où des menus de compilation (Automation)
+  impilotables — Hatari étant tout aussi insensible, il n'y a **aucun bug d'émulation** derrière.
+- **Balayage de masse : monter les disques en LECTURE SEULE.** Un balayage des 67 images le
+  2026-08-25 a laissé `disks/st/Eliminator-Nebulus (19xx)(A-Ha).st` **modifié dans l'arbre git**
+  (le jeu écrit sur sa disquette, l'émulateur écrit dans le fichier). Restauré par
+  `git checkout --`, mais il manque un garde-fou : une option `--disk-ro` (ou un `git status`
+  systématique en fin de campagne) éviterait de commettre une image altérée par accident.
 - **Étalons headless** : calibrer frames + références Cuddly / Union / Troed / Hatari Test Suite ;
   rapatrier Union (planetemu manuel). Infra en place (`tools/run_etalons.py`).
 - **Samples GODLIB (chantier « faire tourner le boulot Reservoir Gods »)** : les **15 exemples**
