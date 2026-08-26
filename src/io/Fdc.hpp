@@ -209,6 +209,7 @@ public:
     // via Machine (setPortASink). Sans cette poussée, un programme qui écrit sa commande
     // FDC AVANT de sélectionner le lecteur reste bloqué avec driveSel_ = -1 — cf. D-PSG.
     // Idempotent : ne ré-ancre l'index que si le lecteur a effectivement changé.
+    void     billDmaCycles(int n);           // stall CPU du DMA FDC (cf. .cpp, D3)
     void     refreshDriveSide();
 
 private:

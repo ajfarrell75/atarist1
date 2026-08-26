@@ -146,8 +146,13 @@ AUCUN test ni AUCUN titre (recensement Lethal Xcess : 5764 blits, tous `ctrl=$80
 non-trivialité : 380 px d'écart avec `blitter_timer`, dont **0 px en zone de données** — même
 transfert, seul le partage de bus change. Et il passe en **`ref_kind: oracle` à 0 px**, donc il
 prouve la **conformité**, pas seulement la non-régression.
-🎯 **Reste ouvert** : le MFP en mode bloc et le stall FIFO du FDC (D3) n'ont toujours pas
-d'étalon — ce sont les deux derniers trous de couverture identifiés.
+✅ **Le MFP en mode bloc a maintenant son étalon** (`mfp_poll`).
+🎯 **Reste ouvert** : le stall FIFO du FDC (**D3**). Le couple prescrit a été TENTÉ le 2026-08-26
+et **REVERTÉ** — il est insuffisant : l'ancrage anti-dérive **double** le débit DMA (mesuré
+4096 cyc/flush en rafale, contre aucun intervalle < 8000 avant), fait tomber `nocooper` et
+`nocooper_greetings`, et un balayage oracle de 181 trames ne trouve aucune correspondance.
+Détail et piste → entrée **D3** de `docs/HATARI_DIVERGENCES.md`. Sonde conservée :
+`NEOST_FDC_FLUSH_DIAG=1`.
 
 ### A3 ◐ — Le corpus de régression n'est pas livrable (AVANCÉ le 2026-08-26)
 
