@@ -54,6 +54,39 @@ comptage des accès CPU sont identiques des deux côtés). Ajouter une constante
 source pour la justifier serait une rustine — le projet en a déjà retiré. **Le résidu reste
 ouvert et documenté, pas masqué.**
 
+## GUI : souris scriptée (`--mouse-at`) — le chemin « double-clic GEM » est franchi, Beyond the Ice Palace CLOS (2026-08-26)
+
+**La dernière marche d'injection d'A8.** Le GUI accepte `--mouse-at N "SCRIPT"`, même DSL que le
+headless (L/R/U/D = ±8 px, 1/2/3 = clics, `.` = idle, un token par trame émulée). Avec elle, le
+chemin que le TODO déclarait hors de portée — « double-clic bureau GEM (Pexec sous AES) » — a été
+piloté de bout en bout : bureau → double-clic icône A → fenêtre → double-clic `ICEPALAC.PRG` →
+cracktro D-Bug → trainer (`--scancode-at`) → menu du jeu → **EN JEU, PROPRE, 16 couleurs**.
+
+**Verdict Beyond the Ice Palace** (rapport « écran scramblé en jeu ») : **non reproduit après
+instruction complète**. En couleur, le chemin GEM exact du rapport joue proprement. En moniteur
+**mono**, le PRG **quitte en ~10 s** (retour bureau, pointeur re-centré — la signature d'un Pexec
+terminé) : on ne peut même pas être « en jeu » en mono, le scramble ne peut donc pas venir de
+cette config. Dossier clos comme Wings of Death : à rouvrir sur nouvelle repro avec `neost.cfg`
+et version. Le catalogue des bugs ouverts ne contient plus que **Shadow Warriors** (disque absent
+du dépôt).
+
+**Pilotage GEM au script souris — les pièges, payés puis consignés :**
+- le **double-clic** doit suivre le pattern d'Hatari (`ikbd.c:DoubleClickPattern`) : 4 trames
+  down, 4 up, 4 down, 4 up — et FINIR PAR UNE RELÂCHE, GEM compte au release ;
+- les clics d'UNE trame (14 ms) sont trop brefs pour certains widgets ;
+- les menus TOS se déroulent au **SURVOL** : un trajet de saturation par le coin HAUT les
+  accroche, et le clic suivant tombe dans un item (vécu : dialogue « Informations bureau »
+  ouvert à la place de l'icône). Approcher par le coin BAS ;
+- la **saturation** d'un positionnement absolu doit couvrir la PLUS GRANDE résolution :
+  ≥ 80 tokens en X (640 px), ≥ 50 en Y (400 px). 40 tokens ne saturent qu'en basse résolution —
+  bug de calage vécu, invisible tant que tous les runs étaient en couleur ;
+- limite de DSL connue : pas de token « mouvement avec bouton tenu », donc pas de DRAG
+  (rubber band GEM impossible).
+
+⚠ Le GUI RÉÉCRIT `neost.cfg` à chaque sortie (rom/disk/mono suivent la session) : un harnais qui
+enchaîne les runs fait DÉRIVER la config utilisateur — vécu, restauré à la main. À traiter un
+jour (`--no-save-config` ?).
+
 ## GUI : injection d'entrées — et le dossier Wings of Death est CLOS (2026-08-26)
 
 **La marche suivante d'A8, posée et immédiatement rentabilisée.** Le GUI accepte désormais
