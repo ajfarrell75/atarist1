@@ -148,9 +148,13 @@ transfert, seul le partage de bus change. Et il passe en **`ref_kind: oracle` à
 prouve la **conformité**, pas seulement la non-régression.
 ✅ **Le MFP en mode bloc a maintenant son étalon** (`mfp_poll`).
 🎯 **Reste ouvert** : le stall FIFO du FDC (**D3**). Le couple prescrit a été TENTÉ le 2026-08-26
-et **REVERTÉ** — il est insuffisant : l'ancrage anti-dérive **double** le débit DMA (mesuré
-4096 cyc/flush en rafale, contre aucun intervalle < 8000 avant), fait tomber `nocooper` et
-`nocooper_greetings`, et un balayage oracle de 181 trames ne trouve aucune correspondance.
+et **REVERTÉ** (deux fois). 🛑 Les chiffres de la première passe étaient **FAUX** : la sonde était
+logée DANS le correctif, donc inactive côté « avant ». Refait : sans couple **4203** cyc/flush,
+stall seul **4235**, ancrage + stall **4096**, cible Hatari **4127** — le couple RAPPROCHE donc de
+l'oracle (−31 contre +76). Il faut pourtant le reverter : 10 étalons pixel sur 12 passent, mais
+`nocooper` casse, et un balayage élargi à **±400 trames** donne une meilleure correspondance à
+~65 000 px, alors que sans le couple il est à **0 px**. Ce n'est donc pas un décalage de trame :
+le couple déséquilibre le rendu d'une démo beam-synchronisée.
 Détail et piste → entrée **D3** de `docs/HATARI_DIVERGENCES.md`. Sonde conservée :
 `NEOST_FDC_FLUSH_DIAG=1`.
 
