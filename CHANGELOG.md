@@ -54,6 +54,24 @@ comptage des accès CPU sont identiques des deux côtés). Ajouter une constante
 source pour la justifier serait une rustine — le projet en a déjà retiré. **Le résidu reste
 ouvert et documenté, pas masqué.**
 
+## GUI : injection d'entrées — et le dossier Wings of Death est CLOS (2026-08-26)
+
+**La marche suivante d'A8, posée et immédiatement rentabilisée.** Le GUI accepte désormais
+`--scancode-at N HEX[,…]`, `--key-hold N` et `--joy-at N VAL` (mêmes noms que le headless).
+⚠ Nuance de sémantique, documentée dans le code : `--joy-at` est **TENU** — l'état est re-posé à
+chaque trame ≥ N, parce que le GUI écrase le port avec l'état des manettes réelles à chaque
+tour ; une pose unique serait perdue au tour suivant, et « tenu » est de toute façon ce qu'un
+harnais veut.
+
+**Application immédiate : Wings of Death « après le bouton », la réserve restante du dossier.**
+Feu injecté et tenu dès la trame 3000, config utilisateur réelle (`neost.cfg`, `drivesound`
+actif), capture à 5500 — après la rafale FDC de t=72-74 s identifiée comme la fenêtre du
+symptôme : **titre au dragon 154 couleurs PROPRE, zéro `ring underrun`** sur tout le run (mesure
+faite machine au repos, sans aucune charge concurrente). Après trois passes — cœur émulé
+byte-identique à l'oracle, GUI en chargement, GUI après le bouton — **le rapport n'est reproduit
+nulle part** : dossier clos dans `docs/CASE_STUDIES.md`, à rouvrir uniquement sur une nouvelle
+repro accompagnée du `neost.cfg` et de la version (le rapport d'origine prédate BL3/BL4/D-PSG/D3).
+
 ## GUI : sortie automatique après N trames + capture (`--run-frames`, `--shot`) (2026-08-26)
 
 La brique qui manquait au chantier A8 : le GUI ne pouvait ni s'arrêter seul ni être observé par
