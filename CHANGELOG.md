@@ -35,7 +35,24 @@ d'Hatari ici EST le cycle-exact) ; et l'overlap CPU parallèle, qui serait un ef
 tranche** (faux — doubler la taille du blit ne double pas la dérive : elle est **par blit**, et
 c'est cette mesure qui a mené à la vraie cause).
 
-**Résidu ouvert : ~20 cyc/blit**, cause non établie.
+**Résidu instruit le lendemain, cause NON établie — et rien n'a été modifié sur une
+supposition.** Décomposition mesurée en variant le nombre de tranches par blit (1 / 2 / 4) :
+**10 cyc/blit à une tranche, 12 à deux, 20 à quatre** — ~10 cyc fixes plus ~2-3 par tranche
+supplémentaire. Le résidu suit les **restitutions de bus**, pas le volume transféré.
+
+Deux réfutations de plus, consignées dans BL5. **L'overlap CPU parallèle
+(`Blitter_Check_Simultaneous_CPU`) est réfuté par le SIGNE** : l'expérience du port 4+4 est
+causale — *ajouter* 4 cyc/blit à NeoST a *réduit* l'écart, donc NeoST facture **moins** de temps
+par blit qu'Hatari, alors que l'overlap est un remboursement côté Hatari, qui le rendrait plus
+rapide encore. Et **l'absence de délai de démarrage sur le chemin HOG est CORRECTE** : l'ajouter
+casse la conformité de `blitter_hog` (0 → 122 px). En HOG, `start()` tourne dans l'instruction
+d'écriture de `$FF8A3C`, dont les cycles restants sont déjà facturés par Moira ; en non-hog on
+planifie un événement depuis ce même point, et le délai doit être explicite.
+
+Aucun candidat Hatari n'explique les ~10 cycles restants (arbitration, PRE_START de reprise et
+comptage des accès CPU sont identiques des deux côtés). Ajouter une constante sans ligne de
+source pour la justifier serait une rustine — le projet en a déjà retiré. **Le résidu reste
+ouvert et documenté, pas masqué.**
 
 ## Le blitter a enfin un étalon — et il trouve une divergence (A1+A2+A3) (2026-08-26)
 
