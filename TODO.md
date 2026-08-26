@@ -284,9 +284,12 @@ PPM du framebuffer ST juste avant la sortie). Vérifié en réel : `./build/neos
 `neost.cfg` (machine, moniteur…) : une capture de harnais doit poser sa config ou en tenir
 compte.
 🎯 **Reste** : le job CI `xvfb` lui-même (Linux, GLFW+GL logiciel : bâtir la cible `neost`,
-`--run-frames N --shot`, comparer) — désormais possible ; et l'INJECTION D'ENTRÉES côté GUI,
-sans laquelle les dossiers « après le bouton » (Wings of Death) et « double-clic GEM » (Beyond
-the Ice Palace) restent hors de portée d'un harnais.
+`--run-frames N --shot`, comparer) — désormais possible ; ✅ et l'INJECTION D'ENTRÉES côté GUI est POSÉE
+le jour même (`--scancode-at`, `--key-hold`, `--joy-at` — ce dernier en sémantique TENUE,
+re-posé chaque trame, car le GUI écrase le port avec l'état des manettes réelles à chaque tour).
+Elle a immédiatement servi : le dossier Wings of Death « après le bouton » est **clos** (titre
+propre, zéro underrun, feu injecté). Reste hors de portée : le « double-clic GEM » (Beyond the
+Ice Palace), qui demanderait une injection SOURIS datée côté GUI.
 
 ### ⚠ Deux erreurs de méthode commises le 2026-08-25, consignées pour ne pas les refaire
 
@@ -309,8 +312,13 @@ Hatari.
 |-----|----------|----------------|
 | **Beyond the Ice Palace** (D-BUG) | Rapport GUI : écran scramblé en jeu. **NON reproduit en headless** : gameplay PROPRE (ST et STE, 1 Mo, boot AUTO). ⚠ Le PRG exige > 512 Ko (BSS dépack 384 Ko → TPA ~471 Ko) : en 512 Ko le TOS skippe l'AUTO — comportement CORRECT (pas un bug). Le chemin GUI = double-clic bureau GEM (Pexec sous AES) ≠ AUTO — à reproduire avec la config GUI exacte. | Recette headless : copier le disque + `mmd ::AUTO` + `mcopy` ; `--mem 1m --keys-at 4000 "n" --keys-at 6200 " " --keys-at 9600 " " --keys-at 12000 "y" --keys-at 14500 "s" --keys-at 16000 " " --keys-at 19600 "y"` → jeu ≈ trame 21000. |
 | **Shadow Warriors** (2Hot2Handle) | Après SPACE : titre + musique OK ; le bouton joystick ne lance pas le jeu. (Castle Warrior, lui, fonctionne.) | À diff'er Hatari. |
-| **Wings of Death** (`.stx`) | ~~Après bouton : titre **corrompu**~~ **NON REPRODUIT en headless (2026-08-25)** : logo Thalion puis titre **154 couleurs PROPRES**, en `st/1m/tos102fr` comme en `ste/1m/tos106uk` — vérifié par deux agents indépendamment. Reste à instruire : **le son ralenti SEUL** (non évaluable par capture PPM). | ⚠ Sur cet écran c'est **ESPACE** qui avance, pas le feu. Cœur émulé disculpé le 2026-08-25 (vidéo byte-identique à l'oracle, cadence YM à ±0,1 s sur 26 s) → suspect n°1 = le **frontend**. ⚠ **MESURÉ le 2026-08-26, et il ne tient pas** : GUI lancé sans sandbox sur `Wings_Of_Death_Disk_1.stx` (tos102fr, config utilisateur, `drivesound` actif), **100 s de chargement, ZÉRO `ring underrun`**. La boucle audio tient la cadence sur cette machine. ⚠ **Réserve** : le run n'a pas reçu d'entrée, il couvre donc la phase de CHARGEMENT et pas l'état « après le bouton » où le symptôme est décrit. Prochain coup : rejouer avec un appui ESPACE et guetter le même message, puis `crt=0`, puis `mix_drive=0`. ⚠ `--sound-dump` **exclut** les bruits de lecteur (`AudioMix.hpp:16-19`) alors que l'utilisateur a `drivesound=1`. |
 | **Lethal Xcess sur Mega ST** (`.stx`) | ✅ **CORRIGÉ (2026-08-25)** — c'était **BL3** : les cycles de stall du blitter étaient facturés HORS de l'horloge de l'ordonnanceur. `Blitter::onSlice` (tranche non-hog) est le callback de l'échéance `Scheduler::BLITTER`, donc il tourne ENTRE deux `cpu.run()` : ses cycles n'entraient ni dans `ran` ni dans `sched.now()`. La dette (mesurée : 8 tranches × 136 = **1088 cycles bus**) était résorbée d'un coup par le `syncTo` du hook d'IACK juste avant le handler Timer A, ce qui mangeait 2 tics de prescaler → `Mfp::readTimerData` rendait TADR = `$3C` et la garde `$14C2E` du jeu tombait dans son `ILLEGAL`. Corrigé par `Blitter::billCycles` → `Scheduler::addStolenCycles` (port de `Blitter_AddCycles`, `blitter.c:351-352`). ⚠ Le symptôme FDC ci-contre était un **LEURRE** : identique à la milliseconde près en `machine=st`, où le jeu démarre. | Le bug frappait les **trois** machines à blitter, pas seulement Mega ST : `megast` cassait trame 5552, `ste` (`tos106uk`) et `megaste` (`tos206uk`) trame 5523 — écran noir à 1 couleur. Après correctif : aucun `BREAK`, 26-29 couleurs, écran de jeu, sur les trois. Repro : `--machine megast --mem 1m --disk Lethal_Xcess_Disk_1.STX --diskb Lethal_Xcess_Disk_2.STX --keys-at 3000 " " --joy-at 4000 0x80 --frames 6000 --break 14C2E`. Sonde de non-régression : `NEOST_QDELTA_DIAG=1` (le delta d'entrée de quantum doit rester PLAT à 40, jamais d'escalier). Détail → `CHANGELOG.md` (2026-08-25) et divergence **BL3** de `docs/HATARI_DIVERGENCES.md`. ⚠ **Cross-check Hatari toujours BLOQUÉ** : `--cmd-fifo` n'injecte que des scancodes ST, pas de bit joystick — il faut un autre biais pour piloter le tir sous l'oracle. |
+
+**CLOS (2026-08-26)** — *Wings of Death : « titre corrompu + son ralenti après le bouton »* :
+**NON REPRODUIT après instruction complète** — cœur émulé byte-identique à l'oracle (2026-08-25),
+puis GUI réel avec **feu injecté et tenu** (brique A8), config utilisateur, rafale FDC couverte :
+titre 154 couleurs **propre**, **zéro** `ring underrun`. Rouvrir uniquement sur nouvelle repro
+accompagnée du `neost.cfg` et de la version. Preuves et recette → `docs/CASE_STUDIES.md`.
 
 **CLOS (2026-08-25)** — *`D-PSG` : Stardust sur STE, gel noir après le menu trainer* :
 **CORRIGÉ**. La sélection de lecteur/face écrite dans le port A du PSG est désormais **POUSSÉE**

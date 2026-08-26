@@ -2659,6 +2659,18 @@ int main(int argc, char** argv) {
     // --run-frames / --shot (cf. le parseur ci-dessous).
     static long        g_runFrames = -1;   // -1 = illimité (comportement normal)
     static std::string g_shotPath;
+    // Injection d'entrées pour harnais (chantier A8, mêmes noms que le headless) :
+    //   --scancode-at N HEX[,HEX…]  scancodes ST BRUTS à partir de la trame émulée N
+    //   --key-hold N                trames d'appui (défaut 2, cf. headless)
+    //   --joy-at N VAL              état joystick port 1 TENU à partir de la trame N
+    // ⚠ Sémantique --joy-at ≠ headless : ici l'état est RE-POSÉ à chaque trame ≥ N,
+    // parce que le GUI écrase le port à chaque tour avec l'état des manettes RÉELLES —
+    // une pose unique serait perdue au tour suivant. « Tenu » est de toute façon ce
+    // qu'un harnais veut (le bouton reste enfoncé).
+    static long g_emuFrame = 0;            // trames ÉMULÉES (croissant, sites nominaux)
+    static int  g_keyHold  = 2;
+    static std::vector<std::pair<long, std::vector<uint8_t>>> g_scanAt;
+    static std::vector<std::pair<long, uint8_t>> g_joyAt;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i] ? argv[i] : "";
         if (a == "--version") {           // identité de build (release-readiness)
@@ -2688,6 +2700,12 @@ int main(int argc, char** argv) {
                 "  --crt-preset NAME     off|light|arcade|phosphor (implies --crt)\n"
                 "  --run-frames N        quit after N emulated frames (harness use)\n"
                 "  --shot PATH           dump the ST framebuffer as PPM before that exit\n"
+                "  --scancode-at N H     raw ST scancodes (hex, comma-separated) at frame N\n"
+                "                        (repeatable; space=39, numeric pad 0-9 =\n"
+                "                         70,6d,6e,6f,6a,6b,6c,67,68,69)\n"
+                "  --key-hold N          frames a key stays down (default 2)\n"
+                "  --joy-at N VAL        HOLD joystick port 1 state VAL from frame N on\n"
+                "                        (bits: up$01 down$02 left$04 right$08 fire$80)\n"
                 "\n"
                 "Without a positional argument, the last ROM from neost.cfg is reloaded\n"
                 "(or EmuTOS US). Headless runs: see neost-headless --help.\n");
@@ -2703,6 +2721,21 @@ int main(int argc, char** argv) {
         //   utilisateur (« l'écran est cassé à tel moment ») sans outil externe.
         else if (a == "--run-frames" && i + 1 < argc) g_runFrames = std::atol(argv[++i]);
         else if (a == "--shot" && i + 1 < argc)       g_shotPath = argv[++i];
+        else if (a == "--key-hold" && i + 1 < argc)   g_keyHold = std::atoi(argv[++i]);
+        else if (a == "--scancode-at" && i + 2 < argc) {
+            const long f = std::atol(argv[++i]);
+            std::vector<uint8_t> sc;
+            for (const char* t = argv[++i]; *t; ) {
+                sc.push_back((uint8_t)std::strtoul(t, nullptr, 16));
+                while (*t && *t != ',') ++t;
+                if (*t == ',') ++t;
+            }
+            g_scanAt.emplace_back(f, std::move(sc));
+        }
+        else if (a == "--joy-at" && i + 2 < argc) {
+            const long f = std::atol(argv[++i]);
+            g_joyAt.emplace_back(f, (uint8_t)std::strtoul(argv[++i], nullptr, 0));
+        }
         else if (a == "--kiosk-monitor" && i + 1 < argc) kioskMonitor = std::atoi(argv[++i]);
         //   --audio-latency MS : coussin audio visé (défaut 85, borné [20,250] par Audio).
         //   Monter à 120-150 sur une machine juste (borne Raspberry Pi) : un underrun coûte
@@ -3583,8 +3616,27 @@ int main(int argc, char** argv) {
                 if (machine.isp1160.enabled()) machine.isp1160.poll(); // trame USB (ATL → done)
                 // Sortie MIDI horodatée : cette trame DOIT commencer à emuNext (temps réel).
                 if (midiOut.anyOpen()) midiOut.anchor(machine.sched.now(), emuNext);
+                // Injections datées (harnais A8) — appliquées APRÈS le polling manettes
+                // du tour (qui écrase le port 1) et AVANT l'émulation de la trame.
+                for (const auto& [jf, jv] : g_joyAt)
+                    if (g_emuFrame >= jf) {
+                        machine.ikbd.setJoystick(0, jv);
+                        machine.bus.stePads.setJoystick(0, jv);
+                    }
+                const int stride = (g_keyHold + 2 > 4) ? g_keyHold + 2 : 4;
+                for (const auto& [sf, sl] : g_scanAt) {
+                    if (g_emuFrame < sf) continue;
+                    const long rel = g_emuFrame - sf;
+                    const long idx = rel / stride;
+                    if (idx < (long)sl.size()) {
+                        const int ph = int(rel % stride);
+                        if      (ph == 0)         machine.ikbd.keyEvent(sl[idx], true);
+                        else if (ph == g_keyHold) machine.ikbd.keyEvent(sl[idx], false);
+                    }
+                }
                 machine.runFrame();                          // une trame (timing + décodage)
                 audio.produceFrame(machine.frameCycles(), machine.sched.now());   // son de la trame → anneau (push)
+                ++g_emuFrame;
                 // --run-frames : sortie AUTOMATIQUE après N trames émulées (chantier A8).
                 // Le décompte est fait ICI, au site d'émulation nominal — le pas-à-pas du
                 // débogueur (sites runFrame du mode pausé) ne compte pas, c'est voulu :
