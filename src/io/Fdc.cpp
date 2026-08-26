@@ -1087,29 +1087,44 @@ static constexpr int kDmaFlushCycles = 4 * 16 / 2;
 // (dans le quantum, `ran` capte déjà l'avance et créditer la compterait deux fois).
 void Fdc::billDmaCycles(int n) {
     if (n <= 0 || !bus_.cpu) return;
-    // SONDE (NEOST_FDC_FLUSH_DIAG=1) : cycles écoulés entre deux flushs FIFO de 16 o.
-    // C'est LA grandeur qui mesure D3 — l'audit de 2026-08-25 l'a chiffrée à 4173
-    // cyc/flush pour NeoST contre 4127 pour Hatari, le modèle sans stall valant 4096.
-    // Inerte si la variable n'est pas posée (même patron que NEOST_QDELTA_DIAG).
-    static const bool diag = std::getenv("NEOST_FDC_FLUSH_DIAG") != nullptr;
-    if (diag && sched_) {
-        // ⚠ On ne moyenne QUE le régime de TRANSFERT CONTINU (intervalle < 8000 cyc).
-        // Une moyenne sur tous les flushs est polluée par les temps morts — seeks,
-        // attentes d'index, silences entre commandes — et donne ~19000 cyc/flush,
-        // c'est-à-dire rien de comparable au 4127 d'Hatari, qui est un débit de rafale.
-        static int64_t prev = -1, sum = 0; static long cnt = 0;
-        const int64_t now = sched_->liveNow();
-        if (prev >= 0) {
-            const int64_t d = now - prev;
-            if (d > 0 && d < 8000) { sum += d; ++cnt;
-                if (cnt % 500 == 0)
-                    std::fprintf(stderr, "[FDCFLUSH] %ld flushs en rafale, "
-                                 "moyenne %.1f cyc/flush\n", cnt, double(sum) / double(cnt)); }
-        }
-        prev = now;
-    }
     bus_.cpu->addBusWaitCycles(n);
     if (sched_ && !bus_.cpu->inRun()) sched_->addStolenCycles(n);
+    // Le stall doit AUSSI décaler la prochaine échéance du FDC. Chez Hatari c'est
+    // automatique : `M68000_AddCycles_CE` avance le compteur global, qui EST la base
+    // de temps des échéances CycInt. Ici les deux sont distincts, donc on mémorise le
+    // stall et `onFdcEvent` le reporte sur le réarmement. Sans ce report, l'ancrage
+    // anti-dérive ABSORBE les 32 cycles et la cadence retombe au modèle sans stall
+    // (mesuré : 4096 cyc/flush au lieu des 4127 d'Hatari).
+    dmaStallPending_ += n;
+}
+
+// SONDE (NEOST_FDC_FLUSH_DIAG=1) : cycles écoulés entre deux flushs FIFO de 16 o.
+// C'est LA grandeur qui mesure D3 — l'audit de 2026-08-25 l'a chiffrée à 4173
+// cyc/flush pour NeoST contre 4127 pour Hatari, le modèle sans stall valant 4096.
+//
+// ⚠ ELLE EST APPELÉE DEPUIS LES SITES DE FLUSH, PAS DEPUIS billDmaCycles. Le
+// 2026-08-26 elle y était logée, et comme `billDmaCycles` n'est appelée QUE si le
+// stall D3 est en place, la mesure « avant correctif » ne mesurait RIEN : zéro
+// ligne de sonde, que j'ai lue comme « aucun flush régulier » et qui m'a fait
+// conclure à tort que l'ancrage doublait le débit DMA. Un banc de comparaison doit
+// être ACTIF DES DEUX CÔTÉS de ce qu'il compare.
+//
+// La moyenne est restreinte au régime de RAFALE (intervalle < 8000 cyc) : sur tous
+// les flushs elle est polluée par les seeks et les silences entre commandes, et
+// donne ~19000 cyc/flush — sans rapport avec un débit de rafale.
+void Fdc::noteFifoFlush() {
+    static const bool diag = std::getenv("NEOST_FDC_FLUSH_DIAG") != nullptr;
+    if (!diag || !sched_) return;
+    static int64_t prev = -1, sum = 0; static long cnt = 0;
+    const int64_t now = sched_->liveNow();
+    if (prev >= 0) {
+        const int64_t d = now - prev;
+        if (d > 0 && d < 8000) { sum += d; ++cnt;
+            if (cnt % 500 == 0)
+                std::fprintf(stderr, "[FDCFLUSH] %ld flushs en rafale, moyenne %.1f cyc/flush\n",
+                             cnt, double(sum) / double(cnt)); }
+    }
+    prev = now;
 }
 
 void Fdc::fifoPush(uint8_t b) {
@@ -1123,6 +1138,7 @@ void Fdc::fifoPush(uint8_t b) {
         bus_.dmaWrite8(dmaAddr_ + uint32_t(j), fifo_[j]);      // via le plan mémoire (MMU)
     dmaAddr_ = (dmaAddr_ + 16) & dmaAddressMask(bus_.ram.size());
     fifoSize_ = 0;
+    noteFifoFlush();
     ff8604recent_ = uint16_t((fifo_[14] << 8) | fifo_[15]);
     dmaBytesInSector_ -= 16;
     if (dmaBytesInSector_ <= 0) { dmaSectorCount_--; dmaBytesInSector_ = 512; }
@@ -1140,6 +1156,7 @@ uint8_t Fdc::fifoPull() {
             fifo_[j] = bus_.dmaRead8(dmaAddr_ + uint32_t(j)); // via le plan mémoire (MMU)
         dmaAddr_ = (dmaAddr_ + 16) & dmaAddressMask(bus_.ram.size());
         fifoSize_ = 15;
+        noteFifoFlush();
         ff8604recent_ = uint16_t((fifo_[14] << 8) | fifo_[15]);
         dmaBytesInSector_ -= 16;
         if (dmaBytesInSector_ < 0) { dmaSectorCount_--; dmaBytesInSector_ = 512; }
@@ -2423,10 +2440,34 @@ void Fdc::onFdcEvent() {
         }
     }
 
+    // ⚠ Remis à zéro à CHAQUE événement, y compris ceux qui ne réarment PAS : sinon le
+    // report s'accumulait d'un événement à l'autre au lieu de valoir UN stall — mesuré,
+    // c'est ce qui donnait 4235 cyc/flush au lieu de 4128.
+    struct StallReset { int64_t& v; ~StallReset() { v = 0; } } stallReset{dmaStallPending_};
     if (command_ != CMD_NULL && sched_) {
         // Délai de commande/transfert → accéléré en mode « FDC rapide » ; délai cadencé
         // sur la rotation (spin-up, arrêt moteur, attente d'index) → durée réelle.
         const int delay = delayIndexPaced_ ? fdcCycles : applyFastFdc(fdcCycles);
+        // SONDE (NEOST_FDC_LATE_DIAG=1) : de COMBIEN l'échéance FDC est-elle servie en
+        // retard ? C'est la grandeur qui décide du chantier D3 : chez Hatari,
+        // `-PendingCyclesOver` ne compense QUE ce dépassement-là, qui est petit
+        // (dispatch cycle-exact). Si NeoST dispatche avec un retard BIEN plus grand
+        // (granularité du bloc CPU), alors réancrer sur `firingDue()` ne « porte » pas
+        // le mécanisme d'Hatari : ça retranche un retard qu'Hatari n'a jamais eu — ce
+        // qui expliquerait le doublement du débit DMA mesuré le 2026-08-26.
+        static const bool lateDiag = std::getenv("NEOST_FDC_LATE_DIAG") != nullptr;
+        if (lateDiag) {
+            const int64_t due = sched_->firingDue();
+            if (due >= 0) {
+                static int64_t sum = 0, mx = 0; static long n = 0;
+                const int64_t late = nowCyc() - due;
+                sum += late; if (late > mx) mx = late; ++n;
+                if (n % 2000 == 0)
+                    std::fprintf(stderr, "[FDCLATE] %ld dispatches, retard moyen %.1f cyc, "
+                                 "max %lld (delai nominal %d)\n",
+                                 n, double(sum) / double(n), (long long)mx, delay);
+            }
+        }
         sched_->schedule(Scheduler::FDC, nowCyc() + delay);
     }
 }

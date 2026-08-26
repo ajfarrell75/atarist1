@@ -210,6 +210,11 @@ public:
     // FDC AVANT de sélectionner le lecteur reste bloqué avec driveSel_ = -1 — cf. D-PSG.
     // Idempotent : ne ré-ancre l'index que si le lecteur a effectivement changé.
     void     billDmaCycles(int n);           // stall CPU du DMA FDC (cf. .cpp, D3)
+    void     noteFifoFlush();                // sonde NEOST_FDC_FLUSH_DIAG (cf. .cpp)
+    // Cycles de stall DMA facturés depuis la dernière échéance FDC servie, à reporter
+    // sur le réarmement (cf. billDmaCycles). Transitoire : remis à 0 à chaque
+    // réarmement, donc toujours nul à une frontière de trame → non sérialisé.
+    int64_t  dmaStallPending_ = 0;
     void     refreshDriveSide();
 
 private:
