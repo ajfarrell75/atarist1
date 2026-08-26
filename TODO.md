@@ -277,9 +277,16 @@ du tout**.
 2. **Le suspect n°1 de *Wings of Death* est tombé** : 100 s de chargement dans le GUI, **zéro
    `ring underrun`** (cf. la ligne du catalogue). Le dossier reste ouvert, mais sa piste
    principale est éliminée.
-🎯 **Reste** : le RENDU et la boucle audio SOUS CHARGE ne sont couverts par rien. Il faudrait un
-job CI avec `xvfb` (Linux, GLFW+GL logiciel) faisant tourner N trames puis capturant — ce qui
-suppose d'ajouter au GUI une sortie automatique après N trames, qu'il n'a pas.
+✅ **La brique manquante est posée (2026-08-26)** : `--run-frames N` (sortie propre après N
+trames ÉMULÉES — le pas-à-pas du débogueur ne compte pas, c'est voulu) et `--shot PATH` (dump
+PPM du framebuffer ST juste avant la sortie). Vérifié en réel : `./build/neost --run-frames 300
+--shot x.ppm roms/etos192fr.img` boote, capture et sort seul en ~5 s, code 0. ⚠ Le GUI lit
+`neost.cfg` (machine, moniteur…) : une capture de harnais doit poser sa config ou en tenir
+compte.
+🎯 **Reste** : le job CI `xvfb` lui-même (Linux, GLFW+GL logiciel : bâtir la cible `neost`,
+`--run-frames N --shot`, comparer) — désormais possible ; et l'INJECTION D'ENTRÉES côté GUI,
+sans laquelle les dossiers « après le bouton » (Wings of Death) et « double-clic GEM » (Beyond
+the Ice Palace) restent hors de portée d'un harnais.
 
 ### ⚠ Deux erreurs de méthode commises le 2026-08-25, consignées pour ne pas les refaire
 

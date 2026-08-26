@@ -2656,6 +2656,9 @@ int main(int argc, char** argv) {
     int  kioskMonitor = 0;
     int  audioLatencyCli = 0;   // 0 = pas d'override CLI (on garde la valeur du neost.cfg)
     std::vector<std::string> pos;
+    // --run-frames / --shot (cf. le parseur ci-dessous).
+    static long        g_runFrames = -1;   // -1 = illimité (comportement normal)
+    static std::string g_shotPath;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i] ? argv[i] : "";
         if (a == "--version") {           // identité de build (release-readiness)
@@ -2683,12 +2686,23 @@ int main(int argc, char** argv) {
                 "                        costs an audible gap, a little more latency does not)\n"
                 "  --crt                 enable CRT effects\n"
                 "  --crt-preset NAME     off|light|arcade|phosphor (implies --crt)\n"
+                "  --run-frames N        quit after N emulated frames (harness use)\n"
+                "  --shot PATH           dump the ST framebuffer as PPM before that exit\n"
                 "\n"
                 "Without a positional argument, the last ROM from neost.cfg is reloaded\n"
                 "(or EmuTOS US). Headless runs: see neost-headless --help.\n");
             return 0;
         }
         if      (a == "--kiosk")           g_kiosk = g_kioskLaunched = true;
+        //   --run-frames N : quitte proprement après N trames ÉMULÉES (pas affichées).
+        //   --shot PATH    : dump du framebuffer ST en PPM juste avant cette sortie.
+        //   Chantier A8 : c'est la brique qui rend le GUI observable par un harnais —
+        //   un job CI sous xvfb peut désormais bâtir la cible `neost`, la faire tourner
+        //   N trames et comparer la capture, là où le GUI n'était testable que sur ses
+        //   arguments. En interactif, permet aussi de capturer l'état exact d'un rapport
+        //   utilisateur (« l'écran est cassé à tel moment ») sans outil externe.
+        else if (a == "--run-frames" && i + 1 < argc) g_runFrames = std::atol(argv[++i]);
+        else if (a == "--shot" && i + 1 < argc)       g_shotPath = argv[++i];
         else if (a == "--kiosk-monitor" && i + 1 < argc) kioskMonitor = std::atoi(argv[++i]);
         //   --audio-latency MS : coussin audio visé (défaut 85, borné [20,250] par Audio).
         //   Monter à 120-150 sur une machine juste (borne Raspberry Pi) : un underrun coûte
@@ -3571,6 +3585,34 @@ int main(int argc, char** argv) {
                 if (midiOut.anyOpen()) midiOut.anchor(machine.sched.now(), emuNext);
                 machine.runFrame();                          // une trame (timing + décodage)
                 audio.produceFrame(machine.frameCycles(), machine.sched.now());   // son de la trame → anneau (push)
+                // --run-frames : sortie AUTOMATIQUE après N trames émulées (chantier A8).
+                // Le décompte est fait ICI, au site d'émulation nominal — le pas-à-pas du
+                // débogueur (sites runFrame du mode pausé) ne compte pas, c'est voulu :
+                // l'option sert un harnais, pas une session de débogage.
+                if (g_runFrames > 0 && --g_runFrames == 0) {
+                    if (!g_shotPath.empty()) {
+                        const uint32_t* px = machine.shifter.pixels();
+                        const int w = machine.shifter.width(), h = machine.shifter.height();
+                        std::FILE* f = std::fopen(g_shotPath.c_str(), "wb");
+                        bool ok = f != nullptr;
+                        if (f) {
+                            std::fprintf(f, "P6\n%d %d\n255\n", w, h);
+                            for (int k = 0; k < w * h && ok; ++k) {
+                                const uint32_t c = px[k];               // ARGB8888
+                                const unsigned char rgb[3] = {
+                                    (unsigned char)((c >> 16) & 0xFF),
+                                    (unsigned char)((c >> 8)  & 0xFF),
+                                    (unsigned char)( c        & 0xFF) };
+                                ok = std::fwrite(rgb, 1, 3, f) == 3;
+                            }
+                            if (std::fclose(f) != 0) ok = false;   // disque plein : échec au flush
+                        }
+                        std::fprintf(stderr, ok ? "[main] shot -> %s (%dx%d)\n"
+                                                : "[main] FAILED shot %s (%dx%d)\n",
+                                     g_shotPath.c_str(), w, h);
+                    }
+                    glfwSetWindowShouldClose(window, GLFW_TRUE);
+                }
                 emuNext += std::chrono::nanoseconds(
                     static_cast<int64_t>(double(machine.frameCycles()) * 1e9 / kCpuHz));
                 ++ran;
