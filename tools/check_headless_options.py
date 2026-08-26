@@ -97,6 +97,39 @@ def main() -> int:
           "un run sans option doit émuler et rapporter « video: … Hz » ; s'il affiche "
           "l'aide, tous les autres tests mesureraient du vide.", out)
 
+    # --- GUI : la seule surface testable SANS ÉCRAN (chantier A8) --------------
+    # Le GUI est un angle mort total — aucun test ne le couvrait, et c'est pourtant
+    # là que vivent les rapports utilisateur restants. Sa couche d'ARGUMENTS, elle,
+    # est atteignable : `--help`, `--version` et le rejet d'options sortent AVANT
+    # toute création de fenêtre. C'est peu, mais c'est la première couverture
+    # automatisée de ce binaire.
+    gui = ROOT / "build" / "neost"
+    if not gui.exists():
+        print("  ·    GUI non bâti — tests d'arguments du GUI sautés (cible « neost »)")
+    else:
+        def run_gui(args):
+            cp = subprocess.run([str(gui)] + args, cwd=ROOT,
+                                capture_output=True, text=True, timeout=60)
+            return cp.returncode, cp.stdout + cp.stderr
+
+        rc, out = run_gui(["--help"])
+        check("GUI : --help sort proprement (sans ouvrir de fenêtre)",
+              rc == 0 and "Usage:" in out,
+              "le GUI doit répondre à --help et sortir en 0 ; c'était l'un des points "
+              "de conformité relevés au TODO.", f"code {rc}")
+
+        # Le vrai piège : une faute de frappe était AVALÉE EN SILENCE, et l'utilisateur
+        # croyait avoir activé l'option.
+        rc, out = run_gui(["--kisok"])
+        check("GUI : une option inconnue est REFUSÉE (pas avalée)",
+              rc == 2 and "unknown option" in out,
+              "toute option en '-' non reconnue doit produire un message ET un code "
+              "non nul ; sinon une faute de frappe passe inaperçue.", f"code {rc}")
+
+        rc, out = run_gui(["--version"])
+        check("GUI : --version n'a pas régressé", rc == 0 and "NeoST" in out,
+              "--version doit continuer de sortir l'identité de build en 0.", f"code {rc}")
+
     print()
     if fails:
         print(f"ÉCHEC — {len(fails)} test(s) du harnais : {', '.join(fails)}")

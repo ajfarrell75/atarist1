@@ -254,13 +254,27 @@ Une `ALLOWLIST` couvre les symboles cités À DESSEIN comme disparus (une phrase
 justement d'une ancre morte), chacun avec sa raison. **Contrôle négatif fait** : deux fausses
 ancres injectées sont bien détectées, code de sortie 1.
 
-### A8 — Le GUI est un angle mort total (effort **M**)
+### A8 ◐ — Le GUI a sa première couverture (AVANCÉ le 2026-08-26)
 
 Aucun test ne couvre le frontend, et c'est **précisément là que vivent les rapports utilisateur
 restants** : *Wings of Death* (cœur émulé disculpé, suspect n°1 = underrun de la boucle audio,
 `src/audio/Audio.cpp:176-178`), *Beyond the Ice Palace* (chemin double-clic GEM ≠ AUTO), *Lethal
 Xcess* titre « à 8 % ». Le cœur est très bien couvert ; **ce que l'utilisateur voit ne l'est pas
 du tout**.
+◐ **Avancé sur deux fronts.**
+1. **La couche d'ARGUMENTS du GUI est testée** — et c'est la seule surface atteignable sans
+   écran, puisque `--help`, `--version` et le rejet d'options sortent AVANT toute création de
+   fenêtre. Trois tests dans `tools/check_headless_options.py`, donc sur le palier **fast** et
+   les trois jobs de CI. Au passage, deux points de conformité du § BLOQUANT RELEASE sont réglés :
+   le GUI **a un `--help`**, et il **REFUSE** désormais une option inconnue (message + code 2) au
+   lieu de l'avaler en silence — une faute de frappe comme `--kisok` partait sans un mot et
+   l'utilisateur croyait l'option active.
+2. **Le suspect n°1 de *Wings of Death* est tombé** : 100 s de chargement dans le GUI, **zéro
+   `ring underrun`** (cf. la ligne du catalogue). Le dossier reste ouvert, mais sa piste
+   principale est éliminée.
+🎯 **Reste** : le RENDU et la boucle audio SOUS CHARGE ne sont couverts par rien. Il faudrait un
+job CI avec `xvfb` (Linux, GLFW+GL logiciel) faisant tourner N trames puis capturant — ce qui
+suppose d'ajouter au GUI une sortie automatique après N trames, qu'il n'a pas.
 
 ### ⚠ Deux erreurs de méthode commises le 2026-08-25, consignées pour ne pas les refaire
 
@@ -283,7 +297,7 @@ Hatari.
 |-----|----------|----------------|
 | **Beyond the Ice Palace** (D-BUG) | Rapport GUI : écran scramblé en jeu. **NON reproduit en headless** : gameplay PROPRE (ST et STE, 1 Mo, boot AUTO). ⚠ Le PRG exige > 512 Ko (BSS dépack 384 Ko → TPA ~471 Ko) : en 512 Ko le TOS skippe l'AUTO — comportement CORRECT (pas un bug). Le chemin GUI = double-clic bureau GEM (Pexec sous AES) ≠ AUTO — à reproduire avec la config GUI exacte. | Recette headless : copier le disque + `mmd ::AUTO` + `mcopy` ; `--mem 1m --keys-at 4000 "n" --keys-at 6200 " " --keys-at 9600 " " --keys-at 12000 "y" --keys-at 14500 "s" --keys-at 16000 " " --keys-at 19600 "y"` → jeu ≈ trame 21000. |
 | **Shadow Warriors** (2Hot2Handle) | Après SPACE : titre + musique OK ; le bouton joystick ne lance pas le jeu. (Castle Warrior, lui, fonctionne.) | À diff'er Hatari. |
-| **Wings of Death** (`.stx`) | ~~Après bouton : titre **corrompu**~~ **NON REPRODUIT en headless (2026-08-25)** : logo Thalion puis titre **154 couleurs PROPRES**, en `st/1m/tos102fr` comme en `ste/1m/tos106uk` — vérifié par deux agents indépendamment. Reste à instruire : **le son ralenti SEUL** (non évaluable par capture PPM). | ⚠ Sur cet écran c'est **ESPACE** qui avance, pas le feu. Cœur émulé disculpé le 2026-08-25 (vidéo byte-identique à l'oracle, cadence YM à ±0,1 s sur 26 s) → suspect n°1 = le **frontend** : lancer le GUI sans sandbox et guetter `[Audio] ring underrun … emulation loop: X real frames/s` (`src/audio/Audio.cpp:176-178`), puis `crt=0`, puis `mix_drive=0`. ⚠ `--sound-dump` **exclut** les bruits de lecteur (`AudioMix.hpp:16-19`) alors que l'utilisateur a `drivesound=1`. |
+| **Wings of Death** (`.stx`) | ~~Après bouton : titre **corrompu**~~ **NON REPRODUIT en headless (2026-08-25)** : logo Thalion puis titre **154 couleurs PROPRES**, en `st/1m/tos102fr` comme en `ste/1m/tos106uk` — vérifié par deux agents indépendamment. Reste à instruire : **le son ralenti SEUL** (non évaluable par capture PPM). | ⚠ Sur cet écran c'est **ESPACE** qui avance, pas le feu. Cœur émulé disculpé le 2026-08-25 (vidéo byte-identique à l'oracle, cadence YM à ±0,1 s sur 26 s) → suspect n°1 = le **frontend**. ⚠ **MESURÉ le 2026-08-26, et il ne tient pas** : GUI lancé sans sandbox sur `Wings_Of_Death_Disk_1.stx` (tos102fr, config utilisateur, `drivesound` actif), **100 s de chargement, ZÉRO `ring underrun`**. La boucle audio tient la cadence sur cette machine. ⚠ **Réserve** : le run n'a pas reçu d'entrée, il couvre donc la phase de CHARGEMENT et pas l'état « après le bouton » où le symptôme est décrit. Prochain coup : rejouer avec un appui ESPACE et guetter le même message, puis `crt=0`, puis `mix_drive=0`. ⚠ `--sound-dump` **exclut** les bruits de lecteur (`AudioMix.hpp:16-19`) alors que l'utilisateur a `drivesound=1`. |
 | **Lethal Xcess sur Mega ST** (`.stx`) | ✅ **CORRIGÉ (2026-08-25)** — c'était **BL3** : les cycles de stall du blitter étaient facturés HORS de l'horloge de l'ordonnanceur. `Blitter::onSlice` (tranche non-hog) est le callback de l'échéance `Scheduler::BLITTER`, donc il tourne ENTRE deux `cpu.run()` : ses cycles n'entraient ni dans `ran` ni dans `sched.now()`. La dette (mesurée : 8 tranches × 136 = **1088 cycles bus**) était résorbée d'un coup par le `syncTo` du hook d'IACK juste avant le handler Timer A, ce qui mangeait 2 tics de prescaler → `Mfp::readTimerData` rendait TADR = `$3C` et la garde `$14C2E` du jeu tombait dans son `ILLEGAL`. Corrigé par `Blitter::billCycles` → `Scheduler::addStolenCycles` (port de `Blitter_AddCycles`, `blitter.c:351-352`). ⚠ Le symptôme FDC ci-contre était un **LEURRE** : identique à la milliseconde près en `machine=st`, où le jeu démarre. | Le bug frappait les **trois** machines à blitter, pas seulement Mega ST : `megast` cassait trame 5552, `ste` (`tos106uk`) et `megaste` (`tos206uk`) trame 5523 — écran noir à 1 couleur. Après correctif : aucun `BREAK`, 26-29 couleurs, écran de jeu, sur les trois. Repro : `--machine megast --mem 1m --disk Lethal_Xcess_Disk_1.STX --diskb Lethal_Xcess_Disk_2.STX --keys-at 3000 " " --joy-at 4000 0x80 --frames 6000 --break 14C2E`. Sonde de non-régression : `NEOST_QDELTA_DIAG=1` (le delta d'entrée de quantum doit rester PLAT à 40, jamais d'escalier). Détail → `CHANGELOG.md` (2026-08-25) et divergence **BL3** de `docs/HATARI_DIVERGENCES.md`. ⚠ **Cross-check Hatari toujours BLOQUÉ** : `--cmd-fifo` n'injecte que des scancodes ST, pas de bit joystick — il faut un autre biais pour piloter le tir sous l'oracle. |
 
 **CLOS (2026-08-25)** — *`D-PSG` : Stardust sur STE, gel noir après le menu trainer* :
