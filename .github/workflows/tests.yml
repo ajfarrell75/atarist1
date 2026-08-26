@@ -183,9 +183,12 @@ jobs:
           for i in range(0, w * h * 3, 3):
               colors.add(d[i:i+3])
           print(f'{w}x{h}, {len(colors)} couleurs')
-          # Un bureau GEM en couleur compte >= 4 couleurs ; 1-2 = écran figé/noir,
-          # c'est-à-dire un GUI qui tourne sans émuler — le bug que ce job garde.
-          assert len(colors) >= 4, f'capture quasi uniforme ({len(colors)} couleurs)'
+          # Le bureau EmuTOS en couleur fait EXACTEMENT 3 couleurs (fond vert, traits
+          # noirs, fenêtre blanche) — mesuré au premier run de ce job, qui échouait sur
+          # un seuil >= 4 posé de tête. 1-2 couleurs = écran figé/noir, c'est-à-dire un
+          # GUI qui tourne sans émuler — le bug que ce garde-fou attrape. Le vrai juge
+          # est de toute façon l'étape suivante (bit-exact vs headless).
+          assert len(colors) >= 3, f'capture quasi uniforme ({len(colors)} couleurs)'
           EOF
 
       # Assertion FORTE : le framebuffer du GUI doit être BIT-IDENTIQUE à celui du

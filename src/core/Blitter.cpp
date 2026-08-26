@@ -302,11 +302,23 @@ void Blitter::onSlice() {
     const int budget = kNonHogBusBlitter - (busCountError_ ? 1 : 0);
     busCountError_ = false;
     clearPreStartWindow();
+    // SONDE (NEOST_BLIT_START_DIAG=1) : cycle absolu de chaque PRISE DE BUS non-hog.
+    // C'est la grandeur du résidu BL5 (~10 cyc/blit + ~3,3/reprise, de trop peu côté
+    // NeoST) : comparer les INTERVALLES entre prises consécutives à ceux d'Hatari
+    // (fprintf « blitter bus start » de Blitter_BusArbitration, à décommenter dans
+    // l'arbre local extern/hatari) — les intervalles s'affranchissent du référentiel
+    // absolu, que le RNG de boot d'Hatari rend incomparable.
+    static const bool startDiag = std::getenv("NEOST_BLIT_START_DIAG") != nullptr;
+    if (startDiag && sched_)
+        std::fprintf(stderr, "[BLSTART] %lld\n", (long long)sched_->liveNow());
     billCycles(arbIn);                     // prise du bus, AVANT les accès (cf. start)
     sliceBus_ = 0;
     inSlice_ = true;
     const bool done = runSlice(budget);
     inSlice_ = false;
+    static const bool endDiag = std::getenv("NEOST_BLIT_START_DIAG") != nullptr;
+    if (endDiag && sched_)
+        std::fprintf(stderr, "[BLEND] %lld\n", (long long)sched_->liveNow());
     billCycles(kArbOut);                   // restitution au CPU
     if (!done) {
         // Part CPU non-hog : armer le comptage des accès bus CPU (port
