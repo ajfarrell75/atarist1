@@ -1070,6 +1070,48 @@ void Fdc::fdcClearIrq() {
 // =============================================================================
 //  Tampon FDC↔DMA et FIFO 16 octets.
 // =============================================================================
+// Coût du transfert FIFO↔RAM : 4 cycles par MOT, 16 octets = 8 mots = 32 cycles
+// (port de `4 * FDC_DMA_FIFO_SIZE / 2` chez Hatari).
+static constexpr int kDmaFlushCycles = 4 * 16 / 2;
+
+// Facture au CPU les cycles de bus pris par le DMA du FDC — port de
+// `M68000_AddCycles_CE ( 4 * FDC_DMA_FIFO_SIZE / 2 )` (fdc.c, FDC_DMA_FIFO_Push et
+// _Pull) : le transfert FIFO↔RAM prend 4 cycles par MOT, soit 32 cycles pour les
+// 16 octets, et le CPU est STALLÉ pendant ce temps.
+//
+// ⚠ MÊME INVARIANT QUE BL3, et c'est le piège de ce chantier : ces flushs ont lieu
+// depuis `Fdc::onFdcEvent`, callback de l'échéance `Scheduler::FDC` — donc HORS de
+// tout `cpu.run()`. Avancer la seule horloge de Moira laisserait ces cycles
+// invisibles de l'ordonnanceur, exactement le bug qui plantait Lethal Xcess. On
+// crédite donc AUSSI `Scheduler::addStolenCycles`, discriminé par `Cpu68k::inRun`
+// (dans le quantum, `ran` capte déjà l'avance et créditer la compterait deux fois).
+void Fdc::billDmaCycles(int n) {
+    if (n <= 0 || !bus_.cpu) return;
+    // SONDE (NEOST_FDC_FLUSH_DIAG=1) : cycles écoulés entre deux flushs FIFO de 16 o.
+    // C'est LA grandeur qui mesure D3 — l'audit de 2026-08-25 l'a chiffrée à 4173
+    // cyc/flush pour NeoST contre 4127 pour Hatari, le modèle sans stall valant 4096.
+    // Inerte si la variable n'est pas posée (même patron que NEOST_QDELTA_DIAG).
+    static const bool diag = std::getenv("NEOST_FDC_FLUSH_DIAG") != nullptr;
+    if (diag && sched_) {
+        // ⚠ On ne moyenne QUE le régime de TRANSFERT CONTINU (intervalle < 8000 cyc).
+        // Une moyenne sur tous les flushs est polluée par les temps morts — seeks,
+        // attentes d'index, silences entre commandes — et donne ~19000 cyc/flush,
+        // c'est-à-dire rien de comparable au 4127 d'Hatari, qui est un débit de rafale.
+        static int64_t prev = -1, sum = 0; static long cnt = 0;
+        const int64_t now = sched_->liveNow();
+        if (prev >= 0) {
+            const int64_t d = now - prev;
+            if (d > 0 && d < 8000) { sum += d; ++cnt;
+                if (cnt % 500 == 0)
+                    std::fprintf(stderr, "[FDCFLUSH] %ld flushs en rafale, "
+                                 "moyenne %.1f cyc/flush\n", cnt, double(sum) / double(cnt)); }
+        }
+        prev = now;
+    }
+    bus_.cpu->addBusWaitCycles(n);
+    if (sched_ && !bus_.cpu->inRun()) sched_->addStolenCycles(n);
+}
+
 void Fdc::fifoPush(uint8_t b) {
     ff8604recent_ = uint16_t((ff8604recent_ & 0xff00) | b);
     if (dmaSectorCount_ == 0) { dmaError_ = true; return; }   // DMA off → octet perdu
