@@ -15,6 +15,48 @@ Ripper, DAC Pro Sound) avec page Dongles, `disks/dongles.txt` et oracle de rejeu
 vérifié note à note** en headless, corpus MIDI piano/blues ; port MIDI ALSA sous Linux ;
 save-state v16. Détail dans les chantiers datés ci-dessous.
 
+## La revue d'architecture A1-A8 est soldée : l'outillage se teste lui-même (2026-08-26)
+
+Clôture de la revue du 2026-08-25 — huit propriétés manquantes du **système de développement**,
+pas du système émulé. Les chantiers qui n'avaient pas encore leur entrée ici (A2/BL5, D3 et les
+briques GUI d'A8 ont les leurs plus bas) :
+
+- **A1 — le palier PIXEL garde le commit** : job `pixel` dans `.github/workflows/tests.yml` —
+  `run_all.py --tier full` à chaque push et pull_request (+ `--verify-refs`, captures d'écart
+  déposées en artefact à l'échec). Mesuré le jour du constat : `NEOST_SYNC_DISPATCH=1` cassait
+  `nocooper_greetings` à 98,97 % sans que le `fast` ne bronche — c'est ce trou qui est fermé.
+- **A4 — l'instrument est testé** : `tools/check_headless_options.py` (palier fast, en boîte
+  noire) couvre le parsing du headless ET du GUI (`--help`, `--version`, rejet d'une option
+  inconnue — une faute de frappe comme `--kisok` partait sans un mot). Chaque test porte le bug
+  qu'il empêche de revenir : répétabilité DISCRIMINANTE de `--joy-at`, première occurrence
+  appliquée, garde « un run nominal ÉMULE » contre le piège zsh. Deux manques comblés au
+  passage : `--key-hold N` (durée d'appui — indispensable pour égaliser une A/B avec le
+  `--cmd-fifo` d'Hatari qui tient ~600 ms : un verdict « confirmé à l'oracle » avait déjà été
+  rendu FAUX par cet écart) et `--scancode-at` (scancodes ST bruts, rouvre le pavé numérique).
+- **A5 — l'oracle est épinglé et sa mise en place scriptée** : Hatari pin **`f0736b2`**
+  (v2.6.1-devel), `tools/setup_hatari.sh` (clone au SHA + options macOS obligatoires),
+  avertissement de `tools/hatari_oracle.sh` quand l'arbre présent diverge du pin, options CPU
+  **explicites** (`--cpu-exact on --compatible on` — les forcer à off déplace la comparaison de
+  69 px), et recette de pilotage au joystick versée dans `docs/HATARI_AUTOMATION.md`. Résidu :
+  le RNG d'Hatari semé sur l'heure (numérotation de trames variable), contourné par
+  `oracle_scan`.
+- **A6 — barrière de débit** : `tools/run_perfbench.py` (palier full) garde des **RATIOS**
+  entre charges du même run (indépendants de la vitesse du runner), tolérance ±25 % — fait pour
+  attraper un chemin devenu deux fois plus cher, pas 5 %. Première réponse rendue : le coût de
+  BL3/BL4 est **nul** (±1,5 % mesuré) — le dispatch est O(1) quand aucune échéance n'est due.
+- **A7 — les ancres de la doc sont vérifiées en CI** : `tools/check_doc_anchors.py` (palier
+  fast), 242 ancres de code contrôlées dans les docs vivants (erreur) et le CHANGELOG
+  (avertissement seulement — un registre daté a le droit de citer un symbole renommé depuis),
+  ALLOWLIST motivée, contrôle négatif fait.
+- **A8 — le GUI tourne en CI** : job `xvfb` (Linux, GL logiciel) — boot réel de la cible
+  `neost`, capture `--shot`, comparaison **bit-exacte** contre le headless. Avec
+  `--run-frames`, l'injection d'entrées et la souris scriptée (entrées dédiées ci-dessous), A8
+  est clos ; seul reliquat, une limite de DSL : pas de token « mouvement bouton tenu » (drag).
+- Au même mouvement, le **MFP en mode bloc** a reçu son étalon (`mfp_poll`).
+
+Reste ouvert de la revue : **A3** (corpus de régression non livrable) et la revue
+complémentaire du 2026-08-26 (A9-A12) — voir `TODO.md`.
+
 ## BL5 : chaque blit démarrait 4 cycles trop tôt (2026-08-26)
 
 **Trouvé par l'étalon `blitter_timer` posé le jour même**, puis instruit jusqu'à la cause.
