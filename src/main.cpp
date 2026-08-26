@@ -2666,6 +2666,28 @@ int main(int argc, char** argv) {
 #endif
             return 0;
         }
+        // --help : sortie AVANT toute création de fenêtre (comme --version), ce qui la
+        // rend testable sans écran — c'est la seule surface du GUI que la CI peut
+        // exercer aujourd'hui (chantier A8).
+        if (a == "--help" || a == "-h") {
+            std::printf(
+                "NeoST - Atari ST emulator\n"
+                "Usage: neost [options] [<rom.img> [<disk.st>]]\n"
+                "\n"
+                "  --help, -h            this help\n"
+                "  --version             build identity\n"
+                "  --kiosk               kiosk (arcade cabinet) mode\n"
+                "  --kiosk-monitor N     monitor index for kiosk mode\n"
+                "  --audio-latency MS    audio cushion in ms (default 85, clamped 20-250;\n"
+                "                        raise to 120-150 on a tight machine - an underrun\n"
+                "                        costs an audible gap, a little more latency does not)\n"
+                "  --crt                 enable CRT effects\n"
+                "  --crt-preset NAME     off|light|arcade|phosphor (implies --crt)\n"
+                "\n"
+                "Without a positional argument, the last ROM from neost.cfg is reloaded\n"
+                "(or EmuTOS US). Headless runs: see neost-headless --help.\n");
+            return 0;
+        }
         if      (a == "--kiosk")           g_kiosk = g_kioskLaunched = true;
         else if (a == "--kiosk-monitor" && i + 1 < argc) kioskMonitor = std::atoi(argv[++i]);
         //   --audio-latency MS : coussin audio visé (défaut 85, borné [20,250] par Audio).
@@ -2681,7 +2703,17 @@ int main(int argc, char** argv) {
                 std::fprintf(stderr, "[main] unknown CRT preset: '%s' "
                              "(off|light|arcade|phosphor)\n", name.c_str());
         }
-        else if (!a.empty() && a[0] != '-') pos.push_back(a);
+        else if (!a.empty() && a[0] == '-') {
+            // ⚠ AVALÉ EN SILENCE jusqu'au 2026-08-26 (chantier A8) : une faute de frappe
+            // (`--kisok`, `--crt-presets`) partait sans le moindre message et l'option
+            // était simplement ignorée — l'utilisateur croyait l'avoir activée. On refuse
+            // maintenant, AVANT d'ouvrir la moindre fenêtre, et on renvoie 2 pour qu'un
+            // script le voie.
+            std::fprintf(stderr, "[main] unknown option: '%s'\n"
+                                 "Try 'neost --help' for the list of options.\n", a.c_str());
+            return 2;
+        }
+        else if (!a.empty()) pos.push_back(a);
     }
     // Les overrides CLI priment sur le cfg (et resteront cohérents si le panneau
     // déclenche un save ultérieur en mode fenêtré).
