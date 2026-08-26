@@ -54,6 +54,15 @@ comptage des accès CPU sont identiques des deux côtés). Ajouter une constante
 source pour la justifier serait une rustine — le projet en a déjà retiré. **Le résidu reste
 ouvert et documenté, pas masqué.**
 
+## GUI : sortie automatique après N trames + capture (`--run-frames`, `--shot`) (2026-08-26)
+
+La brique qui manquait au chantier A8 : le GUI ne pouvait ni s'arrêter seul ni être observé par
+un harnais. `--run-frames N` quitte proprement après N trames **émulées** (décompte au site
+d'émulation nominal — le pas-à-pas du débogueur ne compte pas, c'est voulu : l'option sert un
+harnais, pas une session de débogage) ; `--shot PATH` écrit le framebuffer ST en PPM juste
+avant, avec le `fclose` vérifié (un disque plein n'échoue qu'au flush). Vérifié en réel : boot
+EmuTOS, capture, sortie seule en ~5 s, code 0. Ouvre la voie au job CI `xvfb` (recensé dans A8).
+
 ## D3 est corrigé : le flush FIFO du FDC stalle le CPU, à la cadence exacte d'Hatari (2026-08-26)
 
 **Troisième tentative, la bonne — et les deux verdicts d'échec précédents étaient des artefacts
