@@ -298,6 +298,24 @@
    "ref_kind": "oracle"
   },
   {
+   "id": "mfp_poll",
+   "name": "Poll IPRA du MFP pendant Timer A (make_mfp_poll_test)",
+   "subsystem": "mfp/datation",
+   "rom": "roms/etos192fr.img",
+   "rom_note": "ROM LIBRE (EmuTOS 192 Ko) par construction : secteur de boot autonome (SR=$2700 puis video, palette, MFP poses par le programme).",
+   "disk": "disks/etalons/mfp_poll.st",
+   "disk_generate": "tools/make_mfp_poll_test.py",
+   "machine": "st",
+   "mem": "512k",
+   "cpu": "moira",
+   "frames": 400,
+   "frame": 380,
+   "crop": "buffer_noled",
+   "max_diff_px": 0,
+   "ref_note": "COMBLE LE SECOND TROU DE COUVERTURE recense le 2026-08-25. L'ecart « pas de MFP_UpdateTimers avant lecture IPR/ISR/TBDR en mode bloc » n'avait AUCUN etalon : il n'etait exhibe que par un comptage manuel sur Super Hang-On, jeu commercial non redistribuable. Ici : 100 tours d'une boucle qui lit IPRA ($FFFFFA0B) puis TADR, ecrit les DEUX octets en RAM video (16 px par ligne) et acquitte le pending. Timer A en mode delai, prescaler /4, TDR=13 (~169 cyc CPU) contre une boucle d'environ 60 cyc : la phase DERIVE d'un tour a l'autre, donc l'expiration tombe successivement partout dans l'instruction de poll - c'est ce battement qui rend l'etalon sensible. Controle de non-vacuite : IPRA prend bien les DEUX valeurs $00 et $20 (avec IMRA=0 le pending ne se pose jamais et les 100 lignes lisent 0 - mesure), et TADR prend 14 valeurs distinctes. L'ecart vise porte sur le PENDING ; les data-registers sont deja compenses par Mfp::readTimerData et l'IRQ elle-meme n'est pas affectee. RESIDU ORACLE MESURE le 2026-08-26 (d'ou ref_kind=snapshot, meme demarche que overscan_top et blitter_timer) : NeoST vs Hatari 2.6.1-devel = 120 px / 114816 (le motif etant replique 8 fois par ligne, un octet different compte plusieurs px), sur 24 lignes. Decomposition qui CONFIRME le modele documente : 18 lignes sur 100 ou IPRA differe, contre 3 seulement ou TADR differe - l'ecart est bien sur le registre de PENDING, pas sur le compteur vivant. C'est la premiere mesure redistribuable de cet ecart ; il etait jusqu'ici exhibe uniquement par un comptage manuel sur Super Hang-On. Divergence suivie sous l'entree MFP de docs/HATARI_DIVERGENCES.md ; le correctif propose (runTo cible sur les sources TIMER_*) reste NON adopte, un syncTo nu reactiverait le modele sync-driven refute.",
+   "ref_kind": "snapshot"
+  },
+  {
    "id": "nocooper",
    "name": "No Cooper (1984) — écran principal (overscan med-res, étalon V2)",
    "subsystem": "shifter/res-tricks",
