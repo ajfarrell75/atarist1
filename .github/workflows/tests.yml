@@ -135,6 +135,81 @@ jobs:
           path: tests/out/
           if-no-files-found: ignore
 
+  # ---------------------------------------------------------------------- gui --
+  gui:
+    name: GUI sous xvfb (boot réel + capture)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      # ⚠ submodules: le GUI compile Dear ImGui depuis extern/imgui — les autres jobs
+      # n'en ont pas besoin et font un checkout nu.
+      - uses: actions/checkout@v5
+        with:
+          submodules: true
+
+      - name: Dépendances
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake g++ libglfw3-dev libgl1-mesa-dev libgl1-mesa-dri xvfb
+
+      - name: Configurer
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+      # La cible `neost` (GUI) n'était compilée par AUCUN job de tests — release.yml
+      # la bâtit, mais sans jamais l'EXÉCUTER. Chantier A8, dernière marche.
+      - name: Compiler (GUI + headless)
+        run: cmake --build build -j"$(nproc)" --target neost neost-headless
+
+      # LA raison d'être de ce job : le GUI n'avait jamais TOURNÉ en CI. Grâce à
+      # --run-frames/--shot (2026-08-26), il boote EmuTOS, émule 400 trames, capture
+      # le framebuffer ST et sort seul. xvfb fournit l'écran ; le GL logiciel de Mesa
+      # (llvmpipe) fait le rendu. Sans neost.cfg sur le runner, le GUI part sur ses
+      # défauts (st / 512k / couleur) — le headless est aligné explicitement dessus.
+      - name: Boot GUI sous xvfb (400 trames, capture)
+        run: |
+          xvfb-run -a ./build/neost --run-frames 400 --shot /tmp/gui.ppm roms/etos192fr.img
+          test -s /tmp/gui.ppm
+
+      - name: La capture n'est pas vide (bureau GEM attendu)
+        run: |
+          python3 - <<'EOF'
+          colors = set()
+          with open('/tmp/gui.ppm', 'rb') as f:
+              assert f.readline().strip() == b'P6'
+              w, h = map(int, f.readline().split())
+              f.readline()
+              d = f.read()
+          for i in range(0, w * h * 3, 3):
+              colors.add(d[i:i+3])
+          print(f'{w}x{h}, {len(colors)} couleurs')
+          # Un bureau GEM en couleur compte >= 4 couleurs ; 1-2 = écran figé/noir,
+          # c'est-à-dire un GUI qui tourne sans émuler — le bug que ce job garde.
+          assert len(colors) >= 4, f'capture quasi uniforme ({len(colors)} couleurs)'
+          EOF
+
+      # Assertion FORTE : le framebuffer du GUI doit être BIT-IDENTIQUE à celui du
+      # headless au même point (même cœur, même Shifter, mêmes défauts de config).
+      # Si cette comparaison casse, la boucle GUI n'émule pas comme le headless —
+      # exactement la classe de divergence qu'aucun palier ne voyait.
+      - name: Le GUI émule comme le headless (bit-exact, 400 trames)
+        run: |
+          # ⚠ --disk ALIGNÉ : sans positional, le GUI monte disks/diskA.st PAR DÉFAUT
+          # (defDisk dans main.cpp) — sans ce même disque, le headless boote une
+          # timeline différente et la comparaison bit-exacte meurt sur un faux écart.
+          ./build/neost-headless roms/etos192fr.img --machine st --mem 512k \
+            --disk disks/diskA.st --frames 400 --screenshot /tmp/cli.ppm
+          cmp /tmp/gui.ppm /tmp/cli.ppm
+          echo "GUI == headless (bit-exact)"
+
+      - name: Capture en artefact en cas d'échec
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gui-shot
+          path: /tmp/*.ppm
+          if-no-files-found: ignore
+
   # -------------------------------------------------------------- sanitizers --
   sanitizers:
     name: Debug + ASan/UBSan (palier fast)
