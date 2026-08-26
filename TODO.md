@@ -182,16 +182,33 @@ inchangé, à monter pour égaliser une A/B contre le `--cmd-fifo` d'Hatari qui 
 numérique** sans avoir à inventer un mappage de caractères pour dix touches, et couvre tout futur
 trou du même genre.
 
-### A5 — L'oracle est une dépendance critique traitée comme un accessoire (effort **S**)
+### A5 ✅ — L'oracle est épinglé et sa mise en place scriptée (FAIT le 2026-08-26)
 
 Toute la méthode imposée du projet repose sur Hatari. Or `extern/hatari` est **gitignoré**, n'est
 **pas un sous-module**, peut être **absent** sur une machine fraîche, n'est épinglé à **aucun
 commit** (l'inventaire note lui-même que ses numéros de ligne ont glissé entre `c9906f1` et
 `981f291`), sème son RNG sur `time(NULL)` (d'où le besoin d'`oracle_scan`), et **ne sait pas
 injecter de joystick** — ce qui exclut du cross-check toute une classe de jeux d'action.
-🎯 L'épingler (sous-module, ou SHA + script de build vérifié), et verser la recette de pilotage
-au joystick (`[Joystick1] nJoystickMode = 2` + `kFire = f` + `hatari-event keydown f`) dans
-`docs/HATARI_AUTOMATION.md`.
+✅ **CORRIGÉ**, sur quatre volets :
+1. **Version ÉPINGLÉE** (`f0736b2`, v2.6.1-devel) et `tools/setup_hatari.sh` qui clone à ce SHA
+   et bâtit avec les options macOS obligatoires. La recette précédente faisait un
+   `git clone --depth 1` = « le HEAD du jour » : deux oracles bâtis à deux semaines d'écart
+   pouvaient produire des références PIXEL différentes sans qu'une ligne du dépôt n'ait bougé.
+2. **`hatari_oracle.sh` AVERTIT** quand l'arbre présent ne correspond pas au pin (sans bloquer :
+   un oracle plus récent reste utilisable, mais la divergence devient visible au journal).
+   Contrôle négatif fait : l'avertissement se déclenche bien sur un pin faussé.
+3. **Options CPU explicites** (`--cpu-exact on --compatible on`), alors que ce sont les défauts
+   d'Hatari aujourd'hui — mais mesuré : les forcer à `off` déplace la comparaison de **69 px**.
+   S'en remettre au défaut d'un binaire qu'on ne contrôle pas laisserait une référence bouger
+   toute seule. Vérifié : les rendre explicites ne déplace **aucune** référence (0 px sur
+   `blitter_hog` et `scroll_8264`).
+4. **Recette de pilotage au JOYSTICK versée** dans `docs/HATARI_AUTOMATION.md`
+   (`[Joystick1] nJoystickMode = 2` + `kFire = f` + `hatari-event keydown f`), avec
+   l'avertissement d'égaliser la DURÉE d'appui — 600 ms côté oracle contre 40 ms côté NeoST
+   jusqu'au `--key-hold` d'aujourd'hui, écart qui a déjà rendu FAUX un verdict.
+🎯 **Reste** : le RNG d'Hatari semé sur `time(NULL)` (position angulaire initiale de la
+disquette) rend la numérotation des trames variable d'un run à l'autre — contourné par
+`oracle_scan`, pas supprimé.
 
 ### A6 — Aucun budget de performance (effort **S**)
 

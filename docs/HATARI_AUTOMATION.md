@@ -5,6 +5,37 @@ lecture des sources (`extern/hatari/src`), on peut **exécuter** Hatari de faço
 déterministe et **sans affichage** pour comparer son comportement à NeoST (boot, écran,
 détection HW, IRQ). Ce doc note la recette vérifiée (Hatari v2.6.1, macOS Silicon, juin 2026).
 
+## Piloter l'oracle au JOYSTICK (et pas seulement au clavier)
+
+⚠ `--cmd-fifo` n'injecte **que des scancodes clavier** : `hatari-event key{press,down,up}`
+ne débouche que sur `IKBD_PressSTKey` / `Keymap_SimulateCharacter` (`control.c:87-140`), et
+un `grep` de tout chemin joystick dans `control.c` rend **vide**. C'est ce qui faisait porter
+au `TODO.md` la mention « cross-check Hatari BLOQUÉ » pour tout titre piloté au tir — soit
+l'essentiel des jeux d'action.
+
+Le contournement (trouvé le 2026-08-25, vérifié deux fois indépendamment) : faire passer le
+tir par une **touche**, via la configuration joystick d'Hatari.
+
+```ini
+# hatari.cfg passé avec -c : le port ST 1 est piloté au CLAVIER
+[Joystick1]
+nJoystickMode = 2      ; 2 = émulation clavier
+kFire = f              ; la touche « f » devient le bouton de tir
+```
+
+puis, sur la FIFO de commandes : `hatari-event keydown f` … `hatari-event keyup f`.
+Le chemin est `Keymap_SimulateCharacter → Keymap_KeyDown → Joy_KeyDown`
+(`sdl/keymap.c:836/904`).
+
+⚠ **Égaliser la DURÉE d'appui.** `--cmd-fifo keydown/keyup` tient la touche ~600 ms, là où
+`--keys-at` du headless NeoST ne la tenait que **2 trames ≈ 40 ms** (câblées en dur jusqu'au
+2026-08-26). Comparer 40 ms à 600 ms n'est pas une A/B : un verdict « confirmé à l'oracle » a
+déjà été rendu **FAUX** par cet écart. Côté NeoST, utiliser `--key-hold N` pour égaliser.
+
+Corrections au passage, mesurées : `--fast-forward on` **fonctionne** avec `--cmd-fifo` (1070
+à 1707 VBL/s), contrairement à ce qui était écrit ; et `hatari-debug screenshot <chemin>`
+exige un nom de fichier.
+
 ## Se procurer l'oracle (rien ne le fait à votre place)
 
 ⚠ `extern/hatari` est **gitignoré et n'est PAS un sous-module** : `git clone` du dépôt
@@ -14,11 +45,28 @@ c'était le cas ici le 2026-08-19, alors que `CLAUDE.md` et ce document le décr
 comme « bâti dans le dépôt ». Le récupérer et le bâtir :
 
 ```sh
-git clone --depth 1 https://framagit.org/hatari/hatari.git extern/hatari
-cmake -S extern/hatari -B extern/hatari/build -DCMAKE_BUILD_TYPE=Release \
-      -DCMAKE_OSX_ARCHITECTURES=arm64 -DENABLE_OSX_BUNDLE=0        # macOS Silicon
-cmake --build extern/hatari/build -j                                # → build/src/hatari
+tools/setup_hatari.sh        # clone À LA VERSION ÉPINGLÉE + build (options macOS incluses)
 ```
+
+⚠ **La version est ÉPINGLÉE depuis le 2026-08-26 (chantier A5)** : `f0736b2`, v2.6.1-devel.
+La recette précédente faisait un `git clone --depth 1`, c'est-à-dire « le HEAD du jour » —
+deux oracles bâtis à deux semaines d'écart pouvaient donc produire des références **pixel**
+différentes sans qu'aucune ligne du dépôt n'ait bougé, alors que toutes les entrées
+`ref_kind: oracle` du dépôt ont été posées avec CETTE version. `tools/hatari_oracle.sh`
+**avertit** (sans bloquer) quand l'arbre présent ne correspond pas au pin. Pour changer
+d'oracle en connaissance de cause : `tools/setup_hatari.sh --update-pin`, puis régénérer les
+références et regarder ce qui bouge.
+
+⚠ **Les options CPU sont passées EXPLICITEMENT** par `hatari_oracle.sh`
+(`--cpu-exact on --compatible on`), alors que ce sont aujourd'hui les défauts d'Hatari.
+Mesuré le 2026-08-26 sur `blitter_timer` : forcer les deux à `off` déplace la comparaison de
+**69 px** (397 → 328). Une référence oracle dépend donc de ces réglages, et s'en remettre au
+défaut d'un binaire qu'on ne contrôle pas laisserait une référence bouger toute seule.
+Vérifié : rendre les options explicites ne déplace **aucune** référence existante (0 px sur
+`blitter_hog` et `scroll_8264`).
+
+Le build à la main reste possible (`cmake -S extern/hatari -B extern/hatari/build
+-DCMAKE_BUILD_TYPE=Release [-DCMAKE_OSX_ARCHITECTURES=arm64 -DENABLE_OSX_BUNDLE=0]`).
 
 Les deux options macOS ne sont pas cosmétiques (mesuré le 2026-08-19, Hatari
 v2.6.1-devel, macOS 15 / Silicon) :
