@@ -54,6 +54,32 @@ comptage des accès CPU sont identiques des deux côtés). Ajouter une constante
 source pour la justifier serait une rustine — le projet en a déjà retiré. **Le résidu reste
 ouvert et documenté, pas masqué.**
 
+## D3 est corrigé : le flush FIFO du FDC stalle le CPU, à la cadence exacte d'Hatari (2026-08-26)
+
+**Troisième tentative, la bonne — et les deux verdicts d'échec précédents étaient des artefacts
+d'outillage, corrigés dans le même mouvement.** La formulation est `due + stall + delay` : chez
+Hatari, `PendingCyclesOver` est capturé EN TÊTE de handler, PUIS le stall avance le compteur
+global, PUIS le réarmement retranche l'overshoot — l'ancrage retire donc le retard de dispatch
+(mesuré : 6,7 cyc/échéance, ~107 par cycle de 16 octets) mais laisse le stall décaler la suite.
+Les quatre formulations mesurées : 4203 (ancien code, +76 vs Hatari), 4096 (ancrage pur, stall
+absorbé), 4235 (ancrage neutralisé), **4127,8 (couple complet — cible Hatari 4127)**.
+
+**Validé** : 14/14 étalons pixel verts, `nocooper` re-posé à **0 px contre l'oracle**, canaris
+Lethal Xcess et Stardust OK. `dmaStallPending_` est transitoire (RAII par événement, nul à toute
+frontière de trame) — rien à sérialiser.
+
+**La chasse aux artefacts, consignée pour ne pas la refaire.** (1) La sonde de mesure était logée
+DANS le correctif → inactive côté témoin → « l'ancrage double le débit DMA », faux. (2) L'AVI
+oracle d'un run `--cmd-fifo` contenait 7297 fois LA MÊME frame → diffs strictement constantes
+lues comme « le titre occupe toute la fenêtre » puis « l'oracle est figé », faux aussi. Contrôle
+désormais obligatoire : **md5 de frames éloignées avant tout scan**. (3) La démo No Cooper attend
+un ESPACE que `hatari_oracle.sh` n'injecte pas — la référence d'origine disait « touche espace
+tenue vbl ~900 » dans sa note, jamais relue. Protocole complet dans la note de l'étalon
+(`--cmd-fifo` + `hatari-event keydown 57` ; le nom SPACE est refusé ; fast-forward inopérant).
+
+◐ Suivi ouvert : `timer IRQ max lateness` de LX megast monte 132 → 252 — le stall est servi en
+fin de dispatch, même signature que le crédit groupé pré-BL4.
+
 ## Le blitter a enfin un étalon — et il trouve une divergence (A1+A2+A3) (2026-08-26)
 
 **A1 — le palier PIXEL garde désormais la barrière.** `tests.yml`, le job qui tourne à chaque

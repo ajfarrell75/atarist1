@@ -1139,6 +1139,7 @@ void Fdc::fifoPush(uint8_t b) {
     dmaAddr_ = (dmaAddr_ + 16) & dmaAddressMask(bus_.ram.size());
     fifoSize_ = 0;
     noteFifoFlush();
+    billDmaCycles(kDmaFlushCycles);   // D3
     ff8604recent_ = uint16_t((fifo_[14] << 8) | fifo_[15]);
     dmaBytesInSector_ -= 16;
     if (dmaBytesInSector_ <= 0) { dmaSectorCount_--; dmaBytesInSector_ = 512; }
@@ -1157,6 +1158,7 @@ uint8_t Fdc::fifoPull() {
         dmaAddr_ = (dmaAddr_ + 16) & dmaAddressMask(bus_.ram.size());
         fifoSize_ = 15;
         noteFifoFlush();
+        billDmaCycles(kDmaFlushCycles);   // D3
         ff8604recent_ = uint16_t((fifo_[14] << 8) | fifo_[15]);
         dmaBytesInSector_ -= 16;
         if (dmaBytesInSector_ < 0) { dmaSectorCount_--; dmaBytesInSector_ = 512; }
@@ -2468,7 +2470,22 @@ void Fdc::onFdcEvent() {
                                  n, double(sum) / double(n), (long long)mx, delay);
             }
         }
-        sched_->schedule(Scheduler::FDC, nowCyc() + delay);
+        // FORMULATION COMPLÈTE du couple D3 (la seule jamais mesurée jusqu'ici) :
+        //   échéance suivante = due + stall + delay
+        // C'est exactement l'arithmétique d'Hatari, où l'ORDRE fait tout :
+        // PendingCyclesOver est capturé EN TÊTE de handler (fdc.c:2332), PUIS le stall
+        // M68000_AddCycles_CE avance le compteur global, PUIS le réarmement se fait
+        // « maintenant − overshoot + delay » (fdc.c:2388) = due + stall + delay.
+        // → l'ancrage retire le retard de DISPATCH (mesuré : 6,7 cyc/échéance, ~107
+        //   par cycle de 16 octets — l'écart 4203→4096), mais PAS le stall, qui décale
+        //   réellement la suite. Cadence attendue : 16×256 + 32 = 4128 ≈ 4127 (Hatari).
+        // Les deux variantes partielles sont FAUSSES et ont été mesurées comme telles :
+        //   due + delay            → 4096 (stall absorbé, modèle sans stall)
+        //   nowCyc() + stall+delay → 4235 (ancrage neutralisé)
+        // dmaStallPending_ est remis à zéro par le StallReset en tête d'événement.
+        const int64_t fdcDue = sched_->firingDue();
+        sched_->schedule(Scheduler::FDC,
+                         (fdcDue >= 0 ? fdcDue : nowCyc()) + dmaStallPending_ + delay);
     }
 }
 
