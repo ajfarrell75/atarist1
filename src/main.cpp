@@ -2671,6 +2671,11 @@ int main(int argc, char** argv) {
     static int  g_keyHold  = 2;
     static std::vector<std::pair<long, std::vector<uint8_t>>> g_scanAt;
     static std::vector<std::pair<long, uint8_t>> g_joyAt;
+    //   --mouse-at N "SCRIPT" : souris scriptée (1 token = 1 trame émulée), même
+    //   syntaxe que le headless : L/R/U/D = ±8 px, 1/2/3 = clics, '.' = idle.
+    //   ⚠ Se SUPERPOSE aux événements de la vraie souris (le GUI reste vivant) :
+    //   un run de harnais suppose qu'on ne touche pas la fenêtre pendant ce temps.
+    static std::vector<std::pair<long, std::string>> g_mouseAt;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i] ? argv[i] : "";
         if (a == "--version") {           // identité de build (release-readiness)
@@ -2706,6 +2711,8 @@ int main(int argc, char** argv) {
                 "  --key-hold N          frames a key stays down (default 2)\n"
                 "  --joy-at N VAL        HOLD joystick port 1 state VAL from frame N on\n"
                 "                        (bits: up$01 down$02 left$04 right$08 fire$80)\n"
+                "  --mouse-at N S        mouse script from frame N: L/R/U/D = +/-8 px,\n"
+                "                        1/2 = left/right click, . = idle (1 frame each)\n"
                 "\n"
                 "Without a positional argument, the last ROM from neost.cfg is reloaded\n"
                 "(or EmuTOS US). Headless runs: see neost-headless --help.\n");
@@ -2735,6 +2742,10 @@ int main(int argc, char** argv) {
         else if (a == "--joy-at" && i + 2 < argc) {
             const long f = std::atol(argv[++i]);
             g_joyAt.emplace_back(f, (uint8_t)std::strtoul(argv[++i], nullptr, 0));
+        }
+        else if (a == "--mouse-at" && i + 2 < argc) {
+            const long f = std::atol(argv[++i]);
+            g_mouseAt.emplace_back(f, argv[++i]);
         }
         else if (a == "--kiosk-monitor" && i + 1 < argc) kioskMonitor = std::atoi(argv[++i]);
         //   --audio-latency MS : coussin audio visé (défaut 85, borné [20,250] par Audio).
@@ -3623,6 +3634,30 @@ int main(int argc, char** argv) {
                         machine.ikbd.setJoystick(0, jv);
                         machine.bus.stePads.setJoystick(0, jv);
                     }
+                // Souris scriptée — port à l'identique du headless (mêmes tokens,
+                // même relâche implicite du clic au token suivant).
+                for (const auto& [mf, mscript] : g_mouseAt) {
+                    if (g_emuFrame < mf) continue;
+                    const long idx = g_emuFrame - mf;
+                    if (idx < (long)mscript.size()) {
+                        static bool mL = false, mR = false;
+                        const char t = mscript[idx];
+                        int dx = 0, dy = 0; bool l = false, r = false;
+                        switch (t) {
+                            case 'L': dx = -8; break;
+                            case 'R': dx =  8; break;
+                            case 'U': dy = -8; break;
+                            case 'D': dy =  8; break;
+                            case '1': l = true; mL = true; break;
+                            case '2': r = true; mR = true; break;
+                            case '3': l = r = true; mL = mR = true; break;
+                            default: break;                       // '.' = idle
+                        }
+                        if (t != '1' && t != '3' && mL) { l = false; mL = false; }
+                        if (t != '2' && t != '3' && mR) { r = false; mR = false; }
+                        machine.ikbd.mouseEvent(dx, dy, l, r);
+                    }
+                }
                 const int stride = (g_keyHold + 2 > 4) ? g_keyHold + 2 : 4;
                 for (const auto& [sf, sl] : g_scanAt) {
                     if (g_emuFrame < sf) continue;

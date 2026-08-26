@@ -288,8 +288,12 @@ compte.
 le jour même (`--scancode-at`, `--key-hold`, `--joy-at` — ce dernier en sémantique TENUE,
 re-posé chaque trame, car le GUI écrase le port avec l'état des manettes réelles à chaque tour).
 Elle a immédiatement servi : le dossier Wings of Death « après le bouton » est **clos** (titre
-propre, zéro underrun, feu injecté). Reste hors de portée : le « double-clic GEM » (Beyond the
-Ice Palace), qui demanderait une injection SOURIS datée côté GUI.
+propre, zéro underrun, feu injecté). ✅ Et l'injection SOURIS est posée le
+lendemain (`--mouse-at`, même DSL que le headless) — le « double-clic GEM » a été franchi et le
+dossier Beyond the Ice Palace **clos** dans la foulée. Pièges de pilotage GEM consignés dans sa
+fiche CASE_STUDIES (pattern de double-clic d'Hatari, relâche obligatoire, menus au survol,
+saturation ≥ 640×400). 🎯 Il ne reste d'A8 que le job CI `xvfb` — et une limite de DSL connue :
+pas de token « mouvement avec bouton tenu », donc pas de DRAG (rubber band GEM impossible).
 
 ### ⚠ Deux erreurs de méthode commises le 2026-08-25, consignées pour ne pas les refaire
 
@@ -310,9 +314,16 @@ Hatari.
 
 | Jeu | Symptôme | Piste / renvoi |
 |-----|----------|----------------|
-| **Beyond the Ice Palace** (D-BUG) | Rapport GUI : écran scramblé en jeu. **NON reproduit en headless** : gameplay PROPRE (ST et STE, 1 Mo, boot AUTO). ⚠ Le PRG exige > 512 Ko (BSS dépack 384 Ko → TPA ~471 Ko) : en 512 Ko le TOS skippe l'AUTO — comportement CORRECT (pas un bug). Le chemin GUI = double-clic bureau GEM (Pexec sous AES) ≠ AUTO — à reproduire avec la config GUI exacte. | Recette headless : copier le disque + `mmd ::AUTO` + `mcopy` ; `--mem 1m --keys-at 4000 "n" --keys-at 6200 " " --keys-at 9600 " " --keys-at 12000 "y" --keys-at 14500 "s" --keys-at 16000 " " --keys-at 19600 "y"` → jeu ≈ trame 21000. |
 | **Shadow Warriors** (2Hot2Handle) | Après SPACE : titre + musique OK ; le bouton joystick ne lance pas le jeu. (Castle Warrior, lui, fonctionne.) | À diff'er Hatari. |
 | **Lethal Xcess sur Mega ST** (`.stx`) | ✅ **CORRIGÉ (2026-08-25)** — c'était **BL3** : les cycles de stall du blitter étaient facturés HORS de l'horloge de l'ordonnanceur. `Blitter::onSlice` (tranche non-hog) est le callback de l'échéance `Scheduler::BLITTER`, donc il tourne ENTRE deux `cpu.run()` : ses cycles n'entraient ni dans `ran` ni dans `sched.now()`. La dette (mesurée : 8 tranches × 136 = **1088 cycles bus**) était résorbée d'un coup par le `syncTo` du hook d'IACK juste avant le handler Timer A, ce qui mangeait 2 tics de prescaler → `Mfp::readTimerData` rendait TADR = `$3C` et la garde `$14C2E` du jeu tombait dans son `ILLEGAL`. Corrigé par `Blitter::billCycles` → `Scheduler::addStolenCycles` (port de `Blitter_AddCycles`, `blitter.c:351-352`). ⚠ Le symptôme FDC ci-contre était un **LEURRE** : identique à la milliseconde près en `machine=st`, où le jeu démarre. | Le bug frappait les **trois** machines à blitter, pas seulement Mega ST : `megast` cassait trame 5552, `ste` (`tos106uk`) et `megaste` (`tos206uk`) trame 5523 — écran noir à 1 couleur. Après correctif : aucun `BREAK`, 26-29 couleurs, écran de jeu, sur les trois. Repro : `--machine megast --mem 1m --disk Lethal_Xcess_Disk_1.STX --diskb Lethal_Xcess_Disk_2.STX --keys-at 3000 " " --joy-at 4000 0x80 --frames 6000 --break 14C2E`. Sonde de non-régression : `NEOST_QDELTA_DIAG=1` (le delta d'entrée de quantum doit rester PLAT à 40, jamais d'escalier). Détail → `CHANGELOG.md` (2026-08-25) et divergence **BL3** de `docs/HATARI_DIVERGENCES.md`. ⚠ **Cross-check Hatari toujours BLOQUÉ** : `--cmd-fifo` n'injecte que des scancodes ST, pas de bit joystick — il faut un autre biais pour piloter le tir sous l'oracle. |
+
+**CLOS (2026-08-26)** — *Beyond the Ice Palace : « écran scramblé en jeu » (GUI)* : **NON
+REPRODUIT après instruction complète, chemin « double-clic GEM » compris** — le chemin exact du
+rapport, longtemps hors de portée, a été piloté au script souris (`--mouse-at` GUI, brique A8) :
+`Pexec` sous AES → cracktro → trainer → **en jeu, propre, 16 couleurs**. En moniteur **mono**, le
+PRG **quitte en ~10 s** (on ne peut pas être « en jeu » en mono : le scramble ne vient pas de
+là). Rouvrir uniquement sur nouvelle repro avec `neost.cfg` + version. Recette et pièges GEM →
+`docs/CASE_STUDIES.md`.
 
 **CLOS (2026-08-26)** — *Wings of Death : « titre corrompu + son ralenti après le bouton »* :
 **NON REPRODUIT après instruction complète** — cœur émulé byte-identique à l'oracle (2026-08-25),
