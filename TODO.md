@@ -210,13 +210,26 @@ injecter de joystick** — ce qui exclut du cross-check toute une classe de jeux
 disquette) rend la numérotation des trames variable d'un run à l'autre — contourné par
 `oracle_scan`, pas supprimé.
 
-### A6 — Aucun budget de performance (effort **S**)
+### A6 ✅ — Barrière de débit en place (FAIT le 2026-08-26)
 
 BL4 ajoute un `syncTo` **par accès bus** du blitter (~370 k appels supplémentaires sur 6000
 trames de *Lethal Xcess*). **Personne ne l'a mesuré**, et rien dans la CI ne l'aurait vu. Un
 émulateur temps réel dont le **mode borne sur Raspberry Pi** est une cible déclarée devrait avoir
-une barrière de **débit** (trames/s sur un boot de référence), pas seulement de justesse.
-Le `cycle-bench` existant garde le modèle de cycle, pas le temps mur.
+une barrière de **débit**, pas seulement de justesse. Le `cycle-bench` existant garde le modèle de
+cycle, pas le temps mur.
+✅ **CORRIGÉ** : `tools/run_perfbench.py`, branché sur le palier **full**. Il garde des **RATIOS**
+entre charges mesurées dans le MÊME run (boot nu = étalon de vitesse machine) plutôt que des
+seuils absolus en trames/s — un ratio est indépendant de la vitesse du runner, là où un seuil
+serré sur une CI partagée serait instable, donc désarmé au bout de trois faux rouges. Tolérance
+±25 % : ce banc n'est pas là pour voir 5 %, il est là pour attraper un chemin devenu **deux fois**
+plus cher sans que personne ne le remarque. Les débits absolus sont affichés à chaque run — ils
+ne gardent rien, mais rendent une dérive visible à l'œil. Stabilité vérifiée (±0,2 % au second
+run) et contrôle négatif fait (ratio faussé → code de sortie 1).
+✅ **ET IL RÉPOND À LA QUESTION LAISSÉE OUVERTE** — le coût réel de BL3/BL4, que j'avais admis ne
+pas avoir mesuré : boot sans blitter 1733 → 1707 tr/s (+1,5 % de temps), blitter non-hog
+1504 → 1523 (−1,3 %), poll MFP 1319 → 1317 (+0,2 %). **Rien de mesurable** : `Scheduler::syncTo`
+est O(1) quand aucune échéance n'est due (cache `nextDue_`), donc les ~370 000 appels
+supplémentaires de BL4 sont gratuits. L'inquiétude était légitime, la mesure la lève.
 
 ### A7 ✅ — Les ancres de la doc sont vérifiées en CI (FAIT le 2026-08-26)
 

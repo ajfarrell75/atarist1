@@ -70,6 +70,14 @@ FAST = [
      [sys.executable, str(TOOLS / "run_midi_sequencer.py")]),
 ]
 FULL = FAST + [
+    # Barrière de DÉBIT (chantier A6). Dans le palier FULL et non FAST : il mesure du
+    # temps mur, donc il coûte quelques secondes et il est le seul verdict du dépôt
+    # sensible à la charge de la machine. Il garde des RATIOS entre charges mesurées
+    # dans le MÊME run (le boot nu sert d'étalon de vitesse), ce qui le rend
+    # indépendant de la vitesse du runner — un seuil absolu en trames/s serait
+    # instable sur une CI partagée, donc désarmé au bout de trois faux rouges.
+    ("Banc de débit (coût relatif des chemins blitter et MFP)",
+     [sys.executable, str(TOOLS / "run_perfbench.py")]),
     ("P2 provenance des références",
      [sys.executable, str(TOOLS / "run_etalons.py"), "--verify-refs"]),
     ("P2 étalons pixel (oracle + snapshots)",
