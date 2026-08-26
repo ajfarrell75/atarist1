@@ -37,6 +37,18 @@ FAST = [
      [sys.executable, str(TOOLS / "run_etalons.py"), "--only",
       "glue_selftest,spec512_selftest,bus_selftest,mfp_selftest,msa_selftest,enec_selftest,"
       "usatan_selftest,netusbee_selftest"]),
+    # Intégrité des ANCRES de la doc (chantier A7). Instantané, aucune machine : la
+    # convention du projet veut que le SYMBOLE fasse foi (les fichier:ligne dérivent),
+    # or rien ne vérifiait qu'ils existent encore. Après le renommage
+    # Blitter::stallCpu → billCycles, l'inventaire pointait dans le vide.
+    ("Ancres de documentation (les symboles cités existent-ils encore ?)",
+     [sys.executable, str(TOOLS / "check_doc_anchors.py")]),
+    # Auto-tests du HARNAIS lui-même (chantier A4). L'instrument produit TOUTE la
+    # preuve du projet, et il avait des pannes silencieuses : trois « bloquants » sur
+    # huit venaient de lui lors du balayage du 2026-08-25 (options de pilotage non
+    # répétables). Un instrument non testé fabrique des bugs qui n'existent pas.
+    ("Harnais headless (options de pilotage : répétabilité, durée d'appui, scancodes)",
+     [sys.executable, str(TOOLS / "check_headless_options.py")]),
     ("P1 verdicts série (cartouche diagnostic)",
      [sys.executable, str(TOOLS / "run_selftests.py")]),
     ("Cycle-bench (auto-régression du modèle de cycle 68000)",

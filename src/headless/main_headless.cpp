@@ -75,6 +75,12 @@ void usage() {
         "  --key-up N C      release key C at frame N (break code only)\n"
         "  --keys-at N STR   type STR from frame N on (repeatable): 4 frames per char,\n"
         "                    extended scancodes arrows <>[], Esc =, F1-F5 !@#$%%\n"
+        "  --key-hold N      frames a key stays down for --keys-at / --scancode-at\n"
+        "                    (default 2 = ~40 ms; raise it to match Hatari --cmd-fifo,\n"
+        "                     which holds ~600 ms - otherwise the A/B is invalid)\n"
+        "  --scancode-at N H raw ST scancodes (hex, comma-separated) at frame N\n"
+        "                    (repeatable; reaches the numeric keypad: 0-9 =\n"
+        "                     70,6d,6e,6f,6a,6b,6c,67,68,69, Enter 72, dot 71)\n"
         "  --joy-at N VAL    set the port 1 joystick to VAL at frame N (same bits as --joy)\n"
         "                    (repeatable)\n"
         "  --joy-script N S  joystick script from frame N: U/D/L/R/F/. = one frame each\n"
@@ -1031,6 +1037,21 @@ int main(int argc, char** argv) {
     // et le balayage du catalogue a montré que ce piège fabriquait à lui seul des « bugs »
     // qui n'existaient pas (Xenon 2, Flood, Dynamite Dux — tous jouables une fois la repro
     // corrigée). Même correction pour --mouse-at et --joy-script ci-dessous.
+    // --key-hold N : nombre de trames pendant lesquelles --keys-at / --scancode-at
+    // TIENNENT la touche (make à +0, break à +N). Défaut 2, soit ~40 ms.
+    // ⚠ C'est le piège qui a rendu FAUX un verdict « confirmé à l'oracle » le
+    // 2026-08-25 : `--cmd-fifo keydown/keyup` d'Hatari tient ~600 ms, et comparer
+    // 40 ms à 600 ms n'est pas une A/B. TOUTE comparaison à l'oracle doit égaliser
+    // la durée. Le défaut reste 2 pour ne pas déplacer les recettes existantes.
+    int keyHold = 2;
+    // --scancode-at N HEX[,HEX…] : envoie des scancodes ST BRUTS. Générique, là où
+    // --keys-at passe par stScancode() et ne peut donc atteindre que les touches
+    // qui y ont un caractère. C'est ce qui rendait le PAVÉ NUMÉRIQUE inatteignable
+    // (menus de compilation Automation, cf. Pipe Dream) : plutôt que d'inventer un
+    // mappage de caractères pour dix touches de plus, on expose le scancode.
+    // Repérage : pavé 0-9 = $70,$6D,$6E,$6F,$6A,$6B,$6C,$67,$68,$69 ; . = $71 ;
+    // Entrée = $72 ; ( ) / * = $63,$64,$65,$66 ; - + = $4A,$4E.
+    std::vector<std::pair<int, std::vector<uint8_t>>> scanAtList;
     std::vector<std::pair<int, uint8_t>> joyAtList;
     // --mouse-at N "SCRIPT" : pilote la souris (mode REL) à partir de la trame N pour
     // naviguer un menu souris (ex. Vroom). Un token = une trame ; L/R/U/D = déplacement
@@ -1151,6 +1172,15 @@ int main(int argc, char** argv) {
         // ⚠ --joy-at prend DEUX arguments : les temporaires sont OBLIGATOIRES. Un
         // emplace_back(next(a), next(a)) aurait un ordre d'évaluation NON SPÉCIFIÉ, et
         // inverserait la trame et la valeur au gré du compilateur.
+        else if (!std::strcmp(a, "--key-hold"))    keyHold = std::atoi(next(a));
+        else if (!std::strcmp(a, "--scancode-at"))  { const int f = std::atoi(next(a));
+                                                     std::vector<uint8_t> sc;
+                                                     for (const char* t = next(a); *t; ) {
+                                                         sc.push_back((uint8_t)std::strtoul(t, nullptr, 16));
+                                                         while (*t && *t != ',') ++t;
+                                                         if (*t == ',') ++t;
+                                                     }
+                                                     scanAtList.emplace_back(f, std::move(sc)); }
         else if (!std::strcmp(a, "--joy-at"))      { const int f = std::atoi(next(a));
                                                      const uint8_t v = (uint8_t)std::strtoul(next(a), nullptr, 0);
                                                      joyAtList.emplace_back(f, v); }
@@ -1636,16 +1666,32 @@ int main(int argc, char** argv) {
         for (const auto& [kf, kc] : keyUpList)
             if (frame == kf) { const uint8_t sc = stScancode(kc);
                                if (sc) { machine.ikbd.keyEvent(sc, false); machine.cpu.updateIpl(); } }
+        // Pas par caractère : appui (keyHold trames) + 2 trames de relâche, au moins 4
+        // pour ne pas déplacer les recettes existantes (défaut keyHold=2 → pas de 4).
+        const int keyStride = (keyHold + 2 > 4) ? keyHold + 2 : 4;
         for (const auto& [kf, ks] : keysAtList) {
             if (frame < kf) continue;
             const int rel = frame - kf;
-            const int idx = rel / 4;
+            const int idx = rel / keyStride;
             if (idx < (int)ks.size()) {
                 const uint8_t sc = stScancode(ks[idx]);
                 if (sc) {
-                    if      (rel % 4 == 0) { machine.ikbd.keyEvent(sc, true);  machine.cpu.updateIpl(); }
-                    else if (rel % 4 == 2) { machine.ikbd.keyEvent(sc, false); machine.cpu.updateIpl(); }
+                    const int ph = rel % keyStride;
+                    if      (ph == 0)       { machine.ikbd.keyEvent(sc, true);  machine.cpu.updateIpl(); }
+                    else if (ph == keyHold) { machine.ikbd.keyEvent(sc, false); machine.cpu.updateIpl(); }
                 }
+            }
+        }
+        // Scancodes ST BRUTS (--scancode-at) : même cadence que --keys-at, mais sans
+        // passer par stScancode() — donc pavé numérique, touches mortes, tout le clavier.
+        for (const auto& [sf, sl] : scanAtList) {
+            if (frame < sf) continue;
+            const int rel = frame - sf;
+            const int idx = rel / keyStride;
+            if (idx < (int)sl.size()) {
+                const int ph = rel % keyStride;
+                if      (ph == 0)       { machine.ikbd.keyEvent(sl[idx], true);  machine.cpu.updateIpl(); }
+                else if (ph == keyHold) { machine.ikbd.keyEvent(sl[idx], false); machine.cpu.updateIpl(); }
             }
         }
         if (dumpAtFrame >= 0 && frame == dumpAtFrame && dumpLen) {
