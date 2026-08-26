@@ -77,8 +77,10 @@ un ESPACE que `hatari_oracle.sh` n'injecte pas — la référence d'origine disa
 tenue vbl ~900 » dans sa note, jamais relue. Protocole complet dans la note de l'étalon
 (`--cmd-fifo` + `hatari-event keydown 57` ; le nom SPACE est refusé ; fast-forward inopérant).
 
-◐ Suivi ouvert : `timer IRQ max lateness` de LX megast monte 132 → 252 — le stall est servi en
-fin de dispatch, même signature que le crédit groupé pré-BL4.
+✅ Le suivi `lateness` 132 → 252 a été instrumenté et CLOS le jour même : **deux pics isolés de
+Timer D** (161 et 252 cyc) sur ~300 000 échéances, pas un régime — un timer échu pendant une
+instruction que le stall DMA intra-quantum allonge attend la fin de l'instruction, comme pour
+tout wait-state. Fidèle au matériel.
 
 ## Le blitter a enfin un étalon — et il trouve une divergence (A1+A2+A3) (2026-08-26)
 

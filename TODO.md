@@ -152,8 +152,12 @@ est `due + stall + delay` — mesurée à **4127,8 cyc/flush** contre 4127 chez 
 étalons pixel verts, `nocooper` re-posé à **0 px vs oracle**. Les deux tentatives précédentes
 étaient chacune une moitié de l'arithmétique d'Hatari, et leurs verdicts d'échec reposaient sur
 des artefacts d'outillage (sonde inactive côté témoin, AVI oracle figé). Détail complet →
-entrée **D3** de `docs/HATARI_DIVERGENCES.md`. ◐ Suivi : la `lateness` de LX megast monte
-132→252 (stall servi en fin de dispatch — même classe que le crédit groupé pré-BL4).
+entrée **D3** de `docs/HATARI_DIVERGENCES.md`. ✅ Suivi `lateness` 132→252 CLOS (2026-08-26, instrumenté) : ce sont **deux pics isolés de
+Timer D** (161 et 252 cyc) sur ~300 000 échéances de 6000 trames — pas un régime. Mécanisme
+FIDÈLE : un timer échu pendant une instruction que le stall DMA intra-quantum allonge attend la
+fin de l'instruction, comme pour tout wait-state (le vrai 68000 stallé par le DMA ne prend pas
+d'IRQ en plein accès bus). Rappel A6 : cette métrique se compare à charge identique, jamais à un
+seuil.
 
 ### A3 ◐ — Le corpus de régression n'est pas livrable (AVANCÉ le 2026-08-26)
 
