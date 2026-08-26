@@ -161,16 +161,26 @@ au retrait des TOS Atari passe de **5 à 6 étalons** (`etos_ste_boot`, `oversca
 libre. Restent 7 étalons adossés à des ROM propriétaires : `spectrum512_diapo{,2,_ste}`,
 `cuddly_demos`, `union_demo`, `nocooper`, `nocooper_greetings`.
 
-### A4 — L'instrument n'est pas testé (effort **S**)
+### A4 ✅ — L'instrument est testé (FAIT le 2026-08-26)
 
 `neost-headless` **EST** le framework de test, et il a des modes d'échec **silencieux**. Sur la
 passe du 2026-08-25, **trois** « bloquants » sur huit venaient de l'instrument et non du système
 mesuré (cf. `OUTIL-1`). Le piège résiduel le plus dangereux : `--keys-at` tient la touche
 **40 ms** là où `--cmd-fifo` d'Hatari tient **~600 ms**, ce qui invalide silencieusement toute
 comparaison à l'oracle — un verdict « confirmé à l'oracle » a été rendu **FAUX** par cet écart.
-🎯 `neost-selftest` couvre « la logique pure » : le **parsing d'arguments en est**. Un test qui
-vérifie que `--joy-at` deux fois s'applique deux fois aurait attrapé `OUTIL-1` avant qu'il ne
-fabrique de faux bugs.
+✅ **CORRIGÉ** : `tools/check_headless_options.py`, branché sur le palier **fast** (donc sur les
+trois jobs de CI). Tests en BOÎTE NOIRE — le parsing vit dans `main_headless.cpp`, hors de toute
+bibliothèque, et l'extraire coûterait plus cher que la panne. Chaque test porte le bug qu'il
+empêche de revenir : répétabilité de `--joy-at` (le compteur est vérifié DISCRIMINANT : 1→1,
+2→2, 3→3), application de la PREMIÈRE occurrence et pas seulement de la dernière, existence de
+`--key-hold` et `--scancode-at`, et un garde-fou « un run nominal ÉMULE » — sans lui, le piège
+zsh (variable multi-mots non quotée = UN argument, le headless affiche son aide) ferait passer
+tous les autres tests sur du vide.
+✅ **Les deux manques concrets sont comblés** : `--key-hold N` règle la durée d'appui (défaut 2
+inchangé, à monter pour égaliser une A/B contre le `--cmd-fifo` d'Hatari qui tient ~600 ms), et
+`--scancode-at N HEX[,HEX…]` envoie des scancodes ST **bruts** — ce qui rouvre le **pavé
+numérique** sans avoir à inventer un mappage de caractères pour dix touches, et couvre tout futur
+trou du même genre.
 
 ### A5 — L'oracle est une dépendance critique traitée comme un accessoire (effort **S**)
 
@@ -191,7 +201,7 @@ trames de *Lethal Xcess*). **Personne ne l'a mesuré**, et rien dans la CI ne l'
 une barrière de **débit** (trames/s sur un boot de référence), pas seulement de justesse.
 Le `cycle-bench` existant garde le modèle de cycle, pas le temps mur.
 
-### A7 — La base de connaissance n'a aucun contrôle d'intégrité (effort **XS**)
+### A7 ✅ — Les ancres de la doc sont vérifiées en CI (FAIT le 2026-08-26)
 
 `docs/HATARI_DIVERGENCES.md` est une base de données maintenue à la main. Constaté le même jour :
 deux numérotations **en collision** (`B` sous-système vs `B` sévérité — corrigé en `BL*`), des
@@ -199,8 +209,15 @@ ancres pointant vers des **symboles disparus** (`Blitter::stallCpu` après renom
 décrit à la fois « complet mais OFF » et « ON par défaut ». Le coût réel est la **REDÉCOUVERTE** :
 `D4` a été retrouvé comme faux positif par **trois** agents indépendants dans la même passe, et
 *Arkanoid* était tranché depuis une passe **sans avoir jamais été versé** dans `CASE_STUDIES`.
-🎯 Un contrôle CI qui vérifie que chaque `fichier:symbole` cité existe encore (`grep`) coûte dix
-lignes et empêche la dérive silencieuse.
+✅ **CORRIGÉ** : `tools/check_doc_anchors.py`, branché sur le palier **fast**. Il vérifie que tout
+`Classe::méthode` et tout `Fichier.cpp:symbole` cité entre backticks existe encore dans `src/`
+(ou dans `extern/moira`, vendorisé) — **242 ancres** contrôlées aujourd'hui, 0 morte. Deux
+niveaux, délibérés : les documents **vivants** (`TODO.md`, `DEV.md`, `docs/*.md`) décrivent l'état
+ACTUEL, une ancre morte y est une **erreur** ; `CHANGELOG.md` est un registre **daté**, une entrée
+de juillet a le droit de citer un symbole renommé depuis, donc **avertissement** seulement.
+Une `ALLOWLIST` couvre les symboles cités À DESSEIN comme disparus (une phrase qui parle
+justement d'une ancre morte), chacun avec sa raison. **Contrôle négatif fait** : deux fausses
+ancres injectées sont bien détectées, code de sortie 1.
 
 ### A8 — Le GUI est un angle mort total (effort **M**)
 
