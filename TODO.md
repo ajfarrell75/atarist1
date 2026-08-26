@@ -147,16 +147,13 @@ non-trivialité : 380 px d'écart avec `blitter_timer`, dont **0 px en zone de d
 transfert, seul le partage de bus change. Et il passe en **`ref_kind: oracle` à 0 px**, donc il
 prouve la **conformité**, pas seulement la non-régression.
 ✅ **Le MFP en mode bloc a maintenant son étalon** (`mfp_poll`).
-🎯 **Reste ouvert** : le stall FIFO du FDC (**D3**). Le couple prescrit a été TENTÉ le 2026-08-26
-et **REVERTÉ** (deux fois). 🛑 Les chiffres de la première passe étaient **FAUX** : la sonde était
-logée DANS le correctif, donc inactive côté « avant ». Refait : sans couple **4203** cyc/flush,
-stall seul **4235**, ancrage + stall **4096**, cible Hatari **4127** — le couple RAPPROCHE donc de
-l'oracle (−31 contre +76). Il faut pourtant le reverter : 10 étalons pixel sur 12 passent, mais
-`nocooper` casse, et un balayage élargi à **±400 trames** donne une meilleure correspondance à
-~65 000 px, alors que sans le couple il est à **0 px**. Ce n'est donc pas un décalage de trame :
-le couple déséquilibre le rendu d'une démo beam-synchronisée.
-Détail et piste → entrée **D3** de `docs/HATARI_DIVERGENCES.md`. Sonde conservée :
-`NEOST_FDC_FLUSH_DIAG=1`.
+✅ **Le stall FIFO du FDC (D3) est CORRIGÉ (2026-08-26, 3ᵉ tentative)** : la bonne formulation
+est `due + stall + delay` — mesurée à **4127,8 cyc/flush** contre 4127 chez Hatari, 14/14
+étalons pixel verts, `nocooper` re-posé à **0 px vs oracle**. Les deux tentatives précédentes
+étaient chacune une moitié de l'arithmétique d'Hatari, et leurs verdicts d'échec reposaient sur
+des artefacts d'outillage (sonde inactive côté témoin, AVI oracle figé). Détail complet →
+entrée **D3** de `docs/HATARI_DIVERGENCES.md`. ◐ Suivi : la `lateness` de LX megast monte
+132→252 (stall servi en fin de dispatch — même classe que le crédit groupé pré-BL4).
 
 ### A3 ◐ — Le corpus de régression n'est pas livrable (AVANCÉ le 2026-08-26)
 
