@@ -15,6 +15,29 @@ Ripper, DAC Pro Sound) avec page Dongles, `disks/dongles.txt` et oracle de rejeu
 vérifié note à note** en headless, corpus MIDI piano/blues ; port MIDI ALSA sous Linux ;
 save-state v16. Détail dans les chantiers datés ci-dessous.
 
+## Slirp : le « dernier pas » est clos — 5/5, le coupable était Little Snitch (2026-08-27)
+
+Le FAIL « SORTIE REELLE : DNS » qui bloquait `NetBackendSlirp` depuis le 2026-08-22 n'était
+**pas un bug NeoST**. Diagnostic par interposition DYLD (`sendto`/`recvfrom`/`poll` espionnés) :
+le datagramme DNS **sort** (`sendto` = 31 octets vers 8.8.8.8:53, rc OK) mais `poll()` ne voit
+jamais la réponse — et un **témoin de 30 lignes hors NeoST** (socket/sendto/poll nus) échoue à
+l'identique pendant que `dig` (signé Apple) résout. Cause : **Little Snitch** jette
+silencieusement l'UDP externe des binaires non signés ; une alerte en attente **gèle même le
+`sendto` dans le noyau** (~2 min) jusqu'au verdict. Autoriser `build/neost-headless` → **5/5**.
+
+Durci au passage :
+
+- **4ᵉ vérification déterministe et HORS LIGNE** dans `--slirp-selftest` : boucle retour UDP
+  loopback à travers le NAT (répondeur local éphémère, `10.0.2.2:port` → `127.0.0.1:port`).
+  Contrairement aux points 1-3 (servis par SLIRP en interne), la trame traverse une **vraie
+  socket hôte aller-retour** : chemin complet socket → SLIRP → ARP → anneau RX prouvé sans
+  Internet, insensible aux filtres applicatifs (le loopback n'est pas filtré) — c'est elle qui
+  tranche « NeoST correct » vs « environnement ». CI-compatible.
+- La sortie réelle devient le **5ᵉ point** (opt-in `NEOST_SLIRP_ONLINE=1` inchangé) ;
+  `NEOST_SLIRP_DNS` accepte `a.b.c.d[:port]` ; les réponses des points 4 et 5 portent des
+  xid distincts (la réponse loopback RESTE dans l'anneau — BNRY n'avance pas — sans
+  discriminant le point 5 rendrait un faux vert). Doc → `docs/EXTENSIONS.md` § NetUSBee.
+
 ## La revue d'architecture A1-A8 est soldée : l'outillage se teste lui-même (2026-08-26)
 
 Clôture de la revue du 2026-08-25 — huit propriétés manquantes du **système de développement**,
