@@ -51,7 +51,10 @@ elle écrase la 80ᵉ colonne (une ligne HTML n'y laissait voir que son dernier 
 une colonne de « > »), d'où le repli à 78 colonnes et le CR ajouté sur les LF seuls.
 `src/net/HayesModem.cpp`.
 
-Le NetUSBee/EtherNEC **sort réellement sur Internet** en headless : `--slirp` branche
+Le NetUSBee/EtherNEC **sort réellement sur Internet** : `--slirp` en headless, la case
+« Real Internet for the NE2000 » de la page **Network** dans le GUI (clé `slirp=` de
+`neost.cfg`, rejouée par `--from-cfg` comme `netusbee=`). La bascule boucle locale ↔
+Internet est à chaud — la carte vue par le pilote ST ne change pas. En détail : `--slirp` branche
 `NetBackendSlirp` (libslirp, NAT mode utilisateur — ST en 10.0.2.15, passerelle 10.0.2.2,
 DNS relayé 10.0.2.3), `--slirp-restricted` la variante bac à sable sans sortie. Build :
 option CMake `NEOST_WITH_SLIRP` (AUTO via pkg-config `slirp`). Validation :
@@ -66,8 +69,8 @@ jette silencieusement l'UDP externe des binaires non signés (`sendto` OK, répo
 vue) et une alerte en attente peut même **geler `sendto` dans le noyau** jusqu'au verdict —
 autoriser `build/neost-headless` en sortie (règle à refaire après un rebuild, binaire non
 signé). Le point 4, insensible au filtre, tranche : si lui passe, NeoST est correct.
-Reste côté ST : le GUI (page Network) n'expose pas encore `--slirp`, et la validation de
-bout en bout **STinG + `ENEC.STX`** (DHCP + ping/GET depuis le TOS) — cf. `TODO.md`.
+Reste côté ST : la validation de bout en bout **STinG + `ENEC.STX`** (DHCP + ping/GET
+depuis le TOS) — cf. `TODO.md`.
 
 ## EtherNEC — NE2000 sur le port cartouche (`--ethernec`, GUI Network)
 

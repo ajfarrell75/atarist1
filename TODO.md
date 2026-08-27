@@ -336,8 +336,10 @@ détail → `DEV.md` et `CHANGELOG.md`). Restent :
   qui prouve le chemin complet socket hôte → SLIRP → ARP → anneau RX sans réseau ni filtre —
   CI-compatible, c'est elle qui tranche « NeoST correct » vs « environnement ». Détail et
   variables (`NEOST_SLIRP_ONLINE`, `NEOST_SLIRP_DNS=a.b.c.d[:port]`, `NEOST_SLIRP_TRACE`)
-  → `docs/EXTENSIONS.md` § NetUSBee. **Prochain pas** : câbler `--slirp` dans le GUI (page
-  Network), puis vérifier de bout en bout avec **STinG + ENEC.STX** côté ST (freeware, à
+  → `docs/EXTENSIONS.md` § NetUSBee. **Le GUI est câblé** (même jour) : case « Real
+  Internet for the NE2000 » page Network, clé `slirp=` de `neost.cfg`, bascule à chaud,
+  rejouée par `--from-cfg` (qui rejoue aussi `netusbee=`, oublié jusque-là). **Prochain
+  pas** : vérifier de bout en bout avec **STinG + ENEC.STX** côté ST (freeware, à
   récupérer) et un navigateur (CAB) sur theoldnet.com.
 
 - **MIDI OUT Windows** : `MidiOutHost` couvre CoreMIDI (macOS) et ALSA (Linux) ; winmm reste à

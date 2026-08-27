@@ -37,6 +37,13 @@ Durci au passage :
   `NEOST_SLIRP_DNS` accepte `a.b.c.d[:port]` ; les réponses des points 4 et 5 portent des
   xid distincts (la réponse loopback RESTE dans l'anneau — BNRY n'avance pas — sans
   discriminant le point 5 rendrait un faux vert). Doc → `docs/EXTENSIONS.md` § NetUSBee.
+- **Le GUI est câblé** (même jour) : case « Real Internet for the NE2000 » page Network,
+  clé `slirp=` de `neost.cfg` (aller-retour couvert par `neost-selftest`), applicateur
+  unique `neBackend()` — SLIRP ouvert → SLIRP, sinon boucle locale — et bascule À CHAUD
+  (la carte vue par le pilote ne change pas, pas de reset). Vérifié : boot GUI scripté
+  (`--run-frames`) avec `slirp=1` → `[slirp] NAT user-mode démarré`. Au passage,
+  `--from-cfg` rejoue désormais `netusbee=` et `slirp=` (le premier manquait à l'appel
+  alors que son commentaire promettait la parité avec le lecteur GUI).
 
 ## La revue d'architecture A1-A8 est soldée : l'outillage se teste lui-même (2026-08-26)
 

@@ -404,7 +404,8 @@ void drawHardDiskPage(const std::string& hdDir, const std::string& gemdosDefault
 // Discipline habituelle : données en entrée, requêtes en sortie, AUCUNE E/S ici.
 void drawNetworkPage(bool modemOn, bool etherOn,
                      bool netusbeeOn, bool cartMounted,
-                     int& reqModem, int& reqEther, int& reqNetUsbee) {
+                     bool slirpOn, bool slirpAvail,
+                     int& reqModem, int& reqEther, int& reqNetUsbee, int& reqSlirp) {
     ImGui::TextDisabled("Network extensions (NeoST)");
     ImGui::TextWrapped("Hardware that really existed on the ST, emulated here: a Hayes "
                        "modem on the serial port, and NE2000-based cartridge-port "
@@ -430,5 +431,19 @@ void drawNetworkPage(bool modemOn, bool etherOn,
             reqEther = eth ? 1 : 0;
         if (ImGui::Checkbox("NetUSBee (NE2000 + ISP1160 USB host on the cartridge port)", &nub))
             reqNetUsbee = nub ? 1 : 0;
+    }
+
+    // SLIRP : le « câble » de la NE2000 — boucle locale (défaut) ou Internet réel
+    // (NAT mode utilisateur). Bascule à chaud : la carte vue par le pilote ST ne
+    // change pas. Sans effet tant qu'aucun adaptateur ci-dessus n'est monté.
+    ImGui::Separator();
+    if (!slirpAvail) {
+        ImGui::TextDisabled("Real Internet (libslirp): not available in this build");
+    } else {
+        bool sl = slirpOn;
+        if (ImGui::Checkbox("Real Internet for the NE2000 (user-mode NAT, libslirp)", &sl))
+            reqSlirp = sl ? 1 : 0;
+        ImGui::TextDisabled("ST 10.0.2.15, gateway 10.0.2.2, DNS 10.0.2.3 \xe2\x80\x94 needs an ST-side"
+                            " TCP/IP stack (STinG ENEC.STX, MiNTnet)");
     }
 }

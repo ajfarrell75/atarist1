@@ -254,6 +254,7 @@ static void testConfigParser() {
         a.cart = "carts/z.img";      a.gemdos = "/srv/gemdos"; a.acsi = "hd/c.img";
         a.machine = "megaste";       a.mem = "4m";  a.mono = true;  a.fpu = true;
         a.modem = true;              a.ethernec = true;
+        a.netusbee = true;           a.slirp = true;
         a.joyport = 0;               a.joymap = "GUID1:0,GUID2:x";
         a.joydeadzone = 0.42f;       a.fastfdc = true;
         a.volume = 0.5f;             a.audioLatencyMs = 40;  a.driveSound = false;
@@ -276,6 +277,8 @@ static void testConfigParser() {
         checkBool("aller-retour fpu",      b.fpu      == a.fpu,      true);
         checkBool("aller-retour modem",    b.modem    == a.modem,    true);
         checkBool("aller-retour ethernec", b.ethernec == a.ethernec, true);
+        checkBool("aller-retour netusbee", b.netusbee == a.netusbee, true);
+        checkBool("aller-retour slirp",    b.slirp    == a.slirp,    true);
         checkBool("aller-retour joyport",  b.joyport  == a.joyport,  true);
         checkBool("aller-retour deadzone", b.joydeadzone == a.joydeadzone, true);
         checkBool("aller-retour fastfdc",  b.fastfdc  == a.fastfdc,  true);
