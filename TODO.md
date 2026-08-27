@@ -4,15 +4,14 @@
 
 - Ce qui est fait, par puce → [`docs/IMPLEMENTED.md`](docs/IMPLEMENTED.md)
 - Titres déjà diagnostiqués (corrigés **ou** jugés fidèles) → [`docs/CASE_STUDIES.md`](docs/CASE_STUDIES.md)
-- Chronologie (le clos détaillé vit là-bas, y compris les chantiers retirés d'ici) → [`CHANGELOG.md`](CHANGELOG.md)
+- Chronologie (le clos détaillé vit là-bas, y compris tout ce qui a été retiré d'ici) → [`CHANGELOG.md`](CHANGELOG.md)
 
 **Objectif** : émuler proprement un **MegaSTE** (68000 8/16 MHz, 1/2/4 Mo, TOS 2.05/2.06, STE
 vidéo/son/joypads, blitter, RTC, SCC, SCU, ACSI — le disque interne d'époque est un pont
 ACSI-SCSI, PAS un NCR5380, DD/HD) avec un timing assez fidèle pour jeux, démos et utilitaires.
-**Atteint le 2026-08-27** au sens du diagnostic Atari Field Service : suite Q **12/12** sous
-TOS 2.06 (boîtier de test DMA du kit émulé, `--dma-fixture`) ; ce qui suit affine la
-fidélité, il ne conditionne plus l'objectif. Depuis le même jour, ce 12/12 est **gardé
-par une machine** : `tools/run_megaste_diag.py` rejoue la suite Q à chaque palier `full`.
+**Atteint et GARDÉ** (2026-08-27) : `tools/run_megaste_diag.py` rejoue la suite Q du
+diagnostic Field Service (12/12) à chaque palier `full`. Ce qui suit affine, il ne
+conditionne plus l'objectif.
 
 **Sources de vérité à croiser systématiquement** (cf. [`CLAUDE.md`](CLAUDE.md)) :
 - **Hatari** (`extern/hatari/src/*.c`) — comportement ST/STE/MegaSTE éprouvé. La référence.
@@ -21,7 +20,7 @@ par une machine** : `tools/run_megaste_diag.py` rejoue la suite Q à chaque pali
 
 **Documentation connexe** :
 - Précision cycle (modèle, acquis, restant) → [`docs/CYCLE_ACCURACY.md`](docs/CYCLE_ACCURACY.md)
-- Beam-sync (convergence Moira↔WinUAE — chantier CLOS, journal) → [`docs/MOIRA_WINUAE_CONVERGENCE.md`](docs/MOIRA_WINUAE_CONVERGENCE.md)
+- Beam-sync (chantier CLOS — journal, « ÉTAT COURANT » en tête) → [`docs/MOIRA_WINUAE_CONVERGENCE.md`](docs/MOIRA_WINUAE_CONVERGENCE.md)
 - Divergences NeoST↔Hatari (inventaire maître) → [`docs/HATARI_DIVERGENCES.md`](docs/HATARI_DIVERGENCES.md)
 - Logiciels étalons par sous-système → [`docs/TEST_SOFTWARE.md`](docs/TEST_SOFTWARE.md)
 
@@ -43,12 +42,13 @@ Conséquences : cloner le dépôt (ou télécharger le tarball GitHub) livre une
 logiciels sous copyright — et **GitHub Pages sert `main` à la racine**, donc tout est aussi
 téléchargeable depuis le web. Verrous techniques levés (Pages libre-seulement, étalons
 découplés, `rom_is_free()`, licences gardées par 8 jobs) → détail au `CHANGELOG.md`.
+Les chiffres du tableau sont gardés par `tools/check_doc_claims.py`.
 
 **Séquencement de la purge** (l'ordre casse la circularité « purger ampute le filet ») :
 
 1. **A10 d'abord** — convertir les 7 étalons pixel encore adossés à des ROM/disques
    propriétaires (§ Dette d'architecture). C'est LE verrou qui rend la purge coûteuse.
-2. **Débrancher le palier `fast` des fichiers propriétaires** (nouveau, audit 2026-08-27) :
+2. **Débrancher le palier `fast` des fichiers propriétaires** :
    `run_selftests.py` (`diag_cart` → `tos102uk`), `run_cyclebench.py` (`tos102uk` codé en
    dur) et `run_midi_sequencer.py` (`tos104fr` + **Cubase Lite**, un logiciel commercial
    lui aussi suivi par git) tomberaient en **rouge dur** le jour de la purge — la politique
@@ -75,36 +75,31 @@ Conformité annexe (non bloquante) :
 
 ---
 
-## 🏛 Dette d'architecture — état et plan de correction
+## 🏛 Dette d'architecture — items ouverts
 
-**Audit quatre dimensions du 2026-08-27** (cœur, frontends, tests/CI, fidélité/gouvernance —
-constats, notes et trouvailles → `CHANGELOG.md` à cette date). La revue A1-A8 du 2026-08-25
-est **soldée** (détail → `CHANGELOG.md` 2026-08-26). Les leçons de méthode du 2026-08-25
-(seuil absolu sur grandeur dépendante de la charge ; justesse validée sans mesure de coût)
-sont archivées au `CHANGELOG.md` — ne pas les recommettre.
+Issus de l'audit quatre dimensions du 2026-08-27 et des revues antérieures. Le soldé
+(A1-A8, A16-A27, les leçons de méthode) vit au `CHANGELOG.md` — la numérotation A*n*
+est continue, les trous sont du travail fait.
 
-### Hérités encore ouverts (A3, A9-A15)
+### Reproductibilité & maturité produit (hérités)
 
 - **A3 ◐ — Le corpus de régression n'est pas livrable.** La couverture repose sur les 68
   jeux crackés et 37 ROM propriétaires du § BLOQUANT. Recompté 2026-08-27 : **8 étalons
   pixel sur 15** survivraient au retrait des TOS Atari (`etos_ste_boot`, `overscan_top`,
   `trace_odd`, `scroll_8264`, `scroll_8265`, `blitter_timer`, `blitter_hog`, `mfp_poll`) ;
   les 7 restants sont le plan **A10**.
-- **A9 ⭘ — `src/main.cpp` est un monolithe** (mesuré 2026-08-27 : **4 814 lignes** après
-  l'extraction A21 du clavier, dont `main()` ≈ 2 420 lignes avec une boucle de
-  ~1 530 lignes et **84 globaux `g_*`** — chiffre gardé par `check_doc_claims.py`).
-  La dette est confinée (`neost_core` reste sans GUI). ✅ (a) fait le 2026-08-27 : le
-  boot GUI (400 trames + capture, sauté-et-dit sans affichage) est une étape de
-  `run_all.py`, et `--run-frames` est devenu un vrai mode harnais (gel central de
-  `saveConfig` + `imgui.ini` : un run de test ne laisse AUCUNE trace — le boot GUI
-  réécrivait `rom=`/`rtc=` du développeur au premier essai). Reste (b) : découper —
-  une `struct App` absorbant les globaux, `main()` sous 300 lignes, en généralisant
-  le pattern de requêtes de `MediaPages`. Ne PAS refondre la boucle sans ce filet.
+- **A9 ⭘ — Découper `main()`** (`src/main.cpp`, mesuré 2026-08-27 : **4 814 lignes**, dont
+  `main()` ≈ 2 420 avec une boucle de ~1 530 lignes et **84 globaux `g_*`** — chiffre gardé
+  par `check_doc_claims.py`). Le filet préalable existe (boot GUI dans `run_all.py`, mode
+  harnais sans trace — cf. `CHANGELOG.md`) ; reste le découpage : une `struct App`
+  absorbant les globaux, `main()` sous 300 lignes, en généralisant le pattern de requêtes
+  de `MediaPages`. Ne PAS refondre la boucle en même temps qu'autre chose.
 - **A10 ⭘ — Convertir les 7 étalons adossés à des ROM propriétaires** :
   `spectrum512_diapo`, `spectrum512_diapo2`, `spectrum512_diapo_ste`, `cuddly_demos`,
   `union_demo`, `nocooper`, `nocooper_greetings`. Deux recettes éprouvées, au choix par
   étalon : migration EmuTOS (capture EmuTOS vs TOS propriétaire = 0 px, contrôlée à
-  l'oracle) ou étalon généré (esprit `tools/make_blitter_test.py`).
+  l'oracle) ou étalon généré (esprit `tools/make_blitter_test.py`). Bonus au passage :
+  raccourcir `nocooper_greetings` (~46 s — il borne à lui seul le mur du palier pixel).
 - **A11 ⭘ — L'oracle ne tourne dans aucune CI.** Job planifié ou manuel (pas au push) qui
   clone Hatari au pin via `tools/setup_hatari.sh`, régénère les captures des étalons
   `ref_kind: oracle` et compare aux réfs commises. Fermerait la dernière boucle de
@@ -120,32 +115,15 @@ sont archivées au `CHANGELOG.md` — ne pas les recommettre.
 - **A14** = garde lecture-seule des balayages de masse → § *Outillage / qualité*.
 - **A15** = DSL d'injection sans token « mouvement bouton tenu » (pas de DRAG GEM).
 
-### P1 — corrections rapides : ✅ SOLDÉ le 2026-08-27 (A16-A24)
-
-Détail et verdicts → `CHANGELOG.md` (2026-08-27). Reliquat ouvert né d'A16 :
+### Consolidation (quelques jours chacun, par opportunité)
 
 - **A16b ⭘ — `NEOST_LINELEN_ATTR` (attribution Shifter à la grille réelle) segfaute
-  sous `--glue-selftest`.** Découvert en tentant d'unifier le défaut : le chemin
-  expérimental V3 (les 4 sites `glueLineStart_` du Shifter) crashe quand il est armé
-  hors trame réelle — il crashait déjà via la recette d'A/B documentée
-  `NEOST_LINELEN=1` AVANT la séparation des verrous. À corriger avant toute
-  promotion du chantier V3 (probable : `glueLineStart_` vide/désynchronisé dans le
-  selftest). La config validée en production est Machine-ON/Shifter-OFF.
-
-### P2 — consolidation (quelques jours chacun, par opportunité)
-
-✅ **A25, A26 et A27 SOLDÉS le 2026-08-27** (détail → `CHANGELOG.md`) : la suite Q du
-diagnostic MegaSTE est rejouée à chaque palier `full` (`tools/run_megaste_diag.py`,
-11 Pass + zéro Fail exigés, SKIP recensé si les fichiers Atari manquent) ; les
-affirmations chiffrées de la doc sont gardées par `tools/check_doc_claims.py`
-(palier `fast` — il a attrapé sa première dérive à son premier run), et la passe de
-péremption est faite (CYCLE_ACCURACY §4 réécrit, borne MFP corrigée dans
-HATARI_DIVERGENCES, bloc « ÉTAT COURANT » daté en tête de MOIRA_WINUAE_CONVERGENCE)) ;
-enfin la boucle rapide n'est plus aveugle au rendu (4 étalons pixel courts sur ROM
-libre dans le palier `fast`, ~12 s au total) et `run_etalons.py --jobs` parallélise
-le palier pixel (66 s → 46 s, borné par `nocooper_greetings` seul — le prochain gain
-est le raccourcissement de CET étalon, pas plus de parallélisme).
-
+  sous `--glue-selftest`.** Le chemin expérimental V3 (les 4 sites `glueLineStart_` du
+  Shifter) crashe quand il est armé hors trame réelle — il crashait déjà via l'ancienne
+  recette d'A/B `NEOST_LINELEN=1` avant la séparation des verrous (cf. `CHANGELOG.md`
+  A16). À corriger avant toute promotion du chantier V3 (probable : `glueLineStart_`
+  vide/désynchronisé dans le selftest). La config validée en production est
+  Machine-ON / Shifter-OFF.
 - **A28 ⭘ — Sortir le servo audio et la cadence dans le cœur.** Le filtre proportionnel
   d'asservissement (même constante `/256`, même clamp ±8, même rampe anti-clic) existe en
   **trois copies** (GUI, web, android) et la boucle de rattrapage de cadence aussi ;
@@ -161,7 +139,7 @@ est le raccourcissement de CET étalon, pas plus de parallélisme).
   une soirée. Le bornage manuel est déjà excellent (il corrige même une lecture hors
   bornes présente dans Hatari) — le fuzzing le prouverait et le garderait.
 
-### P3 — chantiers structurels (UN à la fois, jamais combinés)
+### Chantiers structurels (UN à la fois, jamais combinés)
 
 - **A31 ⭘ — Interface `MmioDevice` + table de plages.** Ajouter une puce = 6 points de
   modification dont les deux chaînes de `if` de ~110 lignes de `Bus::mmioRead8` /
@@ -194,7 +172,7 @@ est le raccourcissement de CET étalon, pas plus de parallélisme).
   `XDG_CONFIG_HOME` / `%APPDATA%` avec repli sur le comportement actuel.
 - **A37 ⭘ — Discipline de release.** Trois tags le même jour (0.5→0.5.2), 0.5.3 sautée
   sans trace, et le travail majeur depuis le 2026-08-23 (MegaSTE 12/12, CAB/theoldnet,
-  fenêtres EtherNEC) n'est pas tagué. Taguer, puis signer/notariser `.dmg` et `.zip`
+  audit + plan A16-A37) n'est pas tagué. Taguer, puis signer/notariser `.dmg` et `.zip`
   une fois la purge (§ BLOQUANT) faite.
 
 ### Garde-fous du plan (à NE PAS faire)
@@ -202,8 +180,8 @@ est le raccourcissement de CET étalon, pas plus de parallélisme).
 - **Rouvrir BL5 sans concevoir une 3ᵉ mesure indépendante** : le paradoxe de signe entre
   les deux instrumentations existantes est documenté (`docs/HATARI_DIVERGENCES.md` § BL5,
   6 hypothèses réfutées) — re-mesurer avec les mêmes sondes ne tranchera rien.
-- **Combiner A9 + A31 + A32 en un « grand refactor »** : chaque chantier P3 séparément,
-  filet de test posé AVANT (A9a, A29).
+- **Combiner A9 + A31 + A32 en un « grand refactor »** : chaque chantier structurel
+  séparément, filet de test posé AVANT (le boot GUI l'est ; A29 pour le cœur).
 - **Supprimer un des deux modèles d'exécution sans la mesure d'A34.**
 
 ---
@@ -232,36 +210,28 @@ Suivis mineurs laissés ouverts sur des cas par ailleurs tranchés :
 
 ---
 
-## 🔬 Divergences Hatari restantes
+## 🔬 Divergences Hatari & précision cycle — restes
 
 **Inventaire maître** (sévérité + impact + `fichier:ligne` des deux côtés) :
-[`docs/HATARI_DIVERGENCES.md`](docs/HATARI_DIVERGENCES.md). Fidélité globale **très élevée** ;
-**aucune divergence de sévérité haute n'est ouverte** (vérifié entrée par entrée le
-2026-08-27). Le terrain logique est épuisé ; le beam-sync joueur (Enchanted Land, Cuddly,
-Super Hang-On) est **CLOS** — EL 12402/12402, Cuddly 250/250, SHO résolu, datation re-arm
-meilleure que la cible Hatari (2026-07-09 et 2026-08-06, détail → `CHANGELOG.md` et
-`docs/MOIRA_WINUAE_CONVERGENCE.md`).
-
-> **L'oracle se bâtit, il n'arrive pas tout seul** : `extern/hatari` est GITIGNORÉ et n'est
-> PAS un sous-module — sur une machine fraîche il est ABSENT. `tools/setup_hatari.sh` clone au
-> pin (`f0736b2`) et bâtit avec les options macOS obligatoires ; recettes →
-> [`docs/HATARI_AUTOMATION.md`](docs/HATARI_AUTOMATION.md).
-
-Restent, par priorité d'impact (toutes de valeur basse à moyenne) :
+[`docs/HATARI_DIVERGENCES.md`](docs/HATARI_DIVERGENCES.md). **Aucune divergence de
+sévérité haute n'est ouverte** (vérifié entrée par entrée le 2026-08-27) ; la
+convergence instruction Moira↔WinUAE est complète et le beam-sync joueur est **clos**
+(→ « ÉTAT COURANT » de `docs/MOIRA_WINUAE_CONVERGENCE.md`). Le restant, à rendement
+décroissant, par priorité d'impact :
 
 1. **[VIDÉO]** V3 géométrie mid-trame (50↔60 Hz) : le restart du compteur est porté
-   (`VC_RESTART`), reste l'**attribution de ligne** — le chemin expérimental a son
-   verrou dédié (`NEOST_LINELEN_ATTR`, OFF) et un segfault à corriger d'abord (**A16b**).
+   (`VC_RESTART`), reste l'**attribution de ligne** — verrou dédié `NEOST_LINELEN_ATTR`
+   (OFF) et un segfault à corriger d'abord (**A16b**).
 2. **[SON]** quantification HBL du refill FIFO à confronter à l'oracle sur un poll serré de
    `$FF8909/0B/0D` — validable par dump WAV + trace.
 3. **[MFP]** `UpdateTimers` avant lecture IPR/ISR/TBDR en mode bloc — retard **mesuré à
-   157 cycles** dans le pire cas observé (pas « ≤ 1 instruction »). Le correctif évident
-   (dispatch sync-driven) est **réfuté** ; attendre A34.
+   157 cycles** dans le pire cas observé. Le correctif évident (dispatch sync-driven) est
+   **réfuté** ; attendre A34.
 4. **[FPU]** arrondis de conversion sortante et précision FPCR (détail § Roadmap / FPU).
 5. **[BLITTER]** résidu BL5 : ~10 cyc par démarrage de blit + ~3,3 par reprise de tranche,
-   **paradoxe de signe non levé** entre les deux instrumentations — aucune correction sans
-   3ᵉ mesure indépendante. Hypothèses déjà réfutées (6) → entrée **BL5** de
-   `docs/HATARI_DIVERGENCES.md`.
+   **paradoxe de signe non levé** — cf. Garde-fous (aucune correction sans 3ᵉ mesure).
+6. **[VIDÉO, P3]** wakeup-state WS3 sous-pixel, mode 336 px STE (`bSteBorderFlag`), rendu
+   live du retrait bas, interfoliage blitter → `docs/CYCLE_ACCURACY.md` §4.
 
 **Faisables sans oracle** : FPU packed decimal bit-exact ; GEMDOS recomposition Unicode NFD→NFC
 (cible macOS) — détaillés dans `docs/HATARI_DIVERGENCES.md`.
@@ -270,16 +240,10 @@ Restent, par priorité d'impact (toutes de valeur basse à moyenne) :
 Zilog, NeoST plus fidèle) ; WRITE/READ TRACK STX réinterprétés (NeoST rend la piste lisible) ;
 densité HD/ED STX (NeoST plus cohérent) ; RTC en temps émulé (déterminisme headless).
 
----
-
-## 🎯 Précision cycle
-
-Convergence **instruction** Moira↔WinUAE : complète (14/14 boucles au harnais différentiel).
-Beam-sync : **convergé, transitoire d'entrée inclus** (verdict du 2026-07-09 ; IACK MFP
-vectorisé 12→16 cyc le 2026-08-06 a clos Super Hang-On). Le restant est un inventaire de
-raffinements à rendement décroissant → [`docs/CYCLE_ACCURACY.md`](docs/CYCLE_ACCURACY.md) §4 :
-attribution de ligne V3 (= A16b), wakeup-state WS3 sous-pixel, mode 336 px STE
-(`bSteBorderFlag`), rendu live du retrait bas, interfoliage blitter, quantification FIFO son.
+> **L'oracle se bâtit, il n'arrive pas tout seul** : `extern/hatari` est GITIGNORÉ et n'est
+> PAS un sous-module — sur une machine fraîche il est ABSENT. `tools/setup_hatari.sh` clone au
+> pin (`f0736b2`) et bâtit avec les options macOS obligatoires ; recettes →
+> [`docs/HATARI_AUTOMATION.md`](docs/HATARI_AUTOMATION.md).
 
 ---
 
@@ -289,38 +253,31 @@ attribution de ligne V3 (= A16b), wakeup-state WS3 sous-pixel, mode 336 px STE
 > est **fait et validé** — voir `CHANGELOG.md`. Ci-dessous, uniquement ce qui reste ouvert.
 
 ### Vidéo / Shifter
-- **Raffinements cycle-exact** → § Précision cycle ci-dessus et `docs/CYCLE_ACCURACY.md` §4.
-- **Résidu du latch couleur bordure gauche** (le latch lui-même est corrigé, 2026-07-09) :
-  16 px (cols 45-60) = la **position horizontale exacte** où l'écriture palette prend effet
-  (Hatari bascule ~16 px après le début nominal de l'aire active = latence pipeline ; NeoST
-  bascule pile à `activeX_`). Invisible aux étalons. _Valeur très basse._
+- Raffinements cycle-exact → § Divergences ci-dessus.
+- **Résidu du latch couleur bordure gauche** : 16 px (cols 45-60) = la **position
+  horizontale exacte** où l'écriture palette prend effet (Hatari bascule ~16 px après le
+  début nominal de l'aire active = latence pipeline ; NeoST bascule pile à `activeX_`).
+  Invisible aux étalons. _Valeur très basse._
 
 ### Interface — kiosk & effets CRT
-- ⭘ **Souris ABSOLUE pour GEM/bureau** (2026-08-27) — la souris ST n'est pilotée qu'en
-  mode capturé/relatif (`g_mouseCaptured`, `GLFW_RAW_MOUSE_MOTION`), pensé pour les jeux.
+- ⭘ **Souris ABSOLUE pour GEM/bureau** — la souris ST n'est pilotée qu'en mode
+  capturé/relatif (`g_mouseCaptured`, `GLFW_RAW_MOUSE_MOTION`), pensé pour les jeux.
   🎯 Un mode absolu (position curseur hôte → curseur ST, sans capture) pour l'usage
-  GEM/desktop/navigateur. (Le symptôme d'origine — « impossible d'ouvrir un dossier sur
-  C: » — était l'`EMUDESK.INF` sans `#W`, corrigé → `CHANGELOG.md` ; l'entrée reste comme
-  confort, pas comme bug.)
+  GEM/desktop/navigateur — confort, pas bug.
 - ⭘ **Trace clavier permanente `NEOST_KBD_TRACE`** (comme `NEOST_ENEC_TRACE`) — éviterait
-  le cycle rebuild/revert du 2026-08-27 au prochain doute clavier. _Valeur faible, coût nul._
+  un cycle rebuild/revert au prochain doute clavier. _Valeur faible, coût nul._
 - Cosmétique : membres `srcW_`/`srcH_` morts dans `CrtEffectStack` ; répétition de
   navigation kiosk (tenir gauche/droite bloque la répétition haut/bas). Limitations CRT v1
   assumées (baril/vignette sur le buffer entier en kiosk ; GL 2.1 → passthrough).
 
-### Son DMA STE
-- Quantification HBL du refill FIFO vs oracle (= item 2 du § Divergences). _Effort faible,
-  valeur basse._
-
 ### Stockage & contrôleurs
-- **SCSI / NCR5380** — TT/Falcon **uniquement** (reclassé 2026-08-27 : le MegaSTE n'en a
-  pas). Hors périmètre MegaSTE, non commencé. Réf. `ncr5380.c`.
+- **SCSI / NCR5380** — TT/Falcon **uniquement** (le MegaSTE n'en a pas). Hors périmètre,
+  non commencé. Réf. `ncr5380.c`.
 - SCC : restes faible valeur — timers du BRG / Zero Count, baudrate temporisé, série hôte.
-- ⭘ **Test F (disquette) de la cartouche STE_Test v1.9 : « Cannot write drive A/B », drives
-  vus SS** (constaté 2026-08-27, PRÉ-EXISTANT au chantier MegaSTE). Le test F du diagnostic
-  MegaSTE, lui, PASSE (A et B DS, format/écriture/lecture) avec le même FDC émulé : la
-  cartouche STE détecte les faces/l'écriture autrement. Trace façon FDC + Hatari en oracle
-  sur la même cartouche. _Valeur moyenne._
+- ⭘ **Test F (disquette) de la cartouche STE_Test v1.9 : « Cannot write drive A/B »,
+  drives vus SS** (pré-existant au chantier MegaSTE ; le test F du diagnostic MegaSTE,
+  lui, PASSE avec le même FDC émulé — la cartouche STE détecte les faces/l'écriture
+  autrement). Trace façon FDC + Hatari en oracle sur la même cartouche. _Valeur moyenne._
 
 ### FPU MC68881 (audit 2026-07-12 — différés)
 - **Arrondis de conversion SORTANTE bit-exacts** : FMOVE.L/W/B (double arrondi 53 bits via
@@ -342,10 +299,7 @@ attribution de ligne V3 (= A16b), wakeup-state WS3 sous-pixel, mode 336 px STE
 - **Cartridge port** `$FA0000-$FBFFFF` générique (au-delà du système GEMDOS) — réf. `cart.c`.
 
 ### Système de régression — restes
-La pyramide P0-P3 est en place (palier `fast` **~12 s** mesuré 2026-08-27 — boot GUI,
-pixels rapides et test STX inclus ; palier `full` = tous les pixels en parallèle
-(`--jobs`) + garde MegaSTE ; détail → `DEV.md`). Les manques structurels encore ouverts
-relevés par l'audit sont au § Dette (A27, A29, A30). Restent en plus :
+(La pyramide, ses paliers et ses chiffres → `CLAUDE.md` et `DEV.md`.)
 - gate `trace_diff --periods` vs oracle Hatari (le cycle-bench actuel est une auto-régression
   NeoST) ;
 - self-tests P0 supplémentaires (autres Timers, ACIA) ;
@@ -361,7 +315,7 @@ relevés par l'audit sont au § Dette (A27, A29, A30). Restent en plus :
   Suite ; rapatrier Union (planetemu manuel). Infra en place (`tools/run_etalons.py`).
 - **Comparaison MAME ↔ NeoST** (memory map, bus errors, FDC/MMU FIFO, blitter, SCC).
 - **Matrice MegaSTE — restes** : combinaisons DD/HD × cache par balayage systématique si un
-  jour un titre l'exige (le reste de la matrice est validé → `CHANGELOG.md` 2026-08-27).
+  jour un titre l'exige.
 - Capturer des **traces Hatari de référence** pour `trace_diff` (Arkanoid & co).
 - ⭘ **Hygiène FujiNet — décision de mainteneur** : le code est retiré (2026-08-22), restent
   deux mentions historiques (commentaire de version save-state dans `src/core/Machine.cpp`,
@@ -370,29 +324,28 @@ relevés par l'audit sont au § Dette (A27, A29, A30). Restent en plus :
 
 ### Réseau (extensions NeoST — base livrée 2026-08-12, cf. `docs/EXTENSIONS.md`)
 
-> Les chantiers **clos** de ce front (Slirp 5/5 — le coupable était Little Snitch ;
-> fenêtres EtherNEC ROM3/ROM4 ; **CAB affiche theoldnet.com** — recettes souris GEM, cache
-> CAB, RTO STinG) sont consignés au `CHANGELOG.md` (2026-08-27), recettes incluses.
+> Les chantiers **clos** de ce front (Slirp 5/5, fenêtres EtherNEC ROM3/ROM4, CAB affiche
+> theoldnet.com) → `CHANGELOG.md` (2026-08-27), recettes incluses.
 
 - **MIDI OUT Windows** : `MidiOutHost` couvre CoreMIDI (macOS) et ALSA (Linux) ; winmm
   reste à écrire — le MT-32 (Munt), lui, est portable.
-- **Périphériques des ports — validation** (2026-08-23) : `PortDevices` transcrit
-  Steem/WinUAE sans logiciel à clé sous la main. À exercer : Leader Board / 10th Frame
-  (dump ST), B.A.T. II, Music Master, et l'option « Pro Sound » de Wings of Death /
-  Lethal Xcess (présents en STX) pour entendre le DAC. **Clé Notator** (`--dongle
-  notator`) : à confronter à un Notator SL original — deux incertitudes à trancher sur le
-  vrai matériel (front de /ROM4 cadençant FEEDB1 ; ordre UDS↔/ROM4 à l'armement). Restent
-  sans relevé public : Log 3 (EP330), Pro-24 (GAL16V8), Avalon / Synthworks, Zodiac,
-  DynaBlaster. L'outil pour trancher existe : capture matérielle `R3`/`R4`/`U` +
-  `--key-replay` (recette → `docs/EXTENSIONS.md`).
+- **Périphériques des ports — validation** : `PortDevices` transcrit Steem/WinUAE sans
+  logiciel à clé sous la main. À exercer : Leader Board / 10th Frame (dump ST), B.A.T. II,
+  Music Master, et l'option « Pro Sound » de Wings of Death / Lethal Xcess (présents en
+  STX) pour entendre le DAC. **Clé Notator** (`--dongle notator`) : à confronter à un
+  Notator SL original — deux incertitudes à trancher sur le vrai matériel (front de /ROM4
+  cadençant FEEDB1 ; ordre UDS↔/ROM4 à l'armement). Restent sans relevé public : Log 3
+  (EP330), Pro-24 (GAL16V8), Avalon / Synthworks, Zodiac, DynaBlaster. L'outil pour
+  trancher existe : capture matérielle `R3`/`R4`/`U` + `--key-replay`
+  (recette → `docs/EXTENSIONS.md`).
 - **Dongles — frontends WASM/Android** : `PortDevices`/`CartridgeKey` ne sont exposés que
   par le GUI et le headless ; le menu Android et la démo web n'ont pas de page Dongles.
-- **Clé Steinberg — validation** (2026-08-23) : `CartridgeKey` (rouge/noire, équations
-  MiSTery) n'a jamais vu un Cubase 3.10 / Score / 2.01 réel — il faut une disquette
-  originale (non crackée). Option de confort : choisir une **destination** CoreMIDI
+- **Clé Steinberg — validation** : `CartridgeKey` (rouge/noire, équations MiSTery) n'a
+  jamais vu un Cubase 3.10 / Score / 2.01 réel — il faut une disquette originale (non
+  crackée). Option de confort : choisir une **destination** CoreMIDI
   (`MIDIGetNumberOfDestinations`) au lieu de la seule source virtuelle.
-- **NetUSBee — périphériques USB hôte** (2026-08-21) : l'ISP1160 (`io/Isp1160`) est un hub
-  racine VIDE ; brancher un clavier/souris HID puis un stockage de masse derrière
+- **NetUSBee — périphériques USB hôte** : l'ISP1160 (`io/Isp1160`) est un hub racine
+  VIDE ; brancher un clavier/souris HID puis un stockage de masse derrière
   `HcRhPortStatus`. Banc d'essai : pilotes FreeMiNT `netusbee.ucd` + `usb.km`.
 - **NetUSBee — fenêtre LSB partagée** : `$FA0000-$FA01FF` = latch ISP1160 ET lecture du
   registre CR NE2000 ; NeoST laisse les deux puces voir l'accès faute de schéma. À

@@ -15,6 +15,24 @@ Ripper, DAC Pro Sound) avec page Dongles, `disks/dongles.txt` et oracle de rejeu
 vérifié note à note** en headless, corpus MIDI piano/blues ; port MIDI ALSA sous Linux ;
 save-state v16. Détail dans les chantiers datés ci-dessous.
 
+## Second ménage du TODO : le journal de la journée part d'ici, le TODO redevient une liste d'OUVERT (2026-08-27)
+
+La journée d'audit + P1 + P2 avait redéposé dans le TODO ce qu'elle venait d'y
+enlever : blocs « ✅ SOLDÉ » (P1/A16-A24, A25-A27), récit du filet GUI dans A9,
+narratifs de clôture beam-sync dans deux sections. Tout le clos est ICI (entrées
+datées ci-dessous) ; le TODO repasse de 411 à 363 lignes et ne porte plus que :
+
+- le § BLOQUANT RELEASE (décision de mainteneur, séquencement en 5 pas) ;
+- les items ouverts **A3, A9-A15, A16b, A28-A37** — la numérotation A*n* reste
+  continue, LES TROUS SONT DU TRAVAIL FAIT (le TODO le dit désormais en une ligne
+  au lieu de re-raconter chaque clôture) ;
+- le catalogue (1 bug + 2 suivis), les divergences restantes (§ Divergences et
+  § Précision cycle FUSIONNÉS — les deux ne faisaient plus que pointer l'un vers
+  l'autre autour du même restant), et la roadmap par sous-système élaguée
+  (dates de contexte devenues inutiles retirées, « la pyramide est en place »
+  remplacé par un renvoi CLAUDE.md/DEV.md pour ne pas dupliquer des chiffres
+  qui bougent).
+
 ## La boucle rapide voit des pixels, le palier pixel tourne en parallèle (A27, 2026-08-27)
 
 - **`run_etalons.py --jobs`** (défaut auto = min(4, cpus)) : les étalons machine sont
