@@ -21,7 +21,7 @@
 #    · NetUSBee : accès du pilote FreeMiNT (isp116x.h, lectures MOT, primitives raw) —
 #        nubid  — HcChipID & $FF00 == $6100 (ISP1160)
 #        nubscr — HcScratch : aller-retour 16 bits
-#        nubnic — NE2000 : BNRY (page 0) aller-retour via $FA0000/$FB0000
+#        nubnic — NE2000 : BNRY (page 0) aller-retour (écrit /ROM3 $FB, relit /ROM4 $FA)
 #
 #  Une ligne « NEOST-TEST: <nom> PASS|FAIL » par test sur l'UDR ($FFFA2F), lue
 #  par tools/run_selftests.py (--serial-dump). Le PRG est RELOGEABLE (table de
@@ -167,10 +167,12 @@ def build_code() -> 'Asm':
     a.lbl('nubscr_fail'); a.lea_lbl('s_nubscr_f', 3); a.br(0x6100, 'emit')
 
     # ---- nubnic : NE2000 page 0, BNRY ($03) ← $46 puis relecture ------------------
+    # Protocole fil EtherNEC (BUSENEC.I) : écrire = fausse lecture /ROM3
+    # ($FB0000 + reg*512 + data*2), lire = /ROM4 ($FA0000 + reg*512).
     a.lbl('nubnic')
-    a.tst_b_abs(0xFA0000 + 0 * 512 + 0x21 * 2)          # CR = $21 (page 0, stop)
-    a.tst_b_abs(0xFA0000 + 3 * 512 + 0x46 * 2)          # BNRY = $46
-    a.w(0x1039); a.l32(0xFB0000 + 3 * 512)              # move.b $FB0600.l,d0
+    a.tst_b_abs(0xFB0000 + 0 * 512 + 0x21 * 2)          # CR = $21 (page 0, stop)
+    a.tst_b_abs(0xFB0000 + 3 * 512 + 0x46 * 2)          # BNRY = $46
+    a.w(0x1039); a.l32(0xFA0000 + 3 * 512)              # move.b $FA0600.l,d0
     a.w(0x0C00, 0x0046); a.br(0x6600, 'nubnic_fail')
     a.lea_lbl('s_nubnic_p', 3); a.br(0x6100, 'emit'); a.br(0x6000, 'done')
     a.lbl('nubnic_fail'); a.lea_lbl('s_nubnic_f', 3); a.br(0x6100, 'emit')
