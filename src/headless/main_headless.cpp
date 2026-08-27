@@ -19,10 +19,26 @@
 #include <cstring>
 #include <cmath>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <string>
 #include <fstream>
 #include <thread>
+
+// Sockets du répondeur loopback de --slirp-selftest (point 4). Si libslirp est
+// dans le build, la couche socket de la plate-forme l'est forcément aussi.
+#ifdef NEOST_WITH_SLIRP
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
+#include <arpa/inet.h>
+#include <fcntl.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
+#endif
+#endif
 
 #include "core/Machine.hpp"
 #include "util/HostPath.hpp"   // chemins hôte : UNE définition d'« absolu »
@@ -148,8 +164,10 @@ void usage() {
         "                    ICD 'US' packets, RTC, empty slot) then exit\n"
         "  --netusbee-selftest self-test of the NetUSBee ISP1160 (cartridge-port wire\n"
         "                    protocol, chip ID, registers, ATL) + NE2000 coexistence, then exit\n"
-        "  --slirp-selftest  self-test of the real-Internet backend (libslirp): ARP + DHCP\n"
-        "                    through the emulated NE2000, no outbound traffic needed, then exit\n"
+        "  --slirp-selftest  self-test of the real-Internet backend (libslirp): ARP, DHCP and\n"
+        "                    a loopback UDP round-trip through the emulated NE2000 — no\n"
+        "                    outbound traffic needed (NEOST_SLIRP_ONLINE=1 adds a real DNS\n"
+        "                    query; NEOST_SLIRP_DNS=a.b.c.d[:port] picks the resolver), then exit\n"
         "  --serial-dump F   write the raw RS-232 serial bytes into F (NEOST-TEST verdicts)\n"
         "  --from-cfg F      replay the GUI config (neost.cfg); later options override it\n"
         "  --dump-at N A L F raw dump of L bytes of RAM from $A (hex) after frame N → F\n"
@@ -754,15 +772,15 @@ int slirpSelfTest(Machine& machine) {
     // --- 3. Les compteurs voient passer le trafic ------------------------------
     check(net.txFrames() >= 2 && net.rxFrames() >= 1, "compteurs TX/RX du backend");
 
-    // --- 4. SORTIE RÉELLE (opt-in) : requête DNS vers l'extérieur ---------------
-    // Hors CI par défaut : les auto-tests du projet ne doivent JAMAIS dépendre du
-    // réseau (règle de tools/run_all.py). NEOST_SLIRP_ONLINE=1 l'active pour
-    // vérifier une vraie installation — c'est le seul contrôle qui prouve que les
-    // paquets QUITTENT la machine, les points 1-2 étant servis par SLIRP lui-même.
-    if (std::getenv("NEOST_SLIRP_ONLINE")) {
-        // MAC de la passerelle, apprise de la réponse ARP (octets 22-27).
-        uint8_t gw[6] = {0x52,0x55,0x0A,0x00,0x02,0x02};
-        if (arpOk && reply.size() >= 28) std::memcpy(gw, reply.data() + 22, 6);
+    // --- Requête DNS + boucle d'attente, partagées par les points 4 et 5 --------
+    // MAC de la passerelle, apprise de la réponse ARP (octets 22-27).
+    uint8_t gw[6] = {0x52,0x55,0x0A,0x00,0x02,0x02};
+    if (arpOk && reply.size() >= 28) std::memcpy(gw, reply.data() + 22, 6);
+    // Trame complète Ethernet+IPv4+UDP+DNS « A theoldnet.com » vers ip:port.
+    // Le xid distingue les réponses des points 4 et 5 : BNRY n'avance jamais ici,
+    // la réponse loopback RESTE dans l'anneau — sans discriminant, le point 5 la
+    // relirait et rendrait un faux vert.
+    auto buildDns = [&](const uint8_t ip[4], uint16_t port, uint16_t xid) {
         std::vector<uint8_t> dns;
         auto d  = [&](std::initializer_list<uint8_t> b) { for (uint8_t x : b) dns.push_back(x); };
         auto d16 = [&](uint16_t v) { dns.push_back(uint8_t(v >> 8)); dns.push_back(uint8_t(v)); };
@@ -772,21 +790,10 @@ int slirpSelfTest(Machine& machine) {
         const std::size_t ip2 = dns.size();
         d({0x45,0x00}); d16(0); d16(0x1234); d16(0);
         d({0x40,0x11}); d16(0);
-        // Cible du DNS : par défaut le relais interne de SLIRP (10.0.2.3), qui
-        // réexpédie vers le résolveur de l'hôte. NEOST_SLIRP_DNS=a.b.c.d vise un
-        // résolveur PUBLIC à la place — utile pour distinguer « le relais ne marche
-        // pas » de « rien ne sort du tout ».
-        uint8_t dnsIp[4] = {10, 0, 2, 3};
-        if (const char* e = std::getenv("NEOST_SLIRP_DNS")) {
-            unsigned a, b, c2, d2;
-            if (std::sscanf(e, "%u.%u.%u.%u", &a, &b, &c2, &d2) == 4)
-                { dnsIp[0] = uint8_t(a); dnsIp[1] = uint8_t(b); dnsIp[2] = uint8_t(c2); dnsIp[3] = uint8_t(d2); }
-        }
-        d({10,0,2,15}); d({dnsIp[0],dnsIp[1],dnsIp[2],dnsIp[3]});
+        d({10,0,2,15}); d({ip[0],ip[1],ip[2],ip[3]});
         const std::size_t udp2 = dns.size();
-        d16(5300); d16(53); d16(0); d16(0);
-        const std::size_t q = dns.size();
-        d16(0xBEEF); d16(0x0100); d16(1); d16(0); d16(0); d16(0);   // en-tête DNS
+        d16(5300); d16(port); d16(0); d16(0);
+        d16(xid); d16(0x0100); d16(1); d16(0); d16(0); d16(0);      // en-tête DNS
         for (const char* lbl : {"theoldnet", "com"}) {              // question, en labels
             dns.push_back(uint8_t(std::strlen(lbl)));
             for (const char* c = lbl; *c; ++c) dns.push_back(uint8_t(*c));
@@ -801,23 +808,26 @@ int slirpSelfTest(Machine& machine) {
         while (s2 >> 16) s2 = (s2 & 0xFFFF) + (s2 >> 16);
         const uint16_t c2 = uint16_t(~s2);
         dns[ip2 + 10] = uint8_t(c2 >> 8); dns[ip2 + 11] = uint8_t(c2);
-        (void)q;
         if (std::getenv("NEOST_SLIRP_TRACE")) {
             std::fprintf(stderr, "[slirp-selftest] trame DNS (%zu o) : ", dns.size());
             for (uint8_t b : dns) std::fprintf(stderr, "%02x", b);
             std::fprintf(stderr, "\n");
         }
-        transmit(dns);
-        // ⚠ Attendre du TEMPS RÉEL, pas des tours de boucle : un aller-retour DNS
-        // prend des dizaines de MILLISECONDES, alors que 400 poll() non bloquants
-        // s'exécutent en microsecondes — la première version concluait « pas de
-        // réponse » avant même que le paquet n'ait quitté la machine.
-        bool answered = false;
-        for (int i = 0; i < 300 && !answered; ++i) {
+        return dns;
+    };
+    // Scrute l'anneau jusqu'à lire une réponse DNS portant `xid` (ancount >= 1) ;
+    // `service` est appelé à chaque tour (répondeur local du point 4).
+    // ⚠ Attendre du TEMPS RÉEL, pas des tours de boucle : un aller-retour DNS
+    // prend des dizaines de MILLISECONDES, alors que des poll() non bloquants
+    // s'exécutent en microsecondes — la première version concluait « pas de
+    // réponse » avant même que le paquet n'ait quitté la machine.
+    auto awaitDnsAnswer = [&](uint16_t xid, int iters, const std::function<void()>& service) {
+        for (int i = 0; i < iters; ++i) {
             machine.ne2000.poll();
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));   // 3 s au plus
+            if (service) service();
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
             // On balaie l'anneau : la réponse peut atterrir sur n'importe quelle page.
-            for (uint8_t pg = kRxStart; pg < kRxStop && !answered; ++pg) {
+            for (uint8_t pg = kRxStart; pg < kRxStop; ++pg) {
                 std::vector<uint8_t> r;
                 if (!readRing(pg, r) || r.size() < 28) continue;
                 // ⚠ SLIRP nous ARPe AVANT de livrer : il lui faut la MAC de 10.0.2.15.
@@ -844,11 +854,96 @@ int slirpSelfTest(Machine& machine) {
                 if (r.size() < 14 + 20 + 8 + 12) continue;
                 if (r[12] != 0x08 || r[13] != 0x00 || r[23] != 0x11) continue;  // IPv4/UDP
                 const std::size_t h = 14 + 20 + 8;
-                if (r[h] != 0xBE || r[h + 1] != 0xEF) continue;                 // notre xid
-                answered = ((r[h + 6] << 8) | r[h + 7]) >= 1;                   // ancount
+                if (r[h] != uint8_t(xid >> 8) || r[h + 1] != uint8_t(xid)) continue;
+                if (((r[h + 6] << 8) | r[h + 7]) >= 1) return true;             // ancount
             }
         }
-        check(answered, "SORTIE REELLE : DNS resout theoldnet.com");
+        return false;
+    };
+
+#ifdef NEOST_WITH_SLIRP
+    // --- 4. BOUCLE RETOUR loopback : une VRAIE socket hôte, aller-retour --------
+    // Les points 1-2 sont servis par SLIRP en interne : aucun octet n'y traverse
+    // de socket hôte. Ici, un répondeur UDP local éphémère joue le résolveur, visé
+    // À TRAVERS le NAT (10.0.2.2:port → 127.0.0.1:port) : la requête sort par une
+    // socket hôte et la réponse refait tout le chemin inverse (socket → SLIRP →
+    // ARP → anneau RX). Déterministe et HORS LIGNE — donc CI-compatible — et
+    // insensible aux filtres applicatifs : Little Snitch ne filtre pas le
+    // loopback, alors qu'il jette silencieusement l'UDP externe des binaires non
+    // signés (c'est LUI qui faisait échouer la « sortie réelle » sur le poste de
+    // dev — diagnostic du 2026-08-27, sendto() OK mais poll() à jamais muet).
+    {
+#ifdef _WIN32
+        WSADATA wsa; WSAStartup(MAKEWORD(2, 2), &wsa);    // idempotent, jamais défait ici
+        SOCKET resp = ::socket(AF_INET, SOCK_DGRAM, 0);
+        const bool respOk = resp != INVALID_SOCKET;
+#else
+        int resp = ::socket(AF_INET, SOCK_DGRAM, 0);
+        const bool respOk = resp >= 0;
+#endif
+        bool loopOk = false;
+        sockaddr_in in{};
+        in.sin_family = AF_INET;
+        in.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        in.sin_port = 0;                                   // port éphémère
+        socklen_t sl = sizeof in;
+        if (respOk && ::bind(resp, reinterpret_cast<sockaddr*>(&in), sizeof in) == 0
+                   && ::getsockname(resp, reinterpret_cast<sockaddr*>(&in), &sl) == 0) {
+#ifdef _WIN32
+            u_long nb = 1; ioctlsocket(resp, FIONBIO, &nb);
+#else
+            ::fcntl(resp, F_SETFL, O_NONBLOCK);
+#endif
+            const uint8_t vhost[4] = {10, 0, 2, 2};
+            transmit(buildDns(vhost, ntohs(in.sin_port), 0xB00C));
+            auto service = [&]() {
+                uint8_t q[512]; sockaddr_in peer{}; socklen_t pl = sizeof peer;
+                const long n = long(::recvfrom(resp, reinterpret_cast<char*>(q), sizeof q, 0,
+                                               reinterpret_cast<sockaddr*>(&peer), &pl));
+                if (n < 12) return;
+                // Réponse minimale : xid et question recopiés, QR=1, ancount=1,
+                // une RR A bidon (nom compressé → offset 12 de l'en-tête).
+                std::vector<uint8_t> a(q, q + n);
+                a[2] = 0x81; a[3] = 0x80; a[6] = 0x00; a[7] = 0x01;
+                for (uint8_t b : {0xC0,0x0C, 0x00,0x01, 0x00,0x01, 0x00,0x00,0x00,0x3C,
+                                  0x00,0x04, 0x01,0x02,0x03,0x04})
+                    a.push_back(b);
+                ::sendto(resp, reinterpret_cast<const char*>(a.data()), int(a.size()), 0,
+                         reinterpret_cast<sockaddr*>(&peer), pl);
+            };
+            loopOk = awaitDnsAnswer(0xB00C, 300, service);
+        }
+#ifdef _WIN32
+        if (respOk) closesocket(resp);
+#else
+        if (respOk) ::close(resp);
+#endif
+        check(loopOk, "BOUCLE RETOUR: reponse UDP loopback via NAT");
+    }
+#endif // NEOST_WITH_SLIRP
+
+    // --- 5. SORTIE RÉELLE (opt-in) : requête DNS vers l'extérieur ---------------
+    // Hors CI par défaut : les auto-tests du projet ne doivent JAMAIS dépendre du
+    // réseau (règle de tools/run_all.py). NEOST_SLIRP_ONLINE=1 l'active pour
+    // vérifier une vraie installation — c'est le seul contrôle qui prouve que les
+    // paquets QUITTENT la machine. ⚠ Un pare-feu applicatif (Little Snitch…) peut
+    // le faire échouer alors que NeoST est correct : le point 4 tranche.
+    if (std::getenv("NEOST_SLIRP_ONLINE")) {
+        // Cible du DNS : par défaut le relais interne de SLIRP (10.0.2.3), qui
+        // réexpédie vers le résolveur de l'hôte. NEOST_SLIRP_DNS=a.b.c.d[:port]
+        // vise un résolveur PUBLIC à la place — utile pour distinguer « le relais
+        // ne marche pas » de « rien ne sort du tout ».
+        uint8_t dnsIp[4] = {10, 0, 2, 3};
+        unsigned dnsPort = 53;
+        if (const char* e = std::getenv("NEOST_SLIRP_DNS")) {
+            unsigned a, b, c2, d2, p2;
+            const int n = std::sscanf(e, "%u.%u.%u.%u:%u", &a, &b, &c2, &d2, &p2);
+            if (n >= 4)
+                { dnsIp[0] = uint8_t(a); dnsIp[1] = uint8_t(b); dnsIp[2] = uint8_t(c2); dnsIp[3] = uint8_t(d2); }
+            if (n == 5 && p2 > 0 && p2 < 65536) dnsPort = p2;
+        }
+        transmit(buildDns(dnsIp, uint16_t(dnsPort), 0xBEEF));
+        check(awaitDnsAnswer(0xBEEF, 300, nullptr), "SORTIE REELLE : DNS resout theoldnet.com");
     } else {
         std::fprintf(stderr, "[slirp-selftest] (sortie reelle non testee — NEOST_SLIRP_ONLINE=1 pour l'activer)\n");
     }

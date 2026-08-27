@@ -152,7 +152,7 @@ du code.
 - **A15** = DSL d'injection sans token « mouvement bouton tenu » (pas de DRAG GEM) → reliquat
   d'A8.
 - Signature/notarisation du `.dmg`, tableau des tiers → § BLOQUANT RELEASE.
-- Slirp « dernier pas » (DNS→anneau RX) → § *Réseau*, priorité au redémarrage.
+- Slirp « dernier pas » : **CLOS le 2026-08-27** (cause : Little Snitch, pas NeoST) → § *Réseau*.
 - SCSI/NCR5380 + TOS 2.05/2.06 + NVRAM (l'objectif MegaSTE déclaré en tête de ce fichier n'est
   pas atteint sans eux) → § *Stockage & contrôleurs* et § *Périphériques & profils machine*.
 
@@ -324,48 +324,21 @@ détail → `DEV.md` et `CHANGELOG.md`). Restent :
 - Capturer des **traces Hatari de référence** pour `trace_diff` (Arkanoid & co).
 
 ### Réseau (extensions NeoST — base livrée 2026-08-12, cf. `docs/EXTENSIONS.md`)
-- 🔴 **PRIORITÉ AU REDÉMARRAGE — `NetBackendSlirp` : finir le dernier pas** (2026-08-22).
-  Le backend Internet réel de la NE2000 (NetUSBee/EtherNEC) est **écrit, compilé, câblé et
-  aux trois quarts prouvé** : `src/net/SlirpBackend.{hpp,cpp}`, option CMake `NEOST_WITH_SLIRP`
-  (pkg-config `slirp` ; libslirp 4.9.3 présente sur le poste), drapeaux headless `--slirp` /
-  `--slirp-restricted`, auto-test `--slirp-selftest`.
-
-  **État : 3 vérifications sur 4 passent.**
-  ```
-  ARP: la passerelle 10.0.2.2 repond        OK
-  DHCP: OFFER attribue 10.0.2.15            OK
-  compteurs TX/RX du backend                OK
-  SORTIE REELLE : DNS resout theoldnet.com  FAIL   <- reste a finir
-  ```
-  Les trois premières sont **déterministes et hors ligne** (servies par SLIRP lui-même) : ce
-  sont elles qui iront en CI. La quatrième est **opt-in** (`NEOST_SLIRP_ONLINE=1`), la règle
-  du projet interdisant qu'un étalon dépende du réseau.
-
-  **Trois pièges déjà trouvés ET corrigés** (ne pas les re-chercher) :
-  1. `register_poll_fd`/`unregister_poll_fd` sont marqués *deprecated* mais libslirp les
-     appelle **sans tester leur nullité**, dès la première socket sortante -> SIGSEGV qui
-     n'apparaissait qu'en ligne. Des no-ops suffisent.
-  2. `clock_get_ns` doit partir de **~0**. libslirp fixe l'expiration d'une socket avec son
-     `curtime` interne (encore nul avant le premier poll) puis la compare à cette horloge :
-     avec le temps depuis le démarrage de la machine, toute socket UDP naissait « expirée »
-     et était détruite au premier tour -> rien ne sortait jamais. Corrigé par `kEpoch`.
-  3. SLIRP **ARPe l'invité** avant de livrer un paquet entrant (« qui a 10.0.2.15 ? »). Sur
-     un vrai ST c'est STinG qui répond ; l'auto-test doit le faire lui-même. La réponse ARP
-     est écrite dans `slirpSelfTest`.
-
-  **Ce qui reste à diagnostiquer** : le datagramme sortant part bien — PROUVÉ, un serveur UDP
-  local visé via 10.0.2.2 a reçu la charge utile et la socket hôte s'est liée — et SLIRP nous
-  ARPe, mais la réponse DNS n'atteint pas encore l'anneau de réception. Pistes, dans l'ordre :
-  a) vérifier que la réponse ARP fabriquée par l'auto-test est bien formée/acceptée ;
-  b) `NEOST_SLIRP_TRACE=1` pour voir si `slirp->guest` porte enfin un IPv4/UDP ;
-  c) sinon, regarder le filtre MAC de `Ne2000::deliverFrame` et l'anneau — l'auto-test
-     n'avance JAMAIS `BNRY`, donc au-delà de ~58 pages la carte refuse les trames.
-  Un banc minimal hors NeoST isole libslirp du reste (`scratchpad/slirptest.c`, non versionné,
-  à recréer : ~80 lignes, il lit une trame en hexa et boucle sur fill/poll).
-
-  **Ensuite seulement** : câbler `--slirp` dans le GUI (page Network), documenter dans
-  `docs/EXTENSIONS.md` § NetUSBee, puis vérifier de bout en bout avec **STinG + ENEC.STX**
-  côté ST (freeware, à récupérer) et un navigateur (CAB) sur theoldnet.com.
+- ✅ **`NetBackendSlirp` : le « dernier pas » est CLOS** (2026-08-27) — **5/5 vérifications
+  passent**, dont la sortie Internet réelle. Le FAIL du 2026-08-22 n'était **pas un bug
+  NeoST** : **Little Snitch** jette silencieusement l'UDP externe des binaires non signés
+  (`sendto` OK, `poll` à jamais muet — prouvé par un témoin de 30 lignes hors NeoST échouant
+  à l'identique pendant que `dig`, signé Apple, résolvait), et une alerte en attente **gèle
+  `sendto` dans le noyau** jusqu'au verdict. Autoriser `build/neost-headless` en sortie
+  règle tout (règle à refaire après un rebuild — binaire non signé). Au passage, le selftest
+  a gagné une **4ᵉ vérification déterministe et hors ligne** : une boucle retour UDP
+  loopback à travers le NAT (répondeur local éphémère, `10.0.2.2:port` → `127.0.0.1:port`)
+  qui prouve le chemin complet socket hôte → SLIRP → ARP → anneau RX sans réseau ni filtre —
+  CI-compatible, c'est elle qui tranche « NeoST correct » vs « environnement ». Détail et
+  variables (`NEOST_SLIRP_ONLINE`, `NEOST_SLIRP_DNS=a.b.c.d[:port]`, `NEOST_SLIRP_TRACE`)
+  → `docs/EXTENSIONS.md` § NetUSBee. **Prochain pas** : câbler `--slirp` dans le GUI (page
+  Network), puis vérifier de bout en bout avec **STinG + ENEC.STX** côté ST (freeware, à
+  récupérer) et un navigateur (CAB) sur theoldnet.com.
 
 - **MIDI OUT Windows** : `MidiOutHost` couvre CoreMIDI (macOS) et ALSA (Linux) ; winmm reste à
   écrire — le MT-32 (Munt), lui, est portable.
