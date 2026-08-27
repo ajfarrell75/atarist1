@@ -15,6 +15,23 @@ Ripper, DAC Pro Sound) avec page Dongles, `disks/dongles.txt` et oracle de rejeu
 vérifié note à note** en headless, corpus MIDI piano/blues ; port MIDI ALSA sous Linux ;
 save-state v16. Détail dans les chantiers datés ci-dessous.
 
+## La boucle rapide voit des pixels, le palier pixel tourne en parallèle (A27, 2026-08-27)
+
+- **`run_etalons.py --jobs`** (défaut auto = min(4, cpus)) : les étalons machine sont
+  indépendants — chacun tourne dans son processus, sortie bufferisée et rejouée dans
+  l'ordre du manifeste, listes de SKIP re-fusionnées (le parallélisme ne doit pas
+  avaler un recensement). Séquentiel forcé avec `--oracle`/`--update-ref` ; les
+  générateurs de disques sont appelés AVANT le pool. Mesuré : palier pixel **66 s →
+  46 s**, borné par le seul `nocooper_greetings` (~46 s) — le prochain gain est le
+  raccourcissement de CET étalon, pas davantage de parallélisme.
+- **Le palier `fast` n'est plus aveugle au rendu** : 4 étalons pixel courts
+  (`overscan_top`, `trace_odd`, `scroll_8264`, `blitter_timer` — bordures Glue,
+  exceptions CPU, scroll STE, blitter/ordonnanceur), tous sur ROM EmuTOS libre
+  (prêt-à-purge). `fast` complet : **~12 s** (boot GUI, STX et pixels inclus) —
+  chiffre mis à jour partout (`CLAUDE.md`, `TODO.md`, `TEST_SOFTWARE.md`), et
+  `CLAUDE.md` précise que ces 4 pixels sont un garde-fou, PAS une couverture :
+  « avant de conclure sur le rendu, `--tier full` » reste la règle.
+
 ## L'OBJECTIF est gardé par une machine + les chiffres de la doc se recomptent (A25 + A26, 2026-08-27)
 
 **A25 — la suite Q du diagnostic MegaSTE est rejouée à chaque palier `full`.** Le 12/12

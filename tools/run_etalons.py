@@ -244,6 +244,21 @@ def rom_is_free(rom: str) -> bool:
     return Path(rom).name.startswith("etos")
 
 
+# A27 : worker du mode parallèle. Chaque étalon tourne dans SON processus, sa
+# sortie est bufferisée (redirect process-local, sûr) et rejouée par le parent DANS
+# L'ORDRE DU MANIFESTE — le journal reste lisible et déterministe. Les listes de
+# recensement (SKIPPED/SKIPPED_ROM), globales au processus fils, sont RETOURNÉES
+# et re-fusionnées par le parent : sans cela le parallélisme aurait avalé les SKIP
+# en silence — exactement le vert creux que ce fichier combat.
+def _run_one_buffered(entry: dict, args):
+    import io
+    import contextlib
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
+        ok = run_one(entry, args)
+    return entry["id"], ok, buf.getvalue(), list(SKIPPED), list(SKIPPED_ROM)
+
+
 def run_one(entry: dict, args) -> bool:
     eid = entry["id"]
     print(f"\n=== {eid} — {entry['name']} ===")
@@ -463,6 +478,9 @@ def main() -> int:
     ap.add_argument("--verify-refs", action="store_true",
                     help="contrôle la provenance des références (oracle vs snapshot)")
     ap.add_argument("--no-compare", action="store_true")
+    ap.add_argument("--jobs", type=int, default=0,
+                    help="étalons en parallèle (0 = auto, min(4, cpus) ; 1 = séquentiel ; "
+                         "forcé à 1 avec --oracle et --update-ref)")
     args = ap.parse_args()
 
     if not HEADLESS.exists() and not args.verify_refs:
@@ -512,6 +530,7 @@ def main() -> int:
     ok = True
     ran = 0
     disabled = []
+    runnable = []
     for entry in entries:
         if want and entry["id"] not in want:
             continue
@@ -521,9 +540,40 @@ def main() -> int:
         if entry.get("disabled"):
             disabled.append((entry["id"], entry["disabled"]))
             continue
-        ran += 1
-        if not run_one(entry, args):
-            ok = False
+        runnable.append(entry)
+    # A27 : les étalons sont indépendants (capture PPM propre à chaque id, disques en
+    # lecture) — le mur d'horloge du palier pixel était la SOMME des durées, dominée
+    # par nocooper_greetings (~50 s sur 73). En parallèle, il devient ~le max. Reste
+    # SÉQUENTIEL : --oracle et --update-ref (Hatari et l'écriture de réfs partagent
+    # des chemins), et les générateurs de disques — appelés AVANT le pool, une fois,
+    # pour que deux étalons ne régénèrent pas le même fichier en même temps.
+    jobs = args.jobs if args.jobs > 0 else min(4, os.cpu_count() or 1)
+    if args.oracle or args.update_ref:
+        jobs = 1
+    if jobs > 1 and len(runnable) > 1:
+        for entry in runnable:
+            if entry.get("disk"):
+                ensure_disk(entry)          # rejoué dans run_one, idempotent
+        import concurrent.futures
+        with concurrent.futures.ProcessPoolExecutor(max_workers=jobs) as pool:
+            futs = [pool.submit(_run_one_buffered, e, args) for e in runnable]
+            for fut in futs:                 # ordre de soumission = ordre du manifeste
+                _eid, one_ok, text, skipped, skipped_rom = fut.result()
+                sys.stdout.write(text)
+                ran += 1
+                if not one_ok:
+                    ok = False
+                for x in skipped:
+                    if x not in SKIPPED:
+                        SKIPPED.append(x)
+                for x in skipped_rom:
+                    if x not in SKIPPED_ROM:
+                        SKIPPED_ROM.append(x)
+    else:
+        for entry in runnable:
+            ran += 1
+            if not run_one(entry, args):
+                ok = False
     if ran == 0:
         print("\nAUCUN étalon exécuté — filtre trop restrictif ?")
         return 2

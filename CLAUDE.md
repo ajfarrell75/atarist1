@@ -85,15 +85,17 @@ MAME + captures PPM) et par la suite d'étalons. Seule exception, la LOGIQUE PUR
 (`tests/selftest_logic.cpp`), sans machine ni ROM. **Détail → `DEV.md`.**
 
 ```sh
-python3 tools/run_all.py --tier fast   # auto-tests logique + verdicts série + cycle-bench
-                                       # + round-trip save-state + disquette livrée
-python3 tools/run_all.py --tier full   # + étalons PIXEL — le SEUL palier qui compare des images
+python3 tools/run_all.py --tier fast   # ~12 s : logique + verdicts série + cycle-bench
+                                       # + save-state + STX + boot GUI + 4 pixels RAPIDES
+python3 tools/run_all.py --tier full   # + TOUS les étalons pixel (parallèles, --jobs)
+                                       # + garde MegaSTE (suite Q du diagnostic)
 ./build/neost-headless <rom> --frames N --trace t.txt --regs --irq
 ./build/neost-headless <rom> --frames N --screenshot s.ppm
 ```
 
 ⚠ **Avant de conclure quoi que ce soit sur le rendu, `--tier full`.** Le `fast` ne
-compare aucun pixel : des commits ont déjà sur-promis sur cette base.
+compare que 4 étalons pixel courts (garde-fou, pas une couverture) : des commits ont
+déjà sur-promis sur la base d'un fast vert.
 
 Points critiques : `--irq` indispensable pour les bugs d'IRQ ; `--cart` + `--keys` pour
 les cartouches de diagnostic (rapport sur port série), `--loopback` branché APRÈS
