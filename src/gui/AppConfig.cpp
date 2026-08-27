@@ -29,6 +29,17 @@ static float mixGain(const std::string& s) {
     return std::isnan(v) ? 1.0f : std::clamp(v, 0.0f, 2.0f);
 }
 
+// A24 (audit 2026-08-27) : les 14 clés crt_* étaient des strtof NUS — la leçon NaN
+// payée sur volume=/mix_* (ci-dessus) n'avait pas été appliquée au bloc voisin du
+// même parseur, alors que CrtParams.h documente la plage attendue de chaque champ.
+// Même règle : NaN → défaut, sinon bornage au plus proche. Impact d'une valeur
+// folle : des uniformes GL absurdes (écran illisible), pas de corruption — mais
+// l'incohérence de validation était le vrai défaut.
+static float crtF(const std::string& s, float lo, float hi, float dflt) {
+    const float v = std::strtof(s.c_str(), nullptr);
+    return std::isnan(v) ? dflt : std::clamp(v, lo, hi);
+}
+
 bool parseRtcConfig(const std::string& s, Rtc::DateTime& dt) {
     return std::sscanf(s.c_str(), "%d,%d,%d,%d,%d,%d,%d",
                        &dt.sec, &dt.min, &dt.hour, &dt.wday,
@@ -143,19 +154,20 @@ void parseConfigLine(Config& c, std::string line) {
     // Effets CRT (cf. gui/CrtParams.h). Un preset (--crt-preset / applyCrtPreset)
     // n'est qu'un raccourci qui écrit ces mêmes clés numériques.
     else if (line.rfind("crt=", 0) == 0) c.crt = (line.substr(4) == "1");
-    else if (line.rfind("crt_bright=", 0)  == 0) c.crtParams.brightness  = std::strtof(line.substr(11).c_str(), nullptr);
-    else if (line.rfind("crt_contrast=", 0) == 0) c.crtParams.contrast   = std::strtof(line.substr(13).c_str(), nullptr);
-    else if (line.rfind("crt_sat=", 0)     == 0) c.crtParams.saturation  = std::strtof(line.substr(8).c_str(), nullptr);
-    else if (line.rfind("crt_hue=", 0)     == 0) c.crtParams.hue         = std::strtof(line.substr(8).c_str(), nullptr);
-    else if (line.rfind("crt_sharp=", 0)   == 0) c.crtParams.sharpness   = std::strtof(line.substr(10).c_str(), nullptr);
-    else if (line.rfind("crt_persist=", 0) == 0) c.crtParams.persistence = std::strtof(line.substr(12).c_str(), nullptr);
-    else if (line.rfind("crt_scanlines=", 0) == 0) c.crtParams.scanlines = std::strtof(line.substr(14).c_str(), nullptr);
-    else if (line.rfind("crt_barrel=", 0)  == 0) c.crtParams.barrel      = std::strtof(line.substr(11).c_str(), nullptr);
-    else if (line.rfind("crt_mask=", 0)    == 0) c.crtParams.shadowMask  = static_cast<neost::CrtParams::ShadowMask>(std::atoi(line.substr(9).c_str()));
-    else if (line.rfind("crt_maskstr=", 0) == 0) c.crtParams.shadowMaskStrength = std::strtof(line.substr(12).c_str(), nullptr);
-    else if (line.rfind("crt_lumgain=", 0) == 0) c.crtParams.luminanceGain = std::strtof(line.substr(12).c_str(), nullptr);
-    else if (line.rfind("crt_center=", 0)  == 0) c.crtParams.centerLighting = std::strtof(line.substr(11).c_str(), nullptr);
-    else if (line.rfind("crt_gamma=", 0)   == 0) c.crtParams.phosphorGamma  = std::strtof(line.substr(10).c_str(), nullptr);
+    else if (line.rfind("crt_bright=", 0)  == 0) c.crtParams.brightness  = crtF(line.substr(11), -0.5f, 0.5f, 0.0f);
+    else if (line.rfind("crt_contrast=", 0) == 0) c.crtParams.contrast   = crtF(line.substr(13), 0.5f, 1.5f, 1.0f);
+    else if (line.rfind("crt_sat=", 0)     == 0) c.crtParams.saturation  = crtF(line.substr(8), 0.0f, 2.0f, 1.0f);
+    else if (line.rfind("crt_hue=", 0)     == 0) c.crtParams.hue         = crtF(line.substr(8), -0.5f, 0.5f, 0.0f);
+    else if (line.rfind("crt_sharp=", 0)   == 0) c.crtParams.sharpness   = crtF(line.substr(10), 0.0f, 1.0f, 0.5f);
+    else if (line.rfind("crt_persist=", 0) == 0) c.crtParams.persistence = crtF(line.substr(12), 0.0f, 0.98f, 0.4f);
+    else if (line.rfind("crt_scanlines=", 0) == 0) c.crtParams.scanlines = crtF(line.substr(14), 0.0f, 1.0f, 0.25f);
+    else if (line.rfind("crt_barrel=", 0)  == 0) c.crtParams.barrel      = crtF(line.substr(11), 0.0f, 0.2f, 0.05f);
+    else if (line.rfind("crt_mask=", 0)    == 0) c.crtParams.shadowMask  = static_cast<neost::CrtParams::ShadowMask>(
+                              std::clamp(std::atoi(line.substr(9).c_str()), 0, 3));
+    else if (line.rfind("crt_maskstr=", 0) == 0) c.crtParams.shadowMaskStrength = crtF(line.substr(12), 0.0f, 1.0f, 0.5f);
+    else if (line.rfind("crt_lumgain=", 0) == 0) c.crtParams.luminanceGain = crtF(line.substr(12), 1.0f, 2.0f, 1.0f);
+    else if (line.rfind("crt_center=", 0)  == 0) c.crtParams.centerLighting = crtF(line.substr(11), 0.5f, 1.0f, 1.0f);
+    else if (line.rfind("crt_gamma=", 0)   == 0) c.crtParams.phosphorGamma  = crtF(line.substr(10), 0.6f, 2.6f, 1.0f);
 }
 Config loadConfig(const std::string& exeDir) {
     Config c;

@@ -92,12 +92,13 @@ sont archivées au `CHANGELOG.md` — ne pas les recommettre.
   les 7 restants sont le plan **A10**.
 - **A9 ⭘ — `src/main.cpp` est un monolithe** (mesuré 2026-08-27 : **5 017 lignes**, dont
   `main()` = **2 421 lignes** avec une boucle de ~1 530 lignes et **84 globaux `g_*`**).
-  La dette est confinée (`neost_core` reste sans GUI) mais **`build/neost` est à 0 % de
-  couverture** : `run_all.py` ne l'invoque jamais. 🎯 Ordre imposé : (a) brancher le
-  harnais GUI existant (`--run-frames`/`--shot`/`--joy-at`) dans `run_all.py` (~10 lignes,
-  cf. A19) ; (b) SEULEMENT ENSUITE découper — une `struct App` absorbant les globaux,
-  `main()` sous 300 lignes, en généralisant le pattern de requêtes de `MediaPages`.
-  Ne PAS refondre la boucle principale sans ce filet.
+  La dette est confinée (`neost_core` reste sans GUI). ✅ (a) fait le 2026-08-27 : le
+  boot GUI (400 trames + capture, sauté-et-dit sans affichage) est une étape de
+  `run_all.py`, et `--run-frames` est devenu un vrai mode harnais (gel central de
+  `saveConfig` + `imgui.ini` : un run de test ne laisse AUCUNE trace — le boot GUI
+  réécrivait `rom=`/`rtc=` du développeur au premier essai). Reste (b) : découper —
+  une `struct App` absorbant les globaux, `main()` sous 300 lignes, en généralisant
+  le pattern de requêtes de `MediaPages`. Ne PAS refondre la boucle sans ce filet.
 - **A10 ⭘ — Convertir les 7 étalons adossés à des ROM propriétaires** :
   `spectrum512_diapo`, `spectrum512_diapo2`, `spectrum512_diapo_ste`, `cuddly_demos`,
   `union_demo`, `nocooper`, `nocooper_greetings`. Deux recettes éprouvées, au choix par
@@ -118,46 +119,17 @@ sont archivées au `CHANGELOG.md` — ne pas les recommettre.
 - **A14** = garde lecture-seule des balayages de masse → § *Outillage / qualité*.
 - **A15** = DSL d'injection sans token « mouvement bouton tenu » (pas de DRAG GEM).
 
-### P1 — corrections rapides (audit 2026-08-27 ; quelques heures chacune, à faire en premier)
+### P1 — corrections rapides : ✅ SOLDÉ le 2026-08-27 (A16-A24)
 
-- **A16 ⭘ — `NEOST_LINELEN` a deux défauts contradictoires.** `Machine.cpp:lineLenOn_`
-  lit la variable avec défaut **`true`** ; les 4 sites `Shifter.cpp:envFlag` la lisent
-  avec défaut **`false`**. Sans variable d'environnement (le cas de tout utilisateur), la
-  moitié Machine est ON et la moitié Shifter OFF — précisément l'« hybride jamais validé »
-  que le commentaire d'en-tête de `Shifter.cpp` dénonce. Trancher UN défaut, UN site de
-  lecture ; c'est aussi le préalable du reliquat V3 (§ Divergences).
-- **A17 ⭘ — Version de save-state en dur à deux endroits, message faux.** `Machine.cpp`
-  écrit v17 mais le message de rejet annonce « this build writes v16 » ; la constante vit
-  en double (écriture et contrôle). Une `constexpr` partagée + corriger le message.
-- **A18 ⭘ — Aucun `timeout=` sur les ~15 `subprocess.run` des runners** (`run_etalons.py`,
-  `run_selftests.py`, `run_cyclebench.py`, `run_perfbench.py`, `run_midi_sequencer.py`).
-  Un 68000 qui boucle — la régression même que ces tests cherchent — consomme les 45 min
-  du job CI sans diagnostic. Seul `check_headless_options.py` le fait déjà.
-- **A19 ⭘ — La liste d'IDs codée en dur de `run_all.py` a produit un test orphelin** :
-  **`serloop_selftest` n'est exécuté par AUCUN palier**, ni localement ni en CI, et rien
-  ne peut le signaler (le refus d'ID inconnu attrape les IDs supprimés, pas les oubliés).
-  Sélectionner par `type`/`subsystem` depuis `etalons.json`, brancher l'orphelin — et au
-  passage ajouter l'étape « boot GUI » (cf. A9a).
-- **A20 ⭘ — `tests/stx_writetrack_test.cpp` est du code de test mort** : `EXCLUDE_FROM_ALL`
-  dans `CMakeLists.txt`, jamais compilé, jamais invoqué — alors que `StxImage.cpp`
-  (510 lignes de parseur binaire exposé à des fichiers arbitraires) n'a aucun autre test.
-  Le brancher au palier `fast`. Meilleur rapport valeur/effort du dépôt.
-- **A21 ⭘ — Le clavier du frontend web est amputé** : la copie du keymap dans
-  `main_web.cpp` s'arrête avant le pavé numérique, Undo, Help — et le portage du clavier
-  international (`symbolicForCountry`, pays lu dans l'en-tête ROM) n'y existe pas du tout
-  (AZERTY sous TOS FR tape en QWERTY dans le navigateur). 🎯 Extraire un module
-  `stkeys` dans `neost_core`, appelé par le GUI ET le web ; la table devient testable
-  dans `neost-selftest`.
-- **A22 ⭘ — `--from-cfg` réimplémente la lecture de `neost.cfg`** et la copie a déjà
-  divergé **deux fois** (rognage `\r`, puis `netusbee=`/`slirp=` oubliées). Appeler
-  `parseConfigLine` d'`AppConfig` et ne garder que la résolution de chemins — ferme la
-  classe de bug.
-- **A23 ⭘ — `Blitter::billCycles` / `Fdc::billDmaCycles` : corps identique, commentaire
-  quasi identique** (« MÊME INVARIANT QUE BL3 »). Factoriser en une primitive unique de
-  vol de cycles bus — le troisième maître de bus ne recopiera pas le motif.
-- **A24 ⭘ — Les 14 clés `crt_*` de `neost.cfg` sont des `strtof` nus** (ni NaN ni clamp),
-  alors que le bloc audio voisin du même parseur est blindé après l'incident `volume=nan`
-  et que `CrtParams.h` documente la plage attendue de chacune. Appliquer la même garde.
+Détail et verdicts → `CHANGELOG.md` (2026-08-27). Reliquat ouvert né d'A16 :
+
+- **A16b ⭘ — `NEOST_LINELEN_ATTR` (attribution Shifter à la grille réelle) segfaute
+  sous `--glue-selftest`.** Découvert en tentant d'unifier le défaut : le chemin
+  expérimental V3 (les 4 sites `glueLineStart_` du Shifter) crashe quand il est armé
+  hors trame réelle — il crashait déjà via la recette d'A/B documentée
+  `NEOST_LINELEN=1` AVANT la séparation des verrous. À corriger avant toute
+  promotion du chantier V3 (probable : `glueLineStart_` vide/désynchronisé dans le
+  selftest). La config validée en production est Machine-ON/Shifter-OFF.
 
 ### P2 — consolidation (quelques jours chacun, par opportunité)
 
@@ -285,8 +257,8 @@ meilleure que la cible Hatari (2026-07-09 et 2026-08-06, détail → `CHANGELOG.
 Restent, par priorité d'impact (toutes de valeur basse à moyenne) :
 
 1. **[VIDÉO]** V3 géométrie mid-trame (50↔60 Hz) : le restart du compteur est porté
-   (`VC_RESTART`), reste l'**attribution de ligne** — bloquée sur le canal `NEOST_LINELEN`
-   hybride, donc sur **A16**.
+   (`VC_RESTART`), reste l'**attribution de ligne** — le chemin expérimental a son
+   verrou dédié (`NEOST_LINELEN_ATTR`, OFF) et un segfault à corriger d'abord (**A16b**).
 2. **[SON]** quantification HBL du refill FIFO à confronter à l'oracle sur un poll serré de
    `$FF8909/0B/0D` — validable par dump WAV + trace.
 3. **[MFP]** `UpdateTimers` avant lecture IPR/ISR/TBDR en mode bloc — retard **mesuré à
@@ -313,7 +285,7 @@ Convergence **instruction** Moira↔WinUAE : complète (14/14 boucles au harnais
 Beam-sync : **convergé, transitoire d'entrée inclus** (verdict du 2026-07-09 ; IACK MFP
 vectorisé 12→16 cyc le 2026-08-06 a clos Super Hang-On). Le restant est un inventaire de
 raffinements à rendement décroissant → [`docs/CYCLE_ACCURACY.md`](docs/CYCLE_ACCURACY.md) §4 :
-attribution de ligne V3 (= A16), wakeup-state WS3 sous-pixel, mode 336 px STE
+attribution de ligne V3 (= A16b), wakeup-state WS3 sous-pixel, mode 336 px STE
 (`bSteBorderFlag`), rendu live du retrait bas, interfoliage blitter, quantification FIFO son.
 
 ---

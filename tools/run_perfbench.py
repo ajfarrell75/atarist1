@@ -68,13 +68,29 @@ LOADS = [
 # à son troisième faux rouge, et ne garderait alors plus rien du tout.
 TOLERANCE = 0.25
 
+# Garde-fou A18 (audit 2026-08-27) : AUCUN appel à l'émulateur n'avait de timeout —
+# un 68000 qui boucle (la régression même que ces tests cherchent) consommait les
+# 45 min du job CI sans diagnostic. Verdict 124 (convention de timeout(1)) pour les
+# appels à code de retour ; sortie 2 immédiate pour les appels check=True (leur
+# échec est de toute façon fatal au run).
+def run_timed(cmd, limit_s, **kw):
+    try:
+        return subprocess.run(cmd, timeout=limit_s, **kw)
+    except subprocess.TimeoutExpired:
+        print(f"  TIMEOUT après {limit_s}s : " + " ".join(map(str, cmd)),
+              file=sys.stderr, flush=True)
+        if kw.get("check"):
+            sys.exit(2)
+        return subprocess.CompletedProcess(cmd, 124)
+
+
 
 def measure(args) -> float:
     ts = []
     for _ in range(REPS):
         t0 = time.perf_counter()
-        subprocess.run([str(HEADLESS)] + args + ["--frames", str(FRAMES)],
-                       cwd=ROOT, capture_output=True)
+        run_timed([str(HEADLESS)] + args + ["--frames", str(FRAMES)],
+                  300, cwd=ROOT, capture_output=True)
         ts.append(time.perf_counter() - t0)
     return FRAMES / min(ts)
 

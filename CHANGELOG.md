@@ -15,6 +15,58 @@ Ripper, DAC Pro Sound) avec page Dongles, `disks/dongles.txt` et oracle de rejeu
 vérifié note à note** en headless, corpus MIDI piano/blues ; port MIDI ALSA sous Linux ;
 save-state v16. Détail dans les chantiers datés ci-dessous.
 
+## Le palier P1 de l'audit est soldé : A16-A24, neuf corrections en une passe (2026-08-27)
+
+Chaque item validé au palier `full` (15 étalons pixel + cycle-bench à tolérance zéro),
+TOUS LES PALIERS OK en fin de passe.
+
+- **A16 — `NEOST_LINELEN` tranché, et le tranchage a instruit un bug.** L'hybride
+  Machine-ON/Shifter-OFF n'était pas un choix : le basculement du défaut à ON
+  (tranchage WS3 du 2026-07-08) avait oublié les quatre sites Shifter. Tenté :
+  unifier à ON → le glue-selftest **SEGFAULTE** — et il segfaultait déjà sur le code
+  d'avant via la recette d'A/B documentée `NEOST_LINELEN=1`. Verdict : ce sont DEUX
+  fonctionnalités — le canal Machine validé garde `NEOST_LINELEN` (ON, =0 pour
+  l'A/B, lecteur unique `Shifter::lineLenEnv`), l'attribution expérimentale V3 passe
+  sur `NEOST_LINELEN_ATTR` (OFF) avec son segfault consigné (**A16b** au TODO).
+  Poser `NEOST_LINELEN=1` pour un A/B n'arme plus un chemin non validé.
+- **A17** — version de save-state en constante unique (`kStateVersion`) ; le message
+  de rejet annonçait « writes v16 » pour un build qui écrit v17.
+- **A18** — `run_timed()` (verdict 124, façon timeout(1)) sur les ~15 appels à
+  l'émulateur des 5 runners : un 68000 qui boucle ne consommera plus les 45 min du
+  job CI sans diagnostic. Budgets par nature d'étape (selftest 300 s, pixel 900 s,
+  oracle 1800 s).
+- **A19** — les selftests de `run_all.py` sont sélectionnés **par type** depuis
+  `etalons.json` (fin de la liste d'IDs en dur) : l'orphelin `serloop_selftest` est
+  branché (il passe), et un selftest ajouté au manifeste est exécuté d'office.
+- **A20** — `stx_writetrack_test` sort d'`EXCLUDE_FROM_ALL` et entre au palier
+  `fast`, sur une image STX **FORGÉE** en mémoire (l'ancien défaut — Rick Dangerous
+  cracké — n'existait même plus dans le dépôt : le test était doublement mort).
+  ⚠ piège évité : ses `assert()` seraient vidés par le -DNDEBUG du profil Release —
+  `-UNDEBUG` forcé sur la cible.
+- **A21** — le clavier vit dans `gui/StKeys`, module PARTAGÉ bureau/web (même
+  recette qu'`AudioMix`) : le navigateur récupère le pavé numérique, Undo, Help et
+  le keymap international (AZERTY sous TOS FR tapait en QWERTY), et le pays TOS est
+  armé au boot ET au changement de ROM côté web.
+- **A22** — `--from-cfg` appelle `parseConfigLine` (le lecteur du GUI) : plus de
+  liste de clés à tenir à jour, la classe de bug qui a récidivé deux fois est fermée.
+  Sentinelles sur machine/mem/cpu (défaut headless Ste ≠ défaut Config st).
+- **A23** — `Bus::stealBusCycles` : la primitive unique du vol de cycles bus
+  (l'invariant « MÊME QUE BL3 » vivait recopié dans `Blitter::billCycles` et
+  `Fdc::billDmaCycles`). Cycle-bench inchangé au cycle près.
+- **A24** — les 14 clés `crt_*` de `neost.cfg` sont bornées NaN+clamp aux plages de
+  `CrtParams.h` (la leçon `volume=nan` appliquée au bloc voisin), `crt_mask=` borné
+  0..3.
+- **Boot GUI dans run_all (A9a)** : 400 trames EmuTOS + capture non uniforme à
+  chaque palier quand un affichage existe (sauté ET DIT sinon) — `build/neost`
+  n'était couvert localement par rien. `--run-frames` est devenu un vrai mode
+  harnais : gel CENTRAL de `saveConfig` (6 appelants, dont la résolution MIDI qui
+  réécrivait `midi_out_port=0` depuis un contexte sandboxé) + `imgui.ini` ni lu ni
+  écrit — constaté avant la garde : le boot GUI de test écrasait `rom=`/`rtc=` du
+  poste de dev.
+
+Note de véracité : l'audit annonçait le palier fast « périmé d'un facteur ~5 »
+(15-20 s) — la mesure donne **4,8 s**. C'est le chiffre mesuré qui fait foi partout.
+
 ## Audit d'architecture quatre dimensions + grand ménage du TODO (2026-08-27)
 
 Quatre audits indépendants (cœur, frontends, tests/CI, fidélité/docs/gouvernance) menés sur

@@ -1328,36 +1328,40 @@ int main(int argc, char** argv) {
                 if (s.rfind("../", 0) == 0)   s = s.substr(3);     // build → racine
                 return neost::hostpath::join(cfgDir, s);
             };
+            // A22 (audit 2026-08-27) : ce bloc était un DEUXIÈME lecteur de neost.cfg
+            // (chaîne de rfind("clé=") recopiée du GUI) et la copie a divergé DEUX fois
+            // — le rognage '\r' seul, puis netusbee=/slirp= oubliées. Désormais chaque
+            // ligne passe par appconfig::parseConfigLine — LE lecteur du GUI — et seul
+            // le mappage vers les variables locales (+ la résolution de chemins
+            // relative au cfg, spécifique au headless) reste ici. Une clé ajoutée au
+            // GUI est relue d'office ; il n'y a plus de liste à tenir à jour.
+            neost::appconfig::Config fc;
+            // Sentinelles : les clés CHAÎNE à défaut non vide (machine=st, mem=512k,
+            // cpu=moira) sont vidées avant lecture — « restée vide » = « clé absente
+            // du fichier », et on garde alors la valeur headless (défaut Ste ≠ st !)
+            // ou l'option CLI déjà lue. Les booléens n'ont pas ce problème : leurs
+            // défauts Config et headless coïncident (false), et le GUI écrit toutes
+            // les clés de toute façon (writeConfigKeys full=true).
+            fc.machine.clear(); fc.mem.clear(); fc.cpu.clear();
             std::string ln;
-            auto v = [](const std::string& s, std::size_t n) { return s.substr(n); };
-            while (std::getline(cf, ln)) {
-                // MÊME rognage que le lecteur du GUI (appconfig::trimConfigLine) et non
-                // une recopie : ici ne tombait que le '\r', si bien qu'une espace de
-                // queue — « machine=st » suivi d'un blanc — faisait retomber la clé sur
-                // le défaut, exactement le défaut silencieux que le rognage GUI corrige.
-                neost::appconfig::trimConfigLine(ln);
-                if      (ln.rfind("rom=", 0) == 0)     { if (ln.size() > 4) romPath   = resolve(v(ln, 4)); }
-                else if (ln.rfind("diskb=", 0) == 0)   { if (ln.size() > 6) diskBPath = resolve(v(ln, 6)); }
-                else if (ln.rfind("disk=", 0) == 0)    { if (ln.size() > 5) diskPath  = resolve(v(ln, 5)); }
-                else if (ln.rfind("cart=", 0) == 0)    { if (ln.size() > 5) cartPath  = resolve(v(ln, 5)); }
-                else if (ln.rfind("gemdos=", 0) == 0)  { if (ln.size() > 7) gemdosDir = resolve(v(ln, 7)); }
-                else if (ln.rfind("acsi=", 0) == 0)    { if (ln.size() > 5) acsiImg   = resolve(v(ln, 5)); }
-                // modem= / ethernec= / netusbee= / slirp= : le GUI les écrit à côté
-                // des autres clés réseau, toutes relues ici — sauf celles-là. Rejouer
-                // une config réseau avec --from-cfg démarrait donc SANS le modem ni
-                // la carte EtherNEC, sans un mot. (netusbee= et slirp= ont manqué à
-                // l'appel une seconde fois, ajoutés le 2026-08-27.)
-                else if (ln.rfind("modem=", 0) == 0)    modemFlag    = (v(ln, 6) == "1");
-                else if (ln.rfind("ethernec=", 0) == 0) ethernecFlag = (v(ln, 9) == "1");
-                else if (ln.rfind("netusbee=", 0) == 0) netusbeeFlag = (v(ln, 9) == "1");
-                else if (ln.rfind("slirp=", 0) == 0)    slirpFlag    = (v(ln, 6) == "1");
-                else if (ln.rfind("machine=", 0) == 0) machType   = parseMachine(v(ln, 8).c_str());
-                else if (ln.rfind("mem=", 0) == 0)     ramBytes   = parseRamBytes(v(ln, 4).c_str());
-                else if (ln.rfind("cpu=", 0) == 0)     cpuCore    = Cpu68k::parseCore(v(ln, 4).c_str());
-                else if (ln.rfind("mono=", 0) == 0)    machineMono = (v(ln, 5) == "1");
-                else if (ln.rfind("fastfdc=", 0) == 0) fastFdc    = (v(ln, 8) == "1");
-                else if (ln.rfind("fpu=", 0) == 0)     fpuPresent = (v(ln, 4) == "1");
-            }
+            while (std::getline(cf, ln))
+                neost::appconfig::parseConfigLine(fc, std::move(ln));
+            if (!fc.rom.empty())    romPath   = resolve(fc.rom);
+            if (!fc.disk.empty())   diskPath  = resolve(fc.disk);
+            if (!fc.diskb.empty())  diskBPath = resolve(fc.diskb);
+            if (!fc.cart.empty())   cartPath  = resolve(fc.cart);
+            if (!fc.gemdos.empty()) gemdosDir = resolve(fc.gemdos);
+            if (!fc.acsi.empty())   acsiImg   = resolve(fc.acsi);
+            modemFlag    = fc.modem;
+            ethernecFlag = fc.ethernec;
+            netusbeeFlag = fc.netusbee;
+            slirpFlag    = fc.slirp;
+            if (!fc.machine.empty()) machType = parseMachine(fc.machine.c_str());
+            if (!fc.mem.empty())     ramBytes = parseRamBytes(fc.mem.c_str());
+            if (!fc.cpu.empty())     cpuCore  = Cpu68k::parseCore(fc.cpu.c_str());
+            machineMono  = fc.mono;
+            fastFdc      = fc.fastfdc;
+            fpuPresent   = fc.fpu;
             std::fprintf(stderr, "[headless] config taken from %s\n", p);
         }
         else if (!std::strcmp(a, "--cpu"))        cpuCore   = Cpu68k::parseCore(next(a));

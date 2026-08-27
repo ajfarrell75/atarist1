@@ -4,6 +4,7 @@
 //  (c) 2026 VERHILLE Arnaud — projet NeoST.
 // =============================================================================
 #include "core/Bus.hpp"
+#include "core/Scheduler.hpp"
 #include "core/StateArchive.hpp"
 #include "core/Shifter.hpp"
 #include "core/YM2149.hpp"
@@ -1049,4 +1050,12 @@ void Bus::mmioWrite8(uint32_t addr, uint8_t v) {
     }
     if (glue)
         glue->write8(addr, v);
+}
+
+// A23 : primitive unique du vol de cycles bus — voir la déclaration (Bus.hpp) pour
+// l'invariant (stall CPU toujours, crédit ordonnanceur HORS quantum seulement).
+void Bus::stealBusCycles(Scheduler* sched, int n) {
+    if (n <= 0 || !cpu) return;
+    cpu->addBusWaitCycles(n);
+    if (sched && !cpu->inRun()) sched->addStolenCycles(n);
 }

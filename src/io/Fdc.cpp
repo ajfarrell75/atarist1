@@ -1086,9 +1086,10 @@ static constexpr int kDmaFlushCycles = 4 * 16 / 2;
 // crédite donc AUSSI `Scheduler::addStolenCycles`, discriminé par `Cpu68k::inRun`
 // (dans le quantum, `ran` capte déjà l'avance et créditer la compterait deux fois).
 void Fdc::billDmaCycles(int n) {
-    if (n <= 0 || !bus_.cpu) return;
-    bus_.cpu->addBusWaitCycles(n);
-    if (sched_ && !bus_.cpu->inRun()) sched_->addStolenCycles(n);
+    if (n <= 0) return;
+    // L'invariant stall CPU + crédit ordonnanceur (discriminant Cpu68k::inRun) vit
+    // dans Bus::stealBusCycles (A23) — même primitive que Blitter::billCycles.
+    bus_.stealBusCycles(sched_, n);
     // Le stall doit AUSSI décaler la prochaine échéance du FDC. Chez Hatari c'est
     // automatique : `M68000_AddCycles_CE` avance le compteur global, qui EST la base
     // de temps des échéances CycInt. Ici les deux sont distincts, donc on mémorise le

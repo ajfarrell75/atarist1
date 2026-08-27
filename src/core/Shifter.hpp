@@ -77,6 +77,12 @@ public:
     // détaille les échecs sur stderr. Appelé par neost-headless --glue-selftest.
     bool glueSelfTest();
 
+    // NEOST_LINELEN : l'UNIQUE lecteur du verrou « longueurs de ligne par-ligne »
+    // côté Machine (défaut ON, =0 pour l'A/B). L'attribution expérimentale côté
+    // Shifter vit sur SON verrou (NEOST_LINELEN_ATTR, OFF) — l'historique du défaut
+    // divergent et le segfault qui ont motivé la séparation : définition (A16).
+    static bool lineLenEnv();
+
     // Auto-test DÉTERMINISTE du re-rendu Spectrum 512 (palette intra-ligne). Sans
     // boot ni oracle : remplit une RAM vidéo synthétique (tous pixels = index 1),
     // injecte des écritures palette DATÉES au cycle sur l'index 1, force le rendu

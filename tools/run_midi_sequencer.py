@@ -72,7 +72,12 @@ def main() -> int:
                "--keys-at", str(SELECT_AT), "SONG.MID\n",
                "--keys-at", str(PLAY_AT), "|",
                "--midi-dump", str(log), "--screenshot", str(shot)]
-        r = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
+        try:
+            # Garde-fou A18 : 4000 trames GEMDOS, ~5 s mesurées — 600 s = marge CI ×100.
+            r = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, timeout=600)
+        except subprocess.TimeoutExpired:
+            print("  TIMEOUT après 600s : " + " ".join(map(str, cmd)), file=sys.stderr)
+            return 2
         tail = [ln for ln in r.stderr.splitlines() if "MIDI OUT" in ln or "cannot" in ln]
         print("\n".join(tail), flush=True)
         if r.returncode != 0 or not log.exists():

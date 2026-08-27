@@ -102,8 +102,6 @@ void Blitter::writeWord(uint32_t addr, uint16_t v) {
 // d'une tranche d'être servie à l'heure (chantier BL4). Moira avance son horloge — le
 // CPU « attend » que le blitter rende le bus, cf. addBusWaitCycles.
 void Blitter::billCycles(int n) {
-    if (n <= 0 || !bus_.cpu) return;
-    bus_.cpu->addBusWaitCycles(n);
     // UNE SEULE BASE DE TEMPS (port de Blitter_AddCycles, blitter.c:351-352) : chez
     // Hatari les cycles du blitter incrémentent le MÊME compteur que ceux du CPU,
     // celui que CycInt lit pour ses échéances. Ici deux chemins de facturation
@@ -118,8 +116,9 @@ void Blitter::billCycles(int n) {
     //    Scheduler::BLITTER, il tourne dans Scheduler::runTo, donc ENTRE deux
     //    cpu.run()) → personne ne les compte. C'était le bug : sched.now() restait en
     //    retard, puis sautait d'un coup au rebase d'IACK suivant.
-    // Le discriminant est le flag `inRun()` du CPU, cf. Cpu68k::inRun.
-    if (sched_ && !bus_.cpu->inRun()) sched_->addStolenCycles(n);
+    // L'invariant complet (discriminant Cpu68k::inRun) vit dans Bus::stealBusCycles
+    // (A23) — le FDC (billDmaCycles) partage la même primitive.
+    bus_.stealBusCycles(sched_, n);
 }
 
 uint8_t Blitter::read8(uint32_t addr) {
