@@ -79,6 +79,9 @@ packaging/android/build/
 # Carte SD UltraSatan générée (16 Mo, déterministe) : tools/make_usatan_hd.py la recrée à la demande
 disks/etalons/usatan_sd.img
 
+# Image ACSI de travail CAB/STinG (16 Mo, personnelle) : générée par tools/make_hd_image.py
+disks/cab_hd.img
+
 # ROM Roland MT-32/CM-32L (copyright) : jamais versionnées
 roms/mt32/*.ROM
 roms/mt32/*.rom
