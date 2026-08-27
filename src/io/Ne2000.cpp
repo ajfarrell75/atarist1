@@ -202,7 +202,12 @@ void Ne2000::deliverFrame(const uint8_t* f, int len) {
     const bool tome  = std::memcmp(f, par_, 6) == 0;
     const bool promisc = (rcr_ & 0x10) != 0;
     const bool mcast = (f[0] & 0x01) != 0;
-    if (!bcast && !tome && !promisc && !mcast) return;
+    if (!bcast && !tome && !promisc && !mcast) {
+        // Rejet du filtre MAC : tracé — une trame qui disparaît ICI est invisible
+        // du pilote ET de l'anneau (chasse CAB/STinG du 2026-08-27).
+        trace("rx-macdrop", unsigned(f[0]) << 8 | f[1], unsigned(par_[0]) << 8 | par_[1]);
+        return;
+    }
 
     // Longueur avec en-tête, arrondie à la page (256 octets).
     const int total = len + 4;

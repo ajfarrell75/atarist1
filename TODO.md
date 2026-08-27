@@ -367,6 +367,28 @@ détail → `DEV.md` et `CHANGELOG.md`). Restent :
   tracer les REJETS du filtre, pas seulement les acceptations). Les scripts de repro
   complets sont dans l'historique de session ; disque et C: se regénèrent en scratch.
 
+  **2e vague (même jour) — CAB REND LES PAGES, il ne manque qu'un clic pare-feu** :
+  1. Les « trames perdues » n'en étaient pas : sur un serveur HTTP **loopback**
+     (`http://10.0.2.2:8080/` → 127.0.0.1), **zéro perte** (80 livraisons SLIRP = 80 rx)
+     et **CAB affiche une page de 74 Ko**, en headless ET en GUI temps réel. Le motif
+     dup-ACKs venait du headless en roue libre : le RTO TCP de STinG (1,5 s ÉMULÉES)
+     expire avant la réponse du vrai réseau (~200 ms MUR) → retransmissions. En GUI
+     (temps réel) le problème n'existe pas. Le filtre MAC est hors de cause
+     (trace `rx-macdrop` ajoutée : zéro rejet).
+  2. Le reste du chemin est scripté et prouvé : dialogue Paths au clavier+souris
+     (les clics de boutons GEM veulent un appui TENU — `1111` + `.` de relâche ; un
+     Return vaut OK), sélecteur de chemins au double-clic, clic du lien, rendu.
+  3. **Bloqueur unique restant** : Little Snitch n'a pas encore de règle « any version »
+     pour `build/neost` (le GUI) — `resolve()` meurt (Error #-1) avant tout paquet.
+     `build/neost-headless` a la sienne (selftest online 5/5 stable au rebuild).
+  4. Pistes ÉLIMINÉES, à ne pas rejouer : relais HTTP hôte via `HTTP_PROXY` de l'OVL
+     (l'OVL résout quand même le nom → même blocage) ; URL numérique + proxy →
+     **panic Line-F dans CAB** (chemin proxy de l'OVL buggé) ; et ⚠ le CACHE de CAB
+     persiste dans l'image ACSI entre les runs — une entrée vide d'un run raté se
+     re-sert en silence (page blanche « chargée ») : régénérer l'image entre essais.
+  Run final (une fois la règle posée) : image prête en scratch, séquence GUI =
+  `--mouse-at/--scancode-at` du CHANGELOG, ~12 min temps réel.
+
 - **MIDI OUT Windows** : `MidiOutHost` couvre CoreMIDI (macOS) et ALSA (Linux) ; winmm reste à
   écrire — le MT-32 (Munt), lui, est portable.
 - **Périphériques des ports — validation** (2026-08-23) : `PortDevices` transcrit Steem/WinUAE sans
