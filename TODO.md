@@ -347,7 +347,20 @@ détail → `DEV.md` et `CHANGELOG.md`). Restent :
   `DNS=138.197.157.224`, `TCP connected`, `HTTP/1.1 200 OK` + `<title>The Old Net</title>`
   reçus dans le ST — **un ST émulé surfe**. **Prochain pas** : un navigateur (CAB) sur
   theoldnet.com en GUI, et le mode borne.
-- 🔶 **CAB 1.5 : à un cheveu — la réception NE2000 perd des trames** (2026-08-27, chantier
+- ✅ **CAB AFFICHE THEOLDNET.COM — objectif « un ST émulé surfe en GUI » ATTEINT**
+  (2026-08-27, 3e vague). La capture fait foi : « Welcome To The Old Internet Again! »
+  rendu dans CAB 1.5, STinG + `ENEC.STX` + NE2000 émulée + NAT SLIRP. Le pare-feu
+  applicatif bloquant les sockets du binaire GUI non signé, le chemin de démonstration
+  passe par un **DNS local** (`tools/net_localdns.py`, lié `0.0.0.0:53` — l'exemption
+  macOS INADDR_ANY dispense de root — qui répond `10.0.2.2` pour tout nom existant) et
+  une **passerelle HTTP transparente** (`tools/net_gateway80.py`, `0.0.0.0:80`, route par
+  l'en-tête Host, pompe bidirectionnelle keep-alive) : côté ST, DNS et HTTP sont
+  authentiques de bout en bout, la sortie hôte part d'un process python autorisé. Avec
+  une règle pare-feu « any version » sur `build/neost`, le chemin DIRECT (sans aides)
+  marche aussi — c'est celui du selftest headless (5/5). Pièges consignés au CHANGELOG.
+  Historique de la traque ci-dessous (gardé pour les recettes) :
+
+  🔶 **CAB 1.5 : à un cheveu — la réception NE2000 perd des trames** (2026-08-27, chantier
   en cours, interrompu pour le MegaSTE). Monté et VALIDÉ pas à pas en headless :
   `make_sting_test.py --cab` (EMUDESK.INF, autostart `#Z`), image ACSI C: (`make_hd_image.py`,
   copie désormais DÉTERMINISTE — l'ordre d'\AUTO est un contrat de boot) portant

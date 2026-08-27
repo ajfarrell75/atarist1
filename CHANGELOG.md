@@ -15,6 +15,37 @@ Ripper, DAC Pro Sound) avec page Dongles, `disks/dongles.txt` et oracle de rejeu
 vérifié note à note** en headless, corpus MIDI piano/blues ; port MIDI ALSA sous Linux ;
 save-state v16. Détail dans les chantiers datés ci-dessous.
 
+## THEOLDNET.COM S'AFFICHE DANS CAB — un Atari ST émulé surfe en GUI (2026-08-27)
+
+« Welcome To The Old Internet Again! » rendu dans **CAB 1.5** (freeware d'Alexander
+Clauss) sur NeoST : TOS → STinG 1.26 → `ENEC.STX` → NE2000 émulée → NAT SLIRP →
+Internet réel. Toute la session est scriptée (`--mouse-at`/`--scancode-at` GUI) :
+boot ACSI (image `make_hd_image.py` avec AUTO STinG config-only + CAB + `CAB.OVL`
+1.4401), autostart EmuDesk (`#Z`), dialogue Paths au sélecteur, clic du lien, rendu.
+
+Le pare-feu applicatif du poste bloquant les sockets du binaire GUI non signé, la démo
+passe par un chemin **100 % loopback côté hôte** : `tools/net_localdns.py` (DNS lié à
+`0.0.0.0:53` — l'exemption macOS INADDR_ANY permet les ports bas sans root — répond
+`10.0.2.2` pour tout nom existant) + `tools/net_gateway80.py` (passerelle transparente
+`0.0.0.0:80`, routée par l'en-tête Host, pompe bidirectionnelle keep-alive). Côté ST le
+DNS et le HTTP sont authentiques ; la sortie hôte part d'un python autorisé. Le chemin
+DIRECT (sans aides) marche dès qu'une règle « any version » couvre le binaire.
+
+Recettes payées pendant la traque (à ne pas repayer) :
+- **Un clic en dernier token de `--mouse-at` n'est jamais relâché** (la relâche vient du
+  token suivant) — les boutons GEM veulent un appui TENU : `1111` puis `.` ; un Return
+  vaut le bouton par défaut ; les « champs » du dialogue Paths de CAB sont des
+  boutons-sélecteurs, pas des champs texte ; le homing souris doit contourner la barre
+  de menus (survol = menu ouvert).
+- **Le cache de CAB persiste dans l'image ACSI entre les runs** : une entrée vide d'un
+  échec précédent se re-sert en silence (« page blanche chargée ») — régénérer l'image.
+- Le motif « 61 dup-ACKs » du headless n'était PAS une perte de trames (loopback :
+  80 livraisons = 80 reçues, trace `rx-macdrop` muette) : le RTO TCP de STinG (1,5 s
+  ÉMULÉES) expire avant le vrai réseau quand le headless court plus vite que le mur.
+  En GUI temps réel, le problème n'existe pas.
+- Chemins de l'OVL à éviter : `HTTP_PROXY` (ignoré ici), URL numérique + proxy
+  (panic Line-F dans CAB).
+
 ## EtherNEC : les fenêtres ROM3/ROM4 étaient INVERSÉES — trouvé par la 1re session STinG réelle (2026-08-27)
 
 Premier banc bout-en-bout « un ST émulé surfe » : disquette STinG 1.26 + `ENEC.STX`
