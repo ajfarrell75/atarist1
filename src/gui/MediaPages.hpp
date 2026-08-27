@@ -34,4 +34,5 @@ void drawHardDiskPage(const std::string& hdDir, const std::string& gemdosDefault
 
 void drawNetworkPage(bool modemOn, bool etherOn,
                      bool netusbeeOn, bool cartMounted,
-                     int& reqModem, int& reqEther, int& reqNetUsbee);
+                     bool slirpOn, bool slirpAvail,
+                     int& reqModem, int& reqEther, int& reqNetUsbee, int& reqSlirp);

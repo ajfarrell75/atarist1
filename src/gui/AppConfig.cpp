@@ -93,6 +93,7 @@ void parseConfigLine(Config& c, std::string line) {
     }
     else if (line.rfind("ethernec=", 0) == 0) c.ethernec = (line.substr(9) == "1");
     else if (line.rfind("netusbee=", 0) == 0) c.netusbee = (line.substr(9) == "1");
+    else if (line.rfind("slirp=", 0) == 0)    c.slirp    = (line.substr(6) == "1");
     else if (line.rfind("ultrasatan=", 0) == 0) c.ultrasatan = (line.substr(11) == "1");
     else if (line.rfind("sd2=", 0) == 0) c.sd2 = line.substr(4);
     else if (line.rfind("mono=", 0) == 0) c.mono = (line.substr(5) == "1");
@@ -193,6 +194,7 @@ void writeConfigKeys(std::ostream& f, const Config& w, bool full) {
       << "\nauto_dongle=" << (w.autoDongle ? 1 : 0)
       << "\nethernec=" << (w.ethernec ? 1 : 0)
       << "\nnetusbee=" << (w.netusbee ? 1 : 0)
+      << "\nslirp="    << (w.slirp    ? 1 : 0)
       << "\nultrasatan=" << (w.ultrasatan ? 1 : 0)
       << "\nsd2=" << w.sd2
       << "\nmono=" << (w.mono ? 1 : 0)

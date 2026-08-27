@@ -1333,12 +1333,15 @@ int main(int argc, char** argv) {
                 else if (ln.rfind("cart=", 0) == 0)    { if (ln.size() > 5) cartPath  = resolve(v(ln, 5)); }
                 else if (ln.rfind("gemdos=", 0) == 0)  { if (ln.size() > 7) gemdosDir = resolve(v(ln, 7)); }
                 else if (ln.rfind("acsi=", 0) == 0)    { if (ln.size() > 5) acsiImg   = resolve(v(ln, 5)); }
-                // modem= / ethernec= : le GUI les écrit à côté des autres clés
-                // réseau, toutes relues ici — sauf ces deux-là. Rejouer une config
-                // réseau avec --from-cfg démarrait donc SANS le modem ni la carte
-                // EtherNEC, sans un mot.
+                // modem= / ethernec= / netusbee= / slirp= : le GUI les écrit à côté
+                // des autres clés réseau, toutes relues ici — sauf celles-là. Rejouer
+                // une config réseau avec --from-cfg démarrait donc SANS le modem ni
+                // la carte EtherNEC, sans un mot. (netusbee= et slirp= ont manqué à
+                // l'appel une seconde fois, ajoutés le 2026-08-27.)
                 else if (ln.rfind("modem=", 0) == 0)    modemFlag    = (v(ln, 6) == "1");
                 else if (ln.rfind("ethernec=", 0) == 0) ethernecFlag = (v(ln, 9) == "1");
+                else if (ln.rfind("netusbee=", 0) == 0) netusbeeFlag = (v(ln, 9) == "1");
+                else if (ln.rfind("slirp=", 0) == 0)    slirpFlag    = (v(ln, 6) == "1");
                 else if (ln.rfind("machine=", 0) == 0) machType   = parseMachine(v(ln, 8).c_str());
                 else if (ln.rfind("mem=", 0) == 0)     ramBytes   = parseRamBytes(v(ln, 4).c_str());
                 else if (ln.rfind("cpu=", 0) == 0)     cpuCore    = Cpu68k::parseCore(v(ln, 4).c_str());

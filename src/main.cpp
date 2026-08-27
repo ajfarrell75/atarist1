@@ -54,6 +54,7 @@
 
 #include "core/Machine.hpp"
 #include "net/NetBackend.hpp"
+#include "net/SlirpBackend.hpp"
 #ifdef NEOST_WITH_NET
 #include "net/HayesModem.hpp"
 #endif
@@ -1948,6 +1949,7 @@ struct ConfigUi {
     float mixYm = 1.0f, mixDma = 1.0f, mixDrive = 1.0f, mixMt32 = 1.0f, mixDac = 1.0f;
     bool  mixInit = false, mixDirty = false, mixDone = false;
     int  reqNetUsbee = -1;                // NetUSBee NE2000 + ISP1160 (0/1)
+    int  reqSlirp = -1;                   // NE2000 : Internet réel via SLIRP (0/1)
     int  reqUltraSatan = -1;              // UltraSatan sur les IDs ACSI 0-1 (0/1)
     std::string reqMountSd2;              // image SD du slot 2 (ID 1)
     bool reqEjectSd2 = false;
@@ -2167,7 +2169,8 @@ void drawConfigWindow(ConfigUi& ui) {
         drawNetworkPage(ui.cfg && ui.cfg->modem, ui.machine->ne2000.enabled(),
                         ui.machine->netUsbeeEnabled(),
                         !ui.machine->bus.mountedCartPath().empty(),
-                        ui.reqModem, ui.reqEther, ui.reqNetUsbee);
+                        ui.cfg && ui.cfg->slirp, SlirpBackend::available(),
+                        ui.reqModem, ui.reqEther, ui.reqNetUsbee, ui.reqSlirp);
         break;
     // ── Dongles ───────────────────────────────────────────────────────────────
     // Tout ce qui se branchait sur un port pour qu'un logiciel le sonde : les clés du
@@ -2947,6 +2950,30 @@ int main(int argc, char** argv) {
     // par défaut = boucle locale (NetBackendNull une fois un pont SLIRP/pcap
     // absent) : la carte est DÉTECTÉE par le pilote, sans trafic hôte v1.
     NetBackendNull etherNull;
+    // SLIRP (slirp= dans neost.cfg) : la sortie Internet RÉELLE de la NE2000 (NAT
+    // mode utilisateur, cf. --slirp du headless). Un seul point de vérité pour le
+    // backend : SLIRP ouvert → SLIRP, sinon boucle locale. La bascule est à chaud —
+    // la carte vue par le pilote ST ne change pas, seul son « câble » change.
+    SlirpBackend slirpNet;
+    auto neBackend = [&]() -> NetBackend* {
+        return slirpNet.isOpen() ? static_cast<NetBackend*>(&slirpNet) : &etherNull;
+    };
+    auto slirpApply = [&](bool on) {
+        if (on && !slirpNet.isOpen()) {
+            if (!SlirpBackend::available()) {
+                g_stateMsg = "This build has no libslirp (NEOST_WITH_SLIRP)";
+                g_stateMsgFrames = 150;
+                cfg.slirp = false;
+            } else if (!slirpNet.open(false)) {
+                g_stateMsg = "slirp: " + slirpNet.lastError();
+                g_stateMsgFrames = 150;
+                cfg.slirp = false;
+            }
+        } else if (!on) {
+            slirpNet.close();
+        }
+        machine.ne2000.setBackend(neBackend());
+    };
     // NetUSBee (netusbee=) = la même NE2000 + l'hôte USB ISP1160 ; exclusif d'EtherNEC
     // (un seul montage sur le port cartouche) — netusbee= prime sur ethernec=.
     auto etherApply = [&](bool on) {
@@ -2967,7 +2994,7 @@ int main(int argc, char** argv) {
                 cfg.ethernec = false;
                 return;
             }
-            machine.ne2000.setBackend(&etherNull);
+            machine.ne2000.setBackend(neBackend());
             machine.enableEtherNec();
         } else if (!machine.netUsbeeEnabled()) {
             machine.disableEtherNec();
@@ -2989,13 +3016,14 @@ int main(int argc, char** argv) {
                 return;
             }
             machine.disableEtherNec();                 // la NE2000 repart avec le NetUSBee
-            machine.ne2000.setBackend(&etherNull);
+            machine.ne2000.setBackend(neBackend());
             machine.enableNetUsbee();
         } else if (machine.netUsbeeEnabled()) {
             machine.disableNetUsbee();
             if (cfg.ethernec) etherApply(true);        // EtherNEC seul reprend la NE2000
         }
     };
+    if (cfg.slirp)    slirpApply(true);           // AVANT : les applicateurs lisent neBackend()
     if (cfg.netusbee) netUsbeeApply(true);
     if (cfg.ethernec) etherApply(true);
     machine.midi.setLoopback(cfg.midiLoopback);   // fiche MIDI OUT→IN (OFF par défaut)
@@ -4181,6 +4209,14 @@ int main(int argc, char** argv) {
                 reqHardReset = true;
                 cfgUi.reqNetUsbee = -1;
             }
+            if (cfgUi.reqSlirp >= 0) {
+                cfg.slirp = (cfgUi.reqSlirp == 1);
+                slirpApply(cfg.slirp);           // peut refuser (lib absente, échec d'init)
+                saveConfig(exeDir, cfg, &machine);
+                // Pas de reset : la carte vue par le pilote ne change pas, seul son
+                // « câble » change — la bascule boucle locale ↔ Internet est à chaud.
+                cfgUi.reqSlirp = -1;
+            }
             if (cfgUi.driveSound != driveSoundOn) {
                 driveSoundOn = cfgUi.driveSound; drive.setEnabled(driveSoundOn);
                 cfg.driveSound = driveSoundOn;   // persisté par cfgDirty (la case l'a levé)
@@ -4291,6 +4327,7 @@ int main(int argc, char** argv) {
 #ifdef NEOST_WITH_NET
                     modemApply(cfg.modem);
 #endif
+                    slirpApply(cfg.slirp);
                     netUsbeeApply(cfg.netusbee);
                     etherApply(cfg.ethernec);
                     // Son/MIDI du profil : sorties (GM/CoreMIDI/MT-32 + modèle), câble de
