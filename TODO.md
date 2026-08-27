@@ -264,6 +264,20 @@ interne ×256…) → `docs/CYCLE_ACCURACY.md` §4.
 
 ### Interface — kiosk & effets CRT
 Fonctionnalités livrées et fonctionnelles (→ `CHANGELOG.md` § Frontend). Restent :
+- ⭘ **Souris ABSOLUE pour GEM/bureau** (2026-08-27) — la souris ST n'est pilotée qu'en
+  mode **capturé/relatif** (`g_mouseCaptured`, `GLFW_RAW_MOUSE_MOTION`), pensé pour les
+  jeux. Sur un **trackpad**, un double-clic bouge le curseur entre les deux clics → GEM y
+  voit deux clics simples : impossible d'ouvrir un dossier ou de valider un OK à double-clic
+  de façon fiable (constaté en session CAB). L'émulation, elle, est correcte (double-clic
+  scripté = OK ; le bureau ouvre bien `C:\*.*`). 🎯 Ajouter un **mode souris absolu** (position
+  curseur hôte → position curseur ST, sans capture) pour l'usage GEM/desktop/navigateur —
+  c'est le mode confortable des émulateurs pour le pointage. En attendant : ouvrir un
+  élément sélectionné par **Ctrl+O** (raccourci EmuTOS `^O`) évite le double-clic ; Return
+  n'ouvre PAS un lecteur sur le bureau (seulement dans les dialogues).
+- ⭘ **Traces `NEOST_*_TRACE` clavier/souris** — la chasse au « backspace/flèches » du
+  2026-08-27 a dû ajouter puis retirer une trace `[kbd]` dans `onKey`. Une trace clavier
+  permanente derrière `NEOST_KBD_TRACE` (comme `NEOST_ENEC_TRACE`/`NEOST_SLIRP_TRACE`)
+  éviterait ce cycle rebuild/revert au prochain doute clavier. _Valeur faible, coût nul._
 - **Cosmétique** : membres `srcW_`/`srcH_` morts dans `CrtEffectStack` ; destructeur `= default`
   (fuite GL seulement si l'objet cessait d'être un singleton process-lifetime) ; répétition de
   navigation kiosk : tenir gauche/droite (swap one-shot) bloque la répétition haut/bas.
@@ -322,6 +336,16 @@ détail → `DEV.md` et `CHANGELOG.md`). Restent :
 - **Matrice de compatibilité MegaSTE** : TOS 2.05/06, EmuTOS, 1/2/4 Mo, 8/16 MHz, cache on/off,
   DD/HD, mono/couleur.
 - Capturer des **traces Hatari de référence** pour `trace_diff` (Arkanoid & co).
+- ⭘ **Hygiène FujiNet — reste des mentions résiduelles** (2026-08-27). Le FujiNet n'a jamais
+  existé sur Atari ST (périphérique 8-bits/2600) et son **code d'émulation a été retiré le
+  2026-08-22** (cf. `CHANGELOG.md`). Restent deux mentions, toutes deux **historiques** :
+  (1) `src/core/Machine.cpp` — une ligne de l'historique des versions de save-state
+  (« v13 : FujiNet RETIRÉ… ») qui explique pourquoi les bits de drapeau se sont décalés ;
+  (2) les entrées `CHANGELOG.md` qui datent l'ajout puis le retrait. 🎯 À trancher par le
+  mainteneur : reformuler le commentaire de `Machine.cpp` sans nommer FujiNet (au risque de
+  rendre le saut de version v12→v14 opaque), et décider si l'historique CHANGELOG doit être
+  réécrit — normalement un changelog garde la trace de ce qu'il a supprimé. **Aucun code
+  FujiNet vivant ne subsiste**, seulement ces traces d'historique.
 
 ### Réseau (extensions NeoST — base livrée 2026-08-12, cf. `docs/EXTENSIONS.md`)
 - ✅ **`NetBackendSlirp` : le « dernier pas » est CLOS** (2026-08-27) — **5/5 vérifications
