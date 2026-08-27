@@ -277,9 +277,23 @@ FC0030: bra     $fc004e
   STE_Test→ste, MegaSTE→megaste) ; `--keys "O"` pilote le menu (`O`=ROM, `Z`=tests, `Q`=tout).
 - **`--irq` indispensable** pour les bugs d'interruption (sinon le saut vers un vecteur est
   invisible). `grep '>>> IRQ' t.txt`.
-- **`--loopback`** : branche les connecteurs de bouclage (MIDI/Serial/Printer-Joystick), APRÈS
-  l'injection `--keys` — sinon l'écho du rapport série console reviendrait en réception et
-  casserait la détection clavier. L'ACSI (test J/H) n'a PAS besoin de `--loopback`.
+- **`--loopback`** : branche les connecteurs de bouclage (MIDI/Serial/SCC/Printer-Joystick),
+  APRÈS l'injection `--keys` — sinon l'écho du rapport série console reviendrait en réception
+  et casserait la détection clavier. Avec les injections DATÉES (`--keys-at`/`--scancode-at`),
+  le branchement se fait après la DERNIÈRE injection ; si le test démarre sitôt le Return
+  avalé (test S lancé seul), **`--loopback-at N`** fixe la trame exactement.
+  L'ACSI (test J/H) n'a PAS besoin de `--loopback`.
+- ⚠ **« No loopback connector » dans `--serial-dump` ne prouve RIEN** : la routine série des
+  cartouches Field Service émet le MESSAGE D'ERREUR COMME DONNÉES DE SONDE (chaque caractère
+  doit revenir par le bouclage) — la chaîne apparaît donc même quand le test PASSE. Verdict
+  fiable : l'écran (« Pass ») ou l'absence de « Fail at cycle » dans le dump.
+- **Test J (Hard Disk W/R)** : image ACSI ≥ ~22 Mo (l'exerciseur lit la LBA 40732 en
+  supposant le disque interne 48 Mo d'époque — sur 16 Mo, « Command error » est un CHECK
+  CONDITION légitime). **Test D (DMA Port)** : exige le boîtier DMA du kit Field Service —
+  émulé par **`--dma-fixture`** (cible ACSI 0 à un octet de commande `((count-1)<<6)|$10/$08`,
+  exclusif d'un disque réel sur la cible 0) ; sans lui, échec D0/D1/D3 FIDÈLE (Hatari n'a
+  pas le boîtier et échoue pareil). **Test F formate la disquette A** :
+  toujours passer des copies sacrificielles `--disk`/`--diskb` (piège A14).
 - **Sensibilité à `--mem`** : un même diag peut échouer différemment selon la taille RAM →
   révèle un bug de décodage MMU (`mmuTranslate`).
 - **Garde double bus fault** (`Cpu68k.cpp`, `g_inBusError`) : un code en vrille fautait en

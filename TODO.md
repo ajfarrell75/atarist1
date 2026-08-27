@@ -7,8 +7,11 @@
 - Chronologie (le clos détaillé vit là-bas) → [`CHANGELOG.md`](CHANGELOG.md)
 
 **Objectif** : émuler proprement un **MegaSTE** (68000 8/16 MHz, 1/2/4 Mo, TOS 2.05/2.06, STE
-vidéo/son/joypads, blitter, RTC, SCC, SCU, ACSI/SCSI, DD/HD) avec un timing assez fidèle pour
-jeux, démos et utilitaires.
+vidéo/son/joypads, blitter, RTC, SCC, SCU, ACSI — le disque interne d'époque est un pont
+ACSI-SCSI, PAS un NCR5380, DD/HD) avec un timing assez fidèle pour jeux, démos et utilitaires.
+**Atteint le 2026-08-27** au sens du diagnostic Atari Field Service : suite Q **12/12** sous
+TOS 2.06 (boîtier de test DMA du kit émulé, `--dma-fixture`) ; ce qui suit affine la
+fidélité, il ne conditionne plus l'objectif.
 
 **Sources de vérité à croiser systématiquement** (cf. [`CLAUDE.md`](CLAUDE.md)) :
 - **Hatari** (`extern/hatari/src/*.c`) — comportement ST/STE/MegaSTE éprouvé. La référence.
@@ -153,8 +156,10 @@ du code.
   d'A8.
 - Signature/notarisation du `.dmg`, tableau des tiers → § BLOQUANT RELEASE.
 - Slirp « dernier pas » : **CLOS le 2026-08-27** (cause : Little Snitch, pas NeoST) → § *Réseau*.
-- SCSI/NCR5380 + TOS 2.05/2.06 + NVRAM (l'objectif MegaSTE déclaré en tête de ce fichier n'est
-  pas atteint sans eux) → § *Stockage & contrôleurs* et § *Périphériques & profils machine*.
+- ~~SCSI/NCR5380 + TOS 2.05/2.06 + NVRAM~~ **CLOS le 2026-08-27** : le MegaSTE n'a NI
+  NCR5380 (c'est du TT/Falcon — son disque interne est un pont ACSI, déjà émulé) NI
+  NVRAM (TT/Falcon aussi) ; TOS 2.05/2.06 bootent au bureau sur `--machine megaste`.
+  Suite Q du diagnostic Field Service : 12/12 (détail → `CHANGELOG.md`).
 
 ### ⚠ Deux erreurs de méthode commises le 2026-08-25, consignées pour ne pas les refaire
 
@@ -288,7 +293,10 @@ Fonctionnalités livrées et fonctionnelles (→ `CHANGELOG.md` § Frontend). Re
   _Effort faible, valeur basse._
 
 ### Stockage & contrôleurs
-- **SCSI / NCR5380** (MegaSTE/TT) *(gros contrôleur)* — réf. `ncr5380.c`. Non commencé.
+- **SCSI / NCR5380** (TT/Falcon **uniquement** — reclassé 2026-08-27 : le MegaSTE n'en a
+  pas, son disque interne est un pont ACSI-SCSI sur le bus ACSI, déjà émulé ; Hatari ne
+  câble le 5380 que sur TT/Falcon, EmuTOS pareil) *(gros contrôleur, hors périmètre
+  MegaSTE)* — réf. `ncr5380.c`. Non commencé.
 - *(SCC : restes faible valeur — timers du BRG / Zero Count, baudrate temporisé, série hôte.)*
 
 ### FPU MC68881 (audit 2026-07-12 — différés)
@@ -308,10 +316,20 @@ Fonctionnalités livrées et fonctionnelles (→ `CHANGELOG.md` § Frontend). Re
   fichiers ouverts sur C: donne des handles morts au load (Fread/Fclose du guest échouent).
   Sérialiser la table de handles (chemin + offset + mode) et rouvrir au load ; en attendant,
   documenté ici.
-- **ROM TOS MegaSTE** : TOS 2.05/2.06 256 Ko à `$E00000` (choix pays, checksums, fallback EmuTOS
-  MegaSTE). Aujourd'hui : EmuTOS 256 Ko par défaut.
-- **NVRAM / préférences TOS MegaSTE** (résolution / boot device) si TOS 2.x l'exige.
+- ~~ROM TOS MegaSTE~~ **VÉRIFIÉ le 2026-08-27** : TOS 2.05 et 2.06 (US 60 Hz, FR 50 Hz,
+  1/2/4 Mo) bootent au bureau sur `--machine megaste`, checksums ROM validés par le
+  diagnostic Field Service (test O : Pass). EmuTOS 256 Ko reste le défaut libre.
+  ⚠ TOS 2.x attend une touche après son test mémoire (`--scancode-at N "39,b9"`).
+- ~~NVRAM / préférences TOS MegaSTE~~ **N'EXISTE PAS sur MegaSTE** (MC146818 = TT/Falcon) ;
+  TOS 2.06 boote sans. Clos par vérification (2026-08-27).
 - **Cartridge port** `$FA0000-$FBFFFF` générique (au-delà du système GEMDOS) — réf. `cart.c`.
+
+- ⭘ **Test F (disquette) de la cartouche STE_Test v1.9 : « Cannot write drive A/B », drives
+  vus SS** (constaté 2026-08-27, PRÉ-EXISTANT au chantier MegaSTE — même verdict au run de
+  référence avant toute modification). Le test F du diagnostic **MegaSTE**, lui, PASSE
+  (A et B DS, format/écriture/lecture) avec le même FDC émulé : la cartouche STE détecte
+  les faces/l'écriture autrement. À creuser avec `NEOST_ACSI_TRACE`-façon FDC + Hatari
+  en oracle sur la même cartouche. _Hors périmètre MegaSTE, valeur moyenne._
 
 ### Système de régression — restes (faible priorité)
 La pyramide P0-P3 est **en place** (palier fast ~3 s garde le commit, palier full = pixels ;
@@ -332,7 +350,10 @@ détail → `DEV.md` et `CHANGELOG.md`). Restent :
   rapatrier Union (planetemu manuel). Infra en place (`tools/run_etalons.py`).
 - **Comparaison MAME ↔ NeoST** (memory map, bus errors, FDC/MMU FIFO, blitter, SCC).
 - **Matrice de compatibilité MegaSTE** : TOS 2.05/06, EmuTOS, 1/2/4 Mo, 8/16 MHz, cache on/off,
-  DD/HD, mono/couleur.
+  DD/HD, mono/couleur. **Validé le 2026-08-27** : TOS 2.05us (4 Mo), 2.06us (1/4 Mo, 60 Hz),
+  2.06fr (2 Mo, 50 Hz), EmuTOS 256 (mono + couleur), ACSI monté, suite Q du diag 12/12
+  (boîtier DMA du kit émulé, `--dma-fixture`). Restent les combinaisons
+  DD/HD × cache par balayage systématique si un jour un titre l'exige.
 - Capturer des **traces Hatari de référence** pour `trace_diff` (Arkanoid & co).
 - ⭘ **Hygiène FujiNet — reste des mentions résiduelles** (2026-08-27). Le FujiNet n'a jamais
   existé sur Atari ST (périphérique 8-bits/2600) et son **code d'émulation a été retiré le

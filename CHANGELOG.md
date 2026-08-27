@@ -15,6 +15,68 @@ Ripper, DAC Pro Sound) avec page Dongles, `disks/dongles.txt` et oracle de rejeu
 vérifié note à note** en headless, corpus MIDI piano/blues ; port MIDI ALSA sous Linux ;
 save-state v16. Détail dans les chantiers datés ci-dessous.
 
+## LE MEGASTE AU BANC FIELD SERVICE — suite Q 12/12, l'objectif de tête du TODO est ATTEINT (2026-08-27)
+
+L'objectif déclaré en tête du `TODO.md` (« émuler proprement un MegaSTE ») listait trois
+manquants : SCSI/NCR5380, TOS 2.05/2.06, NVRAM. Bilan du chantier : **les trois étaient
+soit déjà faits, soit des idées fausses** — et la validation a débusqué deux vrais bugs
+(un d'outillage, un d'émulation SCC) qui font passer la suite Q du diagnostic Atari.
+
+**Les trois « manquants » du TODO, tranchés :**
+- **SCSI/NCR5380 : le MegaSTE n'en a PAS.** Le 5380 est du TT/Falcon ; le disque interne
+  du MegaSTE passe par un **pont ACSI-SCSI** (carte type Megafile) sur le bus ACSI — que
+  NeoST émule déjà. Concordance triple : Hatari ne câble le 5380 que sur TT
+  (`ioMemTabTT.c`) et Falcon (`hdc.c`), EmuTOS (`bios/scsi.c`) ne connaît que TT/Falcon,
+  et l'Atari Wiki l'écrit noir sur blanc (« the Mega STE has no full-featured SCSI bus —
+  only ACSI/DMA »). L'item du TODO reclassé TT-only, hors périmètre.
+- **TOS 2.05 et 2.06 bootent au bureau** sur `--machine megaste` (US 60 Hz et FR 50 Hz,
+  1/2/4 Mo), EmuTOS 256 aussi, et une image ACSI se monte en C:. ⚠ Recette : TOS 2.x
+  attend une TOUCHE après son test mémoire (`--scancode-at N "39,b9"`), déjà consigné.
+- **NVRAM : n'existe pas sur MegaSTE** (c'est le TT/Falcon, MC146818). TOS 2.06 boote
+  sans — l'item se clôt par vérification.
+
+**Suite Q du `MegaSTE_Diagnostic_v1.5` (TOS 2.06, toutes fixtures) : 12/12.**
+R RAM, O ROM, M MIDI, S RS232, T MFP/Glue/Video, **D DMA Port**, I SCC, L RTC, F
+disquettes A+B (DS, format/écriture/lecture), P Printer/Joy, Y blitter long : **Pass** ;
+V : « No VME board » (fidèle — Hatari n'émule pas le VME). L'exerciseur **J (Hard Disk
+W/R) tourne propre** sur une image ≥ ~21 Mo (il lit la LBA 40732 en supposant le disque
+interne 48 Mo d'époque : sur une image de 16 Mo, son « Command error » est un CHECK
+CONDITION légitime, pas un bug).
+
+**Le boîtier de test DMA du kit Field Service est émulé** (`Fdc::setDmaFixture`,
+`--dma-fixture`, OFF par défaut — Hatari ne l'a pas : sans lui, D échoue pareil ici et
+chez l'oracle). Protocole décodé du test D lui-même : c'est une cible ACSI de banc à
+**UN octet de commande** — `((count-1)<<6) | opcode`, opcode **$10** = le boîtier AVALE
+count×512 octets (RAM→port), **$08** = il les REND — transfert immédiat, compteur de
+secteurs décompté à ZÉRO, adresse DMA avancée, IRQ GPIP5 (le test vérifie ces trois
+points : D0 time-out / D1 count / D3 status, puis compare les données, D2). Piège
+d'implémentation payé : les bits 7-6 de l'octet ne sont PAS une cible ACSI — filtrer
+sur `(v>>5)==0` rejetait `$D0` (count=4) et rendait un D0 time-out en phase 3.
+
+**Vrai bug d'outillage (classe OUTIL-1) : `--loopback` était IGNORÉ avec les injections
+datées.** Le branchement des connecteurs ne vivait que dans le chemin `--keys` ; avec
+`--keys-at`/`--scancode-at`, les tests S/M/P concluaient « No loopback connector » à tort.
+Corrigé (branchement après la DERNIÈRE injection datée) + nouvelle option **`--loopback-at
+N`** pour les recettes où le test démarre sitôt le Return avalé.
+
+**Le « No loopback connector » du dump série est un LEURRE** — et il avait déjà coûté une
+enquête (commit du 2026-08-25 : « la détection exige encore autre chose que je n'ai pas
+identifié »). Réponse : la routine série du diag ÉMET LE MESSAGE D'ERREUR COMME DONNÉES DE
+SONDE (chaque caractère transmis doit revenir par le bouclage) ; la chaîne apparaît donc
+dans `--serial-dump` même quand le test PASSE. Le verdict fiable est à l'ÉCRAN (« Pass »)
+ou l'absence de « Fail at cycle » — jamais cette ligne-là.
+
+**Vrai bug d'émulation : le SCC n'avait pas de prises de bouclage.** Le test I détecte
+chaque prise (Port A, Port B, LAN) en émettant un **BREAK (WR5 bit4)** et en guettant
+**RR0 bit7 (Break/Abort)** au retour, puis vérifie TxD→RxD, RTS→CTS, DTR→DCD et DTR→DSR
+(/SYNC), et les IRQ ext-status. Implémenté dans `io/Scc` (`setLoopback`, fronts via la
+machinerie `updateRR0` existante), branché par `--loopback`/`--loopback-at`, OFF par
+défaut — étalons intacts. `Testing SCC : Pass`, les trois prises détectées.
+
+**Piège A14 re-payé une fois de plus** : le test F du diag FORMATE la disquette A — un run
+Q a modifié `disks/diskA.st` dans l'arbre git (restauré ; les recettes passent désormais
+par des copies sacrificielles `--disk`/`--diskb`).
+
 ## « Impossible d'ouvrir un dossier sur C: » : c'était l'EMUDESK.INF, pas la souris ni l'ACSI (2026-08-27)
 
 Symptôme (GUI, image ACSI `cab_hd.img` du chantier CAB) : les icônes de lecteur

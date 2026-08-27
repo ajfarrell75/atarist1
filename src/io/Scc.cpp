@@ -88,8 +88,25 @@ void Scc::reset() {
 // -----------------------------------------------------------------------------
 //  RR0 / RR2 / RR3
 // -----------------------------------------------------------------------------
-uint16_t Scc::getCTS(int) const { return 1; }   // ligne au repos = assertée (cf. Hatari sans TTY)
-uint16_t Scc::getDCD(int) const { return 1; }
+// Lignes de modem en ENTRÉE. Sans rien de branché : au repos = assertées, comme
+// Hatari sans TTY. Prise de bouclage Field Service branchée (setLoopback) : CTS
+// suit RTS (WR5 bit1) et DCD suit DTR (WR5 bit7) du MÊME canal — c'est ce que le
+// test « I SCC » du diagnostic MegaSTE bascule pour détecter la prise.
+uint16_t Scc::getCTS(int c) const { return extLoopback_ ? ((chn_[c].WR[5] & 0x02) ? 1 : 0) : 1; }
+uint16_t Scc::getDCD(int c) const { return extLoopback_ ? ((chn_[c].WR[5] & 0x80) ? 1 : 0) : 1; }
+
+// Branche/débranche les prises de bouclage : synchronise /SYNC (DSR de la prise,
+// suit DTR) puis recalcule RR0 des deux canaux (fronts CTS/DCD → ext-status IRQ
+// si armés, exactement comme une vraie (dé)connexion).
+void Scc::setLoopback(bool plugged) {
+    extLoopback_ = plugged;
+    for (int c = 0; c < 2; ++c) {
+        if (plugged && (chn_[c].WR[5] & 0x80)) updateRR0Set(c, RR0_SYNC_HUNT);
+        else                                   updateRR0Clear(c, RR0_SYNC_HUNT);
+        updateRR0(c);
+    }
+    updateIRQ();
+}
 
 void Scc::updateRR0(int c) {
     Chn& ch = chn_[c];
@@ -241,6 +258,8 @@ void Scc::serialWriteByte(int c, uint8_t v) {
     // reconfigurer WR14 boucle donc sur lui-même — inoffensif en pratique car tout pilote
     // série/LAN réécrit WR14 (réglage du BRG, bit4=0) avant d'émettre. NE PAS « corriger ».
     if (chn_[c].WR[14] & 0x10) { receiveByte(c, v); return; }
+    // Prise de bouclage externe (Field Service) : TxD revient sur RxD du même canal.
+    if (extLoopback_) { receiveByte(c, v); return; }
     if (sink_) sink_(c, v);
 }
 
@@ -350,7 +369,26 @@ void Scc::writeControl(int c, uint8_t value) {
         if (((value >> 2) & 3) != WR4_STOP_SYNC) updateRR0Set(c, RR0_TX_UNDERRUN_EOM);
         break;
     }
-    case 5: break;                                        // RTS/DTR/break : lignes non câblées
+    case 5:                                               // RTS/DTR/break : lignes non câblées…
+        // …sauf prise de bouclage branchée : RTS→CTS, DTR→DCD et DTR→/SYNC (DSR)
+        // suivent immédiatement, avec fronts ext-status comme sur la vraie prise.
+        // SEND BREAK (bit4) : TxD forcé à l'espace — bouclé (prise externe ou WR14
+        // local), RxD le voit et RR0 bit7 (Break/Abort) suit. C'est LE mécanisme de
+        // détection des prises du test « I SCC » du diagnostic MegaSTE (le break
+        // émis doit revenir). Fin de break = second front ext-status, comme la puce.
+        if (extLoopback_ || (ch.WR[14] & 0x10)) {
+            if (value & 0x10) updateRR0Set(c, RR0_BREAK_ABORT);
+            else              updateRR0Clear(c, RR0_BREAK_ABORT);
+        }
+        if (extLoopback_) {
+            if (value & 0x80) updateRR0Set(c, RR0_SYNC_HUNT);
+            else              updateRR0Clear(c, RR0_SYNC_HUNT);
+        }
+        if (extLoopback_ || (ch.WR[14] & 0x10)) {
+            updateRR0(c);
+            updateIRQ();
+        }
+        break;
     case 8: writeDataReg(c, value); break;
     case 9: {
         chn_[0].WR[9] = value;

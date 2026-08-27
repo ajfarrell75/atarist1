@@ -44,6 +44,11 @@ public:
     void setSerialSink(std::function<void(int ch, uint8_t b)> fn) { sink_ = std::move(fn); }
     // Injection d'un octet reçu sur le canal `ch` (RX) — bouclage / source externe.
     void receiveByte(int ch, uint8_t b);
+    // Connecteurs de bouclage EXTERNES du kit Field Service (test « I SCC » : prises
+    // Port A / Port B / LAN) : TxD→RxD, RTS→CTS, DTR→DCD et DTR→DSR (/SYNC) sur
+    // CHAQUE canal. Débranché par défaut, comme le MFP (--loopback en headless).
+    // Propriété de banc (pas de l'état machine) : non sérialisée, comme Mfp::loopback_.
+    void setLoopback(bool plugged);
 
     // Sérialisation save-state (SYMÉTRIQUE). `Chn` est POD (trivially-copyable) →
     // copie brute. On saute `sink_` (callback re-lié à la construction) et `trace_`
@@ -75,6 +80,7 @@ private:
     int     activeReg_ = 0;
     std::function<void(int, uint8_t)> sink_;
     bool    trace_ = false;
+    bool    extLoopback_ = false;   // prises de bouclage Field Service branchées (cf. setLoopback)
 
     // --- Cœur (port des SCC_*) -------------------------------------------------
     uint8_t handleRead(uint32_t addr);

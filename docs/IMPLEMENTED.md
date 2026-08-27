@@ -1375,6 +1375,13 @@ Pour ce qui reste → [`../TODO.md`](../TODO.md).
   `C:\AUTO` recopiant `HELLO.TXT`→`OUTPUT.TXT` **persisté dans l'image** (WRITE(6),
   relu par mtools). _(Remplace l'ancien disque virtuel en mémoire, qui n'était qu'un
   bouchon pour le diagnostic « Hard Disk DMA Exerciser ».)_
+- **Boîtier de test DMA du kit Field Service** (2026-08-27, `Fdc::setDmaFixture`,
+  `--dma-fixture` headless, OFF par défaut — matériel de banc d'atelier, exclusif d'un
+  disque réel sur la cible 0) : cible ACSI 0 à **UN octet de commande**
+  `((count-1)<<6) | opcode` — $10 = avale count×512 octets (RAM→boîtier), $08 = les
+  rend — transfert immédiat, compteur de secteurs décompté à zéro, adresse DMA avancée,
+  IRQ GPIP5. Fait passer le test **« D DMA Port »** des diagnostics Atari (suite Q du
+  MegaSTE_Diagnostic v1.5 : **12/12**) ; Hatari, sans boîtier, échoue D0/D1/D3.
 - **ACSI INQUIRY — « Additional Length » fixe (31)** : `buf[4]` n'est plus écrasé par
   `count()-5` (valeur variable erronée) → la longueur additionnelle reste 31 comme Hatari
   (`HDC_Cmd_Inquiry` n'écrit jamais cet octet) ; un pilote HD lisant ce champ n'est plus trompé.
@@ -1392,6 +1399,11 @@ Pour ce qui reste → [`../TODO.md`](../TODO.md).
   (WR9=$C0 reset, WR4 async, WR2 vecteur, WR3/5 8 bits…) et **bootent au bureau** sans
   plante ; bouclage TX→RX prouvé (programme superviseur via Supexec écrit `$42` sur le
   canal A en loopback, le relit et le renvoie sur l'AUX → sortie série `<B>`).
+  **Prises de bouclage EXTERNES du kit Field Service** (2026-08-27, `Scc::setLoopback`,
+  `--loopback`/`--loopback-at` headless, OFF par défaut) : TxD→RxD, RTS→CTS, DTR→DCD,
+  DTR→DSR (/SYNC) et **BREAK émis (WR5 bit4) → RR0 bit7 Break/Abort** au retour — le
+  mécanisme de détection des prises du test « I SCC » du diagnostic MegaSTE, qui rend
+  **Pass** (Port A, Port B et LAN détectés, async, modem control, IRQ ext-status).
   _Non porté (faible valeur ici) : timers du BRG (Zero Count), baudrate temporisé,
   série hôte réelle._
 - **SCC No-Vector → vecteur spurious 24** (`Cpu68k::readIrqUserVector`) : sur IACK niveau 5 avec
