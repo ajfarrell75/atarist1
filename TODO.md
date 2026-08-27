@@ -347,6 +347,25 @@ détail → `DEV.md` et `CHANGELOG.md`). Restent :
   `DNS=138.197.157.224`, `TCP connected`, `HTTP/1.1 200 OK` + `<title>The Old Net</title>`
   reçus dans le ST — **un ST émulé surfe**. **Prochain pas** : un navigateur (CAB) sur
   theoldnet.com en GUI, et le mode borne.
+- 🔶 **CAB 1.5 : à un cheveu — la réception NE2000 perd des trames** (2026-08-27, chantier
+  en cours, interrompu pour le MegaSTE). Monté et VALIDÉ pas à pas en headless :
+  `make_sting_test.py --cab` (EMUDESK.INF, autostart `#Z`), image ACSI C: (`make_hd_image.py`,
+  copie désormais DÉTERMINISTE — l'ordre d'\AUTO est un contrat de boot) portant
+  AUTO STinG + PRG **config-only** (`build_code(host, fetch=False)` — l'ancien PRG laissait
+  une connexion TCP ouverte qui POLLUAIT les traces) + CAB 1.5 (freeware,
+  atari.clauss-net.de/soft/cab15.lzh) + CAB.OVL 1.4008/1.4401 (breakintochat.com/files/
+  atari/inet/cab_ovl/). CAB boote, EmuDesk l'autostart, la page lanceur se rend, le
+  dialogue « Paths » se configure À LA SOURIS+Return (recettes de scripts dans le
+  CHANGELOG ; pièges consignés : un clic en dernier token de `--mouse-at` n'est JAMAIS
+  relâché → toujours finir par `.` ; les « champs » du dialogue sont des boutons-sélecteurs,
+  pas des champs texte ; le survol de la barre de menus ouvre un menu — homing par le BAS).
+  L'OVL résout (DNS OK au fil), ouvre le TCP, envoie le GET… puis « Waiting for data » :
+  **~61 ACKs dupliqués** côté ST avant que la réponse (927 o) n'arrive enfin — l'invité
+  RATE des segments entrants. Dernier relevé : 7 `rx` / 70 `tx` (`NEOST_ENEC_TRACE=1`),
+  AUCUN `rx-overflow` → les trames se perdent en amont de l'anneau (filtre MAC de
+  `Ne2000::deliverFrame` vs PAR programmé par le vrai pilote ? PROM MAC ? à instrumenter :
+  tracer les REJETS du filtre, pas seulement les acceptations). Les scripts de repro
+  complets sont dans l'historique de session ; disque et C: se regénèrent en scratch.
 
 - **MIDI OUT Windows** : `MidiOutHost` couvre CoreMIDI (macOS) et ALSA (Linux) ; winmm reste à
   écrire — le MT-32 (Munt), lui, est portable.
