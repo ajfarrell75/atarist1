@@ -15,6 +15,64 @@ Ripper, DAC Pro Sound) avec page Dongles, `disks/dongles.txt` et oracle de rejeu
 vérifié note à note** en headless, corpus MIDI piano/blues ; port MIDI ALSA sous Linux ;
 save-state v16. Détail dans les chantiers datés ci-dessous.
 
+## Audit d'architecture quatre dimensions + grand ménage du TODO (2026-08-27)
+
+Quatre audits indépendants (cœur, frontends, tests/CI, fidélité/docs/gouvernance) menés sur
+l'arbre au commit `ee617e4`, croisés avec des vérifications directes (build propre, palier
+`fast` vert en 4,8 s, `git ls-files` recompté). Bilan d'ensemble : **~6,5/10** — fidélité
+d'émulation 8,5 (zéro divergence Hatari de sévérité haute ouverte, vérifiée entrée par
+entrée), sécurité des parseurs 8,5, headless 8, modèle temporel 7,5, save-state 7,
+documentation 6,5, tests/CI 6, cœur 6, frontends GUI 4, **gouvernance juridique 3** (le
+§ BLOQUANT du TODO). Le fil conducteur, écrit dans `gui/AppConfig.hpp` par le projet
+lui-même : *ce qui est testable est bon, ce qui ne l'est pas dérive.*
+
+**Trouvailles neuves versées au TODO en items A16-A37** (plan de correction P1/P2/P3),
+dont les plus notables :
+- `NEOST_LINELEN` a **deux défauts contradictoires** (`Machine.cpp` : `true` ;
+  4 sites `Shifter.cpp` : `false`) — l'hybride que le commentaire d'en-tête de
+  `Shifter.cpp` dénonce existe en production, dans l'autre sens (A16) ;
+- `serloop_selftest` est **orphelin** : la liste d'IDs codée en dur de `run_all.py` ne
+  l'exécute dans aucun palier, et rien ne peut le signaler (A19) ;
+- `tests/stx_writetrack_test.cpp` est du code de test **mort** (`EXCLUDE_FROM_ALL`,
+  jamais compilé) alors que le parseur STX n'a aucun autre test (A20) ;
+- le clavier du frontend **web** est amputé (pavé numérique, Undo, Help, clavier
+  international absents — copie partielle du keymap de `main.cpp`) (A21) ;
+- le message de rejet des save-states annonce « writes v16 » alors que le build écrit
+  v17 — la constante vit en double (A17) ;
+- la validation MegaSTE 12/12 est **manuelle et non gardée** — aucun étalon ne couvre
+  MegaST/MegaSTE/TOS 2.06, `etalons.json` l'avoue lui-même (A25) ;
+- le servo audio et la boucle de cadence existent en **trois copies** (GUI/web/android),
+  `kCpuHz` en quatre (A28) ; `--from-cfg` relit `neost.cfg` par une copie qui a déjà
+  divergé deux fois (A22) ;
+- le pin upstream de Moira n'est écrit **nulle part** dans `extern/moira/NEOST_VENDOR.md`
+  et le `Cputester/` a été élagué : le fork n'est ni rebasable ni re-validable (A35).
+
+**Grand ménage du TODO** (482 → 444 lignes : ~160 lignes de clos/périmé retirées, le plan
+A16-A37 ajouté ; ne reste que l'OUVERT) :
+- **Retiré car clos et déjà consigné ici** : les chroniques Slirp/Little Snitch, fenêtres
+  EtherNEC ROM3/ROM4 et CAB/theoldnet (entrées du 2026-08-27 ci-dessous, recettes
+  incluses) ; les items barrés SCSI-NCR5380/NVRAM/ROM TOS MegaSTE (entrée « MegaSTE au
+  banc ») ; la matrice MegaSTE validée (seul le reste DD/HD × cache demeure).
+- **Affirmations périmées corrigées** (constat de l'audit : la doc dérive là où
+  `check_doc_anchors.py` ne regarde pas — les chiffres) : « beam-sync casse EL/Cuddly/SHO »
+  retiré de la priorité n°1 (chantier **clos** depuis les passes du 2026-07-09 et du
+  2026-08-06 — EL 12402/12402, Cuddly 250/250, SHO résolu ; le TODO l'affichait encore
+  comme front actif sept semaines plus tard) ; « 44 ROM » → **37** ; « 6 étalons sur 13 »
+  → **8 sur 15** ; `wasm/index.data` retiré du § BLOQUANT (plus suivi depuis le
+  2026-08-23) ; `main.cpp` « 4 980 » → **5 017** lignes ; borne MFP « ≤ 1 instruction »
+  → **157 cycles mesurés** ; palier fast « ~3 s (2026-08-19) » → **4,8 s (mesuré
+  2026-08-27)** — également corrigé dans `docs/TEST_SOFTWARE.md`. Restent
+  `docs/CYCLE_ACCURACY.md` §4 et `docs/MOIRA_WINUAE_CONVERGENCE.md` (journal par
+  accrétion) : c'est l'item **A26**, avec un `check_doc_claims.py` à créer sur le modèle
+  des ancres.
+- **Archivé ici — les deux erreurs de méthode du 2026-08-25** (retirées du TODO, à ne pas
+  recommettre) : (1) *un seuil absolu sur une grandeur dépendante de la charge* — `timer
+  IRQ max lateness` avait été inscrit comme sonde « doit rester à 132 » ; faux (147, 156,
+  157, 163 relevés ailleurs) — cette métrique se compare à charge identique, jamais à un
+  seuil : un faux garde-fou coûte plus cher qu'aucun garde-fou ; (2) *justesse validée,
+  coût ignoré* — BL4 validé au pixel sans aucune mesure de débit alors qu'il multiplie
+  les appels au dispatch (coût mesuré nul a posteriori par le perfbench).
+
 ## LE MEGASTE AU BANC FIELD SERVICE — suite Q 12/12, l'objectif de tête du TODO est ATTEINT (2026-08-27)
 
 L'objectif déclaré en tête du `TODO.md` (« émuler proprement un MegaSTE ») listait trois
