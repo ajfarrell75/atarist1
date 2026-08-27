@@ -51,8 +51,9 @@ HISTORICAL = ["CHANGELOG.md"]
 # Symboles cités VOLONTAIREMENT alors qu'ils n'existent pas — la phrase parle
 # justement de leur disparition. Toute entrée doit porter sa raison.
 ALLOWLIST = {
-    "Blitter::stallCpu":
-        "TODO.md § A7 : cité comme EXEMPLE d'ancre morte après le renommage en billCycles.",
+    # (« Blitter::stallCpu » exempté jusqu'au 2026-08-27 — la citation-exemple du TODO
+    #  § A7 a disparu avec la réorganisation du TODO ; entrée retirée car plus rien ne
+    #  cite ce symbole.)
     "DmaSound::onFrameEnd":
         "CHANGELOG.md : cité dans une phrase qui dit explicitement « qui n'existent pas ».",
 }
