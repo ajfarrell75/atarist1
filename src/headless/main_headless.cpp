@@ -110,6 +110,11 @@ void usage() {
         "  --diskb FILE      mount an image in drive B (second drive)\n"
         "  --fastfdc         fast FDC (delays /10) — speeds up disk access\n"
         "  --loopback        \"plug in\" the RS232 and MIDI OUT->IN loopback connectors\n"
+        "  --loopback-at N   same, plugged at frame N exactly (recipes with dated key\n"
+        "                    injections: the automatic plug waits for the LAST injection,\n"
+        "                    which can be too late for a test that starts on Return)\n"
+        "  --dma-fixture     plug the Field Service DMA test box on the ACSI port\n"
+        "                    (diagnostic test D; excludes a real disk on target 0)\n"
         "                    (diagnostic serial S / MIDI M tests; MIDI is unplugged by default)\n"
         "  --cart FILE       mount a cartridge ($FA0000): diagnostic Test Kit, etc.\n"
         "  --gemdos DIR      GEMDOS hard disk: map DIR onto C: (GEMDOS calls redirected\n"
@@ -1100,6 +1105,8 @@ int main(int argc, char** argv) {
     bool        haveJoy    = false;   // --joy : maintient un état joystick pendant le run
     uint8_t     joy0Hold   = 0, joy1Hold = 0;  // bits ST (haut$01 bas$02 gauche$04 droite$08 feu$80)
     bool        loopback   = false;   // « branche » le connecteur de bouclage RS232 (test S)
+    int         loopbackAt = -1;      // --loopback-at N : trame de branchement EXPLICITE (sinon auto)
+    bool        dmaFixture = false;   // boîtier de test DMA du kit Field Service (test D)
     bool        machineMono = false;
     bool        glueSelfTest = false; // auto-test déterministe de la machine Glue (bordures)
     bool        spec512SelfTest = false; // auto-test déterministe du re-rendu Spectrum 512
@@ -1243,6 +1250,8 @@ int main(int argc, char** argv) {
             haveJoy = true;
         }
         else if (!std::strcmp(a, "--loopback"))   loopback  = true;
+        else if (!std::strcmp(a, "--loopback-at")) { loopback = true; loopbackAt = std::atoi(next(a)); }
+        else if (!std::strcmp(a, "--dma-fixture")) dmaFixture = true;
         else if (!std::strcmp(a, "--mono"))       machineMono = true;
         else if (!std::strcmp(a, "--glue-selftest")) glueSelfTest = true;
         else if (!std::strcmp(a, "--spec512-selftest")) spec512SelfTest = true;
@@ -1398,6 +1407,7 @@ int main(int argc, char** argv) {
     machine.loadDisk(diskPath);   // lecteur A (optionnel)
     if (!diskBPath.empty()) machine.loadDiskB(diskBPath);   // lecteur B (optionnel)
     machine.fdc.setFastFdc(fastFdc);   // FDC rapide (--fastfdc) : accès disque ÷10
+    machine.fdc.setDmaFixture(dmaFixture);   // boîtier de test DMA (--dma-fixture, test D)
     // Disque dur GEMDOS (--gemdos) : installe la cartouche système à $FA0000 →
     // exclusif avec une cartouche externe (--cart), comme Hatari.
     if (!gemdosDir.empty()) {
@@ -1736,7 +1746,30 @@ int main(int argc, char** argv) {
         }
     }
     bool traceAttached = false;   // --trace-from réellement atteint ? (cf. garde de fin)
+    // --loopback × injections DATÉES (--keys-at / --scancode-at / --key-down) : le
+    // branchement du connecteur ne vivait que dans le chemin --keys (post-boucle) —
+    // avec les formes datées, --loopback était IGNORÉ en silence et les tests S/M/P
+    // des cartouches Field Service concluaient « No loopback connector » (faux
+    // positif d'outillage, classe OUTIL-1). Même règle que le chemin --keys : on
+    // branche APRÈS la dernière injection (l'écho série du rapport console ne doit
+    // pas être relu comme entrée clavier pendant la navigation) ; sans injection
+    // datée, à la trame 0.
+    int loopbackAtFrame = -1;
+    if (loopback && keys.empty()) {
+        const int stride = (keyHold + 2 > 4) ? keyHold + 2 : 4;
+        int last = -1;
+        for (const auto& [kf, ks] : keysAtList) last = std::max(last, kf + (int)ks.size() * stride);
+        for (const auto& [sf, sl] : scanAtList) last = std::max(last, sf + (int)sl.size() * stride);
+        for (const auto& [kf, kc] : keyDownList) { (void)kc; last = std::max(last, kf + 1); }
+        for (const auto& [kf, kc] : keyUpList)   { (void)kc; last = std::max(last, kf + 1); }
+        loopbackAtFrame = (last < 0) ? 0 : last + 8;
+    }
+    if (loopbackAt >= 0) loopbackAtFrame = loopbackAt;   // --loopback-at N : la recette décide
     for (int frame = 0; frame < frames; ++frame) {
+        if (frame == loopbackAtFrame) {
+            machine.mfp.setLoopback(true); machine.midi.setLoopback(true); machine.scc.setLoopback(true);
+            std::fprintf(stderr, "[headless] loopback connectors plugged at frame %d\n", frame);
+        }
         // Trace fenêtrée (--trace-from N) : branche le hook d'instruction à la trame N.
         if (traceFrom > 0 && frame == traceFrom && !tracePath.empty()) {
             machine.cpu.setTracer(&tracer);
@@ -1974,7 +2007,7 @@ int main(int argc, char** argv) {
         // s'il était branché plus tôt, l'écho du rapport série imprimé en console au
         // boot reviendrait en réception et serait lu comme entrée terminal → le test
         // clavier échouerait. Le technicien le branche juste avant de lancer le test S.
-        if (loopback) { machine.mfp.setLoopback(true); machine.midi.setLoopback(true); }
+        if (loopback) { machine.mfp.setLoopback(true); machine.midi.setLoopback(true); machine.scc.setLoopback(true); }
         idle(frames);   // laisse les tests déclenchés s'exécuter
         std::fprintf(stderr, "[headless] keys injected: \"%s\"\n", keys.c_str());
     }

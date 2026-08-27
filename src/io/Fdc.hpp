@@ -373,6 +373,19 @@ private:
     void     writeAcsi(uint32_t addr, uint8_t v);   // un octet de commande ACSI
     void     acsiDmaTransfer();                      // transfert DMA RAM↔image (Acsi_DmaTransfer)
 
+public:
+    // Boîtier de test DMA du kit Field Service (test « D DMA Port » des diagnostics
+    // Atari) : cible ACSI 0, protocole à UN octet de commande — $10 = le boîtier
+    // AVALE count×512 octets (RAM→port), $08 = il les REND (port→RAM). Le transfert
+    // est immédiat, le compteur de secteurs décompte à ZÉRO, l'adresse DMA avance,
+    // IRQ GPIP5 de fin (le test vérifie les trois : D0/D1/D3). Matériel de banc
+    // d'atelier, pas de la machine : OFF par défaut, non sérialisé (cf. Mfp::loopback_).
+    void     setDmaFixture(bool plugged) { dmaFixture_ = plugged; }
+private:
+    void     dmaFixtureTransfer(bool toFixture);     // exécute $10/$08 du boîtier
+    bool     dmaFixture_ = false;
+    std::vector<uint8_t> dmaFixtureBuf_;             // mémoire du boîtier (dernier bloc avalé)
+
     int      currentSide() const;               // face d'après le port A du PSG
     int      selectedDrive() const;             // 0 = A, 1 = B, -1 = aucun (PSG port A)
 

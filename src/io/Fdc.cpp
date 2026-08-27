@@ -2655,6 +2655,18 @@ void Fdc::writeAcsi(uint32_t /*addr*/, uint8_t v) {
     // 1er octet du paquet (sélection cible + opcode), 1 pour les octets suivants. On
     // ignore A1 pour le 2e octet (byteCount==1), comme le vrai matériel (pilotes bogués).
     const bool a1 = (dmaMode_ & DMA_A0) != 0;
+    // Boîtier de test DMA branché : il court-circuite le protocole paquet — sur le
+    // PREMIER octet de commande cible 0, $10/$08 déclenchent le transfert immédiat
+    // (cf. dmaFixtureTransfer). Les autres octets suivent le chemin ACSI normal.
+    // L'octet de commande du boîtier encode le compte dans les bits 7-6 :
+    // ((count-1)<<6) | opcode, opcode $10 = avaler / $08 = rendre (observé : $10,
+    // $08 pour count=1 puis $D0 = 3<<6|$10 pour count=4). Le transfert lui-même
+    // suit dmaSectorCount_, déjà programmé via $8604 en mode SCREG.
+    if (dmaFixture_ && !a1 && acsi_.byteCount() != 1
+        && ((v & 0x3F) == 0x10 || (v & 0x3F) == 0x08)) {
+        dmaFixtureTransfer((v & 0x3F) == 0x10);
+        return;
+    }
     if (!a1 && acsi_.byteCount() != 1) {
         acsi_.selectTarget(uint8_t((v >> 5) & 7));        // cible = bits 7-5
         if ((v & 0x1F) != 0x1F)                           // octet ordinaire (pas marqueur ICD)
@@ -2675,6 +2687,35 @@ void Fdc::writeAcsi(uint32_t /*addr*/, uint8_t v) {
         dmaError_ = acsi_.dmaError();
         fdcSetIrq(IRQ_HDC);                // FDC_SetIRQ(FDC_IRQ_SOURCE_HDC) : source datée
     }
+}
+
+// Boîtier de test DMA (kit Field Service) : exécution d'une commande $10 (avale
+// count×512 octets de la RAM) / $08 (les rend). Protocole décodé du test « D DMA
+// Port » du MegaSTE_Diagnostic v1.5 : après l'octet de commande, le test attend
+// GPIP5, vérifie que l'ADRESSE DMA a avancé de count×512 (sinon « D1 count
+// error »), que le statut $8606 vaut bit0=1/bit1=0/bit2=0 — donc compteur décompté
+// à ZÉRO et pas d'erreur (sinon « D3 not responding ») — puis compare les données
+// rendues (sinon « D2 data mismatch »).
+void Fdc::dmaFixtureTransfer(bool toFixture) {
+    const bool modeWrite = (dmaMode_ & DMA_WRBIT) != 0;
+    if (toFixture != modeWrite) return;              // sens DMA ≠ commande : rien ne part
+    const int len = int(dmaSectorCount_) * 512;
+    bus_.megaSteCacheFlushIfEnabled();               // DMA via BGACK → cache Mega STE invalidé
+    const bool rangeOk = uint64_t(dmaAddr_) + uint64_t(len) <= bus_.ram.size();
+    if (rangeOk && len > 0) {
+        if (toFixture) {                             // RAM → boîtier
+            dmaFixtureBuf_.resize(size_t(len));
+            for (int i = 0; i < len; ++i) dmaFixtureBuf_[size_t(i)] = bus_.dmaRead8(dmaAddr_ + uint32_t(i));
+        } else {                                     // boîtier → RAM (blocs au-delà du stock : 0)
+            for (int i = 0; i < len; ++i)
+                bus_.dmaWrite8(dmaAddr_ + uint32_t(i),
+                               size_t(i) < dmaFixtureBuf_.size() ? dmaFixtureBuf_[size_t(i)] : uint8_t(0));
+        }
+    }
+    dmaAddr_ = (dmaAddr_ + uint32_t(len)) & dmaAddressMask(bus_.ram.size());
+    dmaSectorCount_ = 0;                             // décompté à zéro ($8606 bit1 = 0)
+    dmaError_ = !rangeOk;                            // bit0 = 1 quand PAS d'erreur
+    fdcSetIrq(IRQ_HDC);                              // IRQ GPIP5 de fin de transfert
 }
 
 // Transfert DMA RAM↔image (port de Acsi_DmaTransfer). dmaMode_/dmaAddr_ sont à nous.
