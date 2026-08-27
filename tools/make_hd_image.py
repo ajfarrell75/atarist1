@@ -64,6 +64,8 @@
 #
 #  68000/TOS big-endian pour la table Atari ; BPB FAT little-endian (DOS).
 # =============================================================================
+from __future__ import annotations   # `str | None` sous le python 3.9 du système
+
 import argparse
 import glob
 import os
@@ -350,10 +352,21 @@ def main() -> int:
         os.remove(tmp)
 
     # 4) Le contenu. On copie les ENTRÉES du dossier, pas le dossier lui-même.
-    entries = sorted(os.listdir(args.src))
-    if entries:
-        run_batched(['mcopy', '-i', at, '-s', '-Q', '-m'],
-                    [os.path.join(args.src, e) for e in entries], ['::'])
+    #    ⚠ PAS de `mcopy -s` : il recopie chaque dossier dans l'ordre readdir de
+    #    l'HÔTE (non déterministe — hachage APFS…), or l'ordre des entrées d'un
+    #    répertoire est un CONTRAT côté TOS : \AUTO s'exécute dans l'ordre du
+    #    répertoire (STING.PRG doit précéder son client, etc.). On parcourt donc
+    #    l'arbre nous-mêmes, trié, dossier par dossier puis fichier par fichier —
+    #    l'image devient aussi reproductible octet à octet à contenu identique.
+    for here, dirs, files in os.walk(args.src):
+        rel = os.path.relpath(here, args.src)
+        dst = '::' if rel == '.' else '::' + rel.replace(os.sep, '/')
+        dirs.sort()
+        for d in dirs:
+            run(['mmd', '-i', at, f'{dst}/{d}'.replace('::/', '::')])
+        batch = [os.path.join(here, f) for f in sorted(files)]
+        if batch:
+            run_batched(['mcopy', '-i', at, '-Q', '-m'], batch, [dst])
 
     # 5) L'ÉTAGE 2. L'étage 1 lit ce secteur puis EXIGE que ses 256 mots totalisent
     #    $1234 avant de l'exécuter (cmp.w #$1234,d0 / bne → abandon) : sans ce
@@ -380,7 +393,7 @@ def main() -> int:
             if donor else "image de données : EmuTOS la monte, un vrai TOS non "
                           "(--driver-from pour greffer un pilote)")
     print(f"{args.out} : {args.size_mb} Mo, 1 partition {part_type(part_size).decode()} "
-          f"FAT16, {len(entries)} entrée(s) à la racine de C: — {kind}")
+          f"FAT16, {len(os.listdir(args.src))} entrée(s) à la racine de C: — {kind}")
     return 0
 
 

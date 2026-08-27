@@ -78,7 +78,10 @@ IP_ST = 0x0A00020F               # 10.0.2.15 (1re adresse du NAT SLIRP)
 IP_MASK = 0xFFFFFF00             # 255.255.255.0
 
 
-def build_code(host: str) -> Asm:
+def build_code(host: str, fetch: bool = True) -> Asm:
+    # fetch=False : PRG de CONFIGURATION seule (port + routes), sans resolve ni
+    # GET — pour préparer STinG à un VRAI client (CAB…) sans laisser derrière
+    # soi une connexion TCP ouverte qui polluerait les traces.
     a = Asm(0)
 
     # ---- cookie 'STiK' : lu en superviseur, puis RETOUR EN USER -------------
@@ -196,6 +199,9 @@ def build_code(host: str) -> Asm:
     a.w(0x3E00)                                   # move.w d0,d7
     a.w(0x3007); a.br(0x6100, 'psdec')
     a.lea_lbl('m_nl', 3); a.br(0x6100, 'puts2')
+
+    if not fetch:
+        a.br(0x6000, 'done')
 
     # ---- resolve(hôte, NULL, iplist, 1) ------------------------------------
     a.lea_lbl('m_dns', 3); a.br(0x6100, 'puts2')
@@ -432,10 +438,12 @@ def build_prg(a: Asm) -> bytes:
 
 # =============================================================================
 #  Disquette FAT12 720 Ko avec arborescence (BPB identique à make_floppy.py).
-#  L'ORDRE des fichiers d'AUTO est l'ordre des entrées : STING.PRG doit précéder
-#  STGTEST.PRG (le TOS exécute AUTO dans l'ordre du répertoire).
+#  `tree` : nom → liste [(fichier, contenu)] = DOSSIER ; nom → bytes = fichier
+#  RACINE (EMUDESK.INF…). L'ORDRE des fichiers d'AUTO est l'ordre des entrées :
+#  STING.PRG doit précéder STGTEST.PRG (le TOS exécute AUTO dans l'ordre du
+#  répertoire).
 # =============================================================================
-def build_floppy(tree: dict[str, list[tuple[str, bytes]]]) -> bytes:
+def build_floppy(tree: dict) -> bytes:
     SPT, SIDES, TRACKS, SPC = 9, 2, 80, 2
     TOTAL = TRACKS * SIDES * SPT
     img = bytearray(TOTAL * SECT)
@@ -487,6 +495,13 @@ def build_floppy(tree: dict[str, list[tuple[str, bytes]]]) -> bytes:
 
     slot = 0
     for dirname, files in tree.items():
+        if isinstance(files, (bytes, bytearray)):          # fichier à la RACINE
+            base, _, ext = dirname.upper().partition('.')
+            fcl = alloc(len(files))
+            img[cl_off(fcl):cl_off(fcl) + len(files)] = files
+            entry(img, root + slot * 32, base, ext, 0x20, fcl, len(files))
+            slot += 1
+            continue
         dcl = alloc(csize)                       # 1 cluster = 32 entrées, assez
         entry(img, root + slot * 32, dirname.upper(), '', 0x10, dcl, 0)
         slot += 1
@@ -502,11 +517,15 @@ def build_floppy(tree: dict[str, list[tuple[str, bytes]]]) -> bytes:
 
 
 def main() -> int:
-    if len(sys.argv) < 4:
-        print(__doc__ or 'usage: make_sting_test.py OUT.st STING126_DIR ETHERNE_DIR [hôte]')
+    args = [a for a in sys.argv[1:] if a != '--cab']
+    cab = '--cab' in sys.argv[1:]
+    if len(args) < 3:
+        print('usage: make_sting_test.py [--cab] OUT.st STING126_DIR ETHERNE_DIR [hôte]\n'
+              '  --cab : ajoute A:\\EMUDESK.INF avec autostart #Z de C:\\CAB\\CAB.APP\n'
+              '          (CAB 1.5 + CAB.OVL sur un disque GEMDOS C:, cf. docs/EXTENSIONS.md)')
         return 2
-    out, sting_dir, enec_dir = sys.argv[1], sys.argv[2], sys.argv[3]
-    host = sys.argv[4] if len(sys.argv) > 4 else 'theoldnet.com'
+    out, sting_dir, enec_dir = args[0], args[1], args[2]
+    host = args[3] if len(args) > 3 else 'theoldnet.com'
 
     def rd(*p) -> bytes:
         with open(os.path.join(*p), 'rb') as f:
@@ -535,6 +554,14 @@ def main() -> int:
             ('ROUTE.TAB', route.encode('ascii')),
         ],
     }
+    if cab:
+        # EmuDesk (EmuTOS) lit EMUDESK.INF à la racine du lecteur de boot ;
+        # #Z 01 = autostart d'une application GEM après la fin de l'AUTO.
+        tree['EMUDESK.INF'] = (
+            '#Z 01 C:\\CAB\\CAB.APP@\r\n'
+            '#M 00 00 00 FF A FLOPPY DISK@ @\r\n'
+            '#M 01 00 00 FF C HARD DISK@ @\r\n'
+            '#T 00 03 02 FF   TRASH@ @\r\n').encode('ascii')
     with open(out, 'wb') as f:
         f.write(build_floppy(tree))
     print(f'{out}: STinG 1.26 + ENEC.STX, cible {host} (verdict sur RS-232)')
