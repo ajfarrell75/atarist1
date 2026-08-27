@@ -276,8 +276,15 @@ set_source_files_properties(tests/selftest_logic.cpp
 #  Ne dépend QUE de StxImage (aucun GUI, aucun Moira). Lancer :
 #    ./build/neost-stx-test "disks/stx/Rick Dangerous - Firebird (UK) (France).stx"
 # =============================================================================
-add_executable(neost-stx-test EXCLUDE_FROM_ALL tests/stx_writetrack_test.cpp src/io/StxImage.cpp)
+# A20 (2026-08-27) : EXCLUDE_FROM_ALL retiré — ce test était du code MORT (jamais
+# compilé, jamais invoqué) pendant que StxImage.cpp (510 l. de parseur binaire exposé
+# à des fichiers arbitraires) n'avait aucun autre test. Branché au palier fast de
+# tools/run_all.py, sur une image STX FORGÉE (aucune dépendance à un disque commercial).
+add_executable(neost-stx-test tests/stx_writetrack_test.cpp src/io/StxImage.cpp)
 target_include_directories(neost-stx-test PRIVATE "${CMAKE_SOURCE_DIR}/src")
+# ⚠ Le test vérifie par assert() : le -DNDEBUG du profil Release les VIDERAIT tous
+# (vert creux garanti). On les réactive pour CETTE cible uniquement.
+target_compile_options(neost-stx-test PRIVATE -UNDEBUG)
 
 # =============================================================================
 #  neost (Android) — bibliothèque native chargée par SDL2 (libneost.so).
@@ -359,7 +366,9 @@ if(EMSCRIPTEN)
     target_compile_options(neost_core PUBLIC -fwasm-exceptions)
     target_link_options(neost_core PUBLIC -fwasm-exceptions)
 
-    add_executable(neost-web src/web/main_web.cpp)
+    # gui/StKeys : clavier partagé bureau/web (A21) — seul fichier de gui/ compilé ici,
+# il ne dépend que du GLFW d'Emscripten.
+    add_executable(neost-web src/web/main_web.cpp src/gui/StKeys.cpp)
     target_link_libraries(neost-web PRIVATE neost_core)
     set_source_files_properties(src/web/main_web.cpp
         PROPERTIES COMPILE_OPTIONS "${NEOST_STRICT_OPTS}")
@@ -458,6 +467,7 @@ add_executable(neost
     src/gui/MediaPages.cpp
     src/gui/CrtEffectStack.cpp
     src/gui/KeyboardWindow.cpp
+    src/gui/StKeys.cpp
     src/gui/StbImage.cpp
     src/audio/MidiOutHost.cpp
     src/audio/Mt32Synth.cpp)

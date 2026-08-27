@@ -39,13 +39,41 @@ static std::vector<uint8_t> forgeFlux(uint8_t track, int nSectors) {
     return f;
 }
 
-int main(int argc, char** argv) {
-    const char* path = argc > 1 ? argv[1] : "disks/stx/Rick Dangerous - Firebird (UK) (France).stx";
+// Forge une image STX SYNTHÉTIQUE minimale : en-tête « RSY\0 » + une piste au
+// format « simple » (sectorsCount secteurs de 512 o, sans bloc secteur — la branche
+// buildSectorsSimple du parseur). A20 (2026-08-27) : le défaut historique du test
+// était un jeu commercial cracké (`disks/stx/Rick Dangerous…`) — inutilisable dans
+// un palier destiné à survivre à la purge du § BLOQUANT RELEASE. Un chemin en
+// argument reste accepté pour rejouer le test sur une vraie image.
+static std::vector<uint8_t> forgeStx(uint8_t track, int nSectors) {
+    std::vector<uint8_t> v;
+    // En-tête fichier (16 o) : magic, version, outil, réservé, nb pistes, révision.
+    const uint8_t hdr[16] = { 'R','S','Y','\0', 3,0, 0,0, 0,0, /*tracks=*/1, /*rev=*/0, 0,0,0,0 };
+    v.insert(v.end(), hdr, hdr + 16);
+    // Bloc piste : blockSize(4) fuzzySize(4) sectorsCount(2) flags(2) mfmSize(2)
+    // trackNumber(1) recordType(1), puis nSectors×512 o de données.
+    const uint32_t blockSize = 16u + uint32_t(nSectors) * 512u;
+    auto le32 = [&](uint32_t x) { for (int i = 0; i < 4; ++i) v.push_back(uint8_t(x >> (8 * i))); };
+    auto le16 = [&](uint16_t x) { v.push_back(uint8_t(x)); v.push_back(uint8_t(x >> 8)); };
+    le32(blockSize); le32(0); le16(uint16_t(nSectors)); le16(0 /* pas de SECTOR_BLOCK */);
+    le16(6250); v.push_back(track); v.push_back(0);
+    for (int s = 0; s < nSectors; ++s)
+        for (int i = 0; i < 512; ++i) v.push_back(uint8_t(0xD0 + s));   // contenu quelconque
+    return v;
+}
 
-    std::ifstream f(path, std::ios::binary | std::ios::ate);
-    if (!f) { std::fprintf(stderr, "FAIL: impossible d'ouvrir %s\n", path); return 2; }
-    const std::streamsize n = f.tellg(); f.seekg(0);
-    std::vector<uint8_t> raw; raw.resize(size_t(n)); f.read(reinterpret_cast<char*>(raw.data()), n);
+int main(int argc, char** argv) {
+    const char* path = argc > 1 ? argv[1] : nullptr;
+
+    std::vector<uint8_t> raw;
+    if (path) {
+        std::ifstream f(path, std::ios::binary | std::ios::ate);
+        if (!f) { std::fprintf(stderr, "FAIL: impossible d'ouvrir %s\n", path); return 2; }
+        const std::streamsize n = f.tellg(); f.seekg(0);
+        raw.resize(size_t(n)); f.read(reinterpret_cast<char*>(raw.data()), n);
+    } else {
+        raw = forgeStx(/*track=*/5, /*nSectors=*/10);   // même géométrie que l'ex-défaut
+    }
 
     StxImage stx;
     if (!stx.parse(std::move(raw))) { std::fprintf(stderr, "FAIL: parse STX\n"); return 2; }
@@ -84,9 +112,14 @@ int main(int argc, char** argv) {
     const char* tmp = "/tmp/neost_wt_test.wd1772";
     assert(stx.saveWd1772(tmp) && "saveWd1772");
 
-    std::ifstream f2(path, std::ios::binary | std::ios::ate);
-    const std::streamsize n2 = f2.tellg(); f2.seekg(0);
-    std::vector<uint8_t> raw2; raw2.resize(size_t(n2)); f2.read(reinterpret_cast<char*>(raw2.data()), n2);
+    std::vector<uint8_t> raw2;
+    if (path) {
+        std::ifstream f2(path, std::ios::binary | std::ios::ate);
+        const std::streamsize n2 = f2.tellg(); f2.seekg(0);
+        raw2.resize(size_t(n2)); f2.read(reinterpret_cast<char*>(raw2.data()), n2);
+    } else {
+        raw2 = forgeStx(5, 10);
+    }
     StxImage stx2;
     assert(stx2.parse(std::move(raw2)) && "parse #2");
     assert(stx2.loadWd1772(tmp) && "loadWd1772");

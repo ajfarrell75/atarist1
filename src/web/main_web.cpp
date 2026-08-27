@@ -16,6 +16,8 @@
 //  (c) 2026 VERHILLE Arnaud — projet NeoST.
 // =============================================================================
 #include <GLFW/glfw3.h>
+
+#include "gui/StKeys.hpp"
 #include <GLES2/gl2.h>
 #include <emscripten.h>
 #include <emscripten/html5.h>
@@ -272,52 +274,10 @@ void drawScreen(float u0, float v0, float u1, float v1, float viewAspect) {
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 }
 
-// --- Clavier : touche GLFW → scancode "make" Atari ST (cf. main.cpp natif) ---
-uint8_t glfwToStScancode(int key) {
-    switch (key) {
-        case GLFW_KEY_ESCAPE: return 0x01;
-        case GLFW_KEY_1: return 0x02; case GLFW_KEY_2: return 0x03;
-        case GLFW_KEY_3: return 0x04; case GLFW_KEY_4: return 0x05;
-        case GLFW_KEY_5: return 0x06; case GLFW_KEY_6: return 0x07;
-        case GLFW_KEY_7: return 0x08; case GLFW_KEY_8: return 0x09;
-        case GLFW_KEY_9: return 0x0A; case GLFW_KEY_0: return 0x0B;
-        case GLFW_KEY_MINUS: return 0x0C; case GLFW_KEY_EQUAL: return 0x0D;
-        case GLFW_KEY_BACKSPACE: return 0x0E; case GLFW_KEY_TAB: return 0x0F;
-        case GLFW_KEY_Q: return 0x10; case GLFW_KEY_W: return 0x11;
-        case GLFW_KEY_E: return 0x12; case GLFW_KEY_R: return 0x13;
-        case GLFW_KEY_T: return 0x14; case GLFW_KEY_Y: return 0x15;
-        case GLFW_KEY_U: return 0x16; case GLFW_KEY_I: return 0x17;
-        case GLFW_KEY_O: return 0x18; case GLFW_KEY_P: return 0x19;
-        case GLFW_KEY_LEFT_BRACKET: return 0x1A; case GLFW_KEY_RIGHT_BRACKET: return 0x1B;
-        case GLFW_KEY_ENTER: return 0x1C; case GLFW_KEY_LEFT_CONTROL:
-        case GLFW_KEY_RIGHT_CONTROL: return 0x1D;
-        case GLFW_KEY_A: return 0x1E; case GLFW_KEY_S: return 0x1F;
-        case GLFW_KEY_D: return 0x20; case GLFW_KEY_F: return 0x21;
-        case GLFW_KEY_G: return 0x22; case GLFW_KEY_H: return 0x23;
-        case GLFW_KEY_J: return 0x24; case GLFW_KEY_K: return 0x25;
-        case GLFW_KEY_L: return 0x26; case GLFW_KEY_SEMICOLON: return 0x27;
-        case GLFW_KEY_APOSTROPHE: return 0x28; case GLFW_KEY_GRAVE_ACCENT: return 0x29;
-        case GLFW_KEY_LEFT_SHIFT: return 0x2A; case GLFW_KEY_BACKSLASH: return 0x2B;
-        case GLFW_KEY_Z: return 0x2C; case GLFW_KEY_X: return 0x2D;
-        case GLFW_KEY_C: return 0x2E; case GLFW_KEY_V: return 0x2F;
-        case GLFW_KEY_B: return 0x30; case GLFW_KEY_N: return 0x31;
-        case GLFW_KEY_M: return 0x32; case GLFW_KEY_COMMA: return 0x33;
-        case GLFW_KEY_PERIOD: return 0x34; case GLFW_KEY_SLASH: return 0x35;
-        case GLFW_KEY_RIGHT_SHIFT: return 0x36; case GLFW_KEY_LEFT_ALT:
-        case GLFW_KEY_RIGHT_ALT: return 0x38; case GLFW_KEY_SPACE: return 0x39;
-        case GLFW_KEY_CAPS_LOCK: return 0x3A;
-        case GLFW_KEY_F1: return 0x3B; case GLFW_KEY_F2: return 0x3C;
-        case GLFW_KEY_F3: return 0x3D; case GLFW_KEY_F4: return 0x3E;
-        case GLFW_KEY_F5: return 0x3F; case GLFW_KEY_F6: return 0x40;
-        case GLFW_KEY_F7: return 0x41; case GLFW_KEY_F8: return 0x42;
-        case GLFW_KEY_F9: return 0x43; case GLFW_KEY_F10: return 0x44;
-        case GLFW_KEY_HOME: return 0x47;
-        case GLFW_KEY_UP: return 0x48; case GLFW_KEY_LEFT: return 0x4B;
-        case GLFW_KEY_RIGHT: return 0x4D; case GLFW_KEY_DOWN: return 0x50;
-        case GLFW_KEY_INSERT: return 0x52; case GLFW_KEY_DELETE: return 0x53;
-        default: return 0x00;
-    }
-}
+// Clavier : touche GLFW → scancode ST — gui/StKeys, module PARTAGÉ avec le GUI
+// (A21, 2026-08-27). La copie locale s'arrêtait avant le pavé numérique, Undo et
+// Help, et n'avait pas le keymap international : AZERTY sous TOS FR tapait en
+// QWERTY dans le navigateur.
 
 void setMouseCaptured(GLFWwindow* w, bool captured) {
     g_mouseCaptured = captured;
@@ -346,7 +306,7 @@ void onKey(GLFWwindow* w, int key, int /*scancode*/, int action, int mods) {
     // Émulation joystick clavier active : les touches du joystick (flèches + Ctrl
     // droit) pilotent la manette et ne sont PAS transmises au clavier ST.
     if (g_kbdJoy && stjoy::kbdBit(key)) return;
-    const uint8_t sc = glfwToStScancode(key);
+    const uint8_t sc = neost::stkeys::scancodeFor(key, 0);
     if (sc) g_machine->ikbd.keyEvent(sc, action == GLFW_PRESS);
 }
 
@@ -540,6 +500,7 @@ EMSCRIPTEN_KEEPALIVE void neost_load_tos(const char* path) {
     if (adj != g_machine->bus.machine)
         g_machine->reconfigure(g_machine->bus.ram.size(), CpuCore::Moira, adj);
     g_machine->loadTos(path);
+    neost::stkeys::setCountryFromTos(g_machine->bus.rom);   // pays clavier de la nouvelle ROM
     g_machine->reset();
 }
 
@@ -693,6 +654,7 @@ int main(int argc, char** argv) {
         if (romPath != "/roms/etos192us.img" && !machine.loadTos("/roms/etos192us.img"))
             std::fprintf(stderr, "[web] no loadable TOS — CPU running on nothing.\n");
     }
+    neost::stkeys::setCountryFromTos(machine.bus.rom);   // pays clavier du TOS de boot
     if (!machine.loadDisk(diskPath))
         std::fprintf(stderr, "[web] floppy not found (%s).\n", diskPath.c_str());
     machine.mfp.setColorMonitor(true);  // couleur (basse rés) par défaut

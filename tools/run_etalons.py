@@ -34,6 +34,22 @@ REF_DIR = ROOT / "tests" / "reference"
 HEADLESS = ROOT / "build" / "neost-headless"
 COMPARE = ROOT / "tools" / "compare_screenshot.py"
 HATARI_ORACLE = ROOT / "tools" / "hatari_oracle.sh"
+
+# Garde-fou A18 (audit 2026-08-27) : AUCUN appel à l'émulateur n'avait de timeout —
+# un 68000 qui boucle (la régression même que ces tests cherchent) consommait les
+# 45 min du job CI sans diagnostic. Verdict 124 (convention de timeout(1)) pour les
+# appels à code de retour ; sortie 2 immédiate pour les appels check=True (leur
+# échec est de toute façon fatal au run).
+def run_timed(cmd, limit_s, **kw):
+    try:
+        return subprocess.run(cmd, timeout=limit_s, **kw)
+    except subprocess.TimeoutExpired:
+        print(f"  TIMEOUT après {limit_s}s : " + " ".join(map(str, cmd)),
+              file=sys.stderr, flush=True)
+        if kw.get("check"):
+            sys.exit(2)
+        return subprocess.CompletedProcess(cmd, 124)
+
 BUFFER_W = 416   # largeur du buffer NeoST (overscan) ; un oracle Hatari est en 2× (≥832)
 
 
@@ -54,7 +70,7 @@ def ensure_disk(entry: dict) -> bool:
         print(f"  [gen] {script.relative_to(ROOT)} → {path.relative_to(ROOT)}")
         path.parent.mkdir(parents=True, exist_ok=True)
         out_arg = str(path)
-        subprocess.run([sys.executable, str(script), out_arg], cwd=ROOT, check=True)
+        run_timed([sys.executable, str(script), out_arg], 300, cwd=ROOT, check=True)
         return path.exists()
     return False
 
@@ -65,7 +81,7 @@ def run_selftest(flag: str, cpu: str) -> int:
     # le boot et renvoient le verdict via le code de sortie.
     cmd = [str(HEADLESS), "roms/etos256us.img", flag, "--cpu", cpu]
     print("  $", " ".join(cmd))
-    return subprocess.run(cmd, cwd=ROOT).returncode
+    return run_timed(cmd, 300, cwd=ROOT).returncode
 
 
 def run_headless_capture(entry: dict, out_ppm: Path) -> int:
@@ -90,7 +106,7 @@ def run_headless_capture(entry: dict, out_ppm: Path) -> int:
     if entry.get("cart"):
         cmd += ["--cart", str(ROOT / entry["cart"])]
     print("  $", " ".join(cmd))
-    r = subprocess.run(cmd, cwd=ROOT)
+    r = run_timed(cmd, 900, cwd=ROOT)
     return r.returncode
 
 
@@ -119,7 +135,7 @@ def run_hatari_oracle(entry: dict, out_png: Path) -> int:
     cmd.append("fastfdc" if entry.get("oracle_fastfdc") else "-")   # 7e arg positionnel
     cmd.append(memArg)                                             # 8e : taille RAM
     print("  $", " ".join(cmd))
-    return subprocess.run(cmd, cwd=ROOT).returncode
+    return run_timed(cmd, 1800, cwd=ROOT).returncode
 
 
 def oracle_scan_pick(entry: dict, out_png: Path, neost_ppm: Path, scan: int) -> bool:
@@ -147,7 +163,7 @@ def oracle_scan_pick(entry: dict, out_png: Path, neost_ppm: Path, scan: int) -> 
            entry.get("machine", "st"),
            "fastfdc" if entry.get("oracle_fastfdc") else "-", memArg]
     print("  $ HATARI_ORACLE_SCAN=%d %s" % (scan, " ".join(cmd)))
-    if subprocess.run(cmd, cwd=ROOT, env=env).returncode != 0:
+    if run_timed(cmd, 1800, cwd=ROOT, env=env).returncode != 0:
         return False
     scan_dir = Path(str(out_png)[:-4] + ".scan")
     shots = sorted(scan_dir.glob("f_*.png"))
@@ -182,11 +198,11 @@ def compare_shots(neost: Path, ref: Path, entry: dict, quiet: bool = False) -> i
            "--crop", crop, "--max", str(mx)]
     if quiet:
         # Balayage de fenêtre : une centaine de diffs, dont on ne veut QUE le verdict.
-        return subprocess.run(cmd, cwd=ROOT, stdout=subprocess.DEVNULL,
-                              stderr=subprocess.DEVNULL).returncode
+        return run_timed(cmd, 300, cwd=ROOT, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL).returncode
     cmd.append("--report")
     print("  $", " ".join(cmd))
-    return subprocess.run(cmd, cwd=ROOT).returncode
+    return run_timed(cmd, 300, cwd=ROOT).returncode
 
 
 def resolve_ref(entry: dict, ref_ppm: Path, ref_png: Path):
@@ -480,7 +496,7 @@ def main() -> int:
     if args.fetch:
         ids = args.only.split(",") if args.only else []
         cmd = [sys.executable, str(ROOT / "tools" / "fetch_etalons.py")] + ids
-        subprocess.run(cmd, cwd=ROOT, check=False)
+        run_timed(cmd, 600, cwd=ROOT, check=False)
 
     # strip() : « --only "a, b" » traitait « b » (avec son espace) comme un ID inconnu
     # et refusait de tourner, en DÉSIGNANT un identifiant pourtant valide.

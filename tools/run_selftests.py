@@ -25,6 +25,22 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 MANIFEST = Path(__file__).resolve().parent / "selftests.json"
 HEADLESS = ROOT / "build" / "neost-headless"
+
+# Garde-fou A18 (audit 2026-08-27) : AUCUN appel à l'émulateur n'avait de timeout —
+# un 68000 qui boucle (la régression même que ces tests cherchent) consommait les
+# 45 min du job CI sans diagnostic. Verdict 124 (convention de timeout(1)) pour les
+# appels à code de retour ; sortie 2 immédiate pour les appels check=True (leur
+# échec est de toute façon fatal au run).
+def run_timed(cmd, limit_s, **kw):
+    try:
+        return subprocess.run(cmd, timeout=limit_s, **kw)
+    except subprocess.TimeoutExpired:
+        print(f"  TIMEOUT après {limit_s}s : " + " ".join(map(str, cmd)),
+              file=sys.stderr, flush=True)
+        if kw.get("check"):
+            sys.exit(2)
+        return subprocess.CompletedProcess(cmd, 124)
+
 OUT_DIR = ROOT / "tests" / "out"
 
 VERDICT_RE = re.compile(r"NEOST-TEST:[ \t]*(\S+)[ \t]+(PASS|FAIL)\b[ \t]*(.*)")
@@ -63,7 +79,7 @@ def ensure_rom_asset(entry) -> bool:
             return False
         full.parent.mkdir(parents=True, exist_ok=True)
         print(f"  [gen] {gen} → {path}")
-        subprocess.run([sys.executable, str(ROOT / gen), str(full)], cwd=ROOT, check=True)
+        run_timed([sys.executable, str(ROOT / gen), str(full)], 300, cwd=ROOT, check=True)
     return True
 
 
@@ -110,7 +126,7 @@ def run_one(entry, args) -> bool:
         pass
     log_path = serial_path.with_name(serial_path.stem + "_run.log")
     with open(log_path, "wb") as log:
-        rc = subprocess.run(cmd, cwd=ROOT, stdout=log, stderr=subprocess.STDOUT).returncode
+        rc = run_timed(cmd, 300, cwd=ROOT, stdout=log, stderr=subprocess.STDOUT).returncode
     if rc != 0:
         print(f"  ÉCHEC : neost-headless a rendu {rc} (voir {log_path.relative_to(ROOT)})")
         return False

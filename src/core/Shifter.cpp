@@ -38,11 +38,39 @@ static constexpr int kSpec512AlignCyc = -25;
 // sites NEOST_LINELEN de ce fichier testaient la seule PRÉSENCE de la variable,
 // alors que Machine.cpp lit sa valeur : NEOST_LINELEN=0, censé désactiver le
 // mécanisme pour l'A/B, désactivait la moitié Machine et ACTIVAIT la moitié
-// Shifter — l'A/B mesurait donc un hybride jamais validé. Le défaut de chaque
-// site est inchangé ici : seule la façon de lire la variable est corrigée.
+// Shifter — l'A/B mesurait donc un hybride jamais validé.
 static bool envFlag(const char* name, bool dflt) {
     const char* s = std::getenv(name);
     return s ? (std::atoi(s) != 0) : dflt;
+}
+
+// A16 (2026-08-27) — le tranchage du verrou NEOST_LINELEN, instruit par la mesure.
+// Historique : jusqu'au 2026-07-08 tous les sites (Machine + Shifter) partageaient
+// UNE variable, OFF par défaut. Le tranchage WS3 (45f9a65) a basculé le défaut à ON
+// côté Machine SEULEMENT — les quatre sites de ce fichier sont restés OFF, et la
+// production exécute depuis un couple Machine-ON/Shifter-OFF… qui est en réalité LA
+// configuration validée par la suite (étalons TOUS OK, avant comme aujourd'hui).
+// Tenté le 2026-08-27 : unifier le défaut à ON → le glue-selftest SEGFAULTE
+// (SIGSEGV, reproduit aussi sur le code d'avant avec NEOST_LINELEN=1 — la recette
+// d'A/B documentée crashait donc déjà). Les deux moitiés sont DEUX fonctionnalités :
+//  · NEOST_LINELEN (défaut ON, =0 pour l'A/B) — le canal HBL_Pos/nCyclesPerLine
+//    côté Machine, validé WS3. Lecteur unique : lineLenEnv(), partagé avec
+//    Machine.cpp (lineLenOn_).
+//  · NEOST_LINELEN_ATTR (défaut OFF, opt-in) — l'ATTRIBUTION à la grille réelle
+//    des débuts de ligne (glueLineStart_) côté Shifter : le chantier V3, resté
+//    expérimental, qui segfaute sous --glue-selftest quand il est armé (le
+//    selftest pilote la Glue hors trame réelle : glueLineStart_ vraisemblablement
+//    vide ou désynchronisé — À CORRIGER avant toute promotion, cf. TODO § V3).
+// Séparer les variables ferme le piège : poser NEOST_LINELEN=1 pour un A/B
+// n'arme plus silencieusement un chemin expérimental non validé.
+bool Shifter::lineLenEnv() {
+    static const bool on = envFlag("NEOST_LINELEN", true);
+    return on;
+}
+
+static bool lineLenAttrEnv() {
+    static const bool on = envFlag("NEOST_LINELEN_ATTR", false);
+    return on;
 }
 
 // Seuil de détection « image spec512 » : nombre d'écritures palette MOT par trame
@@ -434,7 +462,7 @@ void Shifter::beginFrame() {
 // enregistrées, en ordre chronologique — exactement la boucle de replayGlue, mais
 // au fil de la trame (les écritures arrivent triées : recordSyncWrite est daté live).
 // Position ABSOLUE (cycle trame) du tic Timer B de la ligne `line`, sur la grille
-// RÉELLE des débuts de ligne (glueLineStart_, canal NEOST_LINELEN) quand elle est
+// RÉELLE des débuts de ligne (glueLineStart_, canal NEOST_LINELEN_ATTR) quand elle est
 // disponible — la même échelle que la lecture du compteur $8209. Renvoie -1 si la
 // trame n'a pas de grille réelle (pas d'écritures freq/res, LINELEN off…) : la
 // Machine retombe alors sur la planification nominale historique. Sans cette
@@ -442,7 +470,7 @@ void Shifter::beginFrame() {
 // phases défavorables il tombait AVANT l'écriture 60 Hz@374 → tic à la position
 // par défaut (400) au lieu du DE réel (488) — 2 phases sur 5, mesuré vs oracle.
 int64_t Shifter::timerBFrameCycleForLine(int line, bool startOfLine) {
-    static const bool lineLen = envFlag("NEOST_LINELEN", false);
+    const bool lineLen = lineLenAttrEnv();
     static const bool dbg = std::getenv("NEOST_TBGRID_DIAG") != nullptr;
     if (!lineLen || frameMode_ == Mode::High || syncWrites_.empty()
         || line < 0 || static_cast<std::size_t>(line) >= glueLineStart_.size()) {
@@ -485,10 +513,10 @@ void Shifter::liveGlueCatchUp(int targetLine) {
     const int maxLine = static_cast<int>(glueLines_.size()) - 2;
     if (targetLine > maxLine) targetLine = maxLine;
     const int cpl = geometry().cyclesPerLine;
-    // NEOST_LINELEN : attribution des écritures à la grille RÉELLE (échelle des
+    // NEOST_LINELEN_ATTR : attribution des écritures à la grille RÉELLE (échelle des
     // débuts de ligne glueLineStart_, alimentée à chaque avance de ligne ;
     // longueur courante déplacée par les « Freq_match » via glueCyclesLine_).
-    static const bool lineLen = envFlag("NEOST_LINELEN", false);
+    const bool lineLen = lineLenAttrEnv();
     for (;;) {
         // Écriture en attente sur une ligne déjà initialisée → consommer AVANT
         // d'avancer (elle conditionne res/freq des lignes suivantes).
@@ -1661,12 +1689,12 @@ void Shifter::replayGlue() {
     // (Machine setHblShorten) : sans ça l'état glue ne refléterait pas les lignes
     // raccourcies. Hors V2 : attribution fixe `frameCycle/cpl` historique (inchangée).
     static const bool v2 = std::getenv("NEOST_V2") != nullptr;
-    // Longueurs de ligne PAR-LIGNE (NEOST_LINELEN) : l'attribution suit la grille
+    // Longueurs de ligne PAR-LIGNE (NEOST_LINELEN_ATTR) : l'attribution suit la grille
     // RÉELLE — la longueur d'une ligne évolue au fil de ses PROPRES écritures
     // (dernier nCyclesPerLine posé par un « Freq_match », défaut cpl), comme la
     // chaîne StartCycle/nCyclesPerLine de Hatari. Remplace l'heuristique V2
     // « impulsion hi ≤57 → 224 ».
-    static const bool lineLen = envFlag("NEOST_LINELEN", false);
+    const bool lineLen = lineLenAttrEnv();
     std::size_t wi = 0;
     const std::size_t nw = syncWrites_.size();
     int64_t lineCyc = 0;                                  // cycle-trame du début de la ligne (V2/LINELEN)
@@ -2538,7 +2566,7 @@ uint32_t Shifter::videoCounter() const {
     // écriture freq/res garde le chemin historique (liveStartHBL_ = 63, zéro régression).
     int line = static_cast<int>(fc / kCyclesPerLine);
     int X    = static_cast<int>(fc % kCyclesPerLine);
-    // NEOST_LINELEN : la LECTURE du compteur se mappe sur la GRILLE RÉELLE des
+    // NEOST_LINELEN_ATTR : la LECTURE du compteur se mappe sur la GRILLE RÉELLE des
     // débuts de ligne (glueLineStart_), pas sur la grille fixe 512 — port du
     // Video_ConvertPosition sur nCyclesPerLine réel qu'utilise
     // Video_CalculateAddress (video.c). Décisif pour The Cuddly Demos (menu
@@ -2551,7 +2579,7 @@ uint32_t Shifter::videoCounter() const {
     // clignotement vertical bistable (fenêtre 34..310 ↔ 63..263). Mesuré à
     // l'oracle (traces video_addr + cpu_disasm, 2026-07-03) : chemin CPU et
     // ancre VBL identiques, seule la fonction valeur(t) différait.
-    static const bool lineLenRead = envFlag("NEOST_LINELEN", false);
+    const bool lineLenRead = lineLenAttrEnv();
     if (lineLenRead && frameMode_ != Mode::High && !syncWrites_.empty()
         && static_cast<std::size_t>(line) + 2 < glueLineStart_.size()) {
         const_cast<Shifter*>(this)->liveGlueCatchUp(line + 1);

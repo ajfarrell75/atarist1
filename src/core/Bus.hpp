@@ -37,6 +37,7 @@ class GemdosHd;
 class Scc;
 class Ne2000;
 class Isp1160;
+class Scheduler;
 #include "core/CartDevice.hpp"
 // -----------------------------------------------------------------------------
 //  Plan mémoire de l'Atari ST (bus d'adresses 24 bits → 16 Mo adressables).
@@ -276,6 +277,14 @@ public:
     Rtc*     rtc     = nullptr;   // horloge RP5C15 ($FFFC21) — Mega ST / Mega STE
     MidiAcia* midi   = nullptr;   // ACIA MIDI ($FFFC04) — bouclage OUT→IN
     Cpu68k*  cpu     = nullptr;   // pour rafraîchir l'IPL après un accès MMIO
+    // Vol de cycles bus par un maître DMA (blitter, DMA disquette…) — A23 : la
+    // primitive UNIQUE. Elle stalle le CPU (addBusWaitCycles) et, HORS quantum
+    // seulement (callback d'échéance, discriminé par Cpu68k::inRun), crédite
+    // l'ordonnanceur (addStolenCycles) — dans le quantum, `ran` capte déjà l'avance
+    // et créditer la compterait deux fois. Ce couple invariant vivait recopié dans
+    // Blitter::billCycles ET Fdc::billDmaCycles (« MÊME INVARIANT QUE BL3 ») ; le
+    // troisième maître de bus l'aurait recopié une troisième fois.
+    void stealBusCycles(Scheduler* sched, int n);
     // Watch d'écriture (debug, cf. write8) : hook posé par Machine si NEOST_WATCH.
     uint32_t watchBase_ = 0xFF000000u;
     std::function<void(uint32_t, uint8_t)> watchHook;

@@ -172,10 +172,10 @@ Machine::Machine(std::size_t ramBytes, CpuCore cpuCore, MachineType machine)
     // Video_AddInterruptHBL) et la longueur (224/508/512) est retenue ; onHbl
     // cumulera le raccourcissement dans lineCarry_ (les événements des lignes
     // suivantes — HBL/Timer B/RENDER — suivent déjà −lineCarry_).
-    lineLenOn_ = [] {
-        const char* s = std::getenv("NEOST_LINELEN");
-        return s ? (std::atoi(s) != 0) : true;
-    }();
+    // ⚠ A16 : lire le verrou par Shifter::lineLenEnv() et RIEN d'autre — cette
+    // ligne lisait getenv elle-même, avec un défaut qui a divergé de celui des
+    // sites Shifter pendant sept semaines (hybride non voulu, cf. Shifter.cpp).
+    lineLenOn_ = Shifter::lineLenEnv();
     shifter.setLineGeom([this](int line, int hblPos, int cyclesLine) {
         if (!lineLenOn_ || line != hblLine_ || line >= lpf_) return;
         const int64_t lineStart = frameStart_ + static_cast<int64_t>(line) * cpl_ - lineCarry_;
@@ -691,10 +691,14 @@ static uint32_t cartFingerprint(const std::vector<uint8_t>& cart) {
 
 // --- Save-states (increment 1) : CPU + RAM + ordonnanceur + état de trame ----------
 // Méthode SYMÉTRIQUE (StateArchive gère save ET load) → l'ordre ne peut pas diverger.
+// A17 (2026-08-27) : le numéro de version vivait EN DUR à deux endroits (écriture ici,
+// contrôle dans loadStateFile) — et ils s'étaient déjà désynchronisés : le message de
+// rejet annonçait « writes v16 » alors que le build écrivait v17. Constante unique.
+static constexpr uint16_t kStateVersion = 17;
 static uint32_t stateCrc32(const uint8_t* p, std::size_t n);   // défini plus bas
 void Machine::serializeState(StateArchive& ar) {
     uint32_t magic   = 0x4E535453u;   // 'NSTS'
-    uint16_t version = 17;            // v17 : Rtc::mode_ bit3 = TIMER EN désormais HONORÉ
+    uint16_t version = kStateVersion; // v17 : Rtc::mode_ bit3 = TIMER EN désormais HONORÉ
                                       // (un état v16 pouvait porter mode_=0, qui fige
                                       // maintenant le compteur) ;
                                       // v16 : + PortDevices (clés joystick/série, DAC, bouton) ;
@@ -860,9 +864,10 @@ bool Machine::loadState(const uint8_t* data, std::size_t n) {
     uint32_t magic;   std::memcpy(&magic, data, 4);
     uint16_t version; std::memcpy(&version, data + 4, 2);
     if (magic != 0x4E535453u) return false;
-    if (version != 17) {
+    if (version != kStateVersion) {
         std::fprintf(stderr, "[state] rejected: unsupported format v%u (this build of "
-                     "NeoST writes v16) — older states are not compatible\n", version);
+                     "NeoST writes v%u) — older states are not compatible\n",
+                     version, static_cast<unsigned>(kStateVersion));
         return false;
     }
     uint8_t  mt    = data[6];
