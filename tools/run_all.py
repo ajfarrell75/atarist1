@@ -60,6 +60,15 @@ FAST = [
     # jamais lancé jusqu'à l'audit du 2026-08-27.
     ("P0 STX WRITE TRACK (image forgée, ré-interprétation + round-trip .wd1772)",
      [str(ROOT / "build" / "neost-stx-test")]),
+    # A27 : la boucle rapide était AVEUGLE au rendu — « avant de conclure, --tier
+    # full » n'était qu'une discipline humaine, et des commits ont déjà sur-promis
+    # sur cette base. Quatre étalons pixel COURTS (250-400 trames, ~2 s en parallèle),
+    # quatre sous-systèmes distincts (bordures Glue, exceptions CPU, scroll STE,
+    # blitter/ordonnanceur), TOUS sur ROM EmuTOS libre : le palier fast reste
+    # prêt-à-purge (§ BLOQUANT RELEASE).
+    ("Pixels rapides (overscan_top + trace_odd + scroll_8264 + blitter_timer)",
+     [sys.executable, str(TOOLS / "run_etalons.py"), "--only",
+      "overscan_top,trace_odd,scroll_8264,blitter_timer"]),
     # Intégrité des ANCRES de la doc (chantier A7). Instantané, aucune machine : la
     # convention du projet veut que le SYMBOLE fasse foi (les fichier:ligne dérivent),
     # or rien ne vérifiait qu'ils existent encore. Après le renommage

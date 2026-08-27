@@ -134,20 +134,18 @@ Détail et verdicts → `CHANGELOG.md` (2026-08-27). Reliquat ouvert né d'A16 :
 
 ### P2 — consolidation (quelques jours chacun, par opportunité)
 
-✅ **A25 et A26 SOLDÉS le 2026-08-27** (détail → `CHANGELOG.md`) : la suite Q du
+✅ **A25, A26 et A27 SOLDÉS le 2026-08-27** (détail → `CHANGELOG.md`) : la suite Q du
 diagnostic MegaSTE est rejouée à chaque palier `full` (`tools/run_megaste_diag.py`,
 11 Pass + zéro Fail exigés, SKIP recensé si les fichiers Atari manquent) ; les
 affirmations chiffrées de la doc sont gardées par `tools/check_doc_claims.py`
 (palier `fast` — il a attrapé sa première dérive à son premier run), et la passe de
 péremption est faite (CYCLE_ACCURACY §4 réécrit, borne MFP corrigée dans
-HATARI_DIVERGENCES, bloc « ÉTAT COURANT » daté en tête de MOIRA_WINUAE_CONVERGENCE).
+HATARI_DIVERGENCES, bloc « ÉTAT COURANT » daté en tête de MOIRA_WINUAE_CONVERGENCE)) ;
+enfin la boucle rapide n'est plus aveugle au rendu (4 étalons pixel courts sur ROM
+libre dans le palier `fast`, ~12 s au total) et `run_etalons.py --jobs` parallélise
+le palier pixel (66 s → 46 s, borné par `nocooper_greetings` seul — le prochain gain
+est le raccourcissement de CET étalon, pas plus de parallélisme).
 
-- **A27 ⭘ — Palier `pixel-fast` + parallélisation.** Le palier `fast` (4,8 s mesuré
-  2026-08-27) ne compare AUCUN pixel : la boucle rapide est aveugle au rendu, la règle
-  « avant de conclure, `--tier full` » est une discipline humaine, pas un garde-fou.
-  3-4 étalons courts (`overscan_top`, `blitter_timer`, `scroll_8264`, `trace_odd` ≈ 4 s)
-  en palier intermédiaire ; et paralléliser `run_etalons.py` (palier pixel : 73 s dont
-  ~50 s pour le seul `nocooper_greetings` — les étalons sont indépendants).
 - **A28 ⭘ — Sortir le servo audio et la cadence dans le cœur.** Le filtre proportionnel
   d'asservissement (même constante `/256`, même clamp ±8, même rampe anti-clic) existe en
   **trois copies** (GUI, web, android) et la boucle de rattrapage de cadence aussi ;
@@ -344,8 +342,9 @@ attribution de ligne V3 (= A16b), wakeup-state WS3 sous-pixel, mode 336 px STE
 - **Cartridge port** `$FA0000-$FBFFFF` générique (au-delà du système GEMDOS) — réf. `cart.c`.
 
 ### Système de régression — restes
-La pyramide P0-P3 est en place (palier `fast` **4,8 s** mesuré 2026-08-27, palier `full` =
-pixels + garde MegaSTE ; détail → `DEV.md`). Les manques structurels encore ouverts
+La pyramide P0-P3 est en place (palier `fast` **~12 s** mesuré 2026-08-27 — boot GUI,
+pixels rapides et test STX inclus ; palier `full` = tous les pixels en parallèle
+(`--jobs`) + garde MegaSTE ; détail → `DEV.md`). Les manques structurels encore ouverts
 relevés par l'audit sont au § Dette (A27, A29, A30). Restent en plus :
 - gate `trace_diff --periods` vs oracle Hatari (le cycle-bench actuel est une auto-régression
   NeoST) ;
