@@ -468,7 +468,9 @@ divergence HAUTE**, les 4 correctifs sont CORRECTS. La passe remonte surtout des
 
 ### 🟠 Nouveaux — MOYENNES (fidélité)
 - **MFP** — pas de dispatch des timers échus (`MFP_UpdateTimers`) avant lecture des registres
-  d'IRQ → un code qui *poll* IPR/ISR voit un bit pending ≤ 1 instruction en retard.
+  d'IRQ → un code qui *poll* IPR/ISR voit un bit pending en retard — **jusqu'à 157 cycles
+  mesurés** (2026-08-25), pas « ≤ 1 instruction » comme écrit jusque-là ; détail et
+  compensations → l'entrée MFP de l'inventaire ci-dessous.
 - **SON S3** — gain LMC ½-amplitude : table DAC pleine + `outScale_=0.5` **sans le ×2** que Hatari
   met dans `left/right_gain` → le YM STE ressort **~6 dB trop bas** relativement quand le LMC est à
   plein volume ; ratio YM:DMA aussi décalé.
@@ -786,8 +788,10 @@ MFP, périphériques (FDC/son-statuts/bus/SCC/ACIA), son approfondi (cœur YM + 
   en course avec le faisceau est relue en fin de trame (Hatari copie TOUJOURS par-ligne).
 - **[basses]** $FF8260 lu sans `|0xFC` sur ST (video.c:5281-5298) ; quirks E605/Tekila
   $FF8205/07/09 pendant DE (+6 movep / +2 wrap, video.c:5222-5241) ; signaux VBlank/VSync non
-  modélisés (video.c:3443-3487) ; attribution replayGlue à longueur fixe hors `NEOST_LINELEN`
-  (canal HYBRIDE : moitié Machine ON, 4 sites Shifter OFF — et non « complet mais OFF ») ;
+  modélisés (video.c:3443-3487) ; attribution replayGlue à longueur fixe hors
+  `NEOST_LINELEN_ATTR` (depuis A16, 2026-08-27 : l'attribution Shifter a son verrou DÉDIÉ,
+  OFF — l'ex-« canal hybride » est démêlé, et le chemin ATTR segfaute sous --glue-selftest,
+  cf. TODO A16b) ;
   ~~CyclesPerVBL±4 si la dernière ligne change de freq~~ **RETIRÉ le 2026-08-25, faux positif
   prouvé** (cf. V3) ;
   STOP réveil granularité 2 cyc (Moira) vs quantum 4 (Hatari) → phase E-clock d'IACK mod 4.

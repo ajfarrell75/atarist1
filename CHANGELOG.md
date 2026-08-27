@@ -15,6 +15,39 @@ Ripper, DAC Pro Sound) avec page Dongles, `disks/dongles.txt` et oracle de rejeu
 vérifié note à note** en headless, corpus MIDI piano/blues ; port MIDI ALSA sous Linux ;
 save-state v16. Détail dans les chantiers datés ci-dessous.
 
+## L'OBJECTIF est gardé par une machine + les chiffres de la doc se recomptent (A25 + A26, 2026-08-27)
+
+**A25 — la suite Q du diagnostic MegaSTE est rejouée à chaque palier `full`.** Le 12/12
+qui a déclaré l'objectif atteint était une validation MANUELLE, non gardée — une
+régression MegaSTE (SCU, SCC, DMA, RTC…) serait restée invisible de toute la pyramide.
+`tools/run_megaste_diag.py` (~14 s) rejoue la recette — redécouverte au banc, la session
+d'origine ne l'avait pas consignée : menu du diag à l'écran avant la trame 300, « Q » +
+Return à 320 (scancodes `10,90,1c,9c`), `--loopback-at 330` (APRÈS l'injection datée,
+leçon OUTIL-1), `--dma-fixture`, `--fastfdc`, fin de suite mesurée entre les trames
+5000 et 6500 → 8000 de marge, disquettes A ET B sacrificielles (le test F formate,
+piège A14). Verdict série STRICT : exactement 11 « Pass » (R,O,M,T,D,I,L,P,F×2,Y) +
+« No VME board » (fidèle) + « Q Tests Completed » + zéro « Fail » — le leurre « No
+loopback connector » documenté dans l'en-tête. Dépendances Atari (TOS 2.06 + cartouche)
+absentes → **SKIP recensé**, jamais un faux vert ; c'est pourquoi l'étape vit dans
+`full`, jamais dans `fast` (prêt-à-purge). Au passage, mesuré : sur **EmuTOS** la suite
+rend 11/12 — le test O échoue LÉGITIMEMENT (CRC EmuTOS hors table Atari), d'où le choix
+du TOS d'époque.
+
+**A26 — `check_doc_claims.py` : les ancres gardaient les symboles, ceci garde les
+CHIFFRES.** Neuf affirmations vérifiées contre leur source de vérité recalculée
+(git ls-files, etalons.json, wc -l) ; motif introuvable = échec aussi (une reformulation
+ne désarme pas le contrôle en silence). Au palier `fast`. **Il a attrapé une dérive à
+son premier run** : `main.cpp` annoncé 5 017 lignes, recompté 4 814 (l'extraction A21
+du matin même). Passe de péremption faite dans la foulée : le `_comment` d'`etalons.json`
+recompté (15 étalons, plus 12 ; le MegaSTE n'est plus « couvert par rien ») ;
+`CYCLE_ACCURACY.md` §4 réécrit (le beam-sync y était encore « le chantier ouvert » avec
+le texte du 2026-06-18 — section remplacée par le récit de clôture) ; la borne MFP
+« ≤ 1 instruction » corrigée en « 157 cycles mesurés » dans le résumé de
+`HATARI_DIVERGENCES.md` (le détail, plus bas dans le même fichier, était déjà juste) ;
+et `MOIRA_WINUAE_CONVERGENCE.md` reçoit un bloc **« ÉTAT COURANT »** daté en tête —
+chantier CLOS, valeurs en vigueur (read −6 / write +2, PAR PAIRE), plan §8 exécuté —
+pour que l'état ne s'obtienne plus qu'en lisant 700 lignes de journal dans l'ordre.
+
 ## Le palier P1 de l'audit est soldé : A16-A24, neuf corrections en une passe (2026-08-27)
 
 Chaque item validé au palier `full` (15 étalons pixel + cycle-bench à tolérance zéro),

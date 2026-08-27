@@ -11,8 +11,8 @@ vidéo/son/joypads, blitter, RTC, SCC, SCU, ACSI — le disque interne d'époque
 ACSI-SCSI, PAS un NCR5380, DD/HD) avec un timing assez fidèle pour jeux, démos et utilitaires.
 **Atteint le 2026-08-27** au sens du diagnostic Atari Field Service : suite Q **12/12** sous
 TOS 2.06 (boîtier de test DMA du kit émulé, `--dma-fixture`) ; ce qui suit affine la
-fidélité, il ne conditionne plus l'objectif. ⚠ Cette validation est **manuelle** — la
-transformer en étalon automatisé est l'item **A25** ci-dessous.
+fidélité, il ne conditionne plus l'objectif. Depuis le même jour, ce 12/12 est **gardé
+par une machine** : `tools/run_megaste_diag.py` rejoue la suite Q à chaque palier `full`.
 
 **Sources de vérité à croiser systématiquement** (cf. [`CLAUDE.md`](CLAUDE.md)) :
 - **Hatari** (`extern/hatari/src/*.c`) — comportement ST/STE/MegaSTE éprouvé. La référence.
@@ -90,8 +90,9 @@ sont archivées au `CHANGELOG.md` — ne pas les recommettre.
   pixel sur 15** survivraient au retrait des TOS Atari (`etos_ste_boot`, `overscan_top`,
   `trace_odd`, `scroll_8264`, `scroll_8265`, `blitter_timer`, `blitter_hog`, `mfp_poll`) ;
   les 7 restants sont le plan **A10**.
-- **A9 ⭘ — `src/main.cpp` est un monolithe** (mesuré 2026-08-27 : **5 017 lignes**, dont
-  `main()` = **2 421 lignes** avec une boucle de ~1 530 lignes et **84 globaux `g_*`**).
+- **A9 ⭘ — `src/main.cpp` est un monolithe** (mesuré 2026-08-27 : **4 814 lignes** après
+  l'extraction A21 du clavier, dont `main()` ≈ 2 420 lignes avec une boucle de
+  ~1 530 lignes et **84 globaux `g_*`** — chiffre gardé par `check_doc_claims.py`).
   La dette est confinée (`neost_core` reste sans GUI). ✅ (a) fait le 2026-08-27 : le
   boot GUI (400 trames + capture, sauté-et-dit sans affichage) est une étape de
   `run_all.py`, et `--run-frames` est devenu un vrai mode harnais (gel central de
@@ -133,20 +134,14 @@ Détail et verdicts → `CHANGELOG.md` (2026-08-27). Reliquat ouvert né d'A16 :
 
 ### P2 — consolidation (quelques jours chacun, par opportunité)
 
-- **A25 ⭘ — Étalon MegaSTE automatisé.** L'objectif de tête du projet — suite Q 12/12 — a
-  été validé À LA MAIN, non gardé contre la régression ; `tools/etalons.json` avertit
-  lui-même que MegaST/MegaSTE/TOS 2.06 ne sont couverts par AUCUN étalon. Rejouer la
-  suite Q en headless (verdicts écran/série, `--dma-fixture`, `--loopback-at`) et
-  l'ajouter à un palier.
-- **A26 ⭘ — Passe de péremption documentaire + contrôle automatisé des affirmations
-  chiffrées.** Le TODO a été purgé le 2026-08-27 (huit affirmations périmées corrigées,
-  cf. `CHANGELOG.md`) ; restent `docs/CYCLE_ACCURACY.md` §4 (statuts V1/V2/WS/blitter
-  antérieurs aux portages), `docs/HATARI_DIVERGENCES.md` (borne MFP « ≤ 1 instruction »
-  contredite par la mesure 157 cycles consignée ailleurs dans le même fichier) et
-  `docs/MOIRA_WINUAE_CONVERGENCE.md` (journal par accrétion : poser un « état courant »
-  daté en tête plutôt que d'exiger la lecture chronologique des 690 lignes). 🎯 Étendre
-  l'esprit de `check_doc_anchors.py` aux **chiffres vérifiables** (nombre d'étalons,
-  lignes de `main.cpp`, fichiers suivis par git) : `check_doc_claims.py`.
+✅ **A25 et A26 SOLDÉS le 2026-08-27** (détail → `CHANGELOG.md`) : la suite Q du
+diagnostic MegaSTE est rejouée à chaque palier `full` (`tools/run_megaste_diag.py`,
+11 Pass + zéro Fail exigés, SKIP recensé si les fichiers Atari manquent) ; les
+affirmations chiffrées de la doc sont gardées par `tools/check_doc_claims.py`
+(palier `fast` — il a attrapé sa première dérive à son premier run), et la passe de
+péremption est faite (CYCLE_ACCURACY §4 réécrit, borne MFP corrigée dans
+HATARI_DIVERGENCES, bloc « ÉTAT COURANT » daté en tête de MOIRA_WINUAE_CONVERGENCE).
+
 - **A27 ⭘ — Palier `pixel-fast` + parallélisation.** Le palier `fast` (4,8 s mesuré
   2026-08-27) ne compare AUCUN pixel : la boucle rapide est aveugle au rendu, la règle
   « avant de conclure, `--tier full` » est une discipline humaine, pas un garde-fou.
@@ -350,8 +345,8 @@ attribution de ligne V3 (= A16b), wakeup-state WS3 sous-pixel, mode 336 px STE
 
 ### Système de régression — restes
 La pyramide P0-P3 est en place (palier `fast` **4,8 s** mesuré 2026-08-27, palier `full` =
-pixels ; détail → `DEV.md`). Les manques structurels relevés par l'audit sont au § Dette
-(A18, A19, A20, A25, A27, A29, A30). Restent en plus :
+pixels + garde MegaSTE ; détail → `DEV.md`). Les manques structurels encore ouverts
+relevés par l'audit sont au § Dette (A27, A29, A30). Restent en plus :
 - gate `trace_diff --periods` vs oracle Hatari (le cycle-bench actuel est une auto-régression
   NeoST) ;
 - self-tests P0 supplémentaires (autres Timers, ACIA) ;

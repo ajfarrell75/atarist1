@@ -20,7 +20,38 @@ Cuddly, Super Hang-On). Décision utilisateur (2026-06-16) : **garder le sync-dr
 > mesures qu'elles ont produites restent valables ; les commandes, non — il faudrait les
 > réinstrumenter. Toutes les autres `NEOST_*` de ce doc sont vivantes dans `src/`.
 
-**État actuel (résumé).** Tout est sur `main`, **build vert** (`run_etalons` 19/0 + TOUS OK).
+---
+
+## ⭐ ÉTAT COURANT (posé le 2026-08-27 — lire CECI avant tout le reste)
+
+**Le chantier beam-sync est CLOS** (2026-07-09, complété 2026-08-06). Ce document est un
+**journal par accrétion** : les couches anciennes énoncent des valeurs et des plans
+**supplantés depuis** sans être barrés — l'audit du 2026-08-27 a constaté qu'il fallait
+le lire chronologiquement en entier pour connaître l'état. Ce bloc s'en charge :
+
+- **Verdict final** : « beam-sync EL CONVERGÉ, transitoire d'entrée INCLUS — aucun
+  résidu NeoST » (re-mesure oracle du 2026-07-09 : datation re-arm 438/442/446, σ 3,0,
+  meilleure que la cible Hatari ~444 ±8 ; diff `$8209` d'entrée byte-identique ;
+  retrait haut `start=34` sur 249/249 trames). EL 12402/12402, Cuddly 250/250,
+  Super Hang-On résolu (IACK MFP vectorisé 12→16 cyc, 2026-08-06).
+- **Valeurs de datation EN VIGUEUR** (celles du code, 2026-07-03) :
+  `kVideoCounterReadOffsetCyc = −6`, `kSyncWriteOffsetCyc = +2`,
+  `kSpec512AlignCyc = −25`. ⚠ Les couches du 2026-07-02 ci-dessous citent encore
+  read −14 / write −6 : c'était l'étape intermédiaire, supplantée le lendemain.
+  Read et write se déplacent PAR PAIRE — bouger l'un seul casse Enchanted Land.
+- **Le « plan d'attaque pour la prochaine passe » du §8 est EXÉCUTÉ** — le futur de
+  ce paragraphe est un futur de juillet 2026.
+- **Ce qui reste d'ouvert n'est PAS ici** : inventaire à rendement décroissant →
+  `CYCLE_ACCURACY.md` §4 (V3/attribution de ligne — bloquée sur le segfault
+  `NEOST_LINELEN_ATTR`, TODO A16b —, retrait bas live, interfoliage blitter, WS1-4).
+
+Le reste du document est conservé tel quel comme MÉMOIRE du chantier (mesures,
+réfutations, recettes de bancs) — précieux pour ne pas rejouer une piste morte, mais
+plus normatif nulle part où ce bloc dit autre chose.
+
+---
+
+**État au 2026-07-02 (résumé de l'époque).** Tout est sur `main`, **build vert** (`run_etalons` 19/0 + TOUS OK).
 - 🎯🎯 **REFONTE COORDONNÉE §8 EXÉCUTÉE (2026-07-02, oracle Hatari 2.6.1-devel bâti dans
   `extern/hatari/build`, Ubuntu).** Le résidu de phase **+24 est ATTRIBUÉ et CORRIGÉ** — c'était
   un CUMUL de 4 biais, tous mesurés :

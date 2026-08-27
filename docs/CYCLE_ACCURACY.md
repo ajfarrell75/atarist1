@@ -107,30 +107,35 @@ sévérité + `fichier:ligne` des deux côtés dans
 
 | Priorité | Chantier | Effort | Étalon type |
 |----------|----------|--------|-------------|
-| **P1** | Beam-sync : phase CPU↔faisceau **par-ligne** (overscan vertical EL) | élevé | Enchanted Land en jeu |
-| **P1** | Tricks par changement de résolution mid-ligne (V2 hi/med/lo, overscan med-res) | moyen+ | Cuddly, No Cooper |
-| **P1** | Géométrie mid-trame (V3 : 50↔60 Hz en cours de trame, `RestartVideoCounter`) | élevé | overscan plein écran, ULM Dark Side |
+| **P1** | Géométrie mid-trame (V3 : attribution de ligne 50↔60 Hz — `RestartVideoCounter` est porté ; bloqué sur le segfault `NEOST_LINELEN_ATTR`, TODO A16b) | élevé | overscan plein écran, ULM Dark Side |
 | **P1** | Rendu live du retrait BAS + lignes EMPTY/BLANK/NO_DE | moyen | scroller bordure basse Cuddly |
 | **P2** | Blitter : interfoliage `CycInt_Process` par accès bus + `cpu_bus_rmw` (le partage 64/64 est PORTÉ) | moyen | démos CPU+blitter simultanés |
-| **P2** | Son DMA STE : `$FF8909/0B/0D` au cycle de la lecture (la FIFO 8 octets est PORTÉE) | moyen | STE_Test, sync zik/raster |
-| **P2** | Restes vidéo : `VIDEO_ENDLINE`, VBL au cycle exact, phase Timer C | moyen | démos fullscreen |
-| **P3** | Wakeup states WS1-4, jitter HBL/VBL, branche STE de la Glue | élevé | démos « extrêmes » (Closure…) |
+| **P2** | Son DMA STE : quantification HBL du refill à confronter à l'oracle (compteur live et FIFO PORTÉS) | moyen | STE_Test, sync zik/raster |
+| **P2** | Restes vidéo : `VIDEO_ENDLINE`, VBL au cycle exact, phase Timer C, mode 336 px STE | moyen | démos fullscreen, Obsession |
+| **P3** | Wakeup states WS1-4, branche STE de la Glue, overscan med-res NO_SYNC | élevé | démos « extrêmes » (Closure…) |
 | **P3** | Unité interne ×256, fréquences exactes centralisées | faible | dérive long terme |
 
-### P1 — Beam-sync (le chantier ouvert)
+### ✅ Beam-sync : CLOS (2026-07-09, complété 2026-08-06) — ex-P1 de tête
 
-C'est le front actif. **Convergence instruction faite** ; reste la **phase d'entrée d'IRQ** et la
-**géométrie par-ligne**. Détail, mesures, bancs et pistes éliminées :
-[`MOIRA_WINUAE_CONVERGENCE.md`](MOIRA_WINUAE_CONVERGENCE.md). En bref :
+Mis à jour le 2026-08-27 (A26) : cette section décrivait le chantier tel qu'ouvert le
+2026-06-18 (« NeoST culmine cyc 476-492 vs Hatari 500-508 → le retrait haut d'EL ne
+tient pas ») — c'était vrai ALORS, et trois passes l'ont clos depuis :
 
-- **Overscan vertical EL en jeu** : la dérive *moyenne* du faisceau correspond à Hatari (+78/ligne
-  avec `NEOST_RAM_SLOT`+`NEOST_IACK`, défaut ON), mais la **phase absolue par-ligne** diffère
-  (NeoST culmine cyc 476-492 vs Hatari 500-508) → le retrait haut ne « tient » pas. Fermeture =
-  tracking cycle-exact du handler **par ligne** (alternance 76/80 de Hatari), pas un offset
-  constant.
-- **V2 res-switch** (line-shortening hi-res précoce ≤56 cyc) : porté fidèle, opt-in `NEOST_V2`,
-  validé structurellement à l'oracle. Limite prouvée : non déclenchable pixel-stable headless
-  (latence HBL ~56 cyc) → couplé à la convergence.
+- **Cause racine** (5ᵉ passe, 2026-07-02) : double comptage du saut STOP dans la
+  comptabilité de quantum → `sched.now()` en avance de δ∈{4..26} sur l'horloge CPU.
+  Lock moteur Enchanted Land 46,9 % → **100 % (12402/12402)**.
+- **Datation lecture/écriture** (2026-07-03) : couple read −6 / write +2 → menu robot
+  Cuddly, clignotement 10-47 % → **0 (250/250)**.
+- **Re-mesure oracle** (2026-07-09) : datation re-arm 438/442/446 (σ 3,0) — meilleure
+  que la cible Hatari (~444 ±8) ; diff `$8209` d'entrée **byte-identique** ; verdict
+  écrit « beam-sync EL CONVERGÉ, transitoire d'entrée inclus — aucun résidu NeoST ».
+- **Super Hang-On** (10ᵉ passe, 2026-08-06) : IACK MFP vectorisé 12→16 cyc.
+
+Journal complet, mesures et pistes éliminées :
+[`MOIRA_WINUAE_CONVERGENCE.md`](MOIRA_WINUAE_CONVERGENCE.md). L'heuristique **V2**
+res-switch (line-shortening hi-res ≤56 cyc, opt-in `NEOST_V2`) est supplantée par le
+canal longueurs de ligne (`NEOST_LINELEN`, ON par défaut depuis le tranchage WS3) —
+elle reste un outil d'A/B, pas un chantier.
 
 ### P1 — Registres vidéo STE : 2 restes
 

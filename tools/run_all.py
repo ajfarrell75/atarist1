@@ -66,6 +66,11 @@ FAST = [
     # Blitter::stallCpu → billCycles, l'inventaire pointait dans le vide.
     ("Ancres de documentation (les symboles cités existent-ils encore ?)",
      [sys.executable, str(TOOLS / "check_doc_anchors.py")]),
+    # A26 : les ancres gardent les SYMBOLES, ceci garde les CHIFFRES — la dérive
+    # constatée par l'audit (huit affirmations périmées corrigées à la main) était
+    # précisément là où personne ne recompte.
+    ("Affirmations chiffrées de la doc (les nombres cités disent-ils encore vrai ?)",
+     [sys.executable, str(TOOLS / "check_doc_claims.py")]),
     # Auto-tests du HARNAIS lui-même (chantier A4). L'instrument produit TOUTE la
     # preuve du projet, et il avait des pannes silencieuses : trois « bloquants » sur
     # huit venaient de lui lors du balayage du 2026-08-25 (options de pilotage non
@@ -124,6 +129,12 @@ FULL = FAST + [
     # instable sur une CI partagée, donc désarmé au bout de trois faux rouges.
     ("Banc de débit (coût relatif des chemins blitter et MFP)",
      [sys.executable, str(TOOLS / "run_perfbench.py")]),
+    # A25 : l'OBJECTIF du projet (MegaSTE, suite Q du diagnostic Field Service 12/12)
+    # était validé à la main — désormais rejoué ici (~14 s). Dépend du TOS 2.06 et de
+    # la cartouche Atari : absents → SKIP recensé (politique rom_is_free), donc dans
+    # FULL et jamais dans fast (qui doit rester prêt-à-purge, § BLOQUANT RELEASE).
+    ("Diagnostic MegaSTE Field Service (suite Q rejouée, verdicts série)",
+     [sys.executable, str(TOOLS / "run_megaste_diag.py")]),
     ("P2 provenance des références",
      [sys.executable, str(TOOLS / "run_etalons.py"), "--verify-refs"]),
     ("P2 étalons pixel (oracle + snapshots)",
