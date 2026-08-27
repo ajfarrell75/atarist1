@@ -69,8 +69,20 @@ jette silencieusement l'UDP externe des binaires non signés (`sendto` OK, répo
 vue) et une alerte en attente peut même **geler `sendto` dans le noyau** jusqu'au verdict —
 autoriser `build/neost-headless` en sortie (règle à refaire après un rebuild, binaire non
 signé). Le point 4, insensible au filtre, tranche : si lui passe, NeoST est correct.
-Reste côté ST : la validation de bout en bout **STinG + `ENEC.STX`** (DHCP + ping/GET
-depuis le TOS) — cf. `TODO.md`.
+Côté ST, le banc bout-en-bout est **`tools/make_sting_test.py`** : il génère une
+disquette de boot STinG 1.26 + `ENEC.STX` (URLs des archives freeware/GPL dans son
+en-tête) dont l'`AUTO` embarque un PRG maison qui configure le port « EtherNet » par
+l'API STinG (cookie `STiK` — le rôle que joue `STNGPORT.CPX` en GEM), résout un nom et
+fait un GET HTTP, verdict recopié sur RS-232 :
+
+```sh
+python3 tools/make_sting_test.py /tmp/sting.st <dossier sting126> <dossier ENEC.STX>
+./build/neost-headless roms/etos256us.img --ethernec --slirp --disk /tmp/sting.st \
+    --frames 3500 --serial-dump /tmp/ser.txt     # attendu : DNS=a.b.c.d puis HTTP/1.x
+```
+
+C'est ce banc qui a démasqué l'inversion des fenêtres ROM3/ROM4 (ci-dessus). Restent le
+navigateur (CAB) en GUI et la consignation dans `docs/CASE_STUDIES.md` — cf. `TODO.md`.
 
 ## EtherNEC — NE2000 sur le port cartouche (`--ethernec`, GUI Network)
 
@@ -80,8 +92,14 @@ faire tourner les pilotes libres **STinG (`.STX`), MiNTnet (`.XIF`) et MagiCNet 
 modification**. Le port cartouche étant en lecture seule et sans ligne A0, tout est
 encodé dans l'adresse :
 
-* **lire** le registre `n` : lecture à `$FB0000 + n*512` ;
-* **écrire** `d` dans `n` : *fausse lecture* à `$FA0000 + n*512 + d*2`.
+* **lire** le registre `n` : lecture à `$FA0000 + n*512` (/ROM4) ;
+* **écrire** `d` dans `n` : *fausse lecture* à `$FB0000 + n*512 + d*2` (/ROM3).
+
+⚠ Ces deux fenêtres ont été **inversées** dans NeoST jusqu'au 2026-08-27 : les selftests
+passaient (mêmes constantes des deux côtés du test), mais le vrai `ENEC.STX` ne pouvait
+ni lire ni écrire la carte — découvert à la première session STinG réelle, tranché sur
+`BUSENEC.I` du pilote de l'auteur du montage (`getBUS` lit via `rom4=$FA0000`, `putBUS`
+écrit via `rom3=$FB0000`).
 
 Décodé dans `Bus::read8Slow` (`src/io/Ne2000.cpp`). Modèle DP8390 classique (pages 0/1,
 anneau de réception avec en-tête 4 octets, Remote DMA, filtrage MAC/broadcast). Backend

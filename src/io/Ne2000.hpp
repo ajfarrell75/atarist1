@@ -4,11 +4,15 @@
 //  EtherNEC (Dr. Thomas Redelberger) branche une NE2000 ISA 8 bits sur le port
 //  ROM de l'Atari ST. Le port cartouche étant EN LECTURE SEULE et sans ligne A0,
 //  les accès sont encodés dans l'ADRESSE — tout est une lecture côté CPU :
-//    · LIRE le registre `reg`  : lecture à $FB0000 + reg*512   (/ROM4)
-//    · ÉCRIRE `data` dans `reg`: lecture à $FA0000 + reg*512 + data*2  (/ROM3)
-//  (HARDWARE.TXT d'EmmanuelKasper/ethernec). NeoST décode cette fenêtre dans
-//  Bus::read8Slow quand une NE2000 est attachée — extension NeoST, cf.
-//  docs/EXTENSIONS.md § EtherNEC et docs/HATARI_DIVERGENCES.md § Extensions.
+//    · LIRE le registre `reg`  : lecture à $FA0000 + reg*512            (/ROM4)
+//    · ÉCRIRE `data` dans `reg`: lecture à $FB0000 + reg*512 + data*2   (/ROM3)
+//  Source de vérité : BUSENEC.I du pilote de l'auteur du montage (etherne.zip —
+//  getBUS lit via rom4=$FA0000, putBUS écrit via rom3=$FB0000). ⚠ Les fenêtres
+//  ont été INVERSÉES dans NeoST jusqu'au 2026-08-27 : les selftests passaient
+//  (mêmes constantes des deux côtés) mais le vrai ENEC.STX ne pouvait ni lire ni
+//  écrire — découvert à la première session STinG réelle. NeoST décode cette
+//  fenêtre dans Bus::read8Slow quand une NE2000 est attachée — extension NeoST,
+//  cf. docs/EXTENSIONS.md § EtherNEC et docs/HATARI_DIVERGENCES.md § Extensions.
 //
 //  Le modèle DP8390 est classique : registres en pages 0/1/2, tampon en anneau
 //  de réception, DMA distant (Remote DMA) pour transférer trames et registres
@@ -30,9 +34,10 @@ class NetBackend;
 
 class Ne2000 {
 public:
-    // Bases de décodage EtherNEC dans la fenêtre cartouche.
-    static constexpr uint32_t READ_BASE  = 0xFB0000;   // /ROM4 : lecture registre
-    static constexpr uint32_t WRITE_BASE = 0xFA0000;   // /ROM3 : écriture (fausse lecture)
+    // Bases de décodage EtherNEC dans la fenêtre cartouche ($FA0000 = /ROM4,
+    // $FB0000 = /ROM3 — l'ordre des sélections cartouche du ST).
+    static constexpr uint32_t READ_BASE  = 0xFA0000;   // /ROM4 : lecture registre
+    static constexpr uint32_t WRITE_BASE = 0xFB0000;   // /ROM3 : écriture (fausse lecture)
 
     void setBackend(NetBackend* b) { backend_ = b; }
     NetBackend* backend() const { return backend_; }

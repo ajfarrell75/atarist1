@@ -338,9 +338,15 @@ détail → `DEV.md` et `CHANGELOG.md`). Restent :
   variables (`NEOST_SLIRP_ONLINE`, `NEOST_SLIRP_DNS=a.b.c.d[:port]`, `NEOST_SLIRP_TRACE`)
   → `docs/EXTENSIONS.md` § NetUSBee. **Le GUI est câblé** (même jour) : case « Real
   Internet for the NE2000 » page Network, clé `slirp=` de `neost.cfg`, bascule à chaud,
-  rejouée par `--from-cfg` (qui rejoue aussi `netusbee=`, oublié jusque-là). **Prochain
-  pas** : vérifier de bout en bout avec **STinG + ENEC.STX** côté ST (freeware, à
-  récupérer) et un navigateur (CAB) sur theoldnet.com.
+  rejouée par `--from-cfg` (qui rejoue aussi `netusbee=`, oublié jusque-là). **Le banc
+  STinG existe** (même jour encore) : `tools/make_sting_test.py` génère la disquette
+  STinG 1.26 + `ENEC.STX` avec un PRG qui configure le port par l'API (rôle du CPX),
+  résout et fait un GET — il a démasqué l'inversion des fenêtres ROM3/ROM4 (corrigée,
+  cf. `CHANGELOG.md`) ; ARP aller-retour et DNS sortant prouvés au niveau fil.
+  **Le verdict online complet est TOMBÉ** (même jour, après ré-autorisation du pare-feu) :
+  `DNS=138.197.157.224`, `TCP connected`, `HTTP/1.1 200 OK` + `<title>The Old Net</title>`
+  reçus dans le ST — **un ST émulé surfe**. **Prochain pas** : un navigateur (CAB) sur
+  theoldnet.com en GUI, et le mode borne.
 
 - **MIDI OUT Windows** : `MidiOutHost` couvre CoreMIDI (macOS) et ALSA (Linux) ; winmm reste à
   écrire — le MT-32 (Munt), lui, est portable.
@@ -362,7 +368,9 @@ détail → `DEV.md` et `CHANGELOG.md`). Restent :
 - **NetUSBee — périphériques USB hôte** (2026-08-21) : l'ISP1160 (`io/Isp1160`) est un hub racine
   VIDE ; brancher un clavier/souris HID puis un stockage de masse derrière `HcRhPortStatus` (PTD
   ATL → réponses du device). Les pilotes FreeMiNT `netusbee.ucd` + `usb.km` sont le banc d'essai.
-- **NetUSBee — fenêtre LSB partagée** : `$FA0000-$FA01FF` = latch ISP1160 ET registre CR NE2000 ;
+- **NetUSBee — fenêtre LSB partagée** : `$FA0000-$FA01FF` = latch ISP1160 ET **lecture** du
+  registre CR NE2000 (depuis la correction des fenêtres du 2026-08-27 : lecture NE2000 = /ROM4
+  `$FA`, écriture = /ROM3 `$FB`) ;
   NeoST laisse les deux puces voir l'accès faute de schéma. À trancher sur le schéma du NetUSBee
   (hardware.atari.org) ou sur un test matériel, puis ajuster `Bus::read8Slow`.
 - **UltraSatan — `US_CONF.TOS` réel** : l'outil de Jookie (ce-atari/ultrasatan/config) compile avec

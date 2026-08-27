@@ -15,6 +15,34 @@ Ripper, DAC Pro Sound) avec page Dongles, `disks/dongles.txt` et oracle de rejeu
 vérifié note à note** en headless, corpus MIDI piano/blues ; port MIDI ALSA sous Linux ;
 save-state v16. Détail dans les chantiers datés ci-dessous.
 
+## EtherNEC : les fenêtres ROM3/ROM4 étaient INVERSÉES — trouvé par la 1re session STinG réelle (2026-08-27)
+
+Premier banc bout-en-bout « un ST émulé surfe » : disquette STinG 1.26 + `ENEC.STX`
+générée par **`tools/make_sting_test.py`** — un PRG 68000 assemblé à la main (assembleur
+maison de `make_usatan_test.py`) y joue le rôle du CPX : cookie `STiK` → `get_dftab` →
+TPL/STX, IP/masque pokés dans le `PORT` « EtherNet », `on_port`, `load_routing_table`,
+puis `resolve()` et GET HTTP en TCP, verdict recopié sur RS-232 (`--serial-dump`).
+
+Ce banc a démasqué un **vrai bug NeoST** que tous les selftests rataient : les fenêtres
+du protocole fil EtherNEC étaient **inversées** — NeoST lisait en `$FB0000` et écrivait
+en `$FA0000`, le vrai pilote fait l'inverse (`BUSENEC.I` de l'auteur du montage :
+`getBUS` lit via **/ROM4 = `$FA0000` + reg×512**, `putBUS` écrit par fausse lecture via
+**/ROM3 = `$FB0000` + reg×512 + data×2**). Les selftests passaient car ils parlaient la
+même convention inversée que l'émulation — un test qui partage ses constantes avec le
+code testé ne teste pas le CONTRAT ; seul le logiciel d'époque le teste. Diagnostic en
+escalier, consigné dans le banc : port up mais 0 trame → `ACTIVATE`/routes OK (TRUE, 1) →
+file d'émission pleine avec « 180 octets émis » côté pilote (3 ARP de 60) et rien côté
+carte → protocole fil. Au passage, le client STinG doit tourner en mode **user**
+(les entrées d'API jouent avec le vecteur Privilege Violation).
+
+Corrigé (swap des constantes `READ_BASE`/`WRITE_BASE` de `Ne2000.hpp`, noms /ROM3-/ROM4
+redressés partout, `nubnic` de `make_usatan_test.py` mis au protocole réel + image SD
+de test régénérée). Verdict final du banc, série à l'appui : **`DNS=138.197.157.224`,
+`TCP connected`, `HTTP/1.1 200 OK` + `<title>The Old Net</title>` reçus DANS le ST** —
+un Atari ST émulé, sous STinG et le pilote d'époque, a chargé une vraie page web à
+travers le NAT SLIRP. L'objectif « un ST émulé surfe » est atteint en headless ;
+restent CAB en GUI et la borne (cf. `TODO.md` § Réseau).
+
 ## Slirp : le « dernier pas » est clos — 5/5, le coupable était Little Snitch (2026-08-27)
 
 Le FAIL « SORTIE REELLE : DNS » qui bloquait `NetBackendSlirp` depuis le 2026-08-22 n'était
