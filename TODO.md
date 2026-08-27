@@ -266,14 +266,12 @@ interne ×256…) → `docs/CYCLE_ACCURACY.md` §4.
 Fonctionnalités livrées et fonctionnelles (→ `CHANGELOG.md` § Frontend). Restent :
 - ⭘ **Souris ABSOLUE pour GEM/bureau** (2026-08-27) — la souris ST n'est pilotée qu'en
   mode **capturé/relatif** (`g_mouseCaptured`, `GLFW_RAW_MOUSE_MOTION`), pensé pour les
-  jeux. Sur un **trackpad**, un double-clic bouge le curseur entre les deux clics → GEM y
-  voit deux clics simples : impossible d'ouvrir un dossier ou de valider un OK à double-clic
-  de façon fiable (constaté en session CAB). L'émulation, elle, est correcte (double-clic
-  scripté = OK ; le bureau ouvre bien `C:\*.*`). 🎯 Ajouter un **mode souris absolu** (position
-  curseur hôte → position curseur ST, sans capture) pour l'usage GEM/desktop/navigateur —
-  c'est le mode confortable des émulateurs pour le pointage. En attendant : ouvrir un
-  élément sélectionné par **Ctrl+O** (raccourci EmuTOS `^O`) évite le double-clic ; Return
-  n'ouvre PAS un lecteur sur le bureau (seulement dans les dialogues).
+  jeux. 🎯 Ajouter un **mode souris absolu** (position curseur hôte → position curseur ST,
+  sans capture) pour l'usage GEM/desktop/navigateur — c'est le mode confortable des
+  émulateurs pour le pointage. ⚠ Le symptôme qui avait motivé cette entrée (« impossible
+  d'ouvrir un dossier sur C: ») ne venait PAS du trackpad : c'était l'`EMUDESK.INF`
+  minimal (`#Z`/`#M`/`#T` sans lignes `#W`) écrit dans `cab_hd.img` — corrigé le
+  2026-08-27 (→ `CHANGELOG.md`). L'entrée reste comme confort d'usage, pas comme bug.
 - ⭘ **Traces `NEOST_*_TRACE` clavier/souris** — la chasse au « backspace/flèches » du
   2026-08-27 a dû ajouter puis retirer une trace `[kbd]` dans `onKey`. Une trace clavier
   permanente derrière `NEOST_KBD_TRACE` (comme `NEOST_ENEC_TRACE`/`NEOST_SLIRP_TRACE`)

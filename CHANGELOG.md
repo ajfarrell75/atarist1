@@ -15,6 +15,31 @@ Ripper, DAC Pro Sound) avec page Dongles, `disks/dongles.txt` et oracle de rejeu
 vérifié note à note** en headless, corpus MIDI piano/blues ; port MIDI ALSA sous Linux ;
 save-state v16. Détail dans les chantiers datés ci-dessous.
 
+## « Impossible d'ouvrir un dossier sur C: » : c'était l'EMUDESK.INF, pas la souris ni l'ACSI (2026-08-27)
+
+Symptôme (GUI, image ACSI `cab_hd.img` du chantier CAB) : les icônes de lecteur
+s'ouvrent (double-clic, Return, File→Open), mais **aucun sous-dossier** ne s'ouvre —
+l'icône se sélectionne et rien ne suit. Le TODO l'attribuait au double-clic trackpad
+(souris relative) ; l'utilisateur a écarté cette piste : le même geste marche sur le
+lecteur GEMDOS de Cubase. Reproduit en **headless** (`--mouse-at`, double-clic scripté)
+→ ni souris GUI, ni ACSI : sur une image fraîche au contenu identique, tout s'ouvre.
+
+**Bisection sur l'image elle-même** (résidents AUTO supprimés → pareil ; INF supprimé →
+guéri) : le coupable est l'`EMUDESK.INF` **minimal** écrit à la main pendant la session
+CAB — `#Z`/`#M`/`#T` sans les lignes **`#W`** (fenêtres du bureau). Sans `#W`, EmuDesk
+ouvre les lecteurs dans une fenêtre dégénérée plein écran et **refuse toute navigation**
+dans un sous-dossier. Correctif : INF **écrit par EmuTOS lui-même** (Options → Save
+desktop, scripté à la souris en headless), ligne `#Z 01 C:\CAB\CAB.APP@` réinsérée avant
+le bloc `#W`. Vérifié : dossiers ouvrables (C:\CAB, 45 items) ET autostart CAB intact.
+
+Recettes payées : un `EMUDESK.INF` se termine en **CRLF** (un patch en `\n` fait
+disparaître des icônes) ; « Save desktop » se confirme par **Return** (le clic scripté
+sur OK n'a pas pris) ; le `DIRTEST.PRG` de la session précédente plantait de lui-même
+(routine `puts` placée en tête du binaire → TOS démarre dedans) et n'avait donc jamais
+testé l'ACSI. Au passage l'image quitte le scratchpad volatil pour `disks/cab_hd.img`
+(gitignorée à l'unité comme la carte UltraSatan), `neost.cfg` mis à jour, sauvegarde
+`cab_hd.img.bak` conservée à l'ancien emplacement.
+
 ## THEOLDNET.COM S'AFFICHE DANS CAB — un Atari ST émulé surfe en GUI (2026-08-27)
 
 « Welcome To The Old Internet Again! » rendu dans **CAB 1.5** (freeware d'Alexander
