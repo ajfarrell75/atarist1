@@ -24,7 +24,6 @@
 // + dispatch à la frontière via runTo, en GARDANT PT=true + RAM_SLOT (la convergence
 // cycle d'instruction est indépendante du dispatch). VALIDÉ : EL remarche (jeu rendu),
 // étalons 19/0, différentiel 14/14. Le sync-driven reste accessible en OPT-IN pour A/B.
-static const bool g_blockDispatch = std::getenv("NEOST_SYNC_DISPATCH") == nullptr;
 
 // Port de Hatari TOS_CheckSysConfig (sous-ensemble utile à NeoST) : abaisse la
 // machine si le TOS chargé ne la supporte pas. Seul le cas « TOS <= 1.04 → ST »
@@ -139,22 +138,21 @@ Machine::Machine(std::size_t ramBytes, CpuCore cpuCore, MachineType machine)
     }
     // Horloge RTC : cycle CPU ABSOLU exact, même au milieu d'une lecture MMIO.
     // L'horloge maîtresse est désormais le cœur (busClockNow), conduit par sync().
-    rtc.setClock([this] { return g_blockDispatch ? (sched.now() + cpu.cyclesRunInQuantum()) : cpu.busClockNow(); });
+    rtc.setClock([this] { return sched.now() + cpu.cyclesRunInQuantum(); });
     // L'horloge de l'UltraSatan (pile propre) suit la même horloge émulée.
-    usatan.setClock([this] { return g_blockDispatch ? (sched.now() + cpu.cyclesRunInQuantum()) : cpu.busClockNow(); });
+    usatan.setClock([this] { return sched.now() + cpu.cyclesRunInQuantum(); });
     // Horloge « live » de l'ordonnanceur = cycle bus absolu live du cœur. Les puces
     // qui datent un événement en plein milieu d'une instruction (MFP timers, compteur
     // vidéo…) s'en servent pour le caler sur l'instant RÉEL de l'accès. C'est l'horloge
     // que sync() avance et sur laquelle il dispatche (cf. NeostMoira::sync).
-    sched.setLiveClock([this] { return g_blockDispatch ? (sched.now() + cpu.cyclesRunInQuantum()) : cpu.busClockNow(); });
+    sched.setLiveClock([this] { return sched.now() + cpu.cyclesRunInQuantum(); });
     // L'ordonnanceur est piloté DEPUIS le hook cycle du cœur (sync) : à chaque pas,
     // sync() avance l'horloge puis dispatche les échus → IPL posé au cycle exact.
     cpu.setScheduler(&sched);
-    // Préemption du bloc CPU : ACTIVE dans le modèle BLOC, qui est le DÉFAUT
-    // (runFrame/stepInstruction arment beginRun avant chaque cpu.run — un événement
-    // planifié avant la cible coupe le bloc). Elle ne devient dormante qu'en mode
-    // piloté par sync (NEOST_SYNC_DISPATCH), où le dispatch se fait au fil de sync()
-    // et où beginRun n'est jamais appelé.
+    // Préemption du bloc CPU : runFrame/stepInstruction arment beginRun avant chaque
+    // cpu.run — un événement planifié avant la cible coupe le bloc. Toujours active
+    // depuis A34 (le second modèle d'exécution, où beginRun n'était jamais appelé, a
+    // été supprimé).
     sched.setEndSlice([this] { cpu.endTimeslice(); });
     // V2 res-switch (opt-in NEOST_V2) : la Glue signale une impulsion hi-res PRÉCOCE
     // (cyc ≤ 56) sur la ligne courante → on raccourcit la ligne (HBL reprogrammé à la
@@ -578,39 +576,30 @@ void Machine::runFrame() {
     // trame — pas de ré-ancrage → aucune dérive d'horloge CPU↔vidéo.
     if (!frameInProgress_) beginFrame_();
     const int64_t frameEnd = frameEnd_;
-    // DEUX modèles d'exécution, choisis par NEOST_SYNC_DISPATCH (cf. g_blockDispatch) :
+    // MODÈLE D'EXÉCUTION : BLOC. Le bloc CPU est borné au prochain événement,
+    // dispatché à la frontière via runTo, avec préemption si un événement plus proche
+    // est planifié en cours de bloc. sync() n'y avance QUE l'horloge.
     //
-    //  · BLOC (le DÉFAUT, branche ci-dessous) : le bloc CPU est borné au prochain
-    //    événement, dispatché à la frontière via runTo, avec préemption si un
-    //    événement plus proche est planifié en cours de bloc. sync() n'y avance
-    //    QUE l'horloge.
-    //  · PILOTÉ PAR L'HORLOGE (opt-in, modèle `do_cycles` WinUAE/Hatari) : le CPU
-    //    tourne jusqu'à la fin de trame et c'est NeostMoira::sync() qui dispatche les
-    //    événements (HBL, Timer-B, VBL, RENDER, timers MFP) AU FIL de l'exécution, au
-    //    cycle exact — l'IPL est posé pendant l'instruction et vu par son POLL_IPL.
-    //    Ni quantum borné à l'événement, ni préemption : le bloc = la trame entière.
+    // A34 (2026-08-28) : il y en avait DEUX. Le concurrent — « piloté par l'horloge »,
+    // modèle `do_cycles` de WinUAE, où sync() dispatchait les événements au fil de
+    // l'instruction — vivait derrière NEOST_SYNC_DISPATCH et n'a JAMAIS été validé par
+    // les étalons. Supprimé : il deadlockait Enchanted Land (boucle beam-sync jamais
+    // servie) sans corriger le jitter qu'il promettait, et la mesure re-prise sur
+    // l'arbre du jour le confirme (palier `fast` rouge, blitter_timer 245 px contre 0).
+    // Une branche morte-vivante dans la boucle d'exécution coûte plus qu'elle ne garde :
+    // elle double le raisonnement de chaque lecteur et n'est exercée par rien.
     //
-    // Dans les deux cas cpu.run() termine son instruction et peut dépasser frameEnd de
-    // quelques cycles (carry, comme Hatari) ; la boucle reboucle si nécessaire.
-    if (g_blockDispatch) {
-        // Modèle BLOC (pré-sync-driven) : run borné au prochain événement, dispatch à la
-        // frontière via runTo. sync() N'avance que l'horloge (pas de dispatch mid-instruction).
-        while (sched.now() < frameEnd) {
-            int64_t next = sched.nextDue();
-            if (next < 0 || next > frameEnd) next = frameEnd;
-            const int64_t want = next - sched.now();
-            sched.beginRun(next);
-            const int ran = cpu.run(static_cast<int>(want > 0 ? want : 1));
-            sched.endRun();
-            sched.runTo(sched.now() + ran);
-            if (cpu.breakpointHit()) return;  // débogueur : rend la main SANS finaliser (résumable)
-        }
-    } else {
-        while (cpu.busClockNow() < frameEnd) {
-            const int64_t want = frameEnd - cpu.busClockNow();
-            cpu.run(static_cast<int>(want > 0 ? want : 1));
-            if (cpu.breakpointHit()) return;  // débogueur : rend la main SANS finaliser (résumable)
-        }
+    // cpu.run() termine son instruction et peut dépasser frameEnd de quelques cycles
+    // (carry, comme Hatari) ; la boucle reboucle si nécessaire.
+    while (sched.now() < frameEnd) {
+        int64_t next = sched.nextDue();
+        if (next < 0 || next > frameEnd) next = frameEnd;
+        const int64_t want = next - sched.now();
+        sched.beginRun(next);
+        const int ran = cpu.run(static_cast<int>(want > 0 ? want : 1));
+        sched.endRun();
+        sched.runTo(sched.now() + ran);
+        if (cpu.breakpointHit()) return;  // débogueur : rend la main SANS finaliser (résumable)
     }
     // Fin de trame atteinte (pas de breakpoint) → on finalise et on rouvre une trame neuve.
     finalizeFrame_();
@@ -656,20 +645,16 @@ void Machine::finalizeFrame_() {
 void Machine::stepInstruction() {
     if (!frameInProgress_) beginFrame_();
     cpu.clearBreakpointHit();   // arme le skip-once du PC courant → exécute même si BP ici
-    if (g_blockDispatch) {
-        // Modèle BLOC (défaut) : sync() n'avance QUE l'horloge — il faut dispatcher
-        // les événements échus ici, comme la boucle de runFrame, sinon le pas-à-pas
-        // ne sert JAMAIS HBL/VBL/timers (aucune IRQ) et tout se déverse d'un coup à
-        // la finalisation de trame — comportement divergent de l'exécution continue.
-        int64_t next = sched.nextDue();
-        if (next < 0 || next > frameEnd_) next = frameEnd_;
-        sched.beginRun(next);
-        const int ran = cpu.run(1);   // run(1) = une instruction (toute instr ≥ 4 cyc > 1)
-        sched.endRun();
-        sched.runTo(sched.now() + ran);
-    } else {
-        cpu.run(1);                 // sync-driven : sync() dispatche au fil de l'instruction
-    }
+    // sync() n'avance QUE l'horloge — il faut dispatcher les événements échus ici,
+    // comme la boucle de runFrame, sinon le pas-à-pas ne sert JAMAIS HBL/VBL/timers
+    // (aucune IRQ) et tout se déverse d'un coup à la finalisation de trame —
+    // comportement divergent de l'exécution continue.
+    int64_t next = sched.nextDue();
+    if (next < 0 || next > frameEnd_) next = frameEnd_;
+    sched.beginRun(next);
+    const int ran = cpu.run(1);   // run(1) = une instruction (toute instr ≥ 4 cyc > 1)
+    sched.endRun();
+    sched.runTo(sched.now() + ran);
     if (cpu.busClockNow() >= frameEnd_) { finalizeFrame_(); frameInProgress_ = false; }
 }
 

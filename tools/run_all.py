@@ -94,6 +94,11 @@ FAST = [
     # n'y était nommé nulle part.
     ("Composants tiers livrés (chacun est-il nommé, avec sa licence ?)",
      [sys.executable, str(TOOLS / "check_licenses.py")]),
+    # A34 : les ~83 verrous NEOST_* du cœur sont-ils tous CLASSÉS — comportement
+    # d'émulation ou simple trace ? Un verrou de comportement non recensé, c'est
+    # quelque chose qui peut changer l'émulation sans qu'aucun fichier ne le dise.
+    ("Verrous NEOST_* du cœur (comportement d'émulation vs trace)",
+     [sys.executable, str(TOOLS / "check_env_locks.py")]),
     # Auto-tests du HARNAIS lui-même (chantier A4). L'instrument produit TOUTE la
     # preuve du projet, et il avait des pannes silencieuses : trois « bloquants » sur
     # huit venaient de lui lors du balayage du 2026-08-25 (options de pilotage non

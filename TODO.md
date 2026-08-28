@@ -185,17 +185,30 @@ est continue, les trous sont du travail fait.
   cérémonie. Prochain pas concret : extraire `VideoCounter` en objet membre (ses
   champs `vc*` sont les moins partagés — `vcFrameBase_`, `vcLineBase_`, `vcLineY_`,
   `vcRestart*`), mesurer ce que ça casse, et seulement ensuite regarder la Glue.
-- **A33 ⭘ — Lever le mono-instance CPU.** `Cpu68k.cpp:g_bus`/`g_moira`/`g_sched` sont des
-  globales ; la classe jette sur une seconde instance. C'est le plafond qui interdit le
-  test unitaire d'une `Machine` (1 079 lignes de tests pour 40 200 de source), l'A/B en un
-  processus et tout parallélisme. À faire APRÈS A31, qui en réduit le rayon.
-- **A34 ⭘ — Trancher les deux modèles d'exécution.** BLOC (défaut) et SYNC-driven
-  (`NEOST_SYNC_DISPATCH`) coexistent dans `Machine::runFrame` et `stepInstruction` ; un
-  seul est validé par les étalons, l'autre est une branche morte-vivante. Décider (mesure
-  à l'appui), puis supprimer le perdant. Plus largement : sur les **82 variables
-  `NEOST_*`** lues par le cœur, isoler celles qui changent le COMPORTEMENT d'émulation
-  (`NEOST_V2`, `NEOST_WS`, `NEOST_IACK*`, `NEOST_MFP_EXACT`…) des traces, et faire
-  passer les premières en configuration explicite ou les retirer.
+- **A33 ⭘ — Lever le mono-instance CPU.** `Cpu68k.cpp` jette sur une seconde
+  instance (`"Cpu68k supports only one live instance"`). C'est le plafond qui interdit
+  le test unitaire d'une `Machine` (1 079 lignes de tests pour 40 200 de source), l'A/B
+  en un processus et tout parallélisme.
+  **Analyse faite le 2026-08-28 — la décision de conception que l'item réclamait est
+  prise, l'exécution reste :** les **48** globaux `g_*` de `Cpu68k.cpp` se classent en
+  deux familles, et les confondre était le vrai obstacle.
+  - **25 sont de l'ÉTAT PAR INSTANCE** et doivent devenir membres : `g_bus`, `g_sched`,
+    `g_moira`, `g_cpuSelf`, `g_tracer`, `g_vblPending`, `g_hblPending`, `g_inBusError`,
+    `g_grp0Vector`, `g_inReset`, `g_endSlice`, `g_bp*` (4), `g_cpuMul`, `g_cpuBias`,
+    `g_desiredIpl`, `g_appliedIpl`, `g_iplChgClock`, `g_pinNextDue`, `g_vblPinDue`,
+    `g_hblPinDue`, `g_htArmed`, `g_htPrev`.
+  - **23 sont de la CONFIGURATION DE PROCESSUS** lue une fois dans l'environnement
+    (`g_iack*`, `g_eclock*`, `g_ipl*`, `g_ht*` de trace, `g_ramSlot*`, `g_raise*`,
+    `g_pinArmMask`, `g_blockDispatch`, `g_busDiagPage`) : les rendre par-instance
+    serait FAUX. Elles sont recensées et classées par `tools/env_locks.json` depuis A34 (2026-08-28), pas d'A33.
+  Forme visée : une `struct CpuState` (les 25) possédée par `Cpu68k`, plus un pointeur
+  d'instance ACTIVE posé à l'entrée de `run()` — les callbacks Moira ne tournent que
+  dedans. Ça donne deux `Machine` alternées (test unitaire, A/B, anneau MIDI à 2 nœuds) ;
+  le vrai parallélisme demanderait davantage.
+  ⚠ **NE PAS le faire au `sed`.** Essayé le 2026-08-28 : un remplacement de masse par
+  motif a capturé `return g_cpuMul == 1 ? b - g_cpuBias : …` comme une DÉCLARATION et
+  supprimé la ligne. Détecté avant application, mais c'est la démonstration : sur ce
+  fichier-là, les ~250 substitutions se font à la main, par bloc, en recompilant.
 - **A35 ⭘ — Le fork Moira n'est pas rebasable.** `extern/moira/NEOST_VENDOR.md` décrit
   les 6 patches locaux mais **n'enregistre ni commit ni tag upstream d'origine** (le
   vendoring de mt32emu, lui, le fait), et l'arbre a été élagué de sa suite de tests
@@ -216,7 +229,10 @@ est continue, les trous sont du travail fait.
   6 hypothèses réfutées) — re-mesurer avec les mêmes sondes ne tranchera rien.
 - **Combiner A9 + A31 + A32 en un « grand refactor »** : chaque chantier structurel
   séparément, filet de test posé AVANT (le boot GUI l'est ; A29 pour le cœur).
-- **Supprimer un des deux modèles d'exécution sans la mesure d'A34.**
+- ~~Supprimer un des deux modèles d'exécution sans la mesure d'A34.~~ **La mesure a
+  été prise le 2026-08-28 et le perdant est supprimé** (cf. `CHANGELOG.md`) : il n'y
+  a plus qu'un modèle, le BLOC. Le garde-fou reste utile comme précédent — on ne
+  supprime pas une branche d'exécution sur une intuition.
 
 ---
 
@@ -265,7 +281,10 @@ décroissant, par priorité d'impact :
    `$FF8909/0B/0D` — validable par dump WAV + trace.
 3. **[MFP]** `UpdateTimers` avant lecture IPR/ISR/TBDR en mode bloc — retard **mesuré à
    157 cycles** dans le pire cas observé. Le correctif évident (dispatch sync-driven) est
-   **réfuté** ; attendre A34.
+   **réfuté**, et A34 a SUPPRIMÉ ce modèle le 2026-08-28 : il ne reste plus rien à
+   attendre de ce côté. Toute correction devra se faire DANS le modèle BLOC — par
+   exemple en rafraîchissant les timers à la lecture du registre plutôt qu'à la
+   frontière de bloc.
 4. **[FPU]** arrondis de conversion sortante et précision FPCR (détail § Roadmap / FPU).
 5. **[BLITTER]** résidu BL5 : ~10 cyc par démarrage de blit + ~3,3 par reprise de tranche,
    **paradoxe de signe non levé** — cf. Garde-fous (aucune correction sans 3ᵉ mesure).

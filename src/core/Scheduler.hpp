@@ -131,8 +131,8 @@ public:
         // Si on est en plein bloc CPU (runTarget_ armé) et que cet événement tombe
         // AVANT la cible du bloc, on préempte : le CPU rend la main à la prochaine
         // frontière d'instruction et la boucle d'horloge ré-évaluera nextDue().
-        // (Actif dans le modèle BLOC, le défaut ; dormant en mode piloté par sync()
-        //  — NEOST_SYNC_DISPATCH — où beginRun n'est jamais appelé.)
+        // (A34 : il n'y a plus qu'un modèle d'exécution — le BLOC — donc beginRun est
+        //  TOUJOURS armé et cette préemption est toujours active.)
         if (atCycle != kInactive && runTarget_ != kInactive && atCycle < runTarget_ && endSlice_) {
             runTarget_ = atCycle;   // nouvelle cible effective (évite des coupes redondantes)
             ++preemptions;
