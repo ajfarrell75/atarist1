@@ -45,6 +45,26 @@ OUT_DIR = ROOT / "tests" / "out"
 
 VERDICT_RE = re.compile(r"NEOST-TEST:[ \t]*(\S+)[ \t]+(PASS|FAIL)\b[ \t]*(.*)")
 
+# Purge § BLOQUANT RELEASE, pas 2 (2026-08-28) : ce palier tourne dans le `fast`, donc
+# il ne doit dépendre d'AUCUN fichier propriétaire — ni pour passer, ni pour échouer.
+# Le défaut est désormais une ROM LIBRE, et un étalon qui nommerait quand même un TOS
+# Atari se SAUTE (recensé) au lieu de rougir. Même règle et même mot que
+# run_etalons.rom_is_free() : une ROM EmuTOS absente reste une CASSE du dépôt.
+DEFAULT_ROM = "roms/etos192us.img"
+# Auto-tests NON EXÉCUTÉS faute d'un fichier propriétaire. Recensés, jamais fondus
+# dans le vert : c'est exactement le « vert creux » que ce palier doit interdire.
+SKIPPED_ROM = []
+# Code de sortie « sauté, recensé » (convention automake/`timeout`-like retenue par
+# le projet le 2026-08-28) : 0 = tout a tourné, 1 = échec, 77 = il manque des données
+# NON REDISTRIBUABLES et run_all.py doit le DIRE dans son bilan.
+EXIT_SKIPPED = 77
+
+
+def rom_is_free(rom: str) -> bool:
+    """EmuTOS (`roms/etos*.img`) est livré avec le dépôt : son absence est une casse.
+    Un TOS Atari, lui, ne peut pas être garanti présent — on saute et on le dit."""
+    return Path(rom).name.startswith("etos")
+
 
 def parse_verdicts(serial: str) -> dict:
     # Une ligne par verdict : on scanne ligne à ligne (splitlines gère \r\n) pour
@@ -86,12 +106,21 @@ def ensure_rom_asset(entry) -> bool:
 def run_one(entry, args) -> bool:
     eid = entry["id"]
     print(f"\n=== {eid} — {entry['name']} ===")
+    # Distinguer AVANT tout lancement les deux absences (cf. rom_is_free) : sans cela,
+    # retirer les TOS Atari du dépôt ferait ROUGIR le palier `fast` au lieu de le
+    # laisser dire ce qu'il n'a pas pu vérifier.
+    rom = entry.get("rom", DEFAULT_ROM)
+    if not (ROOT / rom).exists() and not rom_is_free(rom):
+        print(f"  SKIP recensé : {rom} absent (copyright Atari — cf. TODO "
+              "§ BLOQUANT RELEASE) — cet auto-test n'a PAS tourné")
+        SKIPPED_ROM.append(eid)
+        return True
     if not ensure_rom_asset(entry):
         return False
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     serial_path = OUT_DIR / f"{eid}_serial.txt"
-    cmd = [str(HEADLESS), str(ROOT / entry.get("rom", "roms/tos102uk.img")),
+    cmd = [str(HEADLESS), str(ROOT / entry.get("rom", DEFAULT_ROM)),
            "--machine", entry.get("machine", "st"),
            "--mem", entry.get("mem", "512k"),
            "--frames", str(entry.get("frames", 40)),
@@ -196,8 +225,18 @@ def main() -> int:
     if ran == 0:
         print("\nAUCUN auto-test exécuté — filtre trop restrictif ?")
         return 2
-    print("\n" + ("TOUS OK" if ok else "ÉCHECS — voir ci-dessus"))
-    return 0 if ok else 1
+    if not ok:
+        print("\nÉCHECS — voir ci-dessus")
+        return 1
+    if SKIPPED_ROM:
+        # « TOUS OK » alors qu'un auto-test n'a pas tourné serait un vert creux : on
+        # le nomme, et le code 77 le fait remonter jusqu'au bilan de run_all.py.
+        print(f"\n⚠ NON EXÉCUTÉS — ROM propriétaire absente ({len(SKIPPED_ROM)}) : "
+              + ", ".join(SKIPPED_ROM))
+        print("TOUS OK (couverture AMPUTÉE — voir ci-dessus)")
+        return EXIT_SKIPPED
+    print("\nTOUS OK")
+    return 0
 
 
 if __name__ == "__main__":

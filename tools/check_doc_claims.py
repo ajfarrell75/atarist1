@@ -69,6 +69,8 @@ CLAIMS = [
     ("TODO.md", r"(\d+) images de \*\*jeux commerciaux\*\*",
      lambda: git_count("disks/st", "disks/stx"), 0.0),
     ("TODO.md", r"(\d+) cartouches", lambda: git_count("carts"), 0.0),
+    ("TODO.md", r"\*\*(\d+) fichiers de Cubase Lite\*\*",
+     lambda: git_count("disks/midi/CUBLITE"), 0.0),
     ("TODO.md", r"\*\*(\d+) étalons\s+pixel sur \d+\*\*", free_etalons, 0.0),
     ("TODO.md", r"\*\*\d+ étalons\s+pixel sur (\d+)\*\*",
      lambda: len(machine_etalons()), 0.0),

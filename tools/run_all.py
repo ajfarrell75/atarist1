@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -188,16 +189,76 @@ def install_hook(remove: bool) -> int:
     return 0
 
 
-def run_tier(steps) -> int:
+# Purge § BLOQUANT RELEASE, pas 2 (2026-08-28). Une sous-suite qui n'a pas pu tourner
+# faute d'un fichier NON REDISTRIBUABLE (TOS Atari, cartouche Field Service, Cubase
+# Lite) sort 77 : ni 0 ni 1. Avant, elle sortait 0 — son SKIP était imprimé au milieu
+# de centaines de lignes puis englouti par un « TOUS LES PALIERS OK » final. Le bilan
+# doit dire ce qui n'a PAS été vérifié : c'est tout le sujet du « vert creux ».
+EXIT_SKIPPED = 77
+
+
+# Verrou de la purge (§ BLOQUANT RELEASE, pas 2) : le palier `fast` ne doit RE-acquérir
+# aucune dépendance propriétaire en douce. Le couplage d'origine — un `roms/tos102uk.img`
+# codé en dur dans deux outils du palier — est précisément ce qui rendait le nettoyage
+# juridique « impossible sans casser la CI ». On relit donc le CODE des outils que le
+# palier lance (les commentaires sont ignorés : ils racontent l'histoire, ils n'ouvrent
+# pas de fichier) et les chemins de ROM passés en argument.
+FREE_ROM_RE = re.compile(r'"roms/(?!etos)[^"]+\.img"|"roms"\s*/\s*"(?!etos)[^"]+\.img"')
+
+
+def fast_tier_proprietary(steps) -> list[str]:
+    hits = []
+    for label, cmd in steps:
+        for arg in cmd:
+            if arg.startswith("roms/") and not Path(arg).name.startswith("etos"):
+                hits.append(f"{label} : ROM propriétaire en argument ({arg})")
+        for arg in cmd:
+            src = Path(arg)
+            if src.suffix != ".py" or not src.exists():
+                continue
+            text = src.read_text(errors="replace")
+            # Un outil a le DROIT de nommer un fichier propriétaire s'il sait s'en
+            # passer : la marque en est la constante EXIT_SKIPPED (sortie 77, SKIP
+            # recensé remonté au bilan). C'est un fil-piège, pas une preuve — la
+            # preuve, c'est le test du chemin de SKIP, fait à la main le 2026-08-28
+            # sur run_midi_sequencer.py et run_megaste_diag.py.
+            if "EXIT_SKIPPED" in text:
+                continue
+            for n, line in enumerate(text.splitlines(), 1):
+                if line.lstrip().startswith("#"):
+                    continue
+                m = FREE_ROM_RE.search(line)
+                if m:
+                    hits.append(f"{src.name}:{n} : ROM propriétaire codée en dur "
+                                f"({m.group(0)}) — le palier `fast` doit rester libre "
+                                "(migrer sur EmuTOS, ou politique de SKIP recensé)")
+    return hits
+
+
+def run_tier(steps, skipped=()) -> int:
     ok = True
+    skipped = list(skipped)
     for label, cmd in steps:
         print(f"\n########## {label} ##########")
         rc = subprocess.run(cmd, cwd=ROOT).returncode
-        if rc != 0:
+        if rc == EXIT_SKIPPED:
+            skipped.append(label)
+            print(f"  → SAUTÉE, recensée ({label})")
+        elif rc != 0:
             ok = False
             print(f"  → ÉCHEC ({label})")
-    print("\n" + ("=" * 60) + "\n" + ("TOUS LES PALIERS OK" if ok else "ÉCHEC — voir ci-dessus"))
-    return 0 if ok else 1
+    print("\n" + ("=" * 60))
+    if skipped:
+        print(f"⚠ {len(skipped)} étape(s) NON EXÉCUTÉE(S) — données non redistribuables "
+              "absentes (cf. TODO § BLOQUANT RELEASE) :")
+        for label in skipped:
+            print(f"    · {label}")
+    if not ok:
+        print("ÉCHEC — voir ci-dessus")
+        return 1
+    print("TOUS LES PALIERS OK" + (" — COUVERTURE AMPUTÉE (voir les étapes sautées)"
+                                   if skipped else ""))
+    return 0
 
 
 def main() -> int:
@@ -216,12 +277,21 @@ def main() -> int:
             return 2
 
     steps = list(FAST if args.tier == "fast" else FULL)
+    hits = fast_tier_proprietary(FAST)
+    if hits:
+        print("✗ le palier `fast` a RE-acquis une dépendance propriétaire :",
+              file=sys.stderr)
+        for h in hits:
+            print(f"    {h}", file=sys.stderr)
+        return 2
+    skipped = []
     skip = gui_available()
     if skip is None:
         steps += GUI_STEPS
     else:
         print(f"⚠ Boot GUI SAUTÉ (recensé) : {skip}")
-    return run_tier(steps)
+        skipped.append(f"Boot GUI ({skip})")
+    return run_tier(steps, skipped)
 
 
 if __name__ == "__main__":

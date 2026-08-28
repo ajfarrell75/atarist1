@@ -61,6 +61,37 @@ Un étalon dont la ROM est **absente** ne se comporte plus de la même façon se
 
 Le SKIP n'est jamais silencieux — la suite imprime un bloc
 « ⚠ NON EXÉCUTÉS — ROM propriétaire absente (N) : … » et le code de sortie reste 0.
+
+**Depuis le 2026-08-28, la règle vaut pour TOUT le palier `fast`** (purge § BLOQUANT,
+pas 2), et elle remonte jusqu'au bilan :
+
+| Sous-suite | Dépendance propriétaire | Traitement |
+|-----------|-------------------------|-----------|
+| `run_selftests.py` (`diag_cart`) | *(plus aucune)* — passée sur `etos192fr` | — |
+| `run_cyclebench.py` | *(plus aucune)* — passée sur `etos192fr` | — |
+| `run_midi_sequencer.py` | TOS 1.04 FR **et** Cubase Lite | **SKIP recensé**, sortie **77** |
+| `run_megaste_diag.py` | TOS 2.06 + cartouche Field Service | **SKIP recensé**, sortie **77** |
+| `run_etalons.py` | 4 étalons sur `tos102uk`/`tos162us` | SKIP recensé par étalon (`rom_is_free`) |
+
+**Code de sortie 77 = « sauté, recensé »** : ni succès ni échec. `run_all.py` le distingue
+et termine par « TOUS LES PALIERS OK — **COUVERTURE AMPUTÉE** », en listant les étapes
+qui n'ont rien vérifié. Avant, ces sous-suites sortaient 0 : leur SKIP était imprimé au
+milieu de centaines de lignes puis englouti par un « TOUS LES PALIERS OK » plein — le
+« vert creux » que ce dossier combat.
+
+Pourquoi `diag_cart` et le cycle-bench ont pu migrer sans rien changer : **leurs deux
+programmes prennent la main AVANT le TOS** (cartouche $FA52235F pour l'un, cartouche bench
+pour l'autre), la ROM ne sert qu'à construire la machine. Vérifié plutôt que supposé —
+dump série identique octet pour octet sous `tos102uk` (50 Hz), `etos192fr` (50 Hz) et
+`etos192us` (60 Hz) ; golden `tests/reference/cyclebench.json`, posé sous `tos102uk`,
+passe tel quel sous EmuTOS avec sa tolérance de **0 cycle** (il n'a pas été régénéré).
+
+Pourquoi le séquenceur MIDI, lui, ne peut PAS migrer : son scénario repose sur
+l'auto-lancement `#Z` de `DESKTOP.INF` (« Install Application » du TOS 1.04), qu'EmuTOS
+n'honore pas — il lit `EMUDESK.INF`. Mesuré le 2026-08-28 : sous `etos192fr`, C: est bien
+monté mais Cubase ne démarre pas, **0 octet MIDI émis**, on reste sur le bureau. Et même
+s'il démarrait, Cubase Lite resterait un logiciel commercial : changer la ROM ne
+retirerait pas la dépendance non redistribuable.
 Sans les deux ROM Atari, il reste **9 auto-tests + 11 étalons machine** (ST ×6, STE ×5) — c'était 5 avant la migration A10 du 2026-08-28.
 
 Les **4 étalons à disque généré** (`overscan_top`, `trace_odd`, `scroll_8264`,
@@ -169,7 +200,7 @@ Hatari : `acia.c`, `midi.c`, `gemdos.c`.
 
 | Étalon | Configuration | Ce qui est vérifié | Recette |
 |--------|---------------|--------------------|---------|
-| **Cubase Lite** (Steinberg 1996, MROS, sans clé) + `disks/midi/BLUES/ALBERTAM.MID` | **TOS 1.04 FR**, Mega ST, 1 Mo, mono, `--gemdos disks/midi` (EmuTOS : MROS panique, incompatibilité connue) | 200 notes : hauteur, ordre, **vélocité**, durée (±12 ms + 0,2 %), **pédale CC64**, **pente de tempo** (1,001, tolérance ±0,5 %), **gigue σ < 5 ms** (mesuré 0,4-1,7 ms) | `python3 tools/run_midi_sequencer.py` (palier `fast`, ≈3 s) ; `--song disks/midi/CHOPIN/RAINDROP.MID` pour une autre pièce ; `--keep` garde `midi.log` + la capture |
+| **Cubase Lite** (Steinberg 1996, MROS, sans clé) + `disks/midi/BLUES/ALBERTAM.MID` | **TOS 1.04 FR**, Mega ST, 1 Mo, mono, `--gemdos disks/midi` (EmuTOS : MROS panique, incompatibilité connue) | 200 notes : hauteur, ordre, **vélocité**, durée (±12 ms + 0,2 %), **pédale CC64**, **pente de tempo** (1,001, tolérance ±0,5 %), **gigue σ < 5 ms** (mesuré 0,4-1,7 ms) | `python3 tools/run_midi_sequencer.py` (palier `fast`, ≈3 s ; **SKIP recensé + sortie 77** si le TOS 1.04 FR ou Cubase Lite manquent) ; `--song disks/midi/CHOPIN/RAINDROP.MID` pour une autre pièce ; `--keep` garde `midi.log` + la capture |
 
 Mécanique : `DESKTOP.INF` auto-lance `CB_LITE.PRG` (ligne `#Z`, TOS 1.04) ; souris
 relative `--mouse-at` vers *File → Import…* ; `--azerty` pour taper `SONG.MID` dans le
