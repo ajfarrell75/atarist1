@@ -26,6 +26,50 @@ Ripper, DAC Pro Sound) avec page Dongles, `disks/dongles.txt` et oracle de rejeu
 vérifié note à note** en headless, corpus MIDI piano/blues ; port MIDI ALSA sous Linux ;
 save-state v16. Détail dans les chantiers datés ci-dessous.
 
+## A39 — l'IKBD passe son audit : le protocole est pincé, une étiquette était fausse (2026-08-29)
+
+Deuxième module de la liste des jamais-audités. `io/Ikbd.cpp` fait 1 189 lignes et
+n'avait qu'un test : le TDRE de son ACIA. Le protocole du 6301 lui-même — accumulation
+des commandes multi-octets, longueur attendue de chacune, forme des paquets de réponse
+— n'était couvert QUE par des jeux réels : « ça marche ou ça ne marche pas », rien
+entre les deux. Or c'est une machine à états pure : des octets entrent, des octets
+sortent.
+
+**L'audit, contre `extern/hatari/src/ikbd.c`** :
+
+- **la table des longueurs, opcode par opcode** face à `KeyboardCommands[]`
+  (ikbd.c:222-266). Les 39 longueurs sont JUSTES. Une seule anomalie, d'étiquette :
+  `$19` était commenté « SetJoystickFireDuration » — le nom que Hatari donne à `$18` —
+  alors que c'est le mode **keycode manette** (`SetCursorForJoystick`, 6 paramètres
+  RX/RY/TX/TY/VX/VY). Aucune conséquence à l'exécution ; le lecteur, lui, était trompé ;
+- **le traitement d'un opcode inconnu.** Hatari vide le tampon (« IKBD assumes a
+  NOP ») ; NeoST le dispatche comme mono-octet et remet la longueur à zéro —
+  équivalent, vérifié ;
+- **PAUSE OUTPUT (`$13`).** Le détail fidèle est que **toute** commande valide lève la
+  pause, pas seulement `$11`. NeoST le fait déjà (`Ikbd.cpp`, « toute commande VALIDE
+  complète lève la pause de sortie »). C'est le genre de règle qu'une réécriture perd
+  sans bruit : elle est désormais gardée.
+
+**La table de vérité** (10 assertions, palier `fast`) : interrogation manette `$16` →
+`$FD` + 2 octets ; une commande incomplète n'agit pas ET son octet suivant reste un
+paramètre ; `$0D` → `$F7` + 5 octets ; opcode inconnu = NOP qui ne désynchronise pas ;
+pause puis reprise par une commande quelconque ; et les 39 longueurs comparées une à
+une.
+
+**Vérifiée par mutation**, et c'est là que l'étage intermédiaire paie :
+
+| mutation | ce qui rougit |
+|---|---|
+| longueur de `$09` : 5 → 3 | **trois** assertions — la table NOMME l'opcode, et les deux tests de flux montrent la désynchronisation (3 octets au lieu de 0, puis 14 au lieu de 6) |
+| « toute commande valide lève la pause » retiré | l'assertion dédiée, seule |
+
+Une longueur fausse ne se voit PAS à l'exécution normale : elle décale le flux de
+commandes du jeu qui l'utilise, et de lui seul — donc elle se manifeste des milliers de
+cycles plus loin, dans un titre, sous la forme « la manette ne répond plus ». C'est
+exactement la classe de bug qu'un étalon pixel ne localise jamais.
+
+`neost-selftest` : 257 → **267 assertions**. Palier `full` vert.
+
 ## A39 — le disque dur GEMDOS passe son premier audit, et reçoit son premier test (2026-08-28)
 
 L'évaluation d'architecture du jour nommait `io/GemdosHd.cpp` « la surface la plus

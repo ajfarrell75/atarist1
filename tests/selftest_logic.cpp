@@ -21,6 +21,7 @@
 
 #include <map>
 #include <set>
+#include <vector>
 #include "io/CartridgeKey.hpp"
 #include "io/PortDevices.hpp"
 #include "io/DongleTable.hpp"
@@ -1368,6 +1369,146 @@ static void testTwoCpus() {
     checkHex("A n'a pas bougé de PC pendant que B tournait", cpuA.pc(), kPcA);
 }
 
+// -----------------------------------------------------------------------------
+//  A39 — IKBD : le PROTOCOLE, table de vérité (2026-08-29).
+//
+//  `io/Ikbd.cpp` fait 1 189 lignes et n'avait qu'un test : celui du TDRE de son
+//  ACIA. Le protocole du 6301 lui-même — l'accumulation des commandes multi-octets,
+//  la longueur attendue de chacune, la forme des paquets de réponse — n'était
+//  couvert QUE par des jeux réels, c'est-à-dire par « ça marche ou ça ne marche
+//  pas », sans rien entre les deux.
+//
+//  Or c'est une machine à états pure : des octets entrent, des octets sortent.
+//  Exactement ce que le patron « puce nue + Scheduler » d'A29 sait pincer.
+// -----------------------------------------------------------------------------
+namespace {
+
+constexpr uint32_t kIkbdCtrl = 0xFFFC00, kIkbdData = 0xFFFC02;
+
+struct IkbdRig {
+    Mfp       mfp;
+    Scheduler sched;
+    Ikbd      ikbd{mfp};
+
+    IkbdRig() {
+        ikbd.setScheduler(&sched);
+        // Ce que Machine câble pour de vrai : sans ces trois rappels, les octets que
+        // l'IKBD met en file ne sont JAMAIS livrés et le test lirait du vide.
+        sched.setCallback(Scheduler::IKBD,    [this] { ikbd.onResetResponse(); });
+        sched.setCallback(Scheduler::IKBD_RX, [this] { ikbd.onRxDeliver(); });
+        sched.setCallback(Scheduler::IKBD_TX, [this] { ikbd.onTxEmpty(); });
+        ikbd.write8(kIkbdCtrl, 0x03);          // master reset de l'ACIA
+        ikbd.write8(kIkbdCtrl, 0x96);          // format 8N1, RX int armée
+    }
+    void send(std::initializer_list<uint8_t> bytes) {
+        for (uint8_t b : bytes) { ikbd.write8(kIkbdData, b); run(4000); }
+    }
+    void run(int64_t cycles) { sched.runTo(sched.now() + cycles); }
+    // Draine ce que l'IKBD a mis en file : RDRF (bit0 du statut) = un octet prêt.
+    std::vector<uint8_t> drain(int64_t cycles = 400000) {
+        std::vector<uint8_t> out;
+        const int64_t end = sched.now() + cycles;
+        while (sched.now() < end) {
+            if (ikbd.read8(kIkbdCtrl) & 0x01) out.push_back(ikbd.read8(kIkbdData));
+            else sched.runTo(sched.now() + 512);
+        }
+        return out;
+    }
+};
+
+}  // namespace
+
+static void testIkbdProtocol() {
+    std::printf("IKBD 6301 (protocole : longueurs, accumulation, paquets)\n");
+
+    // --- 1. Interrogation joystick ($16) : $FD + 2 octets --------------------
+    // La commande la plus simple qui RÉPOND : un octet en entrée, trois en sortie.
+    {
+        IkbdRig r;
+        r.drain(200000);                        // vide la réponse de reset éventuelle
+        r.send({0x16});
+        const auto p = r.drain();
+        checkInt("$16 (interrogate) : 3 octets de réponse", long(p.size()), 3);
+        if (p.size() == 3) checkHex("$16 : en-tête $FD", p[0], 0xFD);
+    }
+
+    // --- 2. Une commande multi-octets n'agit qu'une fois COMPLÈTE ------------
+    // $09 (AbsMouseMode) attend 5 octets. Envoyer l'opcode et deux paramètres ne
+    // doit RIEN déclencher — et surtout, l'octet suivant reste un PARAMÈTRE, pas
+    // une nouvelle commande. Une table de longueurs fausse désynchronise ici, et
+    // le symptôme apparaît des milliers de cycles plus loin, dans un jeu.
+    {
+        IkbdRig r;
+        r.drain(200000);
+        r.send({0x09, 0x02, 0x80});             // 3 octets sur 5 : incomplet
+        r.send({0x16});                         // 4e octet : PARAMÈTRE, pas interrogate
+        const auto p = r.drain();
+        checkInt("commande incomplète : aucune réponse", long(p.size()), 0);
+    }
+
+    // --- 3. … et elle agit dès qu'elle est complète --------------------------
+    {
+        IkbdRig r;
+        r.drain(200000);
+        r.send({0x09, 0x02, 0x80, 0x01, 0x90}); // AbsMouseMode complet (5 octets)
+        r.send({0x0D});                         // ReadAbsMousePos → $F7 + 5 octets
+        const auto p = r.drain();
+        checkInt("$0D (pos. absolue) : 6 octets", long(p.size()), 6);
+        if (p.size() == 6) checkHex("$0D : en-tête $F7", p[0], 0xF7);
+    }
+
+    // --- 4. Un opcode INCONNU est un NOP qui ne désynchronise pas ------------
+    // Port de Hatari IKBD_RunKeyboardCommand : commande inconnue → tampon vidé.
+    {
+        IkbdRig r;
+        r.drain(200000);
+        r.send({0x55});                         // inconnu
+        r.send({0x16});                         // doit être compris comme interrogate
+        const auto p = r.drain();
+        checkInt("opcode inconnu : NOP, la commande suivante passe", long(p.size()), 3);
+    }
+
+    // --- 5. PAUSE OUTPUT ($13) gèle la sortie ; TOUTE commande valide la lève -
+    // Détail fidèle d'Hatari (« Any new valid command will unpause the output ») :
+    // ce n'est PAS seulement $11 qui reprend. Un programme qui met en pause puis
+    // envoie n'importe quelle commande doit revoir ses paquets.
+    {
+        IkbdRig r;
+        r.drain(200000);
+        r.send({0x13});                         // PAUSE OUTPUT
+        r.ikbd.keyEvent(0x1E, true);            // une touche pressée
+        checkInt("sous PAUSE : rien ne sort", long(r.drain(200000).size()), 0);
+        r.send({0x08});                         // RelMouseMode : commande valide QUELCONQUE
+        checkBool("toute commande valide lève la pause",
+                  r.drain(200000).size() > 0, true);
+    }
+
+    // --- 6. La table des longueurs, opcode par opcode ------------------------
+    // Recopiée de Hatari KeyboardCommands[] (ikbd.c:222-266). Une longueur fausse
+    // ne se voit PAS à l'exécution normale : elle décale le flux de commandes du
+    // jeu qui l'utilise, et de lui seul.
+    {
+        IkbdRig r;
+        struct { uint8_t op; int len; } kTable[] = {
+            {0x80,2},{0x07,2},{0x08,1},{0x09,5},{0x0A,3},{0x0B,3},{0x0C,3},{0x0D,1},
+            {0x0E,6},{0x0F,1},{0x10,1},{0x11,1},{0x12,1},{0x13,1},{0x14,1},{0x15,1},
+            {0x16,1},{0x17,2},{0x18,1},{0x19,7},{0x1A,1},{0x1B,7},{0x1C,1},{0x20,4},
+            {0x21,3},{0x22,3},
+            {0x87,1},{0x88,1},{0x89,1},{0x8A,1},{0x8B,1},{0x8C,1},{0x8F,1},{0x90,1},
+            {0x92,1},{0x94,1},{0x95,1},{0x99,1},{0x9A,1},
+        };
+        int bad = 0;
+        for (const auto& e : kTable)
+            if (r.ikbd.commandLengthForTest(e.op) != e.len) {
+                ++bad;
+                std::printf("  FAIL longueur $%02X = %d (Hatari : %d)\n",
+                            e.op, r.ikbd.commandLengthForTest(e.op), e.len);
+            }
+        checkInt("39 longueurs de commande == table Hatari", bad, 0);
+        checkInt("opcode inconnu : longueur 0 (NOP)", r.ikbd.commandLengthForTest(0x55), 0);
+    }
+}
+
 int main() {
     testDongleTable();
     testCartridgeKey();
@@ -1375,6 +1516,7 @@ int main() {
     testYmEventDomain();
     testMidiTdre();
     testIkbdTdre();
+    testIkbdProtocol();
     testRtcSecond();
     testBlitterTruthTable();
     testDmaSoundTruthTable();

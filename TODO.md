@@ -264,8 +264,17 @@ est continue, les trous sont du travail fait.
   réputation** — durci à plusieurs reprises, chaque durcissement portant le récit de
   l'évasion qu'il ferme. Ce qui manquait n'était pas la robustesse mais la GARDE.
   **Restent** :
-  - `io/Ikbd.cpp` (**1 189 lignes**) et la pile réseau (`src/net`, ~1 030 lignes) —
-    aucun audit, aucune table de vérité ;
+  - ✅ `io/Ikbd.cpp` (1 189 l.) **audité et pincé le 2026-08-29** : sa table de
+    longueurs de commande est comparée ligne à ligne à Hatari `KeyboardCommands[]`
+    (39 opcodes), et le protocole a sa table de vérité — accumulation multi-octets,
+    opcode inconnu = NOP, PAUSE OUTPUT levée par TOUTE commande valide, forme des
+    paquets `$FD`/`$F7`. Une seule anomalie trouvée, d'étiquette : `$19` était
+    commenté « SetJoystickFireDuration » (le nom que Hatari donne à `$18`) alors que
+    c'est le mode keycode manette. **Restent** dans ce module : les modes souris
+    absolus sous mise à l'échelle, l'horloge, et le code 6301 custom (`Execute`) ;
+  - la pile réseau (`src/net`, ~1 030 lignes) — pas d'audit de lecture, mais elle
+    est la MOINS démunie des trois : `--slirp-selftest`, `enec_selftest`,
+    `netusbee_selftest` et un job de CI dédié la couvrent déjà par le comportement ;
   - dans `GemdosHd` : la table de handles et le suivi Pexec (c'est **A13**), les codes
     d'erreur face à `gemdos.c`, et le comportement de `Fsfirst`/DTA sous réutilisation
     d'index — non couverts par le test du bac à sable ;
