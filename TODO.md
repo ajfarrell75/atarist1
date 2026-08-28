@@ -185,30 +185,22 @@ est continue, les trous sont du travail fait.
   cérémonie. Prochain pas concret : extraire `VideoCounter` en objet membre (ses
   champs `vc*` sont les moins partagés — `vcFrameBase_`, `vcLineBase_`, `vcLineY_`,
   `vcRestart*`), mesurer ce que ça casse, et seulement ensuite regarder la Glue.
-- **A33 ⭘ — Lever le mono-instance CPU.** `Cpu68k.cpp` jette sur une seconde
-  instance (`"Cpu68k supports only one live instance"`). C'est le plafond qui interdit
-  le test unitaire d'une `Machine` (1 079 lignes de tests pour 40 200 de source), l'A/B
-  en un processus et tout parallélisme.
-  **Analyse faite le 2026-08-28 — la décision de conception que l'item réclamait est
-  prise, l'exécution reste :** les **48** globaux `g_*` de `Cpu68k.cpp` se classent en
-  deux familles, et les confondre était le vrai obstacle.
-  - **25 sont de l'ÉTAT PAR INSTANCE** et doivent devenir membres : `g_bus`, `g_sched`,
-    `g_moira`, `g_cpuSelf`, `g_tracer`, `g_vblPending`, `g_hblPending`, `g_inBusError`,
-    `g_grp0Vector`, `g_inReset`, `g_endSlice`, `g_bp*` (4), `g_cpuMul`, `g_cpuBias`,
-    `g_desiredIpl`, `g_appliedIpl`, `g_iplChgClock`, `g_pinNextDue`, `g_vblPinDue`,
-    `g_hblPinDue`, `g_htArmed`, `g_htPrev`.
-  - **23 sont de la CONFIGURATION DE PROCESSUS** lue une fois dans l'environnement
-    (`g_iack*`, `g_eclock*`, `g_ipl*`, `g_ht*` de trace, `g_ramSlot*`, `g_raise*`,
-    `g_pinArmMask`, `g_blockDispatch`, `g_busDiagPage`) : les rendre par-instance
-    serait FAUX. Elles sont recensées et classées par `tools/env_locks.json` depuis A34 (2026-08-28), pas d'A33.
-  Forme visée : une `struct CpuState` (les 25) possédée par `Cpu68k`, plus un pointeur
-  d'instance ACTIVE posé à l'entrée de `run()` — les callbacks Moira ne tournent que
-  dedans. Ça donne deux `Machine` alternées (test unitaire, A/B, anneau MIDI à 2 nœuds) ;
-  le vrai parallélisme demanderait davantage.
-  ⚠ **NE PAS le faire au `sed`.** Essayé le 2026-08-28 : un remplacement de masse par
-  motif a capturé `return g_cpuMul == 1 ? b - g_cpuBias : …` comme une DÉCLARATION et
-  supprimé la ligne. Détecté avant application, mais c'est la démonstration : sur ce
-  fichier-là, les ~250 substitutions se font à la main, par bloc, en recompilant.
+- **A33 ◐ — Mono-instance CPU LEVÉ ; l'état est par instance, le parallélisme reste.**
+  Fait le 2026-08-28 (détail au `CHANGELOG.md`) : le
+  `throw std::logic_error("Cpu68k supports only one live instance")` a disparu, les
+  **25 globaux d'état** sont devenus une `struct CpuState` possédée par `Cpu68k`, et
+  ses **135 accès internes** passent par `state_` (son propre état) et non plus par le
+  pointeur d'instance active. Prouvé, pas supposé : `selftest_logic.cpp` construit
+  DEUX `Cpu68k` sur deux `Bus`, vérifie que chacun prend le vecteur de reset de SON
+  bus, et qu'en faire tourner un ne bouge ni l'horloge ni le PC de l'autre. Les
+  **23 verrous de configuration de processus** restent globaux — les rendre
+  par-instance serait faux (cf. `tools/env_locks.json`).
+  **Reste** : le vrai PARALLÉLISME. Le modèle est « à tour de rôle » — les callbacks
+  Moira et les fonctions libres du fichier n'ont pas de `this` et passent par `g_cur`,
+  posé à l'entrée de `run()`/`reset()`. Deux CPU dans DEUX THREADS demanderaient de
+  supprimer ces 94 accès restants (passer le contexte aux callbacks, ou un
+  `thread_local`) — ce n'est pas ce qu'A33 promettait, et aucune fonctionnalité ne le
+  réclame aujourd'hui.
 - **A35 ◐ — Le fork Moira : le pin est RETROUVÉ, le `Cputester` reste à évaluer.**
   Fait le 2026-08-28 : `extern/moira/NEOST_VENDOR.md` porte désormais le **pin de
   départ** — `1efd69467ca13b27b2fb40febd5cb31dbecdea5f`, l'amont

@@ -31,6 +31,7 @@
 #include "io/Ikbd.hpp"
 #include "io/Rtc.hpp"
 #include "core/Bus.hpp"
+#include "core/Cpu68k.hpp"
 #include "core/Blitter.hpp"
 #include "core/DmaSound.hpp"
 #include "io/Fdc.hpp"
@@ -1312,6 +1313,61 @@ static void testConfigPath() {
              "/opt/neost/bin/../profiles");
 }
 
+// -----------------------------------------------------------------------------
+//  A33 — DEUX CPU vivants dans le même processus.
+//
+//  `Cpu68k` jetait sur une seconde instance :
+//      throw std::logic_error("Cpu68k supports only one live instance")
+//  C'était le plafond qui interdisait le test unitaire d'une Machine, l'A/B en un
+//  processus et l'anneau MIDI à deux nœuds. Ce test-ci est la RAISON D'ÊTRE du
+//  chantier : s'il ne tournait pas, A33 n'aurait rien changé d'observable.
+//
+//  ⚠ Ce qu'il NE prouve PAS : deux CPU tournant SIMULTANÉMENT dans deux threads.
+//  Le modèle est « à tour de rôle » — g_cur désigne l'instance active, posée à
+//  l'entrée de run()/reset(). C'est ce qu'A33 promettait, ni plus ni moins.
+// -----------------------------------------------------------------------------
+static void testTwoCpus() {
+    std::printf("Cpu68k — deux instances vivantes (A33)\n");
+
+    Bus busA(512u * 1024u), busB(512u * 1024u);
+    // Deux CPU sur DEUX bus : la construction du second jetait, avant A33.
+    Cpu68k cpuA(busA), cpuB(busB);
+    busA.cpu = &cpuA;
+    busB.cpu = &cpuB;
+    checkBool("deux Cpu68k coexistent (plus de logic_error)", true, true);
+
+    // Chacun voit SON bus. On pose un vecteur de reset différent de chaque côté :
+    // si les deux CPU partageaient un état, le second écraserait le premier.
+    auto poke32 = [](Bus& b, uint32_t a, uint32_t v) {
+        b.write8(a, uint8_t(v >> 24)); b.write8(a + 1, uint8_t(v >> 16));
+        b.write8(a + 2, uint8_t(v >> 8)); b.write8(a + 3, uint8_t(v));
+    };
+    constexpr uint32_t kPcA = 0x001000, kPcB = 0x002000;
+    for (Bus* b : {&busA, &busB}) { poke32(*b, 0, 0x00040000); }   // SSP
+    poke32(busA, 4, kPcA);
+    poke32(busB, 4, kPcB);
+    // Une instruction inoffensive à chaque PC : bra.s vers soi-même ($60FE).
+    busA.write8(kPcA, 0x60); busA.write8(kPcA + 1, 0xFE);
+    busB.write8(kPcB, 0x60); busB.write8(kPcB + 1, 0xFE);
+
+    cpuA.reset();
+    cpuB.reset();
+    checkHex("CPU A a pris le vecteur de SON bus", cpuA.pc(), kPcA);
+    checkHex("CPU B a pris le vecteur de SON bus", cpuB.pc(), kPcB);
+
+    // Et ils avancent INDÉPENDAMMENT : on ne fait tourner que A.
+    const int64_t a0 = cpuA.busClockNow(), b0 = cpuB.busClockNow();
+    cpuA.run(64);
+    checkBool("faire tourner A avance l'horloge de A", cpuA.busClockNow() > a0, true);
+    checkBool("… et laisse celle de B intacte", cpuB.busClockNow() == b0, true);
+
+    // Puis seulement B : l'activation bascule proprement dans les deux sens.
+    cpuB.run(64);
+    checkBool("faire tourner B avance ensuite l'horloge de B",
+              cpuB.busClockNow() > b0, true);
+    checkHex("A n'a pas bougé de PC pendant que B tournait", cpuA.pc(), kPcA);
+}
+
 int main() {
     testDongleTable();
     testCartridgeKey();
@@ -1325,6 +1381,7 @@ int main() {
     testFdcTruthTable();
     testPacing();
     testMmioTable();
+    testTwoCpus();
     testWindowsPaths();
     testPosixPaths();
     testNativeDefaults();

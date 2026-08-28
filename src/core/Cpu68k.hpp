@@ -8,6 +8,7 @@
 //  (c) 2026 VERHILLE Arnaud — projet NeoST.
 // =============================================================================
 #pragma once
+#include <memory>
 #include <cstdint>
 #include <string>
 
@@ -254,6 +255,13 @@ public:
 
 private:
     void initCore();   // (ré)initialise le cœur Moira
+
+    // A33 — ÉTAT PAR INSTANCE. Défini dans le .cpp (il référence des types internes
+    // au cœur) ; possédé ici pour qu'une deuxième machine soit un deuxième objet et
+    // non 25 variables globales à démêler. `activate()` désigne l'instance dont les
+    // callbacks Moira — qui n'ont pas de `this` — doivent voir l'état.
+    std::unique_ptr<struct CpuState> state_;
+    void activate() const;
 
     CpuCore core_ = CpuCore::Moira;   // cœur actif (toujours Moira)
 
