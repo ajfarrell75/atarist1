@@ -13,6 +13,7 @@
 //
 //  (c) 2026 VERHILLE Arnaud — projet NeoST.
 // =============================================================================
+#include "core/Pacing.hpp"
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
@@ -1667,7 +1668,7 @@ int main(int argc, char** argv) {
                                               64u << 20));
     }
     auto dumpFrame = [&]() {
-        static constexpr double CPU_HZ = 8021248.0;
+        static constexpr double CPU_HZ = neost::pacing::kCpuHz;   // A28
         const int64_t fc = machine.frameCycles();
         dumpCarry += double(fc) * kDumpRate / CPU_HZ;
         const int n = int(dumpCarry);

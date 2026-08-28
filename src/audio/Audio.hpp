@@ -9,6 +9,7 @@
 //  (c) 2026 VERHILLE Arnaud — projet NeoST.
 // =============================================================================
 #pragma once
+#include "core/Pacing.hpp"
 #include <atomic>
 #include <cstdint>
 #include <functional>
@@ -91,17 +92,18 @@ private:
 
     // --- Modèle « push » (Phase C) : anneau émulation → audio --------------------
     // L'anneau stocke des échantillons ENTRELACÉS L/R (2 floats par frame). `primeSamples_`,
-    // `n`, `sampleCarry_` sont comptés en FRAMES (par canal) ; ring_.available()/space()
+    // `n` et le report du pacer sont comptés en FRAMES (par canal) ; ring_.available()/space()
     // comptent en floats → toujours convertir (×2 / ÷2) au passage de frontière.
     SampleRing         ring_{32768};     // SPSC entrelacé : ~340 ms de marge à 48 kHz stéréo
     neost::FrameMixBuffers mixBuf_;      // tampons de la chaîne partagée (YM mono + sortie L/R)
     std::vector<float> driveScratch_;    // bruits lecteur mono intermédiaires (frames)
     uint32_t           rate_ = 48000;    // fréquence de sortie réelle du périphérique (frames/s)
     float              masterVol_ = 1.0f; // volume maître utilisateur (cf. setMasterVolume)
-    float              volSmooth_ = 1.0f; // volume EFFECTIF de fin de bloc précédent (rampe anti-clic)
+    // A28 : report fractionnaire + servo + rampe anti-clic vivent désormais dans
+    // neost::pacing::AudioPacer (core/Pacing.hpp), partagé avec le web et l'Android.
+    neost::pacing::AudioPacer pacer_;
     std::function<bool()> dmaGate_;      // cf. setDmaGate (nul = branche DMA dès que dma_ existe)
     int                devLostFrames_ = 0; // trames depuis la détection « périphérique arrêté »
-    double             sampleCarry_ = 0.0; // report fractionnaire (nb d'échantillons/trame exact à long terme)
     uint32_t           latencyMs_ = 85;      // coussin visé en ms (cf. setLatencyMs) — lu par start()
     uint32_t           primeSamples_ = 4000; // coussin cible (≈ latence visée, ~85 ms) — amorçage + asservissement
     uint32_t           recoverSamples_ = 960;// ré-amorce courte après underrun (≈20 ms, au moins 1 callback)

@@ -17,6 +17,7 @@
 //  (c) 2026 VERHILLE Arnaud — projet NeoST.
 // =============================================================================
 #pragma once
+#include "core/Pacing.hpp"
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -51,7 +52,8 @@ public:
     void setGain(float g) { gain_ = g; }
 
 private:
-    static constexpr double kCpuHz = 8021248.0;
+    // A28 : UNE seule définition de l'horloge CPU/bus, dans core/Pacing.hpp.
+    static constexpr double kCpuHz = neost::pacing::kCpuHz;
     struct Event { int64_t cycle; uint32_t msg; std::vector<uint8_t> sysex; };
 
     void* synth_ = nullptr;                  // MT32Emu::Synth

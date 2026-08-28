@@ -19,6 +19,7 @@
 //  (c) 2026 VERHILLE Arnaud — projet NeoST.
 // =============================================================================
 #pragma once
+#include "core/Pacing.hpp"
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
@@ -62,7 +63,8 @@ public:
     // DOIT commencer (`anchor`, = l'échéance emuNext du GUI) et chaque octet est
     // programmé à anchor + (cycle − cycleAncre)/CPU_HZ + kLeadMs. Un thread le
     // délivre à l'heure dite : latence fixe (inaudible), gigue nulle.
-    static constexpr double kCpuHz = 8021248.0;
+    // A28 : UNE seule définition de l'horloge CPU/bus, dans core/Pacing.hpp.
+    static constexpr double kCpuHz = neost::pacing::kCpuHz;
     static constexpr int    kLeadMs = 30;
     void anchor(int64_t cycle, std::chrono::steady_clock::time_point hostTime);
     void byteAt(uint8_t b, int64_t cycle);

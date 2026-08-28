@@ -15,6 +15,7 @@
 //
 //  (c) 2026 VERHILLE Arnaud — projet NeoST.
 // =============================================================================
+#include "core/Pacing.hpp"
 #include <GLFW/glfw3.h>
 
 #include "gui/StKeys.hpp"
@@ -60,11 +61,10 @@ int    g_texW = 0, g_texH = 0;
 // renvoie la profondeur de sa file, dont on asservit le débit.
 neost::FrameMixBuffers g_mixBuf;
 uint32_t g_audioRate     = 0;      // 0 = sortie fermée (rien n'est produit)
-double   g_sampleCarry   = 0.0;    // report fractionnaire : débit moyen EXACT
+neost::pacing::AudioPacer g_pacer;  // A28 : report fractionnaire + servo + rampe anti-clic
 int      g_queuedFrames  = 0;      // profondeur de la file de la page (frames)
 int      g_cushionFrames = 0;      // coussin visé (frames) — cf. neost_audio_open
 float    g_masterVol     = 1.0f;   // volume maître utilisateur (0..1)
-float    g_volSmooth     = 1.0f;   // volume effectif du bloc précédent (rampe anti-clic)
 uint32_t g_audioUnderruns = 0;     // signalés par la page (diagnostic)
 
 // Plein écran (posé par le shell sur fullscreenchange) : l'image passe alors en
@@ -338,14 +338,9 @@ void produceAudioFrame() {
     // vers le coussin, comme le natif : ±8 échantillons sur ~960, soit ≤ 0,8 % de
     // hauteur — inaudible, mais suffisant pour absorber la dérive entre l'horloge
     // de l'AudioContext et celle de la machine (elles ne sont PAS les mêmes).
-    static constexpr double kCpuHz = 8021248.0;
-    g_sampleCarry += double(fc) * g_audioRate / kCpuHz;
-    int n = int(g_sampleCarry);
-    g_sampleCarry -= n;
-    int adj = (g_cushionFrames - g_queuedFrames) / 256;
-    if      (adj >  8) adj =  8;
-    else if (adj < -8) adj = -8;
-    n += adj;
+    // A28 : le calcul est PARTAGÉ (core/Pacing.hpp) — il était recopié à
+    // l'identique ici, dans le GUI natif et dans l'Android.
+    const int n = g_pacer.samplesForFrame(fc, g_audioRate, g_cushionFrames, g_queuedFrames);
     if (n <= 0) { neost::mixEmulatedFrame(m.psg, &m.dmasnd, false, 0, 0, fc, g_mixBuf); return; }
 
     // Chaîne PARTAGÉE avec le GUI et le headless (core/AudioMix.cpp) : YM horodaté,
@@ -358,15 +353,8 @@ void produceAudioFrame() {
 
     // Volume maître en RAMPE sur le bloc (un saut poserait une marche par bloc :
     // clic audible au mute et « zipper » en glissant le curseur), puis clamp.
-    if (g_masterVol != g_volSmooth || g_masterVol != 1.0f) {
-        const float v0 = g_volSmooth, vt = g_masterVol;
-        for (int i = 0; i < n; ++i) {
-            const float v = v0 + (vt - v0) * (float(i + 1) / float(n));
-            st[2 * i] *= v; st[2 * i + 1] *= v;
-        }
-        g_volSmooth = vt;
-    }
-    for (int i = 0; i < 2 * n; ++i) st[i] = std::max(-1.0f, std::min(1.0f, st[i]));
+    g_pacer.applyMasterVolume(st, n, g_masterVol);
+    neost::pacing::AudioPacer::clampStereo(st, n);
 
     // Estimation locale entre deux rapports de la page : sans elle, l'asservissement
     // verrait une file figée pendant plusieurs trames et sur-corrigerait.
@@ -424,19 +412,15 @@ void mainLoop() {
     // géométrie vidéo décide : 50, 60 ou 71 Hz). Un tour rAF exécute donc 0, 1 ou
     // 2 trames selon ce que le temps réel réclame. Plafond à 4 pour ne pas
     // spiraler après un onglet mis en arrière-plan (rAF y est suspendu).
-    static constexpr double kCpuHz = 8021248.0;      // horloge CPU/bus
-    static double g_emuNextMs = 0.0;
+    // A28 : la boucle de rattrapage est PARTAGÉE (core/Pacing.hpp) — même
+    // algorithme, au caractère près, que celle du frontend Android.
+    static neost::pacing::FramePacer g_framePacer;
     const double nowMs = emscripten_get_now();
-    if (g_emuNextMs == 0.0) g_emuNextMs = nowMs;     // 1re trame : on part d'ici
-
-    int ran = 0;
-    while (nowMs >= g_emuNextMs && ran < 4) {
+    const int ran = g_framePacer.runDue(nowMs, [] {
         g_machine->runFrame();
         produceAudioFrame();          // le son suit la trame, pas le rythme de l'écran
-        g_emuNextMs += double(g_machine->frameCycles()) * 1000.0 / kCpuHz;
-        ++ran;
-    }
-    if (ran == 4 && nowMs > g_emuNextMs) g_emuNextMs = nowMs;   // longue pause : resync
+        return g_machine->frameCycles();
+    });
 
     // Aucune trame due (écran plus rapide que la machine) : rien de neuf à
     // montrer, on garde l'image précédente plutôt que de re-téléverser la même.
@@ -555,7 +539,7 @@ EMSCRIPTEN_KEEPALIVE void neost_audio_open(int rate, int cushionMs) {
     if (cushionMs > 250) cushionMs = 250;
     g_audioRate     = static_cast<uint32_t>(rate);
     g_cushionFrames = rate * cushionMs / 1000;
-    g_sampleCarry   = 0.0;
+    g_pacer.reset();
     g_queuedFrames  = 0;
     std::fprintf(stderr, "[web] audio out: %d Hz stereo, cushion %d ms (%d frames)\n",
                  rate, cushionMs, g_cushionFrames);

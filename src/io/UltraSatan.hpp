@@ -30,6 +30,7 @@
 //  (c) 2026 VERHILLE Arnaud — projet NeoST.
 // =============================================================================
 #pragma once
+#include "core/Pacing.hpp"
 #include <cstdint>
 #include <functional>
 #include <string>
@@ -87,7 +88,7 @@ public:
 private:
     enum class Pending : uint8_t { None = 0, Clock, Name, Settings };
 
-    static constexpr int64_t CPU_HZ = 8021248;   // 1 s émulée (cf. Rtc)
+    static constexpr int64_t CPU_HZ = neost::pacing::kCpuHzInt;   // A28 : core/Pacing.hpp
 
     std::function<int64_t()> now_;
     int64_t  baseCycle_ = 0;      // cycle du dernier calage de l'horloge

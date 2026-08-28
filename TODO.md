@@ -164,13 +164,9 @@ est continue, les trous sont du travail fait.
 - **A13** = save-states × GEMDOS HD → § *Périphériques & profils machine*.
 - **A15** = DSL d'injection sans token « mouvement bouton tenu » (pas de DRAG GEM).
 
-### Consolidation (quelques jours chacun, par opportunité)
+### Consolidation
 
-- **A28 ⭘ — Sortir le servo audio et la cadence dans le cœur.** Le filtre proportionnel
-  d'asservissement (même constante `/256`, même clamp ±8, même rampe anti-clic) existe en
-  **trois copies** (GUI, web, android) et la boucle de rattrapage de cadence aussi ;
-  `kCpuHz` est déclarée quatre fois. Un `AudioPacer`/`FramePacer` dans `neost_core` —
-  même recette que `AudioMix`, dont la copie web avait déjà divergé.
+*(vide — A16b, A28, A29 et A30 sont soldés le 2026-08-28 ; détail au `CHANGELOG.md`.)*
 
 ### Chantiers structurels (UN à la fois, jamais combinés)
 

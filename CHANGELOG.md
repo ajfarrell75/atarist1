@@ -15,6 +15,49 @@ Ripper, DAC Pro Sound) avec page Dongles, `disks/dongles.txt` et oracle de rejeu
 vérifié note à note** en headless, corpus MIDI piano/blues ; port MIDI ALSA sous Linux ;
 save-state v16. Détail dans les chantiers datés ci-dessous.
 
+## A28 — le servo audio et la cadence rentrent dans le cœur (2026-08-28)
+
+Le filtre proportionnel d'asservissement audio — même constante `/256`, même clamp
+±8, même rampe anti-clic — existait en **trois copies** : GUI natif
+(`audio/Audio.cpp`), web (`main_web.cpp`), Android (`main_android.cpp`). La boucle de
+rattrapage de cadence en **deux** (web et Android, identiques au caractère près). Et
+`kCpuHz` était déclarée **quatre** fois — cinq en comptant `Mt32Synth` et
+`MidiOutHost`, plus trois `CPU_HZ` entiers dans les puces.
+
+Le précédent est au journal : la chaîne de mixage vivait elle aussi en clair dans le
+GUI, recopiée ailleurs, et **la copie web avait dérivé** sur l'ancienne API mono non
+horodatée — des échantillons inaudibles dans le navigateur, sans que personne ne le
+voie. `AudioMix` a réglé ce cas-là ; `core/Pacing.hpp` règle les deux qui restaient.
+
+- **`neost::pacing::AudioPacer`** : report fractionnaire, servo proportionnel borné,
+  rampe anti-clic du volume maître, clamp de sortie. Les trois frontends l'appellent.
+- **`neost::pacing::FramePacer`** : la boucle de rattrapage bornée à 4 trames, avec
+  `resync()` pour les pauses (menu borne, onglet en arrière-plan). Web et Android.
+- **UNE seule définition de l'horloge** : `kCpuHz` (double) et `kCpuHzInt` (entier,
+  pour les puces qui comptent des cycles émulés). Le littéral `8021248` n'apparaît
+  plus qu'**une fois** dans tout l'arbre.
+
+**Et pour la première fois, ce code est TESTÉ.** Ni le headless ni les étalons pixel
+ne le traversent : c'est lui qui décide combien d'échantillons sortent par trame, et
+une erreur y donne un son qui dérive ou qui hache — jamais un pixel de différence.
+La table de vérité (`selftest_logic.cpp`, dans la lignée d'A29) pose : la cadence suit
+la GÉOMÉTRIE (19,98 / 16,66 / 13,99 ms pour PAL / NTSC / mono, pas un 20 ms figé) ;
+le report fractionnaire tient 1 000 trames **à ±1 échantillon** là où une troncature
+en perdrait ~989 ; le servo est du bon SIGNE (file vide ⇒ produire plus), borné à ±8,
+et vaut +1 pour 256 trames d'écart ; la rampe de volume ARRIVE à la cible ; le
+rattrapage plafonne à 4 trames et **abandonne** le retard au lieu de le traîner.
+
+Les trois mutations essayées font rougir la bonne ligne : clamp 8 → 16 (3 assertions),
+signe du servo inversé (4), report fractionnaire retiré (1 — exactement celle qui le
+mesure).
+
+Vérification des frontends que le poste de dev ne bâtit pas d'habitude : le **web est
+compilé** (emcc 6.0.8) pour valider les modifications. L'**Android** ne l'est pas — le
+NDK n'est pas installé ici ; ses éditions sont symétriques de celles du web (mêmes
+appels, mêmes noms) et c'est la CI qui les compile.
+
+Palier `full` vert.
+
 ## A30 — les parseurs d'images disquette passent au fuzzer, et la CI ne bâtissait pas ce qu'elle lance (2026-08-28)
 
 `decodeMsa`, `decodeDim` et `StxImage::parse` sont les seules fonctions du projet qui
