@@ -1046,7 +1046,7 @@ agent. 7 findings uniques, 5 CONFIRMÉS (2 faux positifs écartés : Bus/MMIO et
 - **[BASSE, save-state — trous résiduels de durcissement] `Shifter::glueLineStart_`** : restauré
   sans check de taille, indexé sans garde de lecture dans `advanceGlueLive` (`Shifter.cpp:454`, `:461`, `:493`) → lecture hors-tas d'un `int64_t` (invariant `== glueLines_.size()` ajouté).
   **`Machine::curLineLen_`** : consommé par `advanceLine` (`lineCarry_ += cpl_ - curLineLen_`) →
-  forgé, désancre `lineCarry_` après son propre check (borné `]0,4096]`). **`Cpu68k::g_cpuMul`** :
+  forgé, désancre `lineCarry_` après son propre check (borné `]0,4096]`). **`CpuState::cpuMul`** (il s'appelait g_cpuMul avant le regroupement d'état d'A33) :
   multiplie l'horloge Moira (`addBusWaitCycles`) → forgé énorme = bond d'horloge (validé ∈ {1,2}).
 
 **Vérifiés FIDÈLES (adversarial)** : Bus/MMIO whitelist bus-error, Blitter (données + arbitration),

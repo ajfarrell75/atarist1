@@ -2,7 +2,7 @@
 //  Cpu68k.cpp — Liaison Moira <-> Bus NeoST.
 //
 //  Moira (cœur 68000 cycle-exact, MIT) est intégré en sous-module. Cette façade
-//  route ses accès mémoire vers un Bus unique pointé par g_bus et reproduit le
+//  route ses accès mémoire vers un Bus unique pointé par g_cur->bus et reproduit le
 //  vectoring ST (MFP vectorisé niveau 6, VBL/HBL auto-vectorisés). C'est le seul
 //  couplage « global » du projet (les callbacks CPU n'ont qu'un Bus actif).
 //
@@ -24,50 +24,88 @@
 
 #include "Moira.h"
 
+class NeostMoira;   // défini plus bas (le cœur Moira dérivé, avec nos hooks)
+
+// =============================================================================
+//  A33 — ÉTAT PAR INSTANCE du CPU, regroupé (2026-08-28).
+//
+//  Ce fichier portait 48 globaux `g_*`. Les confondre était le vrai obstacle au
+//  mono-instance : les uns sont de l'ÉTAT (une machine émulée en a un jeu), les
+//  autres de la CONFIGURATION DE PROCESSUS lue une fois dans l'environnement (les
+//  verrous d'IACK, d'E-Clock, d'IPL, de créneau RAM et toutes les traces — cf.
+//  tools/env_locks.json) : celles-là DOIVENT rester globales, les rendre
+//  par-instance serait faux.
+//
+//  Les 25 champs ci-dessous sont l'état. Ils vivent dans une structure pour que
+//  « une deuxième machine » devienne un deuxième objet, et non 25 variables à
+//  démêler. Étape suivante (cf. TODO A33) : cette structure devient membre de
+//  Cpu68k et `g_st` un pointeur vers l'instance ACTIVE, posé à l'entrée de run()
+//  — les callbacks Moira ne tournent que dedans.
+// =============================================================================
+struct CpuState {
+    Bus*        bus          = nullptr;   // bus actif vu par les callbacks CPU
+    Scheduler*  sched        = nullptr;   // ordonnanceur piloté par sync() (cf. NeostMoira::sync)
+    Cpu68k*     cpuSelf      = nullptr;   // instance courante (rebase de quantum depuis les hooks)
+    NeostMoira* moira        = nullptr;   // cœur Moira actif
+    Tracer*     tracer       = nullptr;   // traceur optionnel (nullptr = aucun surcoût)
+    bool        vblPending   = false;     // VBL (niveau 4) en attente d'acquittement
+    bool        hblPending   = false;     // HBL (niveau 2) en attente d'acquittement
+    bool        inBusError   = false;     // garde « double bus fault » (cf. son bandeau)
+    int         grp0Vector   = 0;
+    bool        inReset      = false;
+    bool        endSlice     = false;
+    bool        bpHit        = false;     // un breakpoint/watchpoint a stoppé le dernier run()
+    uint32_t    bpAddr       = 0;         // adresse atteinte (PC du BP, ou adresse DONNÉE du WP)
+    bool        bpWatch      = false;     // true = WATCHPOINT (accès mémoire), pas un breakpoint PC
+    uint32_t    bpSkipPc     = 0xFFFFFFFFu;  // adresse à ignorer UNE fois (reprise propre)
+    int         cpuMul       = 1;         // 1 = 8 MHz, 2 = 16 MHz
+    int64_t     cpuBias      = 0;         // biais de conversion (0 tant qu'on reste à 8 MHz)
+    int         desiredIpl   = 0;         // niveau IPL calculé (immédiat, broche « réelle »)
+    int         appliedIpl   = 0;         // niveau dernier PROPAGÉ à la broche Moira (POLL_IPL)
+    int64_t     iplChgClock  = -1000;     // horloge du dernier changement de desiredIpl
+    int64_t     hblPinDue    = -1;        // cycle BUS de montée de la broche HBL (−1 = inactif)
+    int64_t     vblPinDue    = -1;        // idem VBL
+    int64_t     pinNextDue   = -1;        // min des deux (chemin chaud O(1) dans sync())
+    bool        htArmed      = false;     // trace NEOST_HTRACE armée
+    int64_t     htPrev       = 0;
+};
+
 namespace {
-    Bus*    g_bus = nullptr;        // bus actif vu par les callbacks CPU
-    Scheduler* g_sched = nullptr;   // ordonnanceur piloté par sync() (cf. NeostMoira::sync)
-    Cpu68k* g_cpuSelf = nullptr;    // instance courante (rebase de quantum depuis les hooks Moira)
-    bool    g_vblPending = false;   // VBL (niveau 4) en attente d'acquittement
-    bool    g_hblPending = false;   // HBL (niveau 2) en attente d'acquittement
-    Tracer* g_tracer = nullptr;     // traceur optionnel (nullptr = aucun surcoût)
+// Instance ACTIVE. Les callbacks de Moira et les fonctions libres de ce fichier
+// n'ont pas de `this` : elles passent par ce pointeur, posé par le constructeur et
+// re-posé à l'entrée de Cpu68k::run(). Deux CPU peuvent donc coexister et tourner
+// À TOUR DE RÔLE (test unitaire d'une Machine, A/B en un processus, anneau MIDI à
+// deux nœuds) ; deux CPU tournant SIMULTANÉMENT dans deux threads demanderaient
+// davantage — ce n'est pas ce qu'A33 promettait.
+CpuState* g_cur = nullptr;
+
     // Garde « double bus fault » : armée quand on déclenche une bus error, désarmée
     // au début de l'instruction SUIVANTE. Si une NOUVELLE bus error survient alors
     // qu'elle est armée, c'est qu'un accès a fauté PENDANT l'empilement de la trame
     // d'exception (SSP/PC corrompus, code parti en vrille) : sur un vrai 68000 cela
     // halte le CPU. On reproduit ce halt au lieu de récurser → l'hôte ne segfault
     // plus et le mode headless peut vider sa trace/série.
-    bool    g_inBusError = false;
     // Vecteur de l'exception de GROUPE 0 en cours de prise (2 = bus error,
     // 3 = address error), 0 hors exception. Latché par willExecute(M68kException…)
     // et effacé par didExecute(M68kException…) : si l'exception se termine
     // normalement il retombe à 0 ; si elle lève DoubleFault (SSP impair, ou
     // nouvelle faute pendant l'empilement) il vaut ENCORE le vecteur fautif quand
     // cpuDidHalt() est notifié — c'est ce qui permet de NOMMER la cause du halt.
-    int     g_grp0Vector = 0;
     // Pendant cpu.reset() (lecture SSP/PC) le cœur consomme ~40 cyc via sync(). On NE
     // dispatche PAS l'ordonnanceur alors : sinon sched.now() serait traîné à 40 et la 1ʳᵉ
     // trame s'ancrerait là (frameStart_=40) au lieu de 0 → grille faisceau décalée de 40 cyc
     // → calibrations raster cassées (Enchanted Land noir). L'ancien modèle n'avançait
     // l'ordonnanceur qu'aux frontières de bloc, jamais pendant le reset.
-    bool    g_inReset = false;
     // Préemption du timeslice : posé par endTimeslice() (depuis un callback de
     // l'ordonnanceur, en plein milieu d'une instruction), testé après chaque
     // instruction dans la boucle run() pour rendre la main à l'horloge.
-    bool    g_endSlice = false;
     // ---- Débogueur : breakpoints PC (cf. Cpu68k § Débogueur) --------------------
-    bool     g_bpHit    = false;        // un breakpoint/watchpoint a stoppé le dernier run()
-    uint32_t g_bpAddr   = 0;            // adresse atteinte (PC du breakpoint, ou adresse DONNÉE du watchpoint)
-    bool     g_bpWatch  = false;        // true = c'était un WATCHPOINT (accès mémoire) et non un breakpoint PC
-    uint32_t g_bpSkipPc = 0xFFFFFFFFu;  // adresse à ignorer UNE fois (reprise propre, breakpoints PC only)
     // ---- Bascule 8/16 MHz du Mega STE ($FF8E21 bit1, cf. Cpu68k::setMegaSteSpeed) --
     // L'ordonnanceur et toutes les puces vivent en cycles BUS (8 MHz) ; le cœur
     // CPU, lui, compte ses propres cycles. À 16 MHz : 1 cycle bus = 2 cycles CPU.
-    // La conversion est : bus = (clock + g_cpuBias) / g_cpuMul, le biais étant rebasé
+    // La conversion est : bus = (clock + g_cur->cpuBias) / g_cur->cpuMul, le biais étant rebasé
     // à chaque bascule pour que l'horloge bus reste CONTINUE (port de l'esprit de
     // Hatari cpucycleunit = CYCLE_UNIT/2 dans clocks_timings.c/newcpu).
-    int     g_cpuMul  = 1;   // 1 = 8 MHz, 2 = 16 MHz
-    int64_t g_cpuBias = 0;   // biais de conversion (0 tant qu'on reste à 8 MHz)
     // Synchro E-clock à l'entrée des IRQ auto-vectorisées (cf. NeostMoira::willInterrupt).
     // OPT-IN (`NEOST_ECLOCK_ON`) : mécanisme FIDÈLE (Moira, 68000 générique, n'a pas la
     // synchro E-clock Atari de l'IACK auto-vecteur), mais NON validable en jeu headless
@@ -137,8 +175,6 @@ namespace {
     uint32_t g_htPc     = []{ const char* s = std::getenv("NEOST_HTRACE_PC");   return s ? (uint32_t)std::strtoul(s, nullptr, 16) : 0x3862u; }();
     int      g_htSkip   = []{ const char* s = std::getenv("NEOST_HTRACE_SKIP"); return s ? std::atoi(s) : 2000; }();
     int      g_htN      = []{ const char* s = std::getenv("NEOST_HTRACE_N");    return s ? std::atoi(s) : 400; }();
-    bool     g_htArmed  = false;
-    int64_t  g_htPrev   = 0;
     // DEEP convergence WinUAE (opt-in NEOST_RAM_SLOT) : alignement créneau bus 4 cyc à
     // 8 MHz pour la RAM ST (CHIP16 < $400000), port FIDÈLE de wait_cpu_cycle_read/write
     // (custom.c:148-153). Avant un accès RAM, si l'horloge bus n'est pas sur la grille
@@ -163,12 +199,9 @@ namespace {
     // Enchanted Land (boucle beam-sync jamais servie) sans corriger le jitter qu'il
     // promettait, et la mesure re-prise le 2026-08-28 sur l'arbre du jour le confirme —
     // palier `fast` ROUGE, blitter_timer à 245 px là où le modèle BLOC est à 0.
-    int     g_desiredIpl  = 0;       // niveau IPL calculé (immédiat, broche « réelle »)
-    int     g_appliedIpl  = 0;       // niveau dernier PROPAGÉ à la broche Moira (reg.ipl via POLL_IPL)
-    int64_t g_iplChgClock = -1000;   // horloge (cœur) du dernier changement de g_desiredIpl
     // Pré-armement des broches IRQ vidéo (cf. Cpu68k::armHblPinAt/.hpp) : cycle BUS
     // auquel la broche doit monter, appliqué par sync() en cours d'instruction.
-    // −1 = inactif. g_pinNextDue = min des deux (chemin chaud O(1) dans sync()).
+    // −1 = inactif. g_cur->pinNextDue = min des deux (chemin chaud O(1) dans sync()).
     // DIAG (NEOST_BUS_DIAG=<préfixe PC sur 8 bits, hexa>) — cf. busDiag. Drapeau
     // NAMESPACE et pas statique LOCAL : en statique local, chaque accès bus du CPU
     // franchissait la garde d'initialisation du singleton ET évaluait getClock() pour
@@ -176,19 +209,16 @@ namespace {
     // se réduit à la lecture d'un global et les sites d'appel peuvent l'éviter en amont.
     long    g_busDiagPage = []{ const char* s = std::getenv("NEOST_BUS_DIAG");
                                 return s ? std::strtol(s, nullptr, 16) : -1L; }();
-    int64_t g_hblPinDue   = -1;
-    int64_t g_vblPinDue   = -1;
-    int64_t g_pinNextDue  = -1;
     inline void recomputePinNextDue() {
-        g_pinNextDue = g_hblPinDue;
-        if (g_vblPinDue >= 0 && (g_pinNextDue < 0 || g_vblPinDue < g_pinNextDue))
-            g_pinNextDue = g_vblPinDue;
+        g_cur->pinNextDue = g_cur->hblPinDue;
+        if (g_cur->vblPinDue >= 0 && (g_cur->pinNextDue < 0 || g_cur->vblPinDue < g_cur->pinNextDue))
+            g_cur->pinNextDue = g_cur->vblPinDue;
     }
     inline int64_t busOfClock(int64_t c) {
-        return g_cpuMul == 1 ? c + g_cpuBias : (c + g_cpuBias) >> 1;
+        return g_cur->cpuMul == 1 ? c + g_cur->cpuBias : (c + g_cur->cpuBias) >> 1;
     }
     inline int64_t cpuClockForBus(int64_t b) {
-        return g_cpuMul == 1 ? b - g_cpuBias : (b << 1) - g_cpuBias;
+        return g_cur->cpuMul == 1 ? b - g_cur->cpuBias : (b << 1) - g_cur->cpuBias;
     }
     void    neostUpdateIpl(bool commit = false);   // recalcule l'IPL présenté au cœur
     void    noteBlitterPreStart();   // accès CPU pendant la fenêtre PRE_START du blitter ?
@@ -199,7 +229,9 @@ namespace {
 //  vers le Bus et reproduisant le vectoring ST (MFP vectorisé niveau 6,
 //  VBL/HBL auto-vectorisés) via readIrqUserVector (irqMode USER).
 // -----------------------------------------------------------------------------
-namespace {
+// A33 : au scope GLOBAL (plus dans un namespace anonyme) — CpuState est déclaré
+// dans Cpu68k.hpp et porte un NeostMoira*, donc les deux doivent désigner LE
+// MÊME type ; un type à liaison interne n'aurait pas pu convenir.
 class NeostMoira : public moira::Moira {
 public:
     NeostMoira() {
@@ -208,9 +240,9 @@ public:
         // Syntaxe Musashi : conserve le format de trace historique (comparaison MAME).
         setDasmSyntax(moira::Syntax::MUSASHI);
         // Délai de reconnaissance IPL fidèle WinUAE (opt-in). Seuils en clock-units =
-        // cyc × g_cpuMul (1 au boot = 8 MHz ST). Réappliqué si la vitesse change.
-        if (g_iplFetch) setIplDelay(static_cast<int64_t>(g_iplFetch4) * g_cpuMul,
-                                    static_cast<int64_t>(g_iplFetch2) * g_cpuMul);
+        // cyc × g_cur->cpuMul (1 au boot = 8 MHz ST). Réappliqué si la vitesse change.
+        if (g_iplFetch) setIplDelay(static_cast<int64_t>(g_iplFetch4) * g_cur->cpuMul,
+                                    static_cast<int64_t>(g_iplFetch2) * g_cur->cpuMul);
     }
 
     // Une adresse non décodée déclenche une bus error : on lève l'exception
@@ -226,9 +258,9 @@ public:
     // On ne touche NI au CPU NI à l'ordonnanceur : seule la ligne /RESET est assertée.
     void didExecute(const char* /*func*/, moira::Instr I, moira::Mode, moira::Size,
                     moira::u16) override {
-        if (I != moira::Instr::RESET || !g_bus) return;
-        g_vblPending = g_hblPending = false;   // ≙ pendingInterrupts = 0
-        g_bus->peripheralReset();
+        if (I != moira::Instr::RESET || !g_cur->bus) return;
+        g_cur->vblPending = g_cur->hblPending = false;   // ≙ pendingInterrupts = 0
+        g_cur->bus->peripheralReset();
         neostUpdateIpl();
     }
 
@@ -240,11 +272,11 @@ public:
     // le prefetch de l'instruction fautive, il ne désigne PAS la faute).
     void willExecute(moira::M68kException exc, moira::u16 vector) override {
         if (exc == moira::M68kException::BUS_ERROR ||
-            exc == moira::M68kException::ADDRESS_ERROR) g_grp0Vector = int(vector);
+            exc == moira::M68kException::ADDRESS_ERROR) g_cur->grp0Vector = int(vector);
     }
     void didExecute(moira::M68kException exc, moira::u16) override {
         if (exc == moira::M68kException::BUS_ERROR ||
-            exc == moira::M68kException::ADDRESS_ERROR) g_grp0Vector = 0;
+            exc == moira::M68kException::ADDRESS_ERROR) g_cur->grp0Vector = 0;
     }
 
     // ---- Halt du 68000 -------------------------------------------------------
@@ -270,7 +302,7 @@ public:
     // n'en affiche pas non plus dans son message. Le vecteur et le SSP, eux, sont
     // exacts au moment de la faute.
     void cpuDidHalt() override {
-        if (g_inReset) {
+        if (g_cur->inReset) {
             std::fprintf(stderr,
                 "[cpu] 68000 halted: reset vector fetch failed (SSP/PC unreadable).\n");
             return;
@@ -279,7 +311,7 @@ public:
             "[cpu] 68000 halted: double bus/address error while taking exception "
             "vector %d (SSP=$%08X).\n"
             "      The emulated machine is frozen until reset.\n",
-            g_grp0Vector, static_cast<unsigned>(getSP()));
+            g_cur->grp0Vector, static_cast<unsigned>(getSP()));
     }
 
     [[noreturn]] void raiseBusError(moira::u32 addr, bool write) const {
@@ -310,9 +342,9 @@ public:
     // halt() — lequel restaure aussi reg.pc = reg.pc0 et notifie cpuDidHalt(), deux
     // choses que le drapeau posé à la main sautait.
     bool faultOrHalt(moira::u32 a, bool write) const {
-        if (g_inBusError) throw moira::DoubleFault();
-        g_bus->megaSteCacheFlushIfEnabled();   // une bus error invalide le cache Mega STE (Hatari)
-        g_inBusError = true;
+        if (g_cur->inBusError) throw moira::DoubleFault();
+        g_cur->bus->megaSteCacheFlushIfEnabled();   // une bus error invalide le cache Mega STE (Hatari)
+        g_cur->inBusError = true;
         raiseBusError(a, write);            // [[noreturn]] : lève moira::BusError
         return true;                        // inatteignable
     }
@@ -328,7 +360,7 @@ public:
     void chipWait16() const {
         auto* self = const_cast<NeostMoira*>(this);
         const moira::i64 c = self->getClock();
-        const int slot = int((c + g_cpuBias) & 7);       // position dans le créneau bus
+        const int slot = int((c + g_cur->cpuBias) & 7);       // position dans le créneau bus
         self->setClock(c + ((8 - slot) & 7) + 4);
     }
     bool superNow() const { return (getSR() & 0x2000) != 0; }
@@ -337,22 +369,22 @@ public:
         a &= 0x00FFFFFF;
         uint16_t v;
         if (a >= 0x400000) {                 // ROM/cartouche/IO : « FAST », plein 16 MHz
-            v = size == 2 ? g_bus->read16(a) : g_bus->read8(a);
-            if (g_bus->megaSteCacheEnabled())
-                g_bus->megaSteCacheUpdate(a, size, v, false, superNow());
+            v = size == 2 ? g_cur->bus->read16(a) : g_cur->bus->read8(a);
+            if (g_cur->bus->megaSteCacheEnabled())
+                g_cur->bus->megaSteCacheUpdate(a, size, v, false, superNow());
             return v;
         }
         const bool super = superNow();       // RAM ST, partagée avec le Shifter
-        if (g_bus->megaSteCacheEnabled() && g_bus->megaSteCacheRead(a, size, v, super))
+        if (g_cur->bus->megaSteCacheEnabled() && g_cur->bus->megaSteCacheRead(a, size, v, super))
             return v;                        // hit : 4 cycles CPU (déjà facturés par Moira)
         chipWait16();                        // miss / cache off : accès cadencé bus 8 MHz
-        v = size == 2 ? g_bus->read16(a) : g_bus->read8(a);
-        if (g_bus->megaSteCacheEnabled()) {
-            if (size == 2) g_bus->megaSteCacheUpdate(a, 2, v, false, super);
+        v = size == 2 ? g_cur->bus->read16(a) : g_cur->bus->read8(a);
+        if (g_cur->bus->megaSteCacheEnabled()) {
+            if (size == 2) g_cur->bus->megaSteCacheUpdate(a, 2, v, false, super);
             // Lecture octet : le bus porte le MOT entier à cette adresse → la ligne
             // est remplie avec le mot pair complet (si cachable sans bus error).
-            else if (g_bus->megaSteCacheable(a & ~1u, 2, false, super))
-                g_bus->megaSteCacheUpdate(a & ~1u, 2, g_bus->read16(a & ~1u), false, super);
+            else if (g_cur->bus->megaSteCacheable(a & ~1u, 2, false, super))
+                g_cur->bus->megaSteCacheUpdate(a & ~1u, 2, g_cur->bus->read16(a & ~1u), false, super);
         }
         return v;
     }
@@ -360,16 +392,16 @@ public:
     void writeMste16Mhz(moira::u32 a, int size, moira::u16 v) const {
         a &= 0x00FFFFFF;
         if (a < 0x400000) chipWait16();      // écriture RAM ST : toujours cadencée bus
-        if (size == 2) g_bus->write16(a, v); else g_bus->write8(a, moira::u8(v));
-        if (g_bus->megaSteCacheEnabled())    // write-through : maj du mot déjà caché
-            g_bus->megaSteCacheUpdate(a, size, v, true, superNow());
+        if (size == 2) g_cur->bus->write16(a, v); else g_cur->bus->write8(a, moira::u8(v));
+        if (g_cur->bus->megaSteCacheEnabled())    // write-through : maj du mot déjà caché
+            g_cur->bus->megaSteCacheUpdate(a, size, v, true, superNow());
     }
 
     // Chaque accès CPU abouti latche le « dernier mot du bus de données » dans
     // Bus::cpuDb (≈ regs.db du cœur UAE : mot = valeur, octet = dupliqué sur les
     // deux voies — cf. cpu_prefetch.h). Les lectures en RAM « void » le relisent.
-    void latchDb(moira::u16 v) const { g_bus->cpuDb = v; }
-    void latchDb8(moira::u8 v) const { g_bus->cpuDb = moira::u16((moira::u16(v) << 8) | v); }
+    void latchDb(moira::u16 v) const { g_cur->bus->cpuDb = v; }
+    void latchDb8(moira::u8 v) const { g_cur->bus->cpuDb = moira::u16((moira::u16(v) << 8) | v); }
 
     // Alignement créneau bus 4 cyc (8 MHz) sur la RAM ST avant un accès — cf. g_ramSlot.
     // Port fidèle de wait_cpu_cycle_read (custom.c) : la GLUE partage la RAM en créneaux
@@ -386,7 +418,7 @@ public:
         if (!g_ramSlot || (a & 0x00FFFFFFu) >= 0x400000u) return;
         auto* self = const_cast<NeostMoira*>(this);
         const moira::i64 c = self->getClock();
-        const int slot = int((c + g_cpuBias + g_ramSlotPhase - 2) & 3);
+        const int slot = int((c + g_cur->cpuBias + g_ramSlotPhase - 2) & 3);
         if (slot) self->setClock(c + (4 - slot));
     }
 
@@ -402,16 +434,16 @@ public:
     // Fin de cycle bus : /UDS remonte pour tout accès mot, ou octet à adresse PAIRE.
     // C'est l'horloge de la clé Cubase 2 (PAL16R8), qui voit CHAQUE cycle du CPU —
     // fetchs compris. Un seul test de bool quand aucune clé noire n'est branchée.
-    void udsDone(moira::u32 a, int size) const { if (g_bus->udsObserved && (size == 2 || !(a & 1))) g_bus->udsCycle(a); }
-    moira::u8  read8 (moira::u32 a) const override { if (g_bus->blitterWinEnd >= 0 || g_bus->blitterCountCpu) noteBlitterPreStart(); if (g_bus->busFaultN(a, 1, false) && faultOrHalt(a, false)) return 0; moira::u8 v; if (g_cpuMul == 2) v = moira::u8(readMste16Mhz(a, 1)); else { chipWait8(a); if (g_busDiagPage >= 0) busDiag('r', a, getClock()); v = g_bus->read8(a); } latchDb8(v); udsDone(a, 1); return v; }
-    moira::u16 read16(moira::u32 a) const override { if (g_bus->blitterWinEnd >= 0 || g_bus->blitterCountCpu) noteBlitterPreStart(); if (g_bus->busFaultN(a, 2, false) && faultOrHalt(a, false)) return 0; moira::u16 v; if (g_cpuMul == 2) v = readMste16Mhz(a, 2); else { chipWait8(a); if (g_busDiagPage >= 0) busDiag('R', a, getClock()); v = g_bus->read16(a); } latchDb(v); udsDone(a, 2); return v; }
-    void write8 (moira::u32 a, moira::u8  v) const override { if (g_bus->blitterWinEnd >= 0 || g_bus->blitterCountCpu) noteBlitterPreStart(); if (g_bus->busFaultN(a, 1, true)) { if (faultOrHalt(a, true)) return; } latchDb8(v); if (g_cpuMul == 2) { writeMste16Mhz(a, 1, v); udsDone(a, 1); return; } chipWait8(a); g_bus->write8(a, v); udsDone(a, 1); }
-    void write16(moira::u32 a, moira::u16 v) const override { if (g_bus->blitterWinEnd >= 0 || g_bus->blitterCountCpu) noteBlitterPreStart(); if (g_bus->busFaultN(a, 2, true)) { if (faultOrHalt(a, true)) return; } latchDb(v); if (g_cpuMul == 2) { writeMste16Mhz(a, 2, v); udsDone(a, 2); return; } chipWait8(a); g_bus->write16(a, v); udsDone(a, 2); }
+    void udsDone(moira::u32 a, int size) const { if (g_cur->bus->udsObserved && (size == 2 || !(a & 1))) g_cur->bus->udsCycle(a); }
+    moira::u8  read8 (moira::u32 a) const override { if (g_cur->bus->blitterWinEnd >= 0 || g_cur->bus->blitterCountCpu) noteBlitterPreStart(); if (g_cur->bus->busFaultN(a, 1, false) && faultOrHalt(a, false)) return 0; moira::u8 v; if (g_cur->cpuMul == 2) v = moira::u8(readMste16Mhz(a, 1)); else { chipWait8(a); if (g_busDiagPage >= 0) busDiag('r', a, getClock()); v = g_cur->bus->read8(a); } latchDb8(v); udsDone(a, 1); return v; }
+    moira::u16 read16(moira::u32 a) const override { if (g_cur->bus->blitterWinEnd >= 0 || g_cur->bus->blitterCountCpu) noteBlitterPreStart(); if (g_cur->bus->busFaultN(a, 2, false) && faultOrHalt(a, false)) return 0; moira::u16 v; if (g_cur->cpuMul == 2) v = readMste16Mhz(a, 2); else { chipWait8(a); if (g_busDiagPage >= 0) busDiag('R', a, getClock()); v = g_cur->bus->read16(a); } latchDb(v); udsDone(a, 2); return v; }
+    void write8 (moira::u32 a, moira::u8  v) const override { if (g_cur->bus->blitterWinEnd >= 0 || g_cur->bus->blitterCountCpu) noteBlitterPreStart(); if (g_cur->bus->busFaultN(a, 1, true)) { if (faultOrHalt(a, true)) return; } latchDb8(v); if (g_cur->cpuMul == 2) { writeMste16Mhz(a, 1, v); udsDone(a, 1); return; } chipWait8(a); g_cur->bus->write8(a, v); udsDone(a, 1); }
+    void write16(moira::u32 a, moira::u16 v) const override { if (g_cur->bus->blitterWinEnd >= 0 || g_cur->bus->blitterCountCpu) noteBlitterPreStart(); if (g_cur->bus->busFaultN(a, 2, true)) { if (faultOrHalt(a, true)) return; } latchDb(v); if (g_cur->cpuMul == 2) { writeMste16Mhz(a, 2, v); udsDone(a, 2); return; } chipWait8(a); g_cur->bus->write16(a, v); udsDone(a, 2); }
     // Débogueur : watchpoint mémoire atteint (appelé par la couche dataflow de Moira
     // PENDANT l'accès, si CHECK_WP). Sémantique « break-after-access » : on note le hit
     // (adresse DONNÉE) et on préempte → le run() rend la main APRÈS l'instruction fautive.
     void didReachWatchpoint(moira::u32 addr) override {
-        g_bpHit = true; g_bpAddr = addr & 0xFFFFFFu; g_bpWatch = true; g_endSlice = true;
+        g_cur->bpHit = true; g_cur->bpAddr = addr & 0xFFFFFFu; g_cur->bpWatch = true; g_cur->endSlice = true;
     }
 
     // Save-state : tout l'état d'exécution du cœur (les membres protégés de Moira sont
@@ -424,16 +456,16 @@ public:
         // .state (CRC recalculé), il fait prendre à execute() la branche
         // `(this->*loop[queue.ird])` dont l'assert de garde saute en Release —
         // pointeur-membre NUL pour la quasi-totalité des opcodes → SIGSEGV.
-        // Même classe de durcissement que g_cpuMul / enums IKBD (passes 8-9).
+        // Même classe de durcissement que g_cur->cpuMul / enums IKBD (passes 8-9).
         ar.check(!(flags & moira::State::LOOPING), "Moira::flags LOOPING forgé (68000)");
     }
 
     // Lecture du vecteur de reset (SSP/PC) via l'overlay ROM : jamais de bus error.
-    moira::u16 read16OnReset(moira::u32 a) const override { const moira::u16 v = g_bus->read16(a); latchDb(v); return v; }
+    moira::u16 read16OnReset(moira::u32 a) const override { const moira::u16 v = g_cur->bus->read16(a); latchDb(v); return v; }
     // Lecture pour le désassembleur : pas d'effet de bord MMIO ni de bus error
     // (équivaut aux anciens m68k_read_disassembler_* de Musashi). peek16 lit la
     // RAM/ROM sans dispatcher vers les puces ni avancer l'horloge (get_iword_debug).
-    moira::u16 read16Dasm(moira::u32 a) const override { return g_bus->peek16(a); }
+    moira::u16 read16Dasm(moira::u32 a) const override { return g_cur->bus->peek16(a); }
 
     // Le 68000 est-il en attente (instruction STOP) ? Permet à la boucle d'horloge
     // de SAUTER l'attente au lieu de la simuler cycle par cycle (cf. run()).
@@ -454,20 +486,20 @@ public:
         // Broches IRQ vidéo PRÉ-ARMÉES (HBL/VBL) : montée au cycle bus EXACT, en
         // cours d'instruction — l'instruction qui ENJAMBE l'événement la voit à son
         // POLL_IPL, comme WinUAE (pin posée dans do_cycles). Cf. Cpu68k::armHblPinAt.
-        if (g_pinNextDue >= 0 && busOfClock(static_cast<int64_t>(getClock())) >= g_pinNextDue) {
+        if (g_cur->pinNextDue >= 0 && busOfClock(static_cast<int64_t>(getClock())) >= g_cur->pinNextDue) {
             const int64_t busNow = busOfClock(static_cast<int64_t>(getClock()));
-            if (g_hblPinDue >= 0 && busNow >= g_hblPinDue) { g_hblPinDue = -1; g_hblPending = true; }
-            if (g_vblPinDue >= 0 && busNow >= g_vblPinDue) { g_vblPinDue = -1; g_vblPending = true; }
+            if (g_cur->hblPinDue >= 0 && busNow >= g_cur->hblPinDue) { g_cur->hblPinDue = -1; g_cur->hblPending = true; }
+            if (g_cur->vblPinDue >= 0 && busNow >= g_cur->vblPinDue) { g_cur->vblPinDue = -1; g_cur->vblPending = true; }
             recomputePinNextDue();
             neostUpdateIpl();
         }
         // DEEP cpuipldelay : propage le niveau IPL désiré vers la broche une fois le délai de
         // reconnaissance (4 cyc) écoulé depuis son changement → POLL_IPL le voit alors, comme
         // WinUAE ipl_fetch_next. Gated NEOST_IPLDELAY ; sinon setIPL est immédiat (cf. neostUpdateIpl).
-        if (g_iplDelay && g_desiredIpl != g_appliedIpl
-            && getClock() - g_iplChgClock >= static_cast<int64_t>(g_iplDelayCyc) * g_cpuMul) {
-            setIPL(static_cast<moira::u8>(g_desiredIpl));
-            g_appliedIpl = g_desiredIpl;
+        if (g_iplDelay && g_cur->desiredIpl != g_cur->appliedIpl
+            && getClock() - g_cur->iplChgClock >= static_cast<int64_t>(g_iplDelayCyc) * g_cur->cpuMul) {
+            setIPL(static_cast<moira::u8>(g_cur->desiredIpl));
+            g_cur->appliedIpl = g_cur->desiredIpl;
         }
     }
 
@@ -518,9 +550,9 @@ public:
                 int wait = 10 - static_cast<int>(((busClk % 10) + 10) % 10);
                 if (wait == 10) wait = 0;
                 const int add = wait + g_iackVideo;
-                if (add) setClock(getClock() + static_cast<int64_t>(add) * g_cpuMul);
+                if (add) setClock(getClock() + static_cast<int64_t>(add) * g_cur->cpuMul);
             } else if (level == 6) {                             // MFP vectorisé : bloc MFP, pas d'E-clock
-                if (g_iackMfp) setClock(getClock() + static_cast<int64_t>(g_iackMfp) * g_cpuMul);
+                if (g_iackMfp) setClock(getClock() + static_cast<int64_t>(g_iackMfp) * g_cur->cpuMul);
             }
             return;
         }
@@ -528,7 +560,7 @@ public:
         const int64_t busClk = busOfClock(static_cast<int64_t>(getClock())) + g_eclockPhase;
         int wait = 10 - static_cast<int>(busClk % 10);           // cycles BUS jusqu'au prochain front E
         if (wait == 10) wait = 0;                                // déjà aligné
-        if (wait) setClock(getClock() + static_cast<int64_t>(wait) * g_cpuMul);
+        if (wait) setClock(getClock() + static_cast<int64_t>(wait) * g_cur->cpuMul);
     }
 
     // Port FIDÈLE de Hatari `iack_cycle` (newcpu.c:2958-3019) AU point d'IACK du 68000
@@ -551,15 +583,15 @@ public:
             const int64_t busClk = busOfClock(static_cast<int64_t>(getClock())) + g_eclockPhase;
             int wait = 10 - static_cast<int>(((busClk % 10) + 10) % 10);
             if (wait == 10) wait = 0;
-            return wait * g_cpuMul;
+            return wait * g_cur->cpuMul;
         }
         if (level == 6) return 0;                                // MFP : vecteur immédiat
         return 4;
     }
     int iackSyncAfter(moira::u8 level) override {
         if (!g_iackOn || !g_iackAt) return 4;                    // stock Moira
-        if (level == 2 || level == 4) return g_iackVideo * g_cpuMul;   // 10 (IACK→DTACK) + 4 idle
-        if (level == 6) return (g_iackMfp + 4) * g_cpuMul;             // 12 (IACK→DTACK) + 4 idle
+        if (level == 2 || level == 4) return g_iackVideo * g_cur->cpuMul;   // 10 (IACK→DTACK) + 4 idle
+        if (level == 6) return (g_iackMfp + 4) * g_cur->cpuMul;             // 12 (IACK→DTACK) + 4 idle
         return 4;
     }
 
@@ -581,28 +613,26 @@ public:
         // temps écoulé compté DEUX FOIS, et les callbacks lisent liveNow() gonflé.
         // Mesuré sur le banc SHO : sans rebase, tout le raster glisse de ~16 cycles
         // (écritures palette {104..128} → {120..156}, réveil STOP {68,72,76} → {80..96}).
-        if (g_iackSync && g_sched && !g_inReset && g_cpuSelf) g_cpuSelf->rebaseQuantumAndSync();
-        if (level == 6 && g_bus->mfp) {                 // MFP : vecteur fourni par le 68901
-            const int v = g_bus->mfp->iack();
-            if (g_tracer) g_tracer->onInterrupt(level, v);
+        if (g_iackSync && g_cur->sched && !g_cur->inReset && g_cur->cpuSelf) g_cur->cpuSelf->rebaseQuantumAndSync();
+        if (level == 6 && g_cur->bus->mfp) {                 // MFP : vecteur fourni par le 68901
+            const int v = g_cur->bus->mfp->iack();
+            if (g_cur->tracer) g_cur->tracer->onInterrupt(level, v);
             neostUpdateIpl();
             return (v >= 0) ? moira::u16(v) : moira::u16(24);
         }
-        if (level == 5 && g_bus->scc) {                 // SCC série : vecteur vectorisé (IACK)
-            const int v = g_bus->scc->processIack();
-            if (g_tracer) g_tracer->onInterrupt(level, v);
+        if (level == 5 && g_cur->bus->scc) {                 // SCC série : vecteur vectorisé (IACK)
+            const int v = g_cur->bus->scc->processIack();
+            if (g_cur->tracer) g_cur->tracer->onInterrupt(level, v);
             neostUpdateIpl();
             return (v >= 0) ? moira::u16(v) : moira::u16(24);  // NV armé → vecteur spurious 24 ($60),
                                                                // comme le MFP et Hatari (iack_cycle : vector<0 → 24)
         }
-        if (g_tracer) g_tracer->onInterrupt(level, 24 + level);   // VBL/HBL auto-vectorisés
-        if (level == 4) g_vblPending = false; else if (level == 2) g_hblPending = false;
+        if (g_cur->tracer) g_cur->tracer->onInterrupt(level, 24 + level);   // VBL/HBL auto-vectorisés
+        if (level == 4) g_cur->vblPending = false; else if (level == 2) g_cur->hblPending = false;
         neostUpdateIpl();
         return moira::u16(24 + level);
     }
 };
-NeostMoira* g_moira = nullptr;     // cœur Moira actif
-}
 
 namespace {
 // Accès bus CPU signalé au blitter non-hog (Moira seul). Deux rôles, port des
@@ -622,13 +652,13 @@ namespace {
 // resynchronise les deux horloges.) L'ancrage de la trame sur sched.now() est, lui,
 // DÉLIBÉRÉ — cf. Machine.cpp : l'ancrer sur busClockNow décalerait la grille faisceau.
 void noteBlitterPreStart() {
-    if (!g_moira || !g_bus->blitter) return;
-    const int64_t t = g_sched ? g_sched->liveNow()
-                              : busOfClock(static_cast<int64_t>(g_moira->getClock()));
-    if (t >= g_bus->blitterWinStart && t < g_bus->blitterWinEnd)
-        g_bus->blitter->notePreStartCpuAccess();
-    if (g_bus->blitterCountCpu)
-        g_bus->blitter->noteCpuBusAccess(t);
+    if (!g_cur->moira || !g_cur->bus->blitter) return;
+    const int64_t t = g_cur->sched ? g_cur->sched->liveNow()
+                              : busOfClock(static_cast<int64_t>(g_cur->moira->getClock()));
+    if (t >= g_cur->bus->blitterWinStart && t < g_cur->bus->blitterWinEnd)
+        g_cur->bus->blitter->notePreStartCpuAccess();
+    if (g_cur->bus->blitterCountCpu)
+        g_cur->bus->blitter->noteCpuBusAccess(t);
 }
 
 // Recalcule l'IPL présenté au CPU : MFP (6) > VBL (4) > HBL (2).
@@ -636,29 +666,29 @@ void noteBlitterPreStart() {
 // échantillonnée) pour que l'exception parte avant l'instruction suivante — cf.
 // NeostMoira::commitIpl.
 void neostUpdateIpl(bool commit) {
-    const bool mfp6 = g_bus && g_bus->mfp && g_bus->mfp->irqPending();
+    const bool mfp6 = g_cur->bus && g_cur->bus->mfp && g_cur->bus->mfp->irqPending();
     int lvl;
     // MegaSTE : TOUTES les IRQ sont GATÉES par le SCU (SysIntMask/VmeIntMask) avant
     // d'atteindre le CPU — toujours actif comme `SCU_IsEnabled()` d'Hatari (= MegaSTE/TT).
     // Tout OS MegaSTE programme le SCU tôt au boot (TOS 2.06, EmuTOS 256K, diagnostic).
-    if (g_bus && g_bus->machine == MachineType::MegaSte) {
-        const bool scc5 = g_bus->scc && g_bus->scc->irqActive();  // SCC série niveau 5
-        g_bus->scu.syncState(mfp6, scc5, g_vblPending, g_hblPending);  // état ← sources vivantes
-        lvl = g_bus->scu.gatedLevel();                            // plus haut niveau autorisé
+    if (g_cur->bus && g_cur->bus->machine == MachineType::MegaSte) {
+        const bool scc5 = g_cur->bus->scc && g_cur->bus->scc->irqActive();  // SCC série niveau 5
+        g_cur->bus->scu.syncState(mfp6, scc5, g_cur->vblPending, g_cur->hblPending);  // état ← sources vivantes
+        lvl = g_cur->bus->scu.gatedLevel();                            // plus haut niveau autorisé
     } else {
-        lvl = mfp6 ? 6 : g_vblPending ? 4 : g_hblPending ? 2 : 0;
+        lvl = mfp6 ? 6 : g_cur->vblPending ? 4 : g_cur->hblPending ? 2 : 0;
     }
-    if (g_moira) {
-        if (commit) { g_moira->commitIpl(static_cast<moira::u8>(lvl)); g_desiredIpl = g_appliedIpl = lvl; }
+    if (g_cur->moira) {
+        if (commit) { g_cur->moira->commitIpl(static_cast<moira::u8>(lvl)); g_cur->desiredIpl = g_cur->appliedIpl = lvl; }
         else if (g_iplDelay) {
             // cpuipldelay : enregistre le niveau désiré + l'horloge de changement ; ne propage à la
             // broche (POLL_IPL) que si le délai de 4 cyc est écoulé, sinon sync() le fera plus tard.
-            if (lvl != g_desiredIpl) { g_desiredIpl = lvl; g_iplChgClock = g_moira->getClock(); }
-            if (g_moira->getClock() - g_iplChgClock >= static_cast<int64_t>(g_iplDelayCyc) * g_cpuMul) {
-                g_moira->setIPL(static_cast<moira::u8>(lvl)); g_appliedIpl = lvl;
+            if (lvl != g_cur->desiredIpl) { g_cur->desiredIpl = lvl; g_cur->iplChgClock = g_cur->moira->getClock(); }
+            if (g_cur->moira->getClock() - g_cur->iplChgClock >= static_cast<int64_t>(g_iplDelayCyc) * g_cur->cpuMul) {
+                g_cur->moira->setIPL(static_cast<moira::u8>(lvl)); g_cur->appliedIpl = lvl;
             }
         }
-        else { g_moira->setIPL(static_cast<moira::u8>(lvl)); g_appliedIpl = lvl; }
+        else { g_cur->moira->setIPL(static_cast<moira::u8>(lvl)); g_cur->appliedIpl = lvl; }
     }
 }
 }
@@ -677,29 +707,35 @@ const char* Cpu68k::coreName(CpuCore) {
     return "moira";
 }
 
-Cpu68k::Cpu68k(Bus& bus, CpuCore core) : core_(core) {
-    if (g_cpuSelf)
-        throw std::logic_error("Cpu68k supports only one live instance");
-    g_bus = &bus;
-    g_cpuSelf = this;      // cf. rebaseQuantumAndSync (hook d'IACK)
+// A33 : chaque Cpu68k possède SON état (state_) ; g_cur désigne celui qui tourne.
+// Le `throw std::logic_error("Cpu68k supports only one live instance")` qui vivait
+// ici a disparu — c'était le plafond qui interdisait le test unitaire d'une
+// Machine, l'A/B en un processus et l'anneau MIDI à deux nœuds.
+Cpu68k::Cpu68k(Bus& bus, CpuCore core) : core_(core), state_(new CpuState) {
+    activate();                 // les callbacks Moira d'initCore visent CET état
+    state_->bus = &bus;
+    state_->cpuSelf = this;     // cf. rebaseQuantumAndSync (hook d'IACK)
     try {
         initCore();
     } catch (...) {
-        g_cpuSelf = nullptr;
-        g_bus = nullptr;
+        state_->cpuSelf = nullptr;
+        state_->bus = nullptr;
         throw;
     }
 }
 
 Cpu68k::~Cpu68k() {
-    if (g_cpuSelf != this) return;
-    delete g_moira;
-    g_moira = nullptr;
-    g_tracer = nullptr;
-    g_sched = nullptr;
-    g_cpuSelf = nullptr;
-    g_bus = nullptr;
+    delete state_->moira;
+    state_->moira = nullptr;
+    // Ne pas laisser g_cur pendre sur un état détruit. S'il désignait une AUTRE
+    // instance, on n'y touche pas : elle est toujours vivante.
+    if (g_cur == state_.get()) g_cur = nullptr;
 }
+
+// Rend CETTE instance active : les callbacks Moira et les fonctions libres de ce
+// fichier — qui n'ont pas de `this` — passent par g_cur. Appelée au constructeur et
+// à l'entrée de run(), donc alterner deux CPU se fait sans cérémonie.
+void Cpu68k::activate() const { g_cur = state_.get(); }
 
 // Transfère à l'ordonnanceur le temps couru depuis le début du quantum, PUIS
 // dispatche les événements échus — appelé au point d'IACK réel (≙ le
@@ -709,30 +745,30 @@ Cpu68k::~Cpu68k() {
 // par le runTo(now+ran) de Machine, et les callbacks liraient un liveNow() gonflé.
 // Même raisonnement — et même ordre — que le saut d'attente STOP de run().
 void Cpu68k::rebaseQuantumAndSync() {
-    if (!g_sched || !g_moira) return;
-    const int64_t busNow = busOfClock(static_cast<int64_t>(g_moira->getClock()));
+    if (!state_->sched || !state_->moira) return;
+    const int64_t busNow = busOfClock(static_cast<int64_t>(state_->moira->getClock()));
     quantumStartBus_   = busNow;
-    quantumStartClock_ = static_cast<int64_t>(g_moira->getClock());
+    quantumStartClock_ = static_cast<int64_t>(state_->moira->getClock());
     // DIAG (NEOST_IACK_DISP=1) : compte les IACK où un événement était RÉELLEMENT
     // échu dans la fenêtre frontière→IACK (le cas que ce dispatch corrige) —
     // sert à prouver que le chemin n'est pas mort et à mesurer sa fréquence.
     static const bool diag = std::getenv("NEOST_IACK_DISP") != nullptr;
     if (diag) {
         static long total = 0, hits = 0;
-        const int64_t nd = g_sched->peekNextDue();
+        const int64_t nd = state_->sched->peekNextDue();
         ++total;
         if (nd >= 0 && nd <= busNow) ++hits;
         if (total % 100000 == 0)
             std::fprintf(stderr, "[IACKDISP] %ld/%ld IACK with a due event (%.3f %%)\n",
                          hits, total, 100.0 * double(hits) / double(total));
     }
-    g_sched->syncTo(busNow);
+    state_->sched->syncTo(busNow);
 }
 
 // (Ré)initialise le cœur Moira. Appelé par le constructeur ET par setCore()
 // (reconfigure à chaud). Suppose qu'un éventuel ancien cœur a déjà été libéré.
 void Cpu68k::initCore() {
-    g_moira = new NeostMoira();         // backend cycle-exact (irqMode/USER, M68000)
+    state_->moira = new NeostMoira();         // backend cycle-exact (irqMode/USER, M68000)
 }
 
 // Conservé pour compat (reconfigure à chaud) : libère l'ancien cœur puis ré-init.
@@ -740,42 +776,44 @@ void Cpu68k::initCore() {
 // recréer l'objet effacerait les breakpoints/watchpoints posés dans le débogueur
 // (l'état CPU, lui, est réinitialisé par le reset() que l'appelant enchaîne).
 void Cpu68k::setCore(CpuCore core) {
-    if (g_moira && core == core_) return;
-    if (g_moira) { delete g_moira; g_moira = nullptr; }
+    if (state_->moira && core == core_) return;
+    if (state_->moira) { delete state_->moira; state_->moira = nullptr; }
     core_ = core;
     initCore();
 }
 
 void Cpu68k::setTracer(Tracer* t) {
-    g_tracer = t;
+    state_->tracer = t;
     if (t) t->setCpu(this);    // le Tracer lit les registres via ce CPU
 }
 
 void Cpu68k::setScheduler(Scheduler* s) {
-    g_sched = s;               // piloté depuis NeostMoira::sync (cf. en-tête hpp)
+    state_->sched = s;               // piloté depuis NeostMoira::sync (cf. en-tête hpp)
 }
 
 // Horloge BUS absolue live du cœur (cf. hpp). busOfClock intègre la bascule 8/16 MHz
 // du Mega STE. Valide hors run comme en plein milieu d'une instruction.
 int64_t Cpu68k::busClockNow() const {
-    return busOfClock(static_cast<int64_t>(g_moira->getClock()));
+    return busOfClock(static_cast<int64_t>(state_->moira->getClock()));
 }
 
 void Cpu68k::reset() {
-    g_bus->bootOverlay = true;
-    g_inReset = true;                    // sync() n'avance pas l'ordonnanceur pendant le reset
-    g_moira->reset();                    // lit SSP/PC via read16OnReset (overlay ROM)
-    g_inReset = false;
-    g_bus->bootOverlay = false;
+    activate();   // A33 : cf. run()
+    state_->bus->bootOverlay = true;
+    state_->inReset = true;                    // sync() n'avance pas l'ordonnanceur pendant le reset
+    state_->moira->reset();                    // lit SSP/PC via read16OnReset (overlay ROM)
+    state_->inReset = false;
+    state_->bus->bootOverlay = false;
 }
 
 int Cpu68k::run(int cycles) {
+    activate();   // A33 : les callbacks Moira qui vont suivre visent CET état
     inRun_ = true;
     struct RunGuard { bool& f; ~RunGuard() { f = false; } } guard{inRun_};   // hors run → delta intra-quantum = 0
-    const moira::i64 c0 = g_moira->getClock();
+    const moira::i64 c0 = state_->moira->getClock();
     quantumStartClock_ = static_cast<int64_t>(c0);   // pour cyclesRunInQuantum()
     // Cible et résultat en cycles BUS (8 MHz). Le point de départ est FIGÉ ici :
-    // une écriture $FF8E21 en plein quantum rebase la conversion (g_cpuBias),
+    // une écriture $FF8E21 en plein quantum rebase la conversion (state_->cpuBias),
     // mais celle-ci reste continue → les deltas restent exacts.
     quantumStartBus_ = busOfClock(c0);
     // DIAG (NEOST_QDELTA_DIAG=<seuil>, inerte si la variable n'est pas posée) — sonde
@@ -794,8 +832,8 @@ int Cpu68k::run(int cycles) {
     {
         static const long qdiag = []{ const char* s = std::getenv("NEOST_QDELTA_DIAG");
                                       return s ? std::strtol(s, nullptr, 0) : -1; }();
-        if (qdiag >= 0 && g_sched) {
-            const int64_t delta = quantumStartBus_ - g_sched->now();
+        if (qdiag >= 0 && state_->sched) {
+            const int64_t delta = quantumStartBus_ - state_->sched->now();
             static long    runs = 0, nonZero = 0;
             static int64_t maxDelta = 0, sumDelta = 0;
             ++runs;
@@ -803,19 +841,19 @@ int Cpu68k::run(int cycles) {
             if (delta >= qdiag)
                 std::fprintf(stderr, "[QDELTA] run#%ld busNow=%lld schedNow=%lld delta=%lld\n",
                              runs, (long long)quantumStartBus_,
-                             (long long)g_sched->now(), (long long)delta);
+                             (long long)state_->sched->now(), (long long)delta);
             if (runs % 100000 == 0)
                 std::fprintf(stderr, "[QDELTA] recap runs=%ld nonzero=%ld (%.3f %%) max=%lld sum=%lld\n",
                              runs, nonZero, 100.0 * double(nonZero) / double(runs),
                              (long long)maxDelta, (long long)sumDelta);
         }
     }
-    g_endSlice = false;                              // un éventuel résidu de préemption ne doit pas couper le 1er pas
+    state_->endSlice = false;                              // un éventuel résidu de préemption ne doit pas couper le 1er pas
     const int64_t targetBus = quantumStartBus_ + cycles;
-    while (busOfClock(g_moira->getClock()) < targetBus) {
-        g_inBusError = false;                        // nouvelle instruction → faute précédente retombée
-        if (g_moira->isHalted()) { g_moira->setClock(cpuClockForBus(targetBus)); break; }  // double bus fault → CPU arrêté
-        instrStartClock_ = static_cast<int64_t>(g_moira->getClock());   // repère « 1er accès » des wait states
+    while (busOfClock(state_->moira->getClock()) < targetBus) {
+        state_->inBusError = false;                        // nouvelle instruction → faute précédente retombée
+        if (state_->moira->isHalted()) { state_->moira->setClock(cpuClockForBus(targetBus)); break; }  // double bus fault → CPU arrêté
+        instrStartClock_ = static_cast<int64_t>(state_->moira->getClock());   // repère « 1er accès » des wait states
         // Interception GEMDOS HD (port de OpCode_GemDos/Pexec/SysInit + CpuDoNOP
         // d'Hatari) : la cartouche système ($FA0000) place des opcodes « illégaux »
         // magiques (8=GEMDOS, 9=PEXEC, 10=SYSINIT). Quand le HD GEMDOS est actif et
@@ -824,10 +862,10 @@ int Cpu68k::run(int cycles) {
         // un NOP (0x4E71) : l'execute() ci-dessous le consomme, avançant PC et
         // prefetch comme une instruction d'un mot — exactement comme CpuDoNOP. Hors
         // cartouche, un vrai $0008 reste une instruction illégale normale.
-        if (g_bus->gemdos) {
-            const moira::u16 ird = g_moira->getIRD();
+        if (state_->bus->gemdos) {
+            const moira::u16 ird = state_->moira->getIRD();
             if (ird >= 0x0008 && ird <= 0x000A) {
-                const uint32_t pc0 = g_moira->getPC0() & 0x00FFFFFF;
+                const uint32_t pc0 = state_->moira->getPC0() & 0x00FFFFFF;
                 if (pc0 >= 0xFA0000 && pc0 < 0xFC0000) {
                     // Filet : handleOpcode tourne HORS execute(), un BusError qui
                     // s'en échapperait (accès invité non gardé) traverserait
@@ -835,10 +873,10 @@ int Cpu68k::run(int cycles) {
                     // GemdosHd sont non-fautives (checkArea), ceci ne couvre
                     // qu'une régression future — l'appel est alors abandonné.
                     bool handled = false;
-                    try { handled = g_bus->gemdos->handleOpcode(ird); }
+                    try { handled = state_->bus->gemdos->handleOpcode(ird); }
                     catch (const moira::BusError&) { handled = true; }
                     if (handled)
-                        g_moira->setIRD(0x4E71);     // → exécuté comme NOP
+                        state_->moira->setIRD(0x4E71);     // → exécuté comme NOP
                 }
             }
         }
@@ -849,31 +887,31 @@ int Cpu68k::run(int cycles) {
         // après NEOST_HTRACE_SKIP passages, dump NEOST_HTRACE_N instr sur stderr.
         char htDis[200]; uint32_t htPc = 0; bool htEmit = false;
         if (g_htraceOn) {
-            htPc = g_moira->getPC0() & 0xFFFFFFu;
-            if (!g_htArmed && htPc == g_htPc) { if (g_htSkip > 0) --g_htSkip; else { g_htArmed = true; g_htPrev = busClockNow(); } }
-            if (g_htArmed && g_htN > 0) { disassemble(htDis, htPc); htEmit = true; }
+            htPc = state_->moira->getPC0() & 0xFFFFFFu;
+            if (!state_->htArmed && htPc == g_htPc) { if (g_htSkip > 0) --g_htSkip; else { state_->htArmed = true; state_->htPrev = busClockNow(); } }
+            if (state_->htArmed && g_htN > 0) { disassemble(htDis, htPc); htEmit = true; }
         }
         // Débogueur : breakpoint « break-before » — stoppe AVANT d'exécuter l'instruction
         // ciblée (le run() rend la main, PC dessus). Le skip-once évite de re-déclencher à
         // la reprise (on est encore SUR le breakpoint). elements()==0 → coût nul.
-        if (g_moira->debugger.breakpoints.elements() != 0) {
-            const uint32_t pc = g_moira->getPC() & 0xFFFFFFu;
-            if (pc == g_bpSkipPc) {
-                g_bpSkipPc = 0xFFFFFFFFu;                 // laissé passer une fois
-            } else if (g_moira->debugger.breakpoints.isSetAt(pc)) {
-                g_bpHit = true; g_bpAddr = pc; g_endSlice = true; break;
+        if (state_->moira->debugger.breakpoints.elements() != 0) {
+            const uint32_t pc = state_->moira->getPC() & 0xFFFFFFu;
+            if (pc == state_->bpSkipPc) {
+                state_->bpSkipPc = 0xFFFFFFFFu;                 // laissé passer une fois
+            } else if (state_->moira->debugger.breakpoints.isSetAt(pc)) {
+                state_->bpHit = true; state_->bpAddr = pc; state_->endSlice = true; break;
             }
         }
-        g_moira->execute();                          // une instruction (sync() dispatche les events échus)
-        if (g_tracer) g_tracer->onInstruction(g_moira->getPC0());
+        state_->moira->execute();                          // une instruction (sync() dispatche les events échus)
+        if (state_->tracer) state_->tracer->onInstruction(state_->moira->getPC0());
         if (htEmit) {
             const int64_t now = busClockNow();
-            std::fprintf(stderr, "HT %06X d=%-3lld %s\n", htPc, static_cast<long long>(now - g_htPrev), htDis);
-            g_htPrev = now; --g_htN;
+            std::fprintf(stderr, "HT %06X d=%-3lld %s\n", htPc, static_cast<long long>(now - state_->htPrev), htDis);
+            state_->htPrev = now; --g_htN;
         }
         // Préemption du bloc CPU : runFrame arme beginRun à chaque bloc, donc elle est
         // toujours active (A34 : le second modèle d'exécution a été supprimé).
-        if (g_endSlice) { g_endSlice = false; break; }
+        if (state_->endSlice) { state_->endSlice = false; break; }
         // STOP : aucune instruction ne tournera tant qu'un événement ne change pas
         // l'IPL. Au lieu de simuler l'attente cycle par cycle (≈25× plus lent), on
         // saute au PROCHAIN événement armé (borné par la cible du bloc) et on le
@@ -881,12 +919,12 @@ int Cpu68k::run(int cycles) {
         // STOP au bon cycle. Sans événement avant la cible, on saute droit à la cible.
         // (≠ ancien modèle : on saute à l'EVENT, pas à la cible, sinon on zapperait
         // tous les events de la trame — la cible du bloc est maintenant la fin de trame.)
-        if (g_moira->isStopped() && !g_moira->irqDeliverable()) {
-            const int64_t busNow = busOfClock(g_moira->getClock());
+        if (state_->moira->isStopped() && !state_->moira->irqDeliverable()) {
+            const int64_t busNow = busOfClock(state_->moira->getClock());
             if (busNow >= targetBus) break;
-            const int64_t nd = g_sched ? g_sched->peekNextDue() : -1;
+            const int64_t nd = state_->sched ? state_->sched->peekNextDue() : -1;
             const int64_t jumpTo = (nd > busNow && nd < targetBus) ? nd : targetBus;
-            g_moira->setClock(cpuClockForBus(jumpTo));
+            state_->moira->setClock(cpuClockForBus(jumpTo));
             // REBASE **AVANT** le dispatch — l'ordre compte. syncTo() exécute les
             // callbacks, et ceux-ci lisent l'heure via Machine::liveNow() = sched.now() +
             // cpu.cyclesRunInQuantum(). Rebaser après laissait cyclesRunInQuantum() valoir
@@ -901,8 +939,8 @@ int Cpu68k::run(int cycles) {
             // n'apparaissait QUE lorsque le CPU dormait en STOP, donc invisible des
             // étalons qui bouclent en polling.
             quantumStartBus_   = jumpTo;
-            quantumStartClock_ = static_cast<int64_t>(g_moira->getClock());
-            if (g_sched) g_sched->syncTo(jumpTo);    // dispatche l'event au saut (peut lever l'IPL)
+            quantumStartClock_ = static_cast<int64_t>(state_->moira->getClock());
+            if (state_->sched) state_->sched->syncTo(jumpTo);    // dispatche l'event au saut (peut lever l'IPL)
             // REBASE du quantum : syncTo vient d'avancer sched.now() jusqu'à jumpTo,
             // or `ran` (retour de run) et cyclesRunInQuantum() mesuraient encore depuis
             // l'ANCIEN début → le saut était compté DEUX fois (une par syncTo, une par
@@ -916,7 +954,7 @@ int Cpu68k::run(int cycles) {
             // (le rebase lui-même est fait AVANT le syncTo ci-dessus, cf. son commentaire)
         }
     }
-    return static_cast<int>(busOfClock(g_moira->getClock()) - quantumStartBus_);
+    return static_cast<int>(busOfClock(state_->moira->getClock()) - quantumStartBus_);
 }
 
 // Wait states de bus (cf. en-tête / Hatari M68000_SyncCpuBus). Appelé par le Shifter
@@ -939,8 +977,8 @@ int Cpu68k::run(int cycles) {
 void Cpu68k::addBusWaitCycles(int n) {
     if (n <= 0) return;
     // `n` est en cycles BUS (8 MHz) : à 16 MHz l'horloge du cœur compte des cycles
-    // CPU, deux fois plus fins → ×g_cpuMul.
-    g_moira->setClock(g_moira->getClock() + n * g_cpuMul);
+    // CPU, deux fois plus fins → ×state_->cpuMul.
+    state_->moira->setClock(state_->moira->getClock() + n * state_->cpuMul);
 }
 
 // Wait states YM2149 PSG (port Hatari psg.c:PSG_WaitState). 4 cycles au PREMIER accès
@@ -969,7 +1007,7 @@ void Cpu68k::addAciaWaitCycles() {
         aciaPrevInstrClock_ = instrStartClock_;
         // E-Clock = horloge BUS / 10 (1 MHz), indépendante du 8/16 MHz CPU MegaSTE
         // (Hatari M68000_WaitEClock travaille sur CyclesGlobalClockCounter).
-        int toNextE = 10 - static_cast<int>(busOfClock(g_moira->getClock()) % 10);
+        int toNextE = 10 - static_cast<int>(busOfClock(state_->moira->getClock()) % 10);
         if (toNextE == 10) toNextE = 0;                   // déjà aligné sur l'E-Clock
         cycles += toNextE;
     }
@@ -980,90 +1018,90 @@ void Cpu68k::addAciaWaitCycles() {
 int64_t Cpu68k::cyclesRunInQuantum() const {
     if (!inRun_) return 0;     // hors run : l'horloge sched.now() est déjà à jour
     // En cycles BUS (8 MHz), domaine de l'ordonnanceur — d'où la conversion 16 MHz.
-    return busOfClock(static_cast<int64_t>(g_moira->getClock())) - quantumStartBus_;
+    return busOfClock(static_cast<int64_t>(state_->moira->getClock())) - quantumStartBus_;
 }
 
 void Cpu68k::endTimeslice() {
-    g_endSlice = true;   // testé après l'instruction courante (cf. run)
+    state_->endSlice = true;   // testé après l'instruction courante (cf. run)
 }
 
 // --- Débogueur : breakpoints PC (délègue au conteneur Guards de Moira) ------------
 void Cpu68k::setBreakpoint(uint32_t addr) {
-    g_moira->debugger.breakpoints.setAt(addr & 0xFFFFFFu);
+    state_->moira->debugger.breakpoints.setAt(addr & 0xFFFFFFu);
 }
 void Cpu68k::clearBreakpoint(uint32_t addr) {
-    g_moira->debugger.breakpoints.removeAt(addr & 0xFFFFFFu);
+    state_->moira->debugger.breakpoints.removeAt(addr & 0xFFFFFFu);
 }
 void Cpu68k::clearAllBreakpoints() {
-    g_moira->debugger.breakpoints.removeAll();
+    state_->moira->debugger.breakpoints.removeAll();
 }
 bool Cpu68k::hasBreakpoint(uint32_t addr) const {
-    return g_moira->debugger.breakpoints.isSetAt(addr & 0xFFFFFFu);
+    return state_->moira->debugger.breakpoints.isSetAt(addr & 0xFFFFFFu);
 }
 int Cpu68k::breakpointCount() const {
-    return static_cast<int>(g_moira->debugger.breakpoints.elements());
+    return static_cast<int>(state_->moira->debugger.breakpoints.elements());
 }
 bool Cpu68k::breakpointByIndex(int nr, uint32_t& outAddr) const {
-    const auto a = g_moira->debugger.breakpoints.guardAddr(nr);
+    const auto a = state_->moira->debugger.breakpoints.guardAddr(nr);
     if (!a) return false;
     outAddr = *a & 0xFFFFFFu;
     return true;
 }
-bool     Cpu68k::breakpointHit() const       { return g_bpHit; }
-uint32_t Cpu68k::breakpointHitAddr() const   { return g_bpAddr; }
-bool     Cpu68k::breakpointHitIsWatch() const{ return g_bpWatch; }
+bool     Cpu68k::breakpointHit() const       { return state_->bpHit; }
+uint32_t Cpu68k::breakpointHitAddr() const   { return state_->bpAddr; }
+bool     Cpu68k::breakpointHitIsWatch() const{ return state_->bpWatch; }
 void Cpu68k::clearBreakpointHit() {
     // Skip-once UNIQUEMENT pour un breakpoint PC (le watchpoint est « break-after »,
     // le PC a déjà avancé au-delà de l'instruction fautive → rien à ignorer).
-    if (!g_bpWatch) g_bpSkipPc = g_bpAddr;
-    g_bpHit = false; g_bpWatch = false;
+    if (!state_->bpWatch) state_->bpSkipPc = state_->bpAddr;
+    state_->bpHit = false; state_->bpWatch = false;
 }
 
 // --- Débogueur : watchpoints mémoire (accès lecture/écriture d'une adresse) ------
 // Délègue au conteneur Guards de Moira (debugger.watchpoints) ; la couche dataflow de
 // Moira teste l'accès et appelle NeostMoira::didReachWatchpoint. setAt arme CHECK_WP.
 void Cpu68k::setWatchpoint(uint32_t addr) {
-    g_moira->debugger.watchpoints.setAt(addr & 0xFFFFFFu);
+    state_->moira->debugger.watchpoints.setAt(addr & 0xFFFFFFu);
 }
 void Cpu68k::clearWatchpoint(uint32_t addr) {
-    g_moira->debugger.watchpoints.removeAt(addr & 0xFFFFFFu);
+    state_->moira->debugger.watchpoints.removeAt(addr & 0xFFFFFFu);
 }
 void Cpu68k::clearAllWatchpoints() {
-    g_moira->debugger.watchpoints.removeAll();
+    state_->moira->debugger.watchpoints.removeAll();
 }
 bool Cpu68k::hasWatchpoint(uint32_t addr) const {
-    return g_moira->debugger.watchpoints.isSetAt(addr & 0xFFFFFFu);
+    return state_->moira->debugger.watchpoints.isSetAt(addr & 0xFFFFFFu);
 }
 int Cpu68k::watchpointCount() const {
-    return static_cast<int>(g_moira->debugger.watchpoints.elements());
+    return static_cast<int>(state_->moira->debugger.watchpoints.elements());
 }
 bool Cpu68k::watchpointByIndex(int nr, uint32_t& outAddr) const {
-    const auto a = g_moira->debugger.watchpoints.guardAddr(nr);
+    const auto a = state_->moira->debugger.watchpoints.guardAddr(nr);
     if (!a) return false;
     outAddr = *a & 0xFFFFFFu;
     return true;
 }
 
-// Save-state : état du cœur Moira + timing du wrapper + vitesse Mega STE (g_cpuMul).
+// Save-state : état du cœur Moira + timing du wrapper + vitesse Mega STE (g_cur->cpuMul).
 void Cpu68k::serialize(StateArchive& ar) {
-    g_moira->serializeState(ar);
-    ar(g_cpuMul);
-    // g_cpuMul ∈ {1 (8 MHz), 2 (16 MHz Mega STE)} : sélecteur de conversion horloge
+    state_->moira->serializeState(ar);
+    ar(state_->cpuMul);
+    // state_->cpuMul ∈ {1 (8 MHz), 2 (16 MHz Mega STE)} : sélecteur de conversion horloge
     // bus↔CPU (busOfClock/cpuClockForBus) ET multiplicateur des wait-states
-    // (addBusWaitCycles : n * g_cpuMul, Cpu68k.cpp:736). Forgé énorme → débordement /
+    // (addBusWaitCycles : n * state_->cpuMul, Cpu68k.cpp:736). Forgé énorme → débordement /
     // bond d'horloge Moira. On rejette toute autre valeur (rejoue le backup), comme
     // cpl_/lpf_/now_.
-    ar.check(g_cpuMul == 1 || g_cpuMul == 2, "Cpu68k::g_cpuMul hors {1,2}");
-    // g_cpuBias accompagne g_cpuMul : rebasé à CHAQUE bascule 8/16 MHz et non nul
+    ar.check(state_->cpuMul == 1 || state_->cpuMul == 2, "Cpu68k::state_->cpuMul hors {1,2}");
+    // state_->cpuBias accompagne state_->cpuMul : rebasé à CHAQUE bascule 8/16 MHz et non nul
     // même après retour à 8 MHz — sans lui, busOfClock() rendrait des valeurs d'un
     // autre domaine que sched.now_ après load (fenêtres blitter, dispatch faux).
-    ar(g_cpuBias);
+    ar(state_->cpuBias);
     // Broches IRQ vidéo pendantes (niveau-sensibles jusqu'à IACK) : un HBL tombé au
     // dernier runTo avant la frontière de save avec SR masqué serait perdu au load.
-    ar(g_vblPending); ar(g_hblPending);
+    ar(state_->vblPending); ar(state_->hblPending);
     // Modes opt-in NEOST_IPLDELAY / NEOST_PIN_ARM : latence IPL et broches armées.
-    ar(g_desiredIpl); ar(g_appliedIpl); ar(g_iplChgClock);
-    ar(g_hblPinDue); ar(g_vblPinDue); ar(g_pinNextDue);
+    ar(state_->desiredIpl); ar(state_->appliedIpl); ar(state_->iplChgClock);
+    ar(state_->hblPinDue); ar(state_->vblPinDue); ar(state_->pinNextDue);
     ar(quantumStartClock_); ar(quantumStartBus_);
     ar(instrStartClock_); ar(psgPrevInstrClock_); ar(aciaPrevInstrClock_);
 }
@@ -1074,29 +1112,29 @@ int64_t Cpu68k::cyclesIntoInstr() const {
     return busClockNow() - busOfClock(instrStartClock_);
 }
 
-// Bascule 8/16 MHz du Mega STE — cf. Cpu68k.hpp. Le rebasage de g_cpuBias garde
+// Bascule 8/16 MHz du Mega STE — cf. Cpu68k.hpp. Le rebasage de g_cur->cpuBias garde
 // l'horloge bus CONTINUE au cycle courant (la bascule arrive en plein quantum,
 // pendant l'écriture $FF8E21) : busOfClock(c) garde la même valeur avant/après.
 void Cpu68k::setMegaSteSpeed(bool sixteenMhz) {
     const int mul = sixteenMhz ? 2 : 1;
-    if (mul == g_cpuMul) return;
-    const int64_t c = static_cast<int64_t>(g_moira->getClock());
+    if (mul == state_->cpuMul) return;
+    const int64_t c = static_cast<int64_t>(state_->moira->getClock());
     const int64_t b = busOfClock(c);
-    g_cpuMul  = mul;
-    g_cpuBias = (mul == 2) ? (2 * b - c) : (b - c);
+    state_->cpuMul  = mul;
+    state_->cpuBias = (mul == 2) ? (2 * b - c) : (b - c);
     // Réajuste les seuils du délai IPL (en clock-units) à la nouvelle vitesse CPU.
-    if (g_iplFetch) g_moira->setIplDelay(static_cast<int64_t>(g_iplFetch4) * g_cpuMul,
-                                         static_cast<int64_t>(g_iplFetch2) * g_cpuMul);
+    if (g_iplFetch) state_->moira->setIplDelay(static_cast<int64_t>(g_iplFetch4) * state_->cpuMul,
+                                         static_cast<int64_t>(g_iplFetch2) * state_->cpuMul);
     std::fprintf(stderr, "[cpu] Mega STE: 68000 at %d MHz\n", sixteenMhz ? 16 : 8);
 }
 
-bool Cpu68k::megaSte16Mhz() const { return g_cpuMul == 2; }
+bool Cpu68k::megaSte16Mhz() const { return state_->cpuMul == 2; }
 
 bool Cpu68k::supervisor() const {
-    return (g_moira->getSR() & 0x2000) != 0;
+    return (state_->moira->getSR() & 0x2000) != 0;
 }
 
-bool Cpu68k::halted() const { return g_moira->isHalted(); }
+bool Cpu68k::halted() const { return state_->moira->isHalted(); }
 
 void Cpu68k::updateIpl() {
     neostUpdateIpl();
@@ -1138,20 +1176,20 @@ int g_raiseWindow = []{ const char* s = std::getenv("NEOST_RAISE_WINDOW");
 // La fenêtre s'applique-t-elle à ce dispatch ? (hors STOP : réveil niveau-sensible
 // immédiat, validé exact à l'oracle — cf. stoppedState).
 bool raiseWindowDefers() {
-    if (!g_sched || !g_moira) return false;
-    const int64_t due  = g_sched->firingDue();
-    const bool stopped = g_moira->stoppedState();
+    if (!g_cur->sched || !g_cur->moira) return false;
+    const int64_t due  = g_cur->sched->firingDue();
+    const bool stopped = g_cur->moira->stoppedState();
     const bool defer   = !stopped && g_raiseWindow > 0 && due >= 0
-                      && g_sched->now() - due < g_raiseWindow;
+                      && g_cur->sched->now() - due < g_raiseWindow;
     // DIAG (NEOST_RAISE_DIAG=1) : marge frontière−échéance, état STOP et décision.
     static const bool diag = std::getenv("NEOST_RAISE_DIAG") != nullptr;
     if (diag) std::fprintf(stderr, "[RWD] due=%lld now=%lld stop=%d defer=%d\n",
-                           (long long)due, (long long)(g_sched->now()),
+                           (long long)due, (long long)(g_cur->sched->now()),
                            stopped ? 1 : 0, defer ? 1 : 0);
     return defer;
 } }
 void Cpu68k::raiseVbl() {
-    g_vblPending = true;
+    state_->vblPending = true;
     // COMMIT IMMÉDIAT (2026-07-02, mesuré à l'oracle instrumenté [HPIN]/[HEXC] :
     // chez Hatari CE, les événements vidéo sont traités À LA FRONTIÈRE d'instruction
     // (CycInt_Process) et `intlev_load → ipl_fetch_now` pose regs.ipl[0] SANS délai →
@@ -1163,7 +1201,7 @@ void Cpu68k::raiseVbl() {
 }
 
 void Cpu68k::raiseHbl() {
-    g_hblPending = true;
+    state_->hblPending = true;
     // même modèle que raiseVbl + fenêtre d'échantillonnage (cf. g_raiseWindow)
     neostUpdateIpl(/*commit=*/(g_raiseCommit & 1) != 0 && !raiseWindowDefers());
 }
@@ -1182,37 +1220,37 @@ void Cpu68k::raiseHbl() {
 // poll-entry). Gardé en opt-in pour expériences uniquement.
 namespace { int g_pinArmMask = []{ const char* s = std::getenv("NEOST_PIN_ARM");
                                    return s ? std::atoi(s) : 0; }(); }
-void Cpu68k::armHblPinAt(int64_t busCycle) { if (g_pinArmMask & 1) { g_hblPinDue = busCycle; recomputePinNextDue(); } }
-void Cpu68k::armVblPinAt(int64_t busCycle) { if (g_pinArmMask & 2) { g_vblPinDue = busCycle; recomputePinNextDue(); } }
+void Cpu68k::armHblPinAt(int64_t busCycle) { if (g_pinArmMask & 1) { state_->hblPinDue = busCycle; recomputePinNextDue(); } }
+void Cpu68k::armVblPinAt(int64_t busCycle) { if (g_pinArmMask & 2) { state_->vblPinDue = busCycle; recomputePinNextDue(); } }
 
 uint32_t Cpu68k::pc() const {
-    return g_moira->getPC0();
+    return state_->moira->getPC0();
 }
 
 uint32_t Cpu68k::reg(int idx) const {
-    return idx < 8 ? g_moira->getD(idx) : g_moira->getA(idx - 8);
+    return idx < 8 ? state_->moira->getD(idx) : state_->moira->getA(idx - 8);
 }
 
 uint16_t Cpu68k::sr() const {
-    return g_moira->getSR();
+    return state_->moira->getSR();
 }
 
 void Cpu68k::setReg(int idx, uint32_t v) {
-    if (idx < 8) g_moira->setD(idx, v); else g_moira->setA(idx - 8, v);
+    if (idx < 8) state_->moira->setD(idx, v); else state_->moira->setA(idx - 8, v);
 }
 
 void Cpu68k::setSr(uint16_t v) {
-    g_moira->setSR(v);
+    state_->moira->setSR(v);
 }
 
 uint32_t Cpu68k::usp() const {
-    return g_moira->getUSP();
+    return state_->moira->getUSP();
 }
 
 bool Cpu68k::triggerBusError(uint32_t addr, bool write) {
-    return g_moira->faultOrHalt(addr, write);
+    return state_->moira->faultOrHalt(addr, write);
 }
 
 int Cpu68k::disassemble(char* str, uint32_t addr) const {
-    return g_moira->disassemble(str, addr);
+    return state_->moira->disassemble(str, addr);
 }

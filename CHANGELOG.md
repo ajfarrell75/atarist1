@@ -26,6 +26,56 @@ Ripper, DAC Pro Sound) avec page Dongles, `disks/dongles.txt` et oracle de rejeu
 vérifié note à note** en headless, corpus MIDI piano/blues ; port MIDI ALSA sous Linux ;
 save-state v16. Détail dans les chantiers datés ci-dessous.
 
+## A33 — deux CPU peuvent enfin vivre dans le même processus (2026-08-28)
+
+`Cpu68k` jetait sur une seconde instance :
+
+    throw std::logic_error("Cpu68k supports only one live instance")
+
+C'était le plafond que le TODO nommait : pas de test unitaire d'une `Machine`, pas
+d'A/B en un processus, pas d'anneau MIDI à deux nœuds. Il n'y est plus.
+
+**Ce qui bloquait n'était pas une difficulté technique, c'était une CONFUSION.** Le
+fichier portait 48 globaux `g_*` et rien ne les distinguait. Les classer a été le
+vrai travail :
+
+- **25 sont de l'ÉTAT** — le bus, l'ordonnanceur, le cœur Moira, les broches IRQ en
+  attente, les compteurs d'IPL, les breakpoints, le multiplicateur 8/16 MHz… Une
+  machine émulée en a un jeu. Ils forment désormais une `struct CpuState` **possédée
+  par `Cpu68k`** ;
+- **23 sont de la CONFIGURATION DE PROCESSUS** lue une fois dans l'environnement (les
+  verrous d'IACK, d'E-Clock, d'IPL, de créneau RAM, toutes les traces). Les rendre
+  par-instance aurait été **faux**. Ils restent globaux, et `tools/env_locks.json`
+  (posé par A34 le matin même) dit lesquels.
+
+**Le détail qui fait la différence, et que seul le test a révélé.** Après le
+regroupement, les méthodes de `Cpu68k` lisaient encore l'état via le pointeur
+d'instance ACTIVE. Avec un seul CPU c'est le même objet — invisible. Avec deux,
+`cpuA.pc()` rendait le PC de B. Les **135 accès internes** passent maintenant par
+`state_`, l'état de l'objet ; ne restent en `g_cur` que les 94 accès des callbacks
+Moira et des fonctions libres, qui n'ont pas de `this`.
+
+**Prouvé, pas supposé.** `selftest_logic.cpp` construit deux `Cpu68k` sur deux `Bus`,
+leur donne deux vecteurs de reset différents, et vérifie que chacun prend le sien,
+qu'en faire tourner un avance SON horloge et laisse celle de l'autre intacte, et que
+le PC du premier ne bouge pas pendant que le second travaille. Ce test est la raison
+d'être du chantier : sans lui, A33 n'aurait rien changé d'observable.
+
+**Ce qui reste, et c'est écrit au TODO** : le vrai parallélisme. Le modèle est « à
+tour de rôle » — `g_cur` désigne l'instance active, posée à l'entrée de `run()` et de
+`reset()`. Deux CPU dans DEUX THREADS demanderaient de supprimer les 94 accès
+restants (contexte passé aux callbacks, ou `thread_local`). Ce n'est pas ce qu'A33
+promettait, et rien ne le réclame aujourd'hui.
+
+Méthode, parce qu'elle a compté : **pas de `sed` sur ce fichier**. Une première
+tentative de renommage de masse par motif avait pris `return g_cpuMul == 1 ? …` pour
+une déclaration et supprimé la ligne (détecté avant application). Le chantier a été
+fait en trois passes compilées et testées séparément — regrouper, posséder, séparer
+`state_` de `g_cur` — chacune avec le palier `full` vert derrière.
+
+Débit inchangé : blitter/boot +0,4 %, mfp/boot +0,4 % — dans le bruit.
+`neost-selftest` : 250 → **257 assertions**. Palier `full` vert.
+
 ## A37 — la discipline de release s'écrit, et une machine la garde (2026-08-28)
 
 L'audit relevait trois symptômes : trois tags le même jour (0.5 → 0.5.2, le
