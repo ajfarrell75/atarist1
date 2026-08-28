@@ -11,6 +11,7 @@
 //
 //  (c) 2026 VERHILLE Arnaud — projet NeoST.
 // =============================================================================
+#include "core/Pacing.hpp"
 #include <GLFW/glfw3.h>
 #if defined(__APPLE__)
 #include <OpenGL/gl.h>
@@ -3099,7 +3100,6 @@ int main(int argc, char** argv) {
     // pousse `frameCycles × rate / 8 MHz` échantillons par trame, le thread audio
     // en draine `rate` par seconde : la cadence trame doit suivre la géométrie.
     using clock = std::chrono::steady_clock;
-    static constexpr double kCpuHz = 8021248.0;   // horloge CPU/bus (PAL)
     auto emuNext = clock::now();   // échéance réelle de la prochaine trame émulée
 
     double lastMx = 0, lastMy = 0;
@@ -3523,7 +3523,7 @@ int main(int argc, char** argv) {
                     glfwSetWindowShouldClose(window, GLFW_TRUE);
                 }
                 emuNext += std::chrono::nanoseconds(
-                    static_cast<int64_t>(double(machine.frameCycles()) * 1e9 / kCpuHz));
+                    neost::pacing::frameNanos(machine.frameCycles()));   // A28 : Pacing.hpp
                 ++ran;
                 if (machine.cpu.breakpointHit()) { g_dbgPaused = true; break; }   // débogueur : auto-pause
             }

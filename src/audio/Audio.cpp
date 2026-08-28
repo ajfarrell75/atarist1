@@ -101,15 +101,11 @@ void Audio::produceFrame(int64_t frameCycles, int64_t frameEndCycle) {
     // vers le coussin cible (remplissage rapide à l'amorçage, recalage anti-dérive ensuite).
     // |adj| ≤ 8 sur ~960 → ≤ 0,8 % de variation de hauteur, inaudible. Sans toucher au
     // bridage vidéo 50 fps.
-    static constexpr double CPU_HZ = 8021248.0;
-    sampleCarry_ += double(frameCycles) * rate_ / CPU_HZ;
-    int n = int(sampleCarry_);
-    sampleCarry_ -= n;
+    // A28 : le calcul vit dans neost::pacing::AudioPacer (core/Pacing.hpp) — il
+    // était recopié à l'identique ici, dans le frontend web et dans l'Android.
     // ring_.available() est en FLOATS (entrelacé) → ÷2 pour comparer aux FRAMES.
-    int adj = (int(primeSamples_) - int(ring_.available() / 2)) / 256;   // P : erreur vers la cible
-    if      (adj >  8) adj =  8;
-    else if (adj < -8) adj = -8;
-    n += adj;
+    const int n = pacer_.samplesForFrame(frameCycles, rate_,
+                                         int(primeSamples_), int(ring_.available() / 2));
     // Anneau saturé : on draine PSG/DMA (un échantillon perdu ne laisse pas de trace).
     // Le MT-32, lui, est DÉLIBÉRÉMENT conservé : jeter un Note-Off laisserait une note
     // bloquée. C'est transitoire, les événements repartent à la trame suivante, et
@@ -144,16 +140,8 @@ void Audio::produceFrame(int64_t frameCycles, int64_t frameEndCycle) {
     // Volume maître utilisateur (menu), appliqué en RAMPE linéaire sur le bloc depuis la
     // valeur effective du bloc précédent : un saut instantané (mute 1→0 en plein signal,
     // drag du slider) posait une marche d'amplitude par bloc de ~20 ms (clic / zipper).
-    if (masterVol_ != volSmooth_ || masterVol_ != 1.0f) {
-        const float v0 = volSmooth_, vt = masterVol_;
-        for (int i = 0; i < n; ++i) {
-            const float v = v0 + (vt - v0) * (float(i + 1) / float(n));
-            st[2 * i] *= v; st[2 * i + 1] *= v;
-        }
-        volSmooth_ = vt;
-    }
-    for (int i = 0; i < 2 * n; ++i)                        // garde-fou anti-saturation
-        st[i] = std::max(-1.0f, std::min(1.0f, st[i]));
+    pacer_.applyMasterVolume(st, n, masterVol_);
+    neost::pacing::AudioPacer::clampStereo(st, n);         // garde-fou anti-saturation
 
     ring_.push(st, size_t(2 * n));                        // → thread audio (render). Surplus jeté si plein.
 
@@ -208,7 +196,7 @@ bool Audio::start() {
     ring_.clear();
     primed_      = false;                     // ré-amorçage propre
     played_      = false;
-    sampleCarry_ = 0.0;
+    pacer_.reset();
     if (ma_device_start(dev) != MA_SUCCESS) {
         std::fprintf(stderr, "[Audio] ma_device_start failed\n");
         ma_device_uninit(dev);

@@ -16,6 +16,7 @@
 //
 //  (c) 2026 VERHILLE Arnaud — projet NeoST.
 // =============================================================================
+#include "core/Pacing.hpp"
 #include <SDL.h>
 #include <SDL_opengles2.h>
 
@@ -167,11 +168,11 @@ neost::FrameMixBuffers g_mixBuf;
 SampleRing             g_ring{32768};        // entrelacé L/R : ~340 ms à 48 kHz
 SDL_AudioDeviceID      g_audioDev  = 0;
 uint32_t               g_audioRate = 0;
-double                 g_sampleCarry = 0.0;
+neost::pacing::AudioPacer g_pacer;      // A28 : report + servo + rampe, partagés
 uint32_t               g_cushionFrames = 0;
 bool                   g_primed = false;          // appartient au THREAD AUDIO
 std::atomic<uint32_t>  g_underruns{0};            // écrit thread audio, lu principal
-float                  g_masterVol = 1.0f, g_volSmooth = 1.0f;
+float                  g_masterVol = 1.0f;
 
 void audioCallback(void* /*ud*/, Uint8* stream, int len) {
     float* out = reinterpret_cast<float*>(stream);
@@ -193,31 +194,18 @@ void produceAudioFrame() {
         neost::mixEmulatedFrame(m.psg, &m.dmasnd, false, 0, 0, fc, g_mixBuf);
         return;
     }
-    static constexpr double kCpuHz = 8021248.0;
-    g_sampleCarry += double(fc) * g_audioRate / kCpuHz;
-    int n = int(g_sampleCarry);
-    g_sampleCarry -= n;
-    // Asservissement proportionnel vers le coussin (≤ 8 éch. sur ~960, soit
-    // < 0,8 % de hauteur : inaudible, mais absorbe la dérive entre l'horloge du
-    // périphérique audio et celle de la machine).
-    int adj = (int(g_cushionFrames) - int(g_ring.available() / 2)) / 256;
-    if      (adj >  8) adj =  8;
-    else if (adj < -8) adj = -8;
-    n += adj;
+    // A28 : report fractionnaire + asservissement proportionnel PARTAGÉS
+    // (core/Pacing.hpp) — c'était la troisième copie du même calcul.
+    // g_ring.available() est en FLOATS (entrelacé) → ÷2 pour comparer aux FRAMES.
+    const int n = g_pacer.samplesForFrame(fc, g_audioRate,
+                                          int(g_cushionFrames), int(g_ring.available() / 2));
     if (n <= 0) { neost::mixEmulatedFrame(m.psg, &m.dmasnd, false, 0, 0, fc, g_mixBuf); return; }
 
     float* st = neost::mixEmulatedFrame(m.psg, &m.dmasnd, machineHasDmaSound(m.bus.machine),
                                         uint32_t(n), g_audioRate, fc, g_mixBuf);
     if (!st) return;
-    if (g_masterVol != g_volSmooth || g_masterVol != 1.0f) {   // rampe anti-clic
-        const float v0 = g_volSmooth, vt = g_masterVol;
-        for (int i = 0; i < n; ++i) {
-            const float v = v0 + (vt - v0) * (float(i + 1) / float(n));
-            st[2 * i] *= v; st[2 * i + 1] *= v;
-        }
-        g_volSmooth = vt;
-    }
-    for (int i = 0; i < 2 * n; ++i) st[i] = std::max(-1.0f, std::min(1.0f, st[i]));
+    g_pacer.applyMasterVolume(st, n, g_masterVol);             // rampe anti-clic
+    neost::pacing::AudioPacer::clampStereo(st, n);
     g_ring.push(st, size_t(2 * n));
 
     // Diagnostic « son haché », comme le natif : un underrun isolé est bénin
@@ -469,8 +457,9 @@ int main(int argc, char* argv[]) {
     // (50, 60 ou 71 Hz). Un tour de boucle exécute 0, 1 ou 2 trames selon ce que
     // le temps réel réclame ; plafond à 4 pour ne pas spiraler au retour d'une
     // mise en veille.
-    static constexpr double kCpuHz = 8021248.0;
-    double nextMs = double(SDL_GetTicks64());
+    // A28 : la boucle de rattrapage est PARTAGÉE avec le frontend web (Pacing.hpp).
+    neost::pacing::FramePacer framePacer;
+    framePacer.resync(double(SDL_GetTicks64()));
     bool running = true, paused = false;
 
     while (running) {
@@ -511,7 +500,7 @@ int main(int argc, char* argv[]) {
                 // g_primed appartient au THREAD AUDIO (comme primed_ du natif) :
                 // l'écrire ici serait une data race, et c'est inutile — l'anneau
                 // a gardé son contenu pendant la pause du périphérique.
-                nextMs = double(SDL_GetTicks64());    // horloge à resynchroniser
+                framePacer.resync(double(SDL_GetTicks64()));   // horloge à resynchroniser
                 // CONTEXTE GL : sur nombre d'appareils, l'EGL context est PERDU
                 // en arrière-plan (SDLActivity essaie de le préserver, sans
                 // garantie). Nos objets (texture, programme, VBO) seraient alors
@@ -598,19 +587,17 @@ int main(int argc, char* argv[]) {
             // MENU OUVERT = machine EN PAUSE (modèle borne). On resynchronise
             // l'horloge en permanence : sans ça, la reprise croirait devoir
             // rattraper toutes les trames passées dans le menu.
-            nextMs = nowMs;
+            framePacer.resync(nowMs);
         } else {
-            while (nowMs >= nextMs && ran < 4) {
+            ran = framePacer.runDue(nowMs, [&] {
                 machine.runFrame();
                 produceAudioFrame();                  // le son suit la trame
                 if (g_injectHold > 0 && --g_injectHold == 0) {
                     if (g_injectClick) machine.ikbd.mouseEvent(0, 0, false, false);
                     else               machine.ikbd.keyEvent(g_injectScancode, false);
                 }
-                nextMs += double(machine.frameCycles()) * 1000.0 / kCpuHz;
-                ++ran;
-            }
-            if (ran == 4 && nowMs > nextMs) nextMs = nowMs;   // longue pause : resync
+                return machine.frameCycles();
+            });
         }
 
         // On redessine même sans trame neuve : le menu, lui, doit rester vivant

@@ -30,6 +30,9 @@
 #include "core/Blitter.hpp"
 #include "core/DmaSound.hpp"
 #include "io/Fdc.hpp"
+#include "core/Pacing.hpp"
+
+#include <cmath>
 
 #include <cstdio>
 #include <cstring>
@@ -1059,6 +1062,125 @@ static void testFdcTruthTable() {
     checkHex("$FF8600 (hors carte) relit $FF", r.fdc.read8(FDCR + 0x00), 0xFF);
 }
 
+// -----------------------------------------------------------------------------
+//  A28 — cadence des trames & servo audio (neost::pacing).
+//
+//  Ce code vivait en TROIS copies (GUI natif, web, Android) et n'était testé nulle
+//  part : ni le headless ni les étalons pixel ne le traversent. Or c'est lui qui
+//  décide combien d'échantillons sortent par trame — une erreur y donne un son
+//  qui dérive ou qui hache, jamais un pixel de différence.
+// -----------------------------------------------------------------------------
+static void testPacing() {
+    std::printf("Cadence & servo audio (neost::pacing)\n");
+    using namespace neost::pacing;
+
+    // --- 1. La cadence suit la GÉOMÉTRIE, pas un 20 ms figé ------------------
+    // PAL 313×512 = 160 256 cyc ; NTSC 263×508 = 133 604 ; mono 501×224 = 112 224.
+    checkBool("trame PAL  ≈ 19,98 ms", std::fabs(frameMillis(313 * 512) - 19.978) < 0.01, true);
+    checkBool("trame NTSC ≈ 16,66 ms", std::fabs(frameMillis(263 * 508) - 16.656) < 0.01, true);
+    checkBool("trame mono ≈ 13,99 ms", std::fabs(frameMillis(501 * 224) - 13.991) < 0.01, true);
+    checkBool("frameNanos cohérent avec frameMillis",
+              std::llabs(frameNanos(313 * 512) - 19978000) < 5000, true);
+
+    // --- 2. Report fractionnaire : le débit MOYEN colle au temps émulé -------
+    // 160 256 cyc à 48 kHz = 959,03… échantillons. Sans report, tronquer à 959 à
+    // chaque trame perdrait ~1,7 échantillon par seconde — l'anneau se viderait,
+    // le son hacherait, et personne ne saurait pourquoi.
+    {
+        AudioPacer p;
+        long total = 0;
+        const int kFrames = 1000;
+        for (int i = 0; i < kFrames; ++i)
+            total += p.samplesForFrame(313 * 512, 48000, 0, 0);   // servo neutre
+        const double exact = double(kFrames) * double(313 * 512) * 48000.0 / kCpuHz;
+        checkBool("report fractionnaire : 1 000 trames à ±1 échantillon",
+                  std::fabs(double(total) - exact) <= 1.0, true);
+        // Contre-épreuve : tronquer à chaque trame (ce que fait un code sans report)
+        // perdrait ~989 échantillons sur 1 000 trames — 20 ms de son, à chaque
+        // vingtaine de secondes. C'est cet écart-là que le report annule.
+        const int truncated = int(double(313 * 512) * 48000.0 / kCpuHz);
+        checkBool("sans report, la troncature perdrait > 500 échantillons/1 000 trames",
+                  exact - double(kFrames * truncated) > 500.0, true);
+    }
+
+    // --- 3. Le servo : proportionnel, borné, et du BON SIGNE -----------------
+    // File VIDE (queued 0) ⇒ il faut produire PLUS. File PLEINE ⇒ moins. Un signe
+    // inversé emballe la boucle au lieu de la stabiliser.
+    {
+        AudioPacer p;
+        const int base = p.samplesForFrame(313 * 512, 48000, 0, 0);
+        AudioPacer q;
+        checkInt("file vide : +8 échantillons (clamp)",
+                 q.samplesForFrame(313 * 512, 48000, 4000, 0) - base, +8);
+        AudioPacer r;
+        checkInt("file pleine : −8 échantillons (clamp)",
+                 r.samplesForFrame(313 * 512, 48000, 0, 4000) - base, -8);
+        AudioPacer t;
+        checkInt("écart de 256 trames : +1 échantillon",
+                 t.samplesForFrame(313 * 512, 48000, 256, 0) - base, +1);
+        AudioPacer u;
+        checkInt("file à la cible : aucune correction",
+                 u.samplesForFrame(313 * 512, 48000, 2000, 2000) - base, 0);
+    }
+
+    // --- 4. Rampe anti-clic : le volume ARRIVE à la cible, sans marche -------
+    // Un saut instantané (mute en plein signal) posait une marche par bloc de
+    // ~20 ms : clic audible, « zipper » en glissant le curseur.
+    {
+        AudioPacer p;
+        float buf[8];
+        for (int i = 0; i < 8; ++i) buf[i] = 1.0f;
+        p.applyMasterVolume(buf, 4, 0.0f);                 // 1.0 → 0.0 sur 4 trames
+        checkBool("rampe : 1er échantillon à 0,75",  std::fabs(buf[0] - 0.75f) < 1e-6f, true);
+        checkBool("rampe : 2e échantillon à 0,50",   std::fabs(buf[2] - 0.50f) < 1e-6f, true);
+        checkBool("rampe : dernier échantillon à 0", std::fabs(buf[6] - 0.00f) < 1e-6f, true);
+        checkBool("rampe : L et R traités pareil",   buf[0] == buf[1], true);
+        checkBool("rampe : le volume effectif ARRIVE à la cible",
+                  p.volumeSmoothed() == 0.0f, true);
+        // Volume déjà à 1 et lissé à 1 : aucun travail, aucune modification.
+        AudioPacer q; float b2[4] = {0.5f, 0.5f, 0.5f, 0.5f};
+        q.applyMasterVolume(b2, 2, 1.0f);
+        checkBool("volume neutre : le bloc n'est pas touché", b2[0] == 0.5f, true);
+    }
+
+    // --- 5. Garde-fou anti-saturation ---------------------------------------
+    {
+        float buf[4] = {2.0f, -2.0f, 0.5f, -0.5f};
+        AudioPacer::clampStereo(buf, 2);
+        checkBool("clamp : +2 → +1", buf[0] == 1.0f, true);
+        checkBool("clamp : −2 → −1", buf[1] == -1.0f, true);
+        checkBool("clamp : ce qui est dans les clous ne bouge pas", buf[2] == 0.5f, true);
+    }
+
+    // --- 6. Rattrapage de cadence : dû, pas dû, et le PLAFOND ----------------
+    {
+        FramePacer f;
+        int calls = 0;
+        auto oneFrame = [&] { ++calls; return int64_t(313 * 512); };   // 19,978 ms
+
+        checkInt("1re trame : elle est due tout de suite", f.runDue(1000.0, oneFrame), 1);
+        checkInt("même instant : plus rien n'est dû",      f.runDue(1000.0, oneFrame), 0);
+        checkInt("après 20 ms : une trame",                f.runDue(1020.0, oneFrame), 1);
+        checkInt("après 40 ms de plus : deux trames",      f.runDue(1060.0, oneFrame), 2);
+        // Onglet en arrière-plan / appli réveillée : le retard est ABANDONNÉ, pas
+        // traîné — sinon la boucle spirale et ne rend jamais la main.
+        checkInt("long sommeil : plafonné à 4 trames",     f.runDue(11060.0, oneFrame), 4);
+        // Le retard est ABANDONNÉ : l'échéance repart de l'instant courant. Sans
+        // ça, les ~500 trames dues après 10 s de sommeil seraient rejouées 4 par
+        // 4 pendant des secondes — machine qui s'emballe, son en accéléré.
+        checkBool("le retard est abandonné (échéance recalée sur maintenant)",
+                  std::fabs(f.nextDueMs() - 11060.0) < 1e-9, true);
+        checkInt("l'appel suivant ne rattrape PAS la dette (1 trame, pas 4)",
+                 f.runDue(11060.0, oneFrame), 1);
+        checkInt("total d'appels cohérent", calls, 1 + 1 + 2 + 4 + 1);
+
+        // resync explicite (menu borne ouvert = machine en pause).
+        FramePacer g;
+        g.resync(500.0);
+        checkInt("après resync : la trame courante est due", g.runDue(500.0, oneFrame), 1);
+    }
+}
+
 int main() {
     testDongleTable();
     testCartridgeKey();
@@ -1070,6 +1192,7 @@ int main() {
     testBlitterTruthTable();
     testDmaSoundTruthTable();
     testFdcTruthTable();
+    testPacing();
     testWindowsPaths();
     testPosixPaths();
     testNativeDefaults();

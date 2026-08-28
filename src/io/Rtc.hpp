@@ -16,6 +16,7 @@
 //  (c) 2026 VERHILLE Arnaud — projet NeoST.
 // =============================================================================
 #pragma once
+#include "core/Pacing.hpp"
 #include <cstdint>
 #include <functional>
 #include <utility>
@@ -65,7 +66,7 @@ private:
     // la Machine la recale sur la base de temps RÉELLE de la trame émulée (cf.
     // setSecondCycles). Une constante figée faisait dériver l'horloge contre le
     // reste de la machine — cf. secondCycles_.
-    static constexpr int64_t CPU_HZ = 8021248;
+    static constexpr int64_t CPU_HZ = neost::pacing::kCpuHzInt;   // A28 : core/Pacing.hpp
 
     std::function<int64_t()> now_;
     int64_t baseCycle_ = 0;  // cycle du dernier top de seconde (phase du diviseur 1 Hz)

@@ -3,6 +3,7 @@
 //
 //  (c) 2026 VERHILLE Arnaud — projet NeoST.
 // =============================================================================
+#include "core/Pacing.hpp"
 #include "core/DmaSound.hpp"
 #include "core/Bus.hpp"
 #include "core/Scheduler.hpp"
@@ -32,7 +33,7 @@ static const double kRate[4] = { 6258.0, 12517.0, 25033.0, 50066.0 };
 static constexpr float kDmaGain = -0.1875f;
 
 // Horloge CPU (Hz) pour dater la consommation DAC en cycles (cf. Mfp / Scheduler).
-static constexpr int64_t CPU_HZ = 8021248;
+static constexpr int64_t CPU_HZ = neost::pacing::kCpuHzInt;   // A28 : core/Pacing.hpp
 
 // Câble le MFP et lui annonce que cette machine possède le son DMA (STE/Mega STE) :
 // seul ce signal autorise le MFP à XOR la ligne XSINT dans GPIP7 (cf. Hatari
