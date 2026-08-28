@@ -46,8 +46,11 @@ Les chiffres du tableau sont gardés par `tools/check_doc_claims.py`.
 
 **Séquencement de la purge** (l'ordre casse la circularité « purger ampute le filet ») :
 
-1. **A10 d'abord** — convertir les 7 étalons pixel encore adossés à des ROM/disques
+1. **A10 d'abord** — convertir les étalons pixel encore adossés à des ROM/disques
    propriétaires (§ Dette d'architecture). C'est LE verrou qui rend la purge coûteuse.
+   **3 sur 7 migrés le 2026-08-28** ; les 3 spec512 ne migreront pas (réfuté à l'oracle)
+   et deviendront des SKIP recensés le jour de la purge — décision à assumer, ou à
+   racheter par un étalon spec512 GÉNÉRÉ.
 2. **Débrancher le palier `fast` des fichiers propriétaires** :
    `run_selftests.py` (`diag_cart` → `tos102uk`), `run_cyclebench.py` (`tos102uk` codé en
    dur) et `run_midi_sequencer.py` (`tos104fr` + **Cubase Lite**, un logiciel commercial
@@ -84,22 +87,51 @@ est continue, les trous sont du travail fait.
 ### Reproductibilité & maturité produit (hérités)
 
 - **A3 ◐ — Le corpus de régression n'est pas livrable.** La couverture repose sur les 68
-  jeux crackés et 37 ROM propriétaires du § BLOQUANT. Recompté 2026-08-27 : **8 étalons
+  jeux crackés et 37 ROM propriétaires du § BLOQUANT. Recompté 2026-08-28 (A10) : **11 étalons
   pixel sur 15** survivraient au retrait des TOS Atari (`etos_ste_boot`, `overscan_top`,
-  `trace_odd`, `scroll_8264`, `scroll_8265`, `blitter_timer`, `blitter_hog`, `mfp_poll`) ;
-  les 7 restants sont le plan **A10**.
+  `trace_odd`, `scroll_8264`, `scroll_8265`, `blitter_timer`, `blitter_hog`, `mfp_poll`,
+  plus `cuddly_demos`, `nocooper`, `nocooper_greetings` migrés sur EmuTOS le 2026-08-28) ;
+  les 4 restants sont le reliquat d'**A10**.
 - **A9 ⭘ — Découper `main()`** (`src/main.cpp`, mesuré 2026-08-27 : **4 814 lignes**, dont
   `main()` ≈ 2 420 avec une boucle de ~1 530 lignes et **84 globaux `g_*`** — chiffre gardé
   par `check_doc_claims.py`). Le filet préalable existe (boot GUI dans `run_all.py`, mode
   harnais sans trace — cf. `CHANGELOG.md`) ; reste le découpage : une `struct App`
   absorbant les globaux, `main()` sous 300 lignes, en généralisant le pattern de requêtes
   de `MediaPages`. Ne PAS refondre la boucle en même temps qu'autre chose.
-- **A10 ⭘ — Convertir les 7 étalons adossés à des ROM propriétaires** :
-  `spectrum512_diapo`, `spectrum512_diapo2`, `spectrum512_diapo_ste`, `cuddly_demos`,
-  `union_demo`, `nocooper`, `nocooper_greetings`. Deux recettes éprouvées, au choix par
-  étalon : migration EmuTOS (capture EmuTOS vs TOS propriétaire = 0 px, contrôlée à
-  l'oracle) ou étalon généré (esprit `tools/make_blitter_test.py`). Bonus au passage :
-  raccourcir `nocooper_greetings` (~46 s — il borne à lui seul le mur du palier pixel).
+- **A10 ◐ — Étalons adossés à des ROM propriétaires : 3 migrés, 4 restants.**
+  Migrés sur `etos192fr` le 2026-08-28, référence commise INCHANGÉE (0 px / 114816,
+  crop `buffer_noled`) : `cuddly_demos` (--frames 3500 → 3655), `nocooper` (6802 → 6932),
+  `nocooper_greetings` (29500 → 29700). Ces démos bootent depuis le disque : le TOS ne
+  fait que les charger, SEULE la durée du boot change. Recette (à réutiliser) — balayer
+  les trames à **pas 1** autour de la cible et retenir CELLE qui est à 0 px, jamais la
+  moins pire ; sur `cuddly_demos` la trame voisine est déjà à 7 548 px, sur `nocooper` à
+  19 069 px. Détail et preuves dans le `rom_note` de chaque entrée d'`etalons.json`.
+  Restent :
+  - **`spectrum512_diapo`, `spectrum512_diapo2`, `spectrum512_diapo_ste` — migration
+    EmuTOS RÉFUTÉE, ne pas retenter.** Ce disque n'a pas de secteur de boot exécutable
+    (somme $FB35) : la diapo est lancée par le dossier `AUTO`, et sous EmuTOS le
+    programme démarre puis abandonne (bureau figé dès la trame 600). Ce n'est pas un bug
+    NeoST — **l'oracle Hatari + EmuTOS rend le même bureau** (22 px, tous dans la bande
+    de la LED disquette d'Hatari) ; `etos256fr` échoue pareil. Seule voie restante :
+    l'**étalon généré** (esprit `tools/make_overscan_test.py`) — un secteur de boot
+    autonome qui écrit la palette en cours de ligne, calé à l'oracle.
+  - **`union_demo`** : disque absent du dépôt (fetch planetemu manuel), donc non testable
+    — appliquer la recette ci-dessus le jour où il revient.
+  - **Prix de la migration, mesuré au repos** : le palier pixel passe de **46 s à 50 s**
+    (`run_etalons.py` complet, 2 runs de chaque côté en alternance). Le mur reste
+    `nocooper_greetings` : **41,3 → 45,1 s**, dont 0,7 % de trames ajoutées et ~8 % de
+    cœur — NeoST émule cette démo un peu plus lentement sous EmuTOS, à image identique.
+    ⚠ Mesuré d'abord SOUS CHARGE, ces mêmes écarts sortaient à 46→90 s et 43→63 s : une
+    durée sans description de la charge n'est pas une mesure (leçon du 2026-08-25,
+    re-jouée).
+  - Bonus NON acquis : raccourcir `nocooper_greetings` (il borne à lui seul le mur du
+    palier pixel). Trois tentatives mesurées le 2026-08-28 — espaces resserrés à 2 000
+    puis à 600 trames d'intervalle, puis AUCUN espace : l'écran greetings n'est jamais
+    atteint (au mieux 24 508 px). Et décaler les 5 espaces de +141 trames ne change rien
+    à l'arrivée (greetings toujours à 29 610) : la durée de la dernière partie ne dépend
+    pas d'eux. La démo joue ses parties à son rythme (la trame change sans touche à
+    2 000, 2 800, 3 700…) — un espace anticipé n'est pas pris. Trancher demande de savoir
+    QUAND la démo relit le clavier, pas de re-tirer au hasard un calendrier.
 - **A11 ⭘ — L'oracle ne tourne dans aucune CI.** Job planifié ou manuel (pas au push) qui
   clone Hatari au pin via `tools/setup_hatari.sh`, régénère les captures des étalons
   `ref_kind: oracle` et compare aux réfs commises. Fermerait la dernière boucle de
