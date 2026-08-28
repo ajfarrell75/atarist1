@@ -15,6 +15,48 @@ Ripper, DAC Pro Sound) avec page Dongles, `disks/dongles.txt` et oracle de rejeu
 vérifié note à note** en headless, corpus MIDI piano/blues ; port MIDI ALSA sous Linux ;
 save-state v16. Détail dans les chantiers datés ci-dessous.
 
+## A36 — `neost.cfg` sait où il habite, y compris installé dans `/usr` (2026-08-28)
+
+`cfgPath()` valait `exeDir + "/../neost.cfg"`. Correct pour `build/neost`, pour
+l'AppImage et pour le `.zip` Windows — tous **portables**, binaire et config voyagent
+ensemble. Faux dès qu'on installe pour de bon : `/usr/bin/neost` cherchait sa config
+dans `/usr/`, où l'utilisateur n'écrit pas. L'écriture échouait en silence — ou, pire,
+réussissait pour root seulement.
+
+La règle, dans l'ordre, et **elle ne surprend jamais l'installation portable** :
+
+1. si `<exeDir>/../neost.cfg` **existe**, c'est lui. Arbre de dev, AppImage, zip,
+   borne : rien ne change, pas de migration, pas de réglages qui « disparaissent »
+   après une mise à jour ;
+2. sinon, la config utilisateur si elle existe (`$XDG_CONFIG_HOME/neost/neost.cfg`,
+   défaut `~/.config/neost/` ; `%APPDATA%\neost\neost.cfg` sous Windows) ;
+3. sinon, on choisit où **écrire** : à côté du binaire si ce dossier est inscriptible
+   (portable neuf), sinon dans la config utilisateur (installation système) ;
+4. ni l'un ni l'autre (démon sans environnement) : chemin historique, et l'écriture
+   échouera **en le disant** plutôt qu'en silence.
+
+Les **profils nommés suivent la config retenue** — sinon on écrirait des profils que
+la config ne retrouverait pas. Un dossier `profiles` déjà utilisé à côté du binaire
+garde la priorité : on ne déplace pas les profils de quelqu'un.
+
+**« Inscriptible » est testé en écrivant.** Regarder les bits de permission mentirait :
+montage en lecture seule, ACL, conteneur, sandbox macOS. Le seul test qui ne ment pas
+est l'essai, et il coûte un fichier temporaire une fois au démarrage.
+
+**La règle est PURE et testée** (`util/ConfigPath.hpp`) : elle prend ses sondes —
+existe ? inscriptible ? environnement ? — en paramètre. Le test les fournit en mémoire,
+la production les branche sur le disque. C'est ce que fait déjà `hostpath::Style`, et
+c'est ce qui avait permis d'attraper l'issue #37 depuis un Mac. Onze assertions, dont
+les deux cas Windows et la règle XDG « une valeur RELATIVE s'ignore » (sans quoi la
+config partirait dans le répertoire courant du lancement).
+
+Au passage, une attente fausse corrigée : mon premier test exigeait des `\` sous
+Windows. Il a rougi — et le code avait raison : `hostpath` normalise en `/`, « accepté
+par Win32 aussi », c'est la convention interne du projet. Le test dit maintenant
+pourquoi.
+
+Palier `full` vert, et le `neost.cfg` du dépôt est intact (cas 1).
+
 ## A34 — un seul modèle d'exécution, et les 83 verrous du cœur sont enfin classés (2026-08-28)
 
 **La branche morte-vivante est morte.** `Machine::runFrame` et `stepInstruction`

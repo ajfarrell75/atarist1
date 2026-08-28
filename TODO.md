@@ -209,14 +209,20 @@ est continue, les trous sont du travail fait.
   motif a capturé `return g_cpuMul == 1 ? b - g_cpuBias : …` comme une DÉCLARATION et
   supprimé la ligne. Détecté avant application, mais c'est la démonstration : sur ce
   fichier-là, les ~250 substitutions se font à la main, par bloc, en recompilant.
-- **A35 ⭘ — Le fork Moira n'est pas rebasable.** `extern/moira/NEOST_VENDOR.md` décrit
-  les 6 patches locaux mais **n'enregistre ni commit ni tag upstream d'origine** (le
-  vendoring de mt32emu, lui, le fait), et l'arbre a été élagué de sa suite de tests
-  (`Cputester/`). Noter le pin de départ ; évaluer le rapatriement du Cputester pour
-  re-valider les patches hors étalons ST.
-- **A36 ⭘ — Chemin de config inadapté à une installation système.** `neost.cfg` est
-  cherché en `exeDir/../` (correct pour `build/neost`, douteux pour `/usr/bin`).
-  `XDG_CONFIG_HOME` / `%APPDATA%` avec repli sur le comportement actuel.
+- **A35 ◐ — Le fork Moira : le pin est RETROUVÉ, le `Cputester` reste à évaluer.**
+  Fait le 2026-08-28 : `extern/moira/NEOST_VENDOR.md` porte désormais le **pin de
+  départ** — `1efd69467ca13b27b2fb40febd5cb31dbecdea5f`, l'amont
+  `dirkwhoffmann/Moira` au premier commit d'intégration (2026-06-01) — retrouvé dans
+  l'historique NeoST lui-même : le gitlink du sous-module y est encore, et la commande
+  qui le déterre est écrite dans le fichier. Le tableau donne aussi les trois commits
+  du fork local disparu, dont le tip (`a1e52ec`) dont le CONTENU est le code vendorisé.
+  La recette de rebase et la commande de `diff` contre l'amont sont écrites.
+  **Reste** : (1) vérifier d'un `git ls-remote` que `1efd6946` existe toujours chez
+  l'amont — non fait, aucun accès réseau utilisé pour établir ce qui précède ; (2) le
+  `Cputester`. Sa réintégration DANS le dépôt est écartée (≈713 Mo de corpus ADF, dans
+  un dépôt public qu'on cherche justement à alléger) : la voie est la même que pour
+  l'oracle Hatari — clone hors arbre, gitignoré, recette documentée. Ses dépendances
+  propres n'ont pas été évaluées.
 - **A37 ⭘ — Discipline de release.** Trois tags le même jour (0.5→0.5.2), 0.5.3 sautée
   sans trace, et le travail majeur depuis le 2026-08-23 (MegaSTE 12/12, CAB/theoldnet,
   audit + plan A16-A37) n'est pas tagué. Taguer, puis signer/notariser `.dmg` et `.zip`
