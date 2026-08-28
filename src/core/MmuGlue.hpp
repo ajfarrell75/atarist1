@@ -1,5 +1,12 @@
 // =============================================================================
-//  Glue.hpp — GLUE + MMU : la "colle" logique du système Atari ST.
+//  MmuGlue.hpp — le MMU et la part « colle système » du GLUE (A32, 2026-08-28).
+//
+//  ⚠ CE N'EST PAS le GLUE vidéo. Celui qui décide des retraits de bordure et des
+//  positions DE/HBL vit dans core/VideoGlue.hpp. Ce fichier s'appelait « Glue.hpp »
+//  et ne portait que le stub ci-dessous : un lecteur qui cherchait la machine à
+//  états des bordures l'ouvrait et n'y trouvait rien.
+//
+//  Historique du fichier : GLUE + MMU, la "colle" logique du système Atari ST.
 //
 //  Sur ST, deux puces se partagent la gestion bas niveau :
 //   - le MMU décode les banques RAM et arbitre l'accès RAM CPU/Shifter ;
@@ -13,7 +20,7 @@
 #pragma once
 #include <cstdint>
 
-class Glue {
+class MmuGlue {
 public:
     uint8_t read8(uint32_t addr) {
         if (addr == 0xFF8001) return memConfig_;   // config banques RAM

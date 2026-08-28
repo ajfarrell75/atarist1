@@ -75,6 +75,10 @@ add_library(neost_core STATIC
     src/core/Bus.cpp
     src/core/Cpu68k.cpp
     src/core/Shifter.cpp
+    # A32 : Shifter.cpp portait SIX rôles en 2 917 lignes. Découpé par rôle —
+    # la machine à états des bordures et le compteur vidéo ont leur fichier.
+    src/core/VideoGlue.cpp
+    src/core/VideoCounter.cpp
     src/core/YM2149.cpp
     src/core/DmaSound.cpp
     src/core/AudioMix.cpp
@@ -107,7 +111,8 @@ target_include_directories(neost_core PUBLIC "${CMAKE_SOURCE_DIR}/src")
 # (Cpu68k.cpp est traité à part : il inclut l'en-tête tiers Moira.h → C++20 sans
 #  -Wpedantic strict, cf. le bloc Moira plus bas.)
 set_source_files_properties(
-    src/core/Bus.cpp src/core/Shifter.cpp src/core/YM2149.cpp src/core/DmaSound.cpp
+    src/core/Bus.cpp src/core/Shifter.cpp src/core/VideoGlue.cpp
+    src/core/VideoCounter.cpp src/core/YM2149.cpp src/core/DmaSound.cpp
     src/core/Blitter.cpp
     src/core/Machine.cpp src/core/Tracer.cpp src/core/Symbols.cpp src/io/Mfp.cpp src/io/Ikbd.cpp src/io/Fdc.cpp src/io/StxImage.cpp src/io/Rtc.cpp src/io/MidiAcia.cpp src/io/Fpu.cpp src/io/GemdosHd.cpp src/io/Acsi.cpp src/io/Scc.cpp src/io/MediaScan.cpp src/io/Ne2000.cpp src/io/UltraSatan.cpp src/io/Isp1160.cpp src/io/CartridgeKey.cpp src/io/PortDevices.cpp src/io/DongleTable.cpp src/core/Framing.cpp src/util/HostPath.cpp src/gui/AppConfig.cpp
     PROPERTIES COMPILE_OPTIONS "${NEOST_STRICT_OPTS}")

@@ -89,7 +89,7 @@ validations dans `CHANGELOG.md`) :
 | **FDC temporel** | BUSY posé, durée calculée, INTRQ différé ; modèle rotationnel complet (spin-up, débit MFM) | `Fdc.cpp` |
 | **Registres STE différés** | compteur vidéo matérialisé (`vcLineBase_`) ; `$8205/07/09`, HSCROLL, LINEWIDTH appliqués en fin de ligne | `Shifter.cpp` |
 | **Quantum sous la ligne** | `liveNow()` = cycle absolu exact à l'écriture (sous-instruction Moira) + préemption | `Scheduler`, `Cpu68k` |
-| **Bordures H/B/G/D** | machine Glue STF (`updateGlueState` ≙ `Video_Update_Glue_State`), self-test 19/19 | `Shifter.cpp`, `Glue.hpp` |
+| **Bordures H/B/G/D** | machine Glue STF (`updateGlueState` ≙ `Video_Update_Glue_State`), self-test 19/19 | `VideoGlue.cpp`, `VideoGlue.hpp` |
 | **Spec512** | palette intra-ligne pixel-identique à l'oracle (latch + alignement bus shifter) | `Shifter.cpp` |
 | **Wait states bus** | shifter/PSG/MFP/ACIA + E-Clock | `Bus.cpp`, `Cpu68k.cpp` |
 | **Microwire/LMC1992 datés** | filtres son STE horodatés | `DmaSound.cpp` |

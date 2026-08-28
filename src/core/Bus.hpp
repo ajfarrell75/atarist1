@@ -12,7 +12,7 @@
 // Glue.hpp est inclus (et non seulement déclaré) pour que le CHEMIN CHAUD du bus
 // puisse lire `glue->memConfig_` en ligne — cf. mmuFastLimit(). C'est un en-tête
 // autonome de 30 lignes sans dépendance : aucun cycle d'inclusion possible.
-#include "core/Glue.hpp"
+#include "core/MmuGlue.hpp"
 #include "io/Fpu.hpp"
 #include "io/Scu.hpp"
 #include "io/StePads.hpp"
@@ -257,7 +257,7 @@ public:
 
     Shifter* shifter = nullptr;
     YM2149*  psg     = nullptr;
-    Glue*    glue    = nullptr;
+    MmuGlue* glue    = nullptr;
     Mfp*     mfp     = nullptr;   // contrôleur d'interruptions 68901
     Ikbd*    ikbd    = nullptr;   // ACIA clavier
     Fdc*     fdc     = nullptr;   // contrôleur disquette + DMA
