@@ -33,6 +33,9 @@ ROM = ROOT / "roms" / "tos104fr.img"
 CUBLITE = ROOT / "disks" / "midi" / "CUBLITE"
 DESKTOP_INF = ROOT / "disks" / "midi" / "DESKTOP.INF"
 DEFAULT_SONG = ROOT / "disks" / "midi" / "BLUES" / "ALBERTAM.MID"
+# Code de sortie « sauté, recensé » (cf. run_selftests.py) : run_all.py le distingue
+# d'un succès ET d'un échec, et le fait remonter dans son bilan de fin.
+EXIT_SKIPPED = 77
 
 # Cubase est chargé vers la trame 1200 ; la souris part du centre (322,204) vers
 # « File » (90,9) — le déplacement vertical est amorti par GEM, d'où l'excédent de U —
@@ -52,9 +55,29 @@ def main() -> int:
     ap.add_argument("--keep", action="store_true", help="garde le répertoire de travail")
     a = ap.parse_args()
 
-    for p in (HEADLESS, ROM, CUBLITE, DESKTOP_INF, a.song):
-        if not p.exists():
-            print(f"absent : {p}", file=sys.stderr)
+    if not HEADLESS.exists():
+        print(f"Build requis : cmake --build build  ({HEADLESS} absent)", file=sys.stderr)
+        return 2
+    # Purge § BLOQUANT RELEASE, pas 2 (2026-08-28) : deux des entrées de ce scénario
+    # sont NON REDISTRIBUABLES — le TOS 1.04 FR (copyright Atari) et Cubase Lite
+    # (Steinberg, suivi par git aujourd'hui). Leur absence est un état LÉGITIME du
+    # dépôt d'après-purge : SKIP recensé, jamais un rouge, jamais un silence.
+    # ⚠ Cet étalon ne peut PAS migrer sur EmuTOS, et pas seulement à cause du MROS :
+    #   1. le scénario repose sur l'auto-lancement `#Z` de DESKTOP.INF (fonction
+    #      « Install Application » du TOS 1.04) — EmuTOS lit EMUDESK.INF et ne le
+    #      déclenche pas : mesuré le 2026-08-28, on reste sur le bureau, 0 octet MIDI ;
+    #   2. et même s'il partait, Cubase Lite resterait propriétaire : changer la ROM
+    #      ne retirerait pas la dépendance non redistribuable.
+    proprietary = [q for q in (ROM, CUBLITE) if not q.exists()]
+    if proprietary:
+        for q in proprietary:
+            print(f"  SKIP recensé : {q.relative_to(ROOT)} absent (non redistribuable "
+                  "— cf. TODO § BLOQUANT RELEASE)")
+        print("  ⚠ le séquenceur MIDI n'a PAS tourné — couverture amputée, pas verte.")
+        return EXIT_SKIPPED
+    for q in (DESKTOP_INF, a.song):
+        if not q.exists():
+            print(f"absent : {q}", file=sys.stderr)
             return 2
 
     work = Path(tempfile.mkdtemp(prefix="neost-midi-"))

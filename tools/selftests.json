@@ -4,7 +4,8 @@
   {
    "id": "diag_cart",
    "name": "Cartouche diagnostic — CPU + timing (verdict série)",
-   "rom": "roms/tos102uk.img",
+   "rom": "roms/etos192fr.img",
+   "rom_note": "ROM LIBRE (EmuTOS 192 Ko) le 2026-08-28 — purge § BLOQUANT, pas 2. La cartouche diagnostic ($FA52235F) prend la main AVANT le TOS (état vidéo par défaut du reset, cf. l'en-tête de tools/make_selftest_cart.py) : le TOS ne sert qu'à construire la machine. Vérifié plutôt que supposé — le dump série est IDENTIQUE octet pour octet sous tos102uk (50 Hz), etos192fr (50 Hz) et etos192us (60 Hz) : 4 verdicts PASS, mêmes lignes. etos192fr retenu parce qu'il a la MÊME fréquence de balayage que la ROM qu'il remplace : le remplacement ne change donc rien, même sur les chemins qui ne sont pas exercés ici.",
    "machine": "st",
    "mem": "512k",
    "frames": 40,

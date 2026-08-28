@@ -51,6 +51,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 HEADLESS = ROOT / "build" / "neost-headless"
+# Code de sortie « sauté, recensé » : ni succès ni échec — il manque des données
+# NON REDISTRIBUABLES, et run_all.py doit le DIRE dans son bilan de fin.
+EXIT_SKIPPED = 77
 ROM = ROOT / "roms" / "tos206us.img"
 CART = ROOT / "carts" / "MegaSTE_Diagnostic_v1.5.bin"
 DISK = ROOT / "disks" / "diskA.st"
@@ -77,7 +80,11 @@ def main() -> int:
             print(f"  SKIP recensé : {p.relative_to(ROOT)} absent (copyright Atari — "
                   "cf. TODO § BLOQUANT RELEASE)")
         print("  ⚠ la garde MegaSTE 12/12 n'a PAS tourné — couverture amputée, pas verte.")
-        return 0
+        # 77 (et non 0) depuis le 2026-08-28 : un 0 rendait ce SKIP invisible dans le
+        # bilan de run_all.py, qui concluait « TOUS LES PALIERS OK » sur une étape qui
+        # n'avait rien vérifié. Cf. EXIT_SKIPPED, même convention dans run_selftests.py
+        # et run_midi_sequencer.py.
+        return EXIT_SKIPPED
     if not DISK.exists():
         print(f"  ÉCHEC : {DISK.relative_to(ROOT)} absent (libre, régénérable par "
               "tools/make_floppy.py — son absence est une casse du dépôt)", file=sys.stderr)

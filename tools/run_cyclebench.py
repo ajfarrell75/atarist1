@@ -24,7 +24,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 TOOLS = Path(__file__).resolve().parent
 HEADLESS = ROOT / "build" / "neost-headless"
-ROM = ROOT / "roms" / "tos102uk.img"
+# ROM LIBRE (EmuTOS 192 Ko) depuis le 2026-08-28 — purge § BLOQUANT RELEASE, pas 2 :
+# ce gate vit dans le palier `fast`, il ne doit dépendre d'aucun fichier propriétaire.
+# La bascule est SANS effet sur ce qu'il mesure — la cartouche bench prend la main
+# AVANT le TOS (make_cycle_bench.py --cart, « pré-TOS → fiable en headless »), le TOS
+# ne sert qu'à construire la machine. Vérifié plutôt que supposé : le golden
+# tests/reference/cyclebench.json, posé sous tos102uk, passe TEL QUEL sous etos192fr
+# (tolérance 0 cycle sur chaque période) — il n'a pas été régénéré.
+ROM = ROOT / "roms" / "etos192fr.img"
 OUT = ROOT / "tests" / "out"
 GOLDEN = ROOT / "tests" / "reference" / "cyclebench.json"
 CART = OUT / "cyclebench_cart.bin"

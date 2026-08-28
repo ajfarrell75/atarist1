@@ -36,6 +36,7 @@ suit :
 | `roms/` | **37 images TOS Atari propriétaires** (`tos100*` → `tos402`, `TOS v1.02 …[MEGA TOS]`) | ~11 Mo |
 | `disks/st/` (52), `disks/stx/` (16) | 68 images de **jeux commerciaux**, majoritairement CRACKÉS (mentions `[cr Replicants]`, `[cr Elite]`, `[cr Medway Boys]`…) | ~51 Mo |
 | `carts/` | 5 cartouches **Atari Field Service** (`ST_Diagnostic_v4.4`, `MegaSTE_Diagnostic_v1.5`, `STE_Test_v1.9`…) | |
+| `disks/midi/CUBLITE/` | **33 fichiers de Cubase Lite** (Steinberg 1996) — logiciel **commercial**, moteur du seul étalon MIDI | ~0,5 Mo |
 | `dev/` | tiers commis : `dev/agt` (« aucun fichier LICENSE explicite »), `dev/reservoir-gods/` sans licence avec `.exe` précompilés et une `license.txt` UnRAR (non libre) | ~50 Mo |
 
 Conséquences : cloner le dépôt (ou télécharger le tarball GitHub) livre une archive de
@@ -51,12 +52,19 @@ Les chiffres du tableau sont gardés par `tools/check_doc_claims.py`.
    **3 sur 7 migrés le 2026-08-28** ; les 3 spec512 ne migreront pas (réfuté à l'oracle)
    et deviendront des SKIP recensés le jour de la purge — décision à assumer, ou à
    racheter par un étalon spec512 GÉNÉRÉ.
-2. **Débrancher le palier `fast` des fichiers propriétaires** :
-   `run_selftests.py` (`diag_cart` → `tos102uk`), `run_cyclebench.py` (`tos102uk` codé en
-   dur) et `run_midi_sequencer.py` (`tos104fr` + **Cubase Lite**, un logiciel commercial
-   lui aussi suivi par git) tomberaient en **rouge dur** le jour de la purge — la politique
-   « ROM Atari absente = SKIP recensé » de `run_etalons.py` ne les couvre pas. Migrer sur
-   EmuTOS quand possible, sinon appliquer la même politique de SKIP recensé.
+2. ✅ **FAIT le 2026-08-28 — le palier `fast` ne dépend plus d'aucun fichier
+   propriétaire.** `run_selftests.py` (`diag_cart`) et `run_cyclebench.py` sont passés sur
+   `etos192fr` : leurs deux programmes prennent la main **avant le TOS** (cartouche
+   $FA52235F, cartouche bench), la ROM ne sert qu'à construire la machine — vérifié, pas
+   supposé (dump série identique octet pour octet sous `tos102uk` / `etos192fr` /
+   `etos192us` ; golden `cyclebench.json` posé sous `tos102uk` passe tel quel, tolérance
+   0 cycle). `run_midi_sequencer.py` ne peut PAS migrer (auto-lancement `#Z` du
+   DESKTOP.INF non honoré par EmuTOS — mesuré : on reste sur le bureau, 0 octet MIDI ;
+   et Cubase Lite resterait propriétaire de toute façon) : il applique désormais la
+   politique de **SKIP recensé**, comme `run_megaste_diag.py`. Convention posée :
+   **code de sortie 77** = « sauté, recensé », et `run_all.py` liste ces étapes dans son
+   bilan de fin (« TOUS LES PALIERS OK — COUVERTURE AMPUTÉE ») au lieu de les engloutir
+   dans un vert plein.
 3. **La purge elle-même** (décision du mainteneur — réécriture d'historique) :
    `git rm --cached` sur `roms/tos*`, `disks/st`, `disks/stx`, `carts/`,
    `dev/reservoir-gods`, `dev/agt`, ajout au `.gitignore`, puis `git filter-repo` — sans

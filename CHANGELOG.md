@@ -15,6 +15,55 @@ Ripper, DAC Pro Sound) avec page Dongles, `disks/dongles.txt` et oracle de rejeu
 vérifié note à note** en headless, corpus MIDI piano/blues ; port MIDI ALSA sous Linux ;
 save-state v16. Détail dans les chantiers datés ci-dessous.
 
+## Le palier `fast` ne dépend plus d'aucun fichier propriétaire, et un SKIP ne peut plus se cacher dans le vert (purge pas 2, 2026-08-28)
+
+Deuxième pas du séquencement de la purge (§ BLOQUANT du `TODO.md`), dans la foulée
+d'A10. Trois sous-suites du palier `fast` seraient tombées en **rouge dur** le jour où
+les TOS Atari quittent le dépôt — la politique « ROM absente = SKIP recensé » de
+`run_etalons.py` ne les couvrait pas. C'est réglé de deux façons, selon ce que chacune
+peut faire.
+
+**Deux migrent, et ça ne change rien à ce qu'elles mesurent.** `run_selftests.py`
+(`diag_cart`) et `run_cyclebench.py` passent de `tos102uk` à `etos192fr`. Leurs deux
+programmes prennent la main **avant le TOS** — cartouche diagnostic $FA52235F pour l'un,
+cartouche bench pour l'autre — donc la ROM ne sert qu'à construire la machine. Vérifié
+plutôt que supposé : le dump série de `diag_cart` est **identique octet pour octet** sous
+`tos102uk` (50 Hz), `etos192fr` (50 Hz) et `etos192us` (60 Hz) — 4 verdicts PASS, mêmes
+lignes ; et le golden `tests/reference/cyclebench.json`, posé sous `tos102uk`, **passe tel
+quel** sous EmuTOS avec sa tolérance de 0 cycle (il n'a PAS été régénéré — c'est ce qui
+fait la preuve). `etos192fr` a été retenu pour avoir la même fréquence de balayage que la
+ROM qu'il remplace : la bascule ne change rien, même hors des chemins exercés.
+
+**Une ne peut pas, et on dit pourquoi.** `run_midi_sequencer.py` dépend de DEUX fichiers
+non redistribuables : le TOS 1.04 FR et **Cubase Lite** (Steinberg, 33 fichiers suivis par
+git — désormais listés dans le tableau du § BLOQUANT, chiffre gardé par
+`check_doc_claims.py`). Migrer la ROM ne suffirait pas, et ne marcherait pas : le scénario
+repose sur l'auto-lancement `#Z` de `DESKTOP.INF` (« Install Application » du TOS 1.04),
+qu'EmuTOS n'honore pas — il lit `EMUDESK.INF`. Mesuré : sous `etos192fr`, C: est bien
+monté, mais Cubase ne démarre pas et **0 octet MIDI** sort. Elle applique donc la
+politique de SKIP recensé.
+
+**Convention posée : le code de sortie 77 = « sauté, recensé ».** Ni 0 ni 1.
+`run_selftests.py`, `run_midi_sequencer.py` et `run_megaste_diag.py` le rendent quand il
+leur manque une donnée non redistribuable, et `run_all.py` le distingue : le bilan liste
+les étapes qui n'ont RIEN vérifié et se termine par « TOUS LES PALIERS OK — **COUVERTURE
+AMPUTÉE** ». Avant, ces suites sortaient 0 : le SKIP du diagnostic MegaSTE, par exemple,
+s'imprimait au milieu de centaines de lignes puis disparaissait sous un « TOUS LES PALIERS
+OK » plein. C'est le « vert creux » de l'audit, appliqué à l'orchestrateur lui-même. Les
+deux chemins de SKIP ont été exercés pour de vrai (ROM pointée sur un fichier inexistant),
+seuls puis ensemble : sortie 77, bilan amputé, code de retour global 0.
+
+**Et un verrou pour que ça ne revienne pas.** `run_all.py` relit, au démarrage, le CODE
+des outils que le palier `fast` lance (commentaires ignorés — ils racontent l'histoire,
+ils n'ouvrent pas de fichier) et les ROM passées en argument : un `roms/tos*.img` codé en
+dur fait sortir 2 avec le `fichier:ligne`. Un outil garde le droit de nommer un fichier
+propriétaire s'il porte la constante `EXIT_SKIPPED` — c'est-à-dire s'il sait s'en passer.
+Fil-piège vérifié en le déclenchant : remettre `tos102uk` dans `run_cyclebench.py` est
+attrapé à la ligne près. Ce couplage codé en dur est exactement ce qui rendait le nettoyage
+juridique « impossible sans casser la CI » ; il ne peut plus se reformer en silence.
+
+Palier `full` vert (1 min 40).
+
 ## Trois démos étalons quittent les ROM Atari — A10 à moitié soldé, l'autre moitié réfutée (2026-08-28)
 
 Le § BLOQUANT du `TODO.md` fait d'**A10** le premier pas de la purge : tant que le filet
