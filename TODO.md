@@ -254,13 +254,26 @@ est continue, les trous sont du travail fait.
   s'en va) ; (3) re-mesurer le mur du palier `fast` à chaque ajout, et le dire.
   ⚠ Ne PAS traiter en ajoutant un 18ᵉ outil qui surveille les 17 autres.
 
-- **A39 ⭘ — Trois modules importants n'ont JAMAIS été audités.** Angles morts nommés
-  par l'évaluation, avec leur taille : `io/GemdosHd.cpp` (**1 704 lignes** — chemins
-  hôte, Pexec, table de handles, c'est-à-dire la surface la plus exposée aux fichiers
-  de l'utilisateur), `io/Ikbd.cpp` (**1 189 lignes**) et la pile réseau
-  (`src/net`, ~1 030 lignes). Aucun n'a de table de vérité ; GemdosHd porte en plus
-  A13 (handles hors save-state). Un audit chacun, dans l'esprit de celui du
-  2026-08-27 : lire contre Hatari, chiffrer, verser les trouvailles ici.
+- **A39 ◐ — Trois modules importants n'ont JAMAIS été audités ; `GemdosHd` l'a été.**
+  Premier passage fait le 2026-08-28 sur `io/GemdosHd.cpp` (détail au `CHANGELOG.md`) :
+  chaque opération sur le système de fichiers hôte a été remontée jusqu'à la
+  provenance de son chemin (**toutes** passent par `createHostFileName` →
+  `clampToSandbox`), les contrôles mémoire à taille variable ont été vérifiés contre
+  le débordement, et le bac à sable a reçu **son premier test** (13 assertions,
+  `--gemdos-selftest`, palier `fast`). Verdict : le module est **plus solide que sa
+  réputation** — durci à plusieurs reprises, chaque durcissement portant le récit de
+  l'évasion qu'il ferme. Ce qui manquait n'était pas la robustesse mais la GARDE.
+  **Restent** :
+  - `io/Ikbd.cpp` (**1 189 lignes**) et la pile réseau (`src/net`, ~1 030 lignes) —
+    aucun audit, aucune table de vérité ;
+  - dans `GemdosHd` : la table de handles et le suivi Pexec (c'est **A13**), les codes
+    d'erreur face à `gemdos.c`, et le comportement de `Fsfirst`/DTA sous réutilisation
+    d'index — non couverts par le test du bac à sable ;
+  - **un test par COUCHE** du bac à sable. Le test posé garantit la PROPRIÉTÉ (rien ne
+    sort) et pas les couches : mesuré par mutation, il faut retirer LES DEUX défenses
+    pour le faire rougir. Il ne signalera donc pas la perte silencieuse d'une seule.
+    Le corriger demande de tester des états intermédiaires, donc de coupler le test à
+    l'implémentation : à décider, pas à bâcler.
 
 - ⚠ **Et le GUI n'a jamais été exercé INTERACTIVEMENT dans une passe de validation.**
   Il est jugé sur sa forme (A9 : 4 814 lignes, `main()` 2 430, 82 globaux) et couvert

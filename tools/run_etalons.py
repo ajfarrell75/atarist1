@@ -285,6 +285,7 @@ def run_one(entry: dict, args) -> bool:
                      "mfp_selftest": "--mfp-selftest",
                      "serloop_selftest": "--serloop-selftest",
                      "msa_selftest": "--msa-selftest",
+                     "gemdos_selftest": "--gemdos-selftest",
                      "enec_selftest": "--enec-selftest",
                      "usatan_selftest": "--usatan-selftest",
                      "netusbee_selftest": "--netusbee-selftest"}.get(entry.get("type"))

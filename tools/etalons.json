@@ -62,6 +62,14 @@
    "max_diff_px": 0
   },
   {
+   "id": "gemdos_selftest",
+   "name": "Disque dur GEMDOS — BAC À SABLE : des noms hostiles ne sortent pas du dossier monté",
+   "subsystem": "gemdos/securite",
+   "type": "gemdos_selftest",
+   "note": "A39 (2026-08-28) — premier test de io/GemdosHd.cpp (1 704 lignes). C'est la SEULE faille du projet qui puisse abîmer autre chose que l'émulation : un programme invité qui sort du dossier monté lit et ÉCRIT sur l'hôte avec les droits de l'utilisateur. 13 assertions : remontées simples et profondes, séparateurs UNIX (« / » est INVALIDE côté GEMDOS mais séparateur côté hôte), lettre de lecteur, préfixe existant suivi d'un suffixe inexistant, jokers — plus deux cas LÉGITIMES qui ne doivent pas être mutilés. ⚠ CE QUE CE TEST GARANTIT, ET CE QU'IL NE GARANTIT PAS : il vérifie la PROPRIÉTÉ (rien ne sort), pas les couches. Mesuré par mutation : retirer la normalisation « / » → « \\ » SEULE laisse 13/13 (le clamp rattrape), neutraliser clampToSandbox SEUL laisse 13/13 (la normalisation rattrape) ; il faut retirer LES DEUX pour obtenir 3 FAIL. La défense en profondeur est donc réelle et vérifiée — mais ce test ne signalera pas la perte SILENCIEUSE d'une seule couche.",
+   "max_diff_px": 0
+  },
+  {
    "id": "usatan_selftest",
    "name": "UltraSatan — protocole fil ACSI (INQUIRY JOOKIE, paquets ICD 'US', RTC, slot vide)",
    "subsystem": "acsi/ultrasatan",

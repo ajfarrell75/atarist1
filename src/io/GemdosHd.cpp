@@ -31,6 +31,8 @@
 #endif
 #include <unistd.h>
 #include <utime.h>
+#include <filesystem>          // canonical() : il n'y a pas de realpath()
+#include <fstream>             // auto-test du bac à sable (fichier témoin)
 #if defined(_WIN32)
 #ifndef NOMINMAX
 #define NOMINMAX               // sinon windows.h définit min()/max() en MACROS et
@@ -39,7 +41,6 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>           // GetDiskFreeSpaceExW (Dfree), faute de statvfs
-#include <filesystem>          // canonical() : il n'y a pas de realpath()
 // MinGW n'a pas les bits de permission « groupe » et « autres » : sous Windows il
 // n'existe qu'un attribut « lecture seule », que le CRT dérive du bit propriétaire.
 // On les définit à 0 pour que les masques ci-dessous restent lisibles tels quels
@@ -1701,4 +1702,95 @@ bool GemdosHd::handleOpcode(uint16_t opcode) {
     }
     flushCache();
     return true;
+}
+
+// =============================================================================
+//  Auto-test du BAC À SABLE (A39, 2026-08-28) — le premier test de ce module.
+//
+//  POURQUOI ICI, ET POURQUOI MAINTENANT. `GemdosHd` fait 1 700 lignes et n'avait
+//  AUCUN test : l'évaluation d'architecture du jour l'a nommé « la surface la plus
+//  exposée aux fichiers de l'utilisateur ». Un programme invité qui sort du dossier
+//  monté lit et ÉCRIT sur l'hôte avec les droits de l'utilisateur — c'est la seule
+//  faille de ce projet qui puisse abîmer autre chose que l'émulation.
+//
+//  Le code, lui, a déjà été durci plusieurs fois (la normalisation « / » → « \ »,
+//  les deux étapes makeAbsoluteName + physicalCanon de clampToSandbox) — chaque
+//  durcissement porte le récit de l'évasion qu'il ferme. Ce qui manquait n'était
+//  pas la robustesse : c'était la GARDE. Rien ne rejouait ces cas.
+//
+//  Déterministe, sans machine ni ROM : un dossier temporaire, un montage, une table
+//  de noms hostiles. Chaque résultat doit rester SOUS la racine du montage.
+//  Devenu possible par A33 (deux Cpu68k dans un processus) : ce test construit sa
+//  propre machine minimale, à côté de celle du binaire hôte.
+// =============================================================================
+bool GemdosHd::sandboxSelfTest() {
+    namespace stdfs = std::filesystem;
+    std::error_code ec;
+    const stdfs::path root = stdfs::temp_directory_path(ec) / "neost-gemdos-selftest";
+    stdfs::remove_all(root, ec);
+    stdfs::create_directories(root / "SUB" / "DEEP", ec);
+    { std::ofstream(root / "SUB" / "FILE.TXT") << "x"; }
+    if (ec || !stdfs::is_directory(root, ec)) {
+        std::fprintf(stderr, "[gemdos-selftest] FAIL: dossier temporaire indisponible\n");
+        return false;
+    }
+    if (!setDirectory(root.string())) {
+        std::fprintf(stderr, "[gemdos-selftest] FAIL: montage refusé (%s)\n", root.c_str());
+        return false;
+    }
+    // Racine CANONIQUE avec séparateur final : c'est le préfixe que tout chemin hôte
+    // produit doit porter. On la recalcule comme clampToSandbox, pas comme l'entrée
+    // (un /tmp qui est un lien symbolique ferait échouer une comparaison naïve).
+    std::string rootCanon = physicalCanon(emudrives_[0].hdEmuDir);
+    addSlash(rootCanon);
+
+    int pass = 0, fail = 0;
+    auto inside = [&](const char* what, const char* gemName) {
+        std::string host;
+        createHostFileName(2, gemName, host);
+        std::string canon = physicalCanon(host);
+        const bool ok = canon.compare(0, rootCanon.size(), rootCanon) == 0
+                     || canon + PATHSEP == rootCanon;
+        if (ok) ++pass;
+        else {
+            ++fail;
+            std::fprintf(stderr, "  FAIL %-34s '%s' -> %s (HORS du bac à sable %s)\n",
+                         what, gemName, canon.c_str(), rootCanon.c_str());
+        }
+    };
+
+    // --- Les évasions, dont deux ont RÉELLEMENT existé dans ce fichier -----------
+    inside("remontee simple",            "..\\X");
+    inside("remontee profonde",          "..\\..\\..\\..\\etc\\passwd");
+    // Séparateurs UNIX : « / » est un caractère INVALIDE côté GEMDOS mais LE
+    // séparateur côté hôte. Sans la normalisation d'entrée, ce nom traversait le
+    // parseur intact et le « .. » était résolu pour de vrai par l'OS.
+    inside("separateurs UNIX",           "../../etc/passwd");
+    inside("lettre de lecteur + UNIX",   "C:/../../etc/passwd");
+    inside("melange des deux",           "..\\../..\\etc/passwd");
+    // Préfixe EXISTANT suivi d'un suffixe inexistant : realpath seul ne peut pas
+    // résoudre le suffixe et rendait les « .. » intacts — d'où les DEUX étapes.
+    inside("prefixe existant + inexistant", "SUB\\NOPE\\..\\..\\..\\X");
+    inside("chemin absolu + remontee",   "\\..\\..\\X");
+    inside("racine puis remontee",       "C:\\..\\X");
+    inside("point-point sans separateur", "..");
+    inside("joker apres remontee",       "..\\*.*");
+    inside("nom vide de composant",      "SUB\\\\..\\..\\X");
+
+    // --- Les cas LÉGITIMES : le bac à sable ne doit pas les mutiler --------------
+    std::string host;
+    createHostFileName(2, "SUB\\FILE.TXT", host);
+    const std::string want = physicalCanon((root / "SUB" / "FILE.TXT").string());
+    if (physicalCanon(host) == want) ++pass;
+    else { ++fail; std::fprintf(stderr, "  FAIL %-34s -> %s (attendu %s)\n",
+                                "fichier legitime", host.c_str(), want.c_str()); }
+    createHostFileName(2, "C:\\", host);
+    if (physicalCanon(host) + PATHSEP == rootCanon || physicalCanon(host) == rootCanon) ++pass;
+    else { ++fail; std::fprintf(stderr, "  FAIL %-34s -> %s (attendu la racine %s)\n",
+                                "racine du lecteur", host.c_str(), rootCanon.c_str()); }
+
+    unmount();
+    stdfs::remove_all(root, ec);
+    std::fprintf(stderr, "[gemdos-selftest] %d OK, %d FAIL\n", pass, fail);
+    return fail == 0;
 }
