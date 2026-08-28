@@ -15,6 +15,76 @@ Ripper, DAC Pro Sound) avec page Dongles, `disks/dongles.txt` et oracle de rejeu
 vérifié note à note** en headless, corpus MIDI piano/blues ; port MIDI ALSA sous Linux ;
 save-state v16. Détail dans les chantiers datés ci-dessous.
 
+## Trois démos étalons quittent les ROM Atari — A10 à moitié soldé, l'autre moitié réfutée (2026-08-28)
+
+Le § BLOQUANT du `TODO.md` fait d'**A10** le premier pas de la purge : tant que le filet
+pixel dépend de ROM propriétaires, purger ampute le filet. Sept étalons étaient concernés.
+
+**Trois migrés sur `etos192fr` (EmuTOS 192 Ko, PAL), référence commise INCHANGÉE :**
+`cuddly_demos` (`--frames` 3500 → 3655), `nocooper` (6802 → 6932), `nocooper_greetings`
+(29500 → 29700). Contrairement aux 4 étalons à disque généré migrés le 2026-08-19, ces
+démos ne bootent PAS d'un secteur autonome (celui de `nocooper.msa`/`cuddly_demos.msa` est
+chargé par le TOS) — mais l'image n'en dépend pas davantage : **seule la durée du boot
+change**, donc la numérotation des trames. Ce n'est pas supposé, c'est mesuré : la capture
+NeoST sous EmuTOS est **byte-identique** (0 px / 114816, crop `buffer_noled`) à la
+référence oracle Hatari posée sous TOS 1.02. Contre-épreuve à l'oracle sur `cuddly_demos` :
+Hatari + EmuTOS rend la même image (trame Hatari 3720 ↔ trame NeoST 3654 de ce run) —
+NeoST et Hatari restent byte-exacts sur cette démo, ROM libre comprise. Et
+`nocooper_greetings` retombe aussi à 0 px de l'oracle ARCHIVÉ (`nocooper_greetings_oracle.png`),
+pas seulement de sa self-capture.
+
+**Méthode du recalage** (à réutiliser, elle a coûté la moitié du chantier) : balayer les
+trames à **pas 1** et retenir CELLE qui est à 0 px, **jamais la moins pire**. Sur ces
+écrans animés le voisinage n'est pas une pente douce : la trame suivante est déjà à
+7 548 px (`cuddly_demos`) ou 19 069 px (`nocooper`). Un balayage à pas 20 — le premier
+essai — ne voyait qu'un plateau à ~15 % et concluait à tort « la démo ne rend pas pareil ».
+Corollaire : `--frames N --screenshot` capture la trame **N-1** de `--shot-every`
+(convention déjà présente dans le manifeste : `frames: 1200, frame: 1199`) ; le vérifier
+d'abord évite de chercher un décalage qui n'existe pas.
+
+**Les 3 étalons Spectrum 512 ne migreront PAS — réfuté à l'oracle, ne pas retenter.** La
+cause est enfin nommée : `spectrum_512_auto_diapo.st` **n'a pas de secteur de boot
+exécutable** (somme des 256 mots = $FB35, pas $1234) ; la diapo est lancée par le dossier
+`AUTO` (`SYNC.PRG` + `SPSLIDE8.PRG`). Sous EmuTOS le programme AUTO démarre (écran noir,
+glyphes rouges illisibles vers la trame 350) puis abandonne, et le bureau GEM apparaît —
+écran figé de la trame 600 à la fin. Réflexe « vérifier la ROM avant de déclarer un bug »
+appliqué : **Hatari + `etos192fr` rend le même bureau** (22 px d'écart, tous dans la bande
+de la LED disquette d'Hatari — donc le bureau EmuTOS de NeoST est lui-même byte-exact vs
+l'oracle, mesure incidente). `etos256fr` échoue identiquement. `docs/TEST_SOFTWARE.md`
+l'affirmait déjà depuis le 2026-08-19 sans la preuve ni la cause ; le `TODO.md`, lui,
+comptait encore ces trois-là parmi les migrables.
+
+**Bilan chiffré** (recompté, gardé par `check_doc_claims.py`) : **11 étalons pixel sur 15**
+survivent au retrait des TOS Atari, contre 8 la veille. Reste `union_demo` (disquette
+absente du dépôt, donc non testable) et les 3 spec512, qui deviendront des SKIP recensés
+le jour de la purge — à assumer, ou à racheter par un étalon spec512 **généré** (secteur de
+boot autonome écrivant la palette en cours de ligne, esprit `make_overscan_test.py`).
+
+**LE PRIX, mesuré et assumé** — « justesse validée, coût ignoré » est déjà au journal
+comme erreur de méthode : le palier pixel passe de **46 s à 50 s** de mur d'horloge
+(`run_etalons.py` complet, 2 runs de chaque côté, poste au repos, A/B sur le même arbre :
+46,2 / 46,5 s → 50,0 / 50,3 s). Le mur reste `nocooper_greetings`, qui passe de **41,3 à
+45,1 s** — dont 0,7 % viennent des 200 trames ajoutées, le reste (~8 %) du fait que NeoST
+émule cette démo un peu plus lentement sous EmuTOS que sous TOS 1.02, sans qu'un pixel
+change. 4 secondes pour un filet qui survit à la purge : c'est acheté.
+
+⚠ **Et la mesure a d'abord menti** — la leçon du 2026-08-25 (« un seuil absolu sur une
+grandeur dépendante de la CHARGE ») s'est re-jouée ici en direct : les premiers relevés,
+pris pendant que la machine bâtissait un oracle Hatari et convertissait 500 PNG, donnaient
+« 46 s → 90 s » et « 43 s → 63 s », soit un surcoût **onze fois** trop gros. Le chiffre
+n'est devenu vrai qu'une fois les deux côtés mesurés au repos, en alternance, deux fois
+chacun. Une mesure de durée sans description de la charge n'est pas une mesure.
+
+**Bonus NON acquis, et c'est écrit** : raccourcir `nocooper_greetings` (il borne à lui seul
+le mur du palier pixel). Trois tentatives mesurées : espaces resserrés à 2 000 puis à 600
+trames d'intervalle → l'écran greetings n'est **jamais** atteint (au mieux 24 508 px) ;
+aucun espace du tout → pas davantage (la démo plafonne sur un autre écran). Et décaler les
+5 espaces de +141 trames ne change RIEN à l'arrivée (greetings toujours à 29 610) : la
+durée de la dernière partie ne dépend pas d'eux. La démo joue ses parties à son rythme
+(l'écran change sans touche aux trames 2 000, 2 800, 3 700…) et un espace anticipé n'est
+pas pris. Trancher demande de savoir QUAND la démo relit le clavier ; re-tirer un
+calendrier au hasard ne tranchera rien.
+
 ## Second ménage du TODO : le journal de la journée part d'ici, le TODO redevient une liste d'OUVERT (2026-08-27)
 
 La journée d'audit + P1 + P2 avait redéposé dans le TODO ce qu'elle venait d'y

@@ -37,11 +37,12 @@ commutations de palette par ligne ne tombent plus au bon endroit : l'image sort
 le remède est une ROM européenne. Repères d'aire non-noire pour la diapo « coucher de
 soleil » : **0,555 = rendu correct (PAL)**, **0,475 = déchiré (NTSC)**.
 
-**Couverture de la suite** (12 étalons « machine », hors auto-tests) : `st` ×8 et
-`ste` ×4 ; `tos102uk` ×6 (50 Hz) + `tos162us` ×1 (60 Hz) — **ROM Atari propriétaires** —,
-`etos192fr` ×2 (50 Hz) + `etos256us` ×3 (60 Hz) — **ROM libres** ; 512 Ko ×10
-et 1 Mo ×2 ; `fastfdc` ×8. Donc **MegaST, MegaSTE, TOS 1.00/1.04/1.06/2.06 et EmuTOS
-PAL ne sont couverts par AUCUN étalon**. Une suite verte ne prouve rien hors de ces
+**Couverture de la suite** (recomptée 2026-08-28 : 15 étalons « machine », hors les
+9 auto-tests) : `st` ×9 et `ste` ×6 ; `tos102uk` ×3 (50 Hz) + `tos162us` ×1 (60 Hz)
+— **ROM Atari propriétaires** —, `etos192fr` ×6 (50 Hz) + `etos256us` ×5 (60 Hz)
+— **ROM libres** ; 512 Ko ×13 et 1 Mo ×2 ; `fastfdc` ×8. Donc **MegaST, TOS
+1.00/1.04/1.06 ne sont couverts par AUCUN étalon** (le MegaSTE et TOS 2.06, eux, le sont
+depuis le 2026-08-27 par `tools/run_megaste_diag.py`, hors de ce manifeste). Une suite verte ne prouve rien hors de ces
 configurations : devant un rapport « ça plante dans le GUI », commencer par lire
 `neost.cfg` et rejouer la scène avec `--from-cfg neost.cfg --disk <image>`
 (+ `--shot-every N PRÉFIXE` pour voir *où* ça casse) avant de soupçonner une
@@ -60,7 +61,7 @@ Un étalon dont la ROM est **absente** ne se comporte plus de la même façon se
 
 Le SKIP n'est jamais silencieux — la suite imprime un bloc
 « ⚠ NON EXÉCUTÉS — ROM propriétaire absente (N) : … » et le code de sortie reste 0.
-Sans les deux ROM Atari, il reste **7 auto-tests + 5 étalons machine** (ST ×2, STE ×3).
+Sans les deux ROM Atari, il reste **9 auto-tests + 11 étalons machine** (ST ×6, STE ×5) — c'était 5 avant la migration A10 du 2026-08-28.
 
 Les **4 étalons à disque généré** (`overscan_top`, `trace_odd`, `scroll_8264`,
 `scroll_8265`) ont été migrés sur EmuTOS le 2026-08-19 : leur programme est un secteur de
@@ -68,9 +69,28 @@ boot autonome (il pose lui-même résolution, palette et base écran), donc le T
 le charger. Vérifié plutôt que supposé — capture EmuTOS vs capture TOS propriétaire = 0 px,
 oracle Hatari EmuTOS vs oracle Hatari TOS = 0 px, références inchangées.
 
-⚠ Les **3 étalons Spectrum 512 ne sont PAS migrables** : sous EmuTOS le disque
-`spectrum_512_auto_diapo.st` ne prend pas la main (on retombe sur le bureau GEM). Ils
-restent donc sur `tos102uk` / `tos162us`, et se sautent proprement sans ces ROM.
+Trois **démos** de plus ont été migrées le 2026-08-28 (chantier A10) : `cuddly_demos`,
+`nocooper`, `nocooper_greetings` passent de `tos102uk` à `etos192fr`. Elles ne bootent pas
+d'un secteur autonome — c'est le TOS qui les charge — mais l'image, elle, n'en dépend pas :
+**seule la durée du boot change**, donc la numérotation des trames. Preuve : la capture
+NeoST sous EmuTOS est **byte-identique** (0 px / 114816, crop `buffer_noled`) à la
+référence oracle Hatari posée sous TOS 1.02, et les références commises sont INCHANGÉES ;
+contre-épreuve à l'oracle sur `cuddly_demos` (Hatari + EmuTOS rend la même image, trame
+3720 ↔ trame NeoST 3654). Recalage : `--frames` 3500 → 3655, 6802 → 6932, 29500 → 29700.
+**Méthode** : balayer les trames à **pas 1** et retenir CELLE qui est à 0 px, jamais la
+moins pire — sur ces écrans animés la trame voisine est déjà à 7 548 px (`cuddly_demos`)
+ou 19 069 px (`nocooper`).
+
+⚠ Les **3 étalons Spectrum 512 ne sont PAS migrables** — RÉFUTÉ À L'ORACLE le 2026-08-28,
+ne pas retenter. Le disque `spectrum_512_auto_diapo.st` n'a **pas de secteur de boot
+exécutable** (somme des 256 mots = $FB35, pas $1234) : la diapo est lancée par le dossier
+`AUTO` (`SYNC.PRG` + `SPSLIDE8.PRG`). Sous EmuTOS le programme AUTO démarre (écran noir,
+glyphes rouges illisibles vers la trame 350) puis abandonne, et le bureau GEM apparaît —
+écran figé de la trame 600 à la fin. Ce n'est **pas** un bug NeoST : **Hatari + `etos192fr`
+rend le même bureau** (22 px d'écart, tous dans la bande de la LED disquette d'Hatari) ;
+`etos256fr` échoue identiquement. Ils restent donc sur `tos102uk` / `tos162us`, et se
+sautent proprement sans ces ROM. Pour racheter la couverture spec512 après la purge, la
+voie restante est l'**étalon généré**, pas la migration de ROM.
 
 ## Ordre de débogage affichage conseillé
 
@@ -94,7 +114,7 @@ Hatari : `video.c`, `spec512.c`.
 |--------|---------|-----------|------------------|------------|
 | **Spectrum 512** | Inshape | Réécrit la palette plusieurs fois par ligne → >512 couleurs affichées | Synchro cycle-près `MOVE.W` ↔ position du faisceau. Défaut : couleurs décalées verticalement, bandes/flicker | ✅ **RÉSOLU** — diaporama étalon **0 px vs Hatari** (4 images), flicker éliminé. Reste : scroll fin mi-ligne |
 | **Enchanted Land** | Thalion | Scrolling horizontal pixel-près SANS Blitter : bascule 50↔60 Hz en fin de ligne pour tromper le compteur d'adresse interne du Shifter et décaler l'adresse de base | 1 cycle d'erreur → écran qui saute/déchire ou plante. Exige la géométrie variable EN COURS de trame | « Suppression de bordures » (géométrie mi-trame) |
-| **No Cooper** | 1984, 1989 | Écran **greetings** : page med-res 4 bordures ouvertes (chaque ligne : hi@0/lo@12/**MED@20** + 60/50@376/384 + stab@444/456) ; écran principal : nappe raster bord à bord + scrolltext 2 px/trame | Cas d'école `Video_WriteToGlueRes` — **✅ V2 VALIDÉ 0 px vs oracle (2026-07-08)** | Étalons `nocooper` (écran principal, ~6800) et `nocooper_greetings` (**référencé sur l'oracle**, 5 espaces datés, ~29500) — fetch fujiology auto |
+| **No Cooper** | 1984, 1989 | Écran **greetings** : page med-res 4 bordures ouvertes (chaque ligne : hi@0/lo@12/**MED@20** + 60/50@376/384 + stab@444/456) ; écran principal : nappe raster bord à bord + scrolltext 2 px/trame | Cas d'école `Video_WriteToGlueRes` — **✅ V2 VALIDÉ 0 px vs oracle (2026-07-08)** | Étalons `nocooper` (écran principal, ~6800) et `nocooper_greetings` (**référencé sur l'oracle**, 5 espaces datés, ~29700) — fetch fujiology auto ; les deux sur **EmuTOS** depuis le 2026-08-28 (A10) |
 | **The Cuddly Demos** | The Carebears (TCB), 1989 | 1ʳᵉ démo à ouvrir les **4 bordures** (haut/bas/gauche/droite) simultanément : boucles de NOP calibrées qui commutent la fréquence au moment où le canon atteint les limites de l'affichage standard. Le robot du menu est dessiné puis **effacé en course avec le faisceau** (un seul buffer) : seul un rendu échantillonné PAR LIGNE le voit (cf. `lineSnap_`, commit 08b58e1) | Précision des timings de génération HSYNC/VSYNC + tampons internes Shifter | « Suppression de bordures » (BORDERMASK_*) |
 
 ### Quirk connu — PAS un bug d'émulation
@@ -190,9 +210,8 @@ python3 tools/compare_screenshot.py tests/out/foo_neost.ppm tests/reference/foo.
 **nocooper_greetings** (V2, réf. oracle archivée) ; fetch auto : **Cuddly Demos**
 (`disks/etalons/cuddly_demos.msa`), **No Cooper** (`disks/etalons/nocooper.msa`),
 **union_demo** (`optional` : SKIP tant que la disquette n'est pas rapatriée).
-Soit **21 entrées** dans `tools/etalons.json` — 9 auto-tests + **12 étalons machine**, dont
-le `_comment` du fichier rappelle la couverture réelle (ni MegaST, ni MegaSTE, ni TOS
-1.00/1.04/1.06/2.06, ni EmuTOS PAL).
+Soit **24 entrées** dans `tools/etalons.json` — 9 auto-tests + **15 étalons machine**, dont
+le `_comment` du fichier rappelle la couverture réelle (ni MegaST, ni TOS 1.00/1.04/1.06).
 
 ### Auto-tests logique pure (P0 — ms, sans boot ni oracle)
 
