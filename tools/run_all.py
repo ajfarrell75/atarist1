@@ -99,6 +99,12 @@ FAST = [
     # quelque chose qui peut changer l'émulation sans qu'aucun fichier ne le dise.
     ("Verrous NEOST_* du cœur (comportement d'émulation vs trace)",
      [sys.executable, str(TOOLS / "check_env_locks.py")]),
+    # A37 : les trois numéros de version (CMakeLists, « Version courante », dernière
+    # en-tête de release) disent-ils la même chose ? Et un numéro sauté est-il
+    # expliqué ? Trois tags le même jour et une 0.5.3 disparue sans trace venaient
+    # d'une seule cause : rien ne le vérifiait. Cf. docs/RELEASE.md.
+    ("Cohérence de version (CMakeLists ↔ CHANGELOG ↔ releases)",
+     [sys.executable, str(TOOLS / "check_release.py")]),
     # Auto-tests du HARNAIS lui-même (chantier A4). L'instrument produit TOUTE la
     # preuve du projet, et il avait des pannes silencieuses : trois « bloquants » sur
     # huit venaient de lui lors du balayage du 2026-08-25 (options de pilotage non

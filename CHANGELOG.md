@@ -6,6 +6,17 @@ l'ordre inverse. Version courante : **0.5.4**.
 - « NeoST gère-t-il X ? » → [`docs/IMPLEMENTED.md`](docs/IMPLEMENTED.md) (inventaire par puce)
 - « Que reste-t-il ? » → [`TODO.md`](TODO.md)
 
+## Numéros de version sautés
+
+Cette section existe pour qu'un trou dans la numérotation ne soit jamais SILENCIEUX —
+`tools/check_release.py` échoue tant qu'un numéro sauté n'y figure pas.
+
+- **0.5.3 — jamais utilisée.** Le bump du 2026-08-23 (`dec5929`, « Version 0.5.4 ») est
+  passé directement de 0.5.2 à 0.5.4 : aucun tag, aucune entrée de CHANGELOG, aucun
+  artefact publié sous ce numéro. **La raison du saut n'est pas consignée** et elle
+  n'est pas reconstituable depuis l'historique — on l'écrit tel quel plutôt que
+  d'inventer une explication.
+
 ## 0.5.4 — dongles, ports, MIDI vérifié (2026-08-23)
 
 Depuis la 0.5.2 : **clés de protection** (Cubase rouge/noire, Notator/Creator, Leader
@@ -14,6 +25,33 @@ Ripper, DAC Pro Sound) avec page Dongles, `disks/dongles.txt` et oracle de rejeu
 **page Input par port** (souris / manette / clavier sur chaque DE-9) ; **Cubase Lite
 vérifié note à note** en headless, corpus MIDI piano/blues ; port MIDI ALSA sous Linux ;
 save-state v16. Détail dans les chantiers datés ci-dessous.
+
+## A37 — la discipline de release s'écrit, et une machine la garde (2026-08-28)
+
+L'audit relevait trois symptômes : trois tags le même jour (0.5 → 0.5.2, le
+2026-08-10), une **0.5.3 sautée sans une ligne pour le dire**, et le travail majeur
+depuis le 2026-08-23 non tagué. Une seule cause : la procédure n'était écrite nulle
+part, donc rien ne pouvait la vérifier.
+
+- **[`docs/RELEASE.md`](docs/RELEASE.md)** l'écrit en sept pas — dont le troisième, celui
+  qu'on saute : `NEOST_VERSION_STR` est une variable de **cache** CMake, et sans un
+  `-DNEOST_VERSION_STR=x.y.z` après le bump, `--version` **ment**. Le fichier dit aussi
+  ce qui BLOQUE encore une release publique (le § BLOQUANT, la signature/notarisation) et
+  récapitule ce que les machines vérifient déjà.
+- **`tools/check_release.py`** (palier `fast`) exige que les TROIS numéros disent la même
+  chose — `CMakeLists`, « Version courante » du CHANGELOG, dernière en-tête de release —
+  et refuse un numéro sauté en silence. Fil-piège vérifié en le déclenchant : bumper le
+  `CMakeLists` seul donne « CMakeLists dit 0.5.5, le CHANGELOG dit Version courante 0.5.4 ».
+- **Le saut de 0.5.3 est consigné**, avec ce qu'on sait et rien de plus : elle n'a jamais
+  existé (le bump `dec5929` du 2026-08-23 passe de 0.5.2 à 0.5.4 — aucun tag, aucune
+  entrée, aucun artefact), et **la raison n'est pas reconstituable depuis l'historique**.
+  On l'écrit tel quel plutôt que d'inventer une explication plausible.
+
+**Ce que je n'ai PAS fait, et pourquoi.** Poser le tag. Il y a 128 commits depuis la
+0.5.4 et de quoi faire une belle version — mais choisir un numéro et publier est une
+décision de mainteneur sur un dépôt public, pas une conséquence mécanique de ce
+chantier. La procédure est prête ; la décision reste. Idem pour la signature du `.dmg`
+et du `.zip`, qui attend la purge.
 
 ## A36 — `neost.cfg` sait où il habite, y compris installé dans `/usr` (2026-08-28)
 
