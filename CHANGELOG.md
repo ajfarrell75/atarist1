@@ -26,6 +26,49 @@ Ripper, DAC Pro Sound) avec page Dongles, `disks/dongles.txt` et oracle de rejeu
 vérifié note à note** en headless, corpus MIDI piano/blues ; port MIDI ALSA sous Linux ;
 save-state v16. Détail dans les chantiers datés ci-dessous.
 
+## A10 — la couverture Spectrum 512 est RENDUE, sans une ligne de ROM Atari (2026-08-28)
+
+Le matin, la migration EmuTOS des trois étalons `spectrum512_diapo*` était réfutée à
+l'oracle : leur diapo vient d'un dossier `AUTO` qu'EmuTOS n'exécute pas jusqu'au bout.
+Le jour de la purge, ils deviennent des SKIP recensés — et **toute** la couverture
+« palette changée en cours de ligne » partait avec eux. Le TODO ne laissait qu'une voie :
+l'étalon **généré**. La voici.
+
+`tools/make_spec512_test.py` produit une disquette dont le **secteur de boot est
+autonome** : il pose la résolution, la fréquence, la base écran, remplit la RAM écran de
+l'index 1 **partout** (plan 0 à `$FFFF`, les trois autres à 0), puis martèle
+`palette[1]` (`$FF8242`) avec rouge / vert / bleu séparés d'un délai fixe, en se
+resynchronisant sur le compteur vidéo à chaque trame.
+
+**Ce que ça mesure, et que rien d'autre ne mesurait sans ROM Atari** : l'écran entier
+suit `palette[1]`, donc la position **horizontale** de chaque bascule de couleur dépend
+du cycle exact auquel l'écriture prend effet. C'est le seul endroit du rendu où un cycle
+de CPU se voit à l'œil. L'étalon exerce `recordColorWrite` (datation), `spec512Active_`
+(bascule en re-rendu par ligne) et l'alignement bus des écritures palette.
+
+**Le résultat qui compte : 0 px / 114816 contre l'oracle Hatari**, sur ROM libre
+(`etos192fr`). NeoST et Hatari s'accordent au pixel sur un motif pourtant entièrement
+déterminé par le modèle de cycle.
+
+Deux choses apprises en le posant, écrites dans le générateur et dans l'entrée du
+manifeste plutôt que redécouvertes :
+
+- **La taille de la boucle compte.** Premier essai à 2 600 itérations : ~4 trames par
+  passe, donc la resynchronisation ne voyait qu'une trame sur quatre et l'écran sortait
+  UNIFORME (la dernière couleur écrite). La trace `NEOST_PAL_TRACE` l'a dit tout de
+  suite — 98 écritures, toutes lignes 0 à 19. À ~300 cycles l'itération, 500 couvrent
+  une trame PAL en laissant de quoi se resynchroniser.
+- **L'image n'est PAS statique, et ce n'est pas grave.** La boucle et la trame ne sont
+  pas commensurables : le motif a une période de **4 trames** (mesuré). NeoST étant
+  déterministe, la trame 399 est toujours la même ; et l'oracle a sa fenêtre de scan,
+  qui trouve la trame identique — une sur quatre l'est. `oracle_scan` est à 90 et non
+  40 parce que le premier essai de pose a MANQUÉ la fenêtre (Hatari tire au hasard la
+  position angulaire initiale de la disquette).
+
+**Bilan** : **12 étalons pixel sur 16** survivent désormais au retrait des TOS Atari —
+8 ce matin. Les trois `spectrum512_diapo*` resteront des SKIP recensés, mais plus rien
+d'essentiel ne part avec eux.
+
 ## A33 — deux CPU peuvent enfin vivre dans le même processus (2026-08-28)
 
 `Cpu68k` jetait sur une seconde instance :
