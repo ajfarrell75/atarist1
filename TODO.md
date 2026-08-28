@@ -171,11 +171,6 @@ est continue, les trous sont du travail fait.
   **trois copies** (GUI, web, android) et la boucle de rattrapage de cadence aussi ;
   `kCpuHz` est déclarée quatre fois. Un `AudioPacer`/`FramePacer` dans `neost_core` —
   même recette que `AudioMix`, dont la copie web avait déjà divergé.
-- **A29 ⭘ — Étendre le patron « puce nue + Scheduler » au Blitter, DmaSound et Fdc.**
-  `selftest_logic.cpp` le fait déjà pour YM2149, MFP+ACIA et RTC : c'est l'étage manquant
-  entre la logique pure et le pixel. Sans lui, chaque régression pixel est une enquête
-  (« 3 400 px divergents à (112,57) ») là où une table de vérité dirait « 4 cycles de
-  trop en mode HOG ».
 - **A30 ⭘ — Fuzzing des parseurs d'images disque.** `decodeMsa`/`decodeDim` et
   `StxImage::parse` sont des fonctions pures `octets → bool` : un harnais libFuzzer coûte
   une soirée. Le bornage manuel est déjà excellent (il corrige même une lecture hors
@@ -195,7 +190,7 @@ est continue, les trous sont du travail fait.
   stub de 31 lignes pendant que le vrai GLUE vit dans le Shifter.
 - **A33 ⭘ — Lever le mono-instance CPU.** `Cpu68k.cpp:g_bus`/`g_moira`/`g_sched` sont des
   globales ; la classe jette sur une seconde instance. C'est le plafond qui interdit le
-  test unitaire d'une `Machine` (686 lignes de tests pour 40 500 de source), l'A/B en un
+  test unitaire d'une `Machine` (1 079 lignes de tests pour 40 200 de source), l'A/B en un
   processus et tout parallélisme. À faire APRÈS A31, qui en réduit le rayon.
 - **A34 ⭘ — Trancher les deux modèles d'exécution.** BLOC (défaut) et SYNC-driven
   (`NEOST_SYNC_DISPATCH`) coexistent dans `Machine::runFrame` et `stepInstruction` ; un
