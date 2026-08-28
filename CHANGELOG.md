@@ -26,6 +26,63 @@ Ripper, DAC Pro Sound) avec page Dongles, `disks/dongles.txt` et oracle de rejeu
 vérifié note à note** en headless, corpus MIDI piano/blues ; port MIDI ALSA sous Linux ;
 save-state v16. Détail dans les chantiers datés ci-dessous.
 
+## A39 — le disque dur GEMDOS passe son premier audit, et reçoit son premier test (2026-08-28)
+
+L'évaluation d'architecture du jour nommait `io/GemdosHd.cpp` « la surface la plus
+exposée aux fichiers de l'utilisateur », jamais auditée. C'est la seule faille de ce
+projet qui puisse abîmer autre chose que l'émulation : un programme invité qui sort du
+dossier monté lit et **écrit** sur l'hôte avec les droits de l'utilisateur.
+
+**Ce que l'audit a regardé** (1 704 lignes, méthode de celui du 2026-08-27) :
+
+- **la provenance de CHAQUE chemin hôte.** Les huit points où le module touche vraiment
+  le système de fichiers — `mkdir`, deux `fopen`, `opendir` ×2, `rename`, `access`,
+  le `fopen` de Pexec — ont été remontés jusqu'à leur source. **Tous** passent par
+  `createHostFileName`, donc par `clampToSandbox`. Le seul chemin dérivé
+  (`dirPath` de `Fsfirst`) est retaillé sans jamais pouvoir remonter au-dessus de
+  `rootLen` ;
+- **les contrôles mémoire à taille variable.** `checkArea(addr, size)` délègue à
+  `Bus::hostRamPtr`, qui borne à 4 Mo. Un `addr + size` peut théoriquement déborder en
+  `uint32`, mais les deux appelants à taille invitée sont couverts : Fread écrête
+  `size` à la taille du fichier AVANT le contrôle, et Fwrite refuse un `size` négatif
+  (donc ≤ 2 Gio, sans repli). **Le débordement est rattrapé par le test de contiguïté
+  de `hostRamPtr`, pas par une garde explicite** — c'est solide aujourd'hui, ça tient à
+  un raisonnement plutôt qu'à une ligne de code ;
+- **le bac à sable lui-même.** Il a été durci plusieurs fois, et chaque durcissement
+  porte le récit de l'évasion qu'il ferme : la normalisation « / » → « \ » à l'entrée
+  (« / » est un caractère INVALIDE côté GEMDOS mais LE séparateur côté hôte), et les
+  deux étapes `makeAbsoluteName` puis `physicalCanon` de `clampToSandbox` (un préfixe
+  existant suivi d'un suffixe inexistant ressortait avec ses « .. » intacts).
+
+**Verdict : le module est plus solide que sa réputation.** Ce qui manquait n'était pas
+la robustesse, c'était la GARDE — rien ne rejouait ces cas.
+
+**`--gemdos-selftest`** (13 assertions, palier `fast`) monte un dossier temporaire et y
+jette des noms hostiles : remontées simples et profondes, séparateurs UNIX, lettre de
+lecteur, préfixe existant + suffixe inexistant, jokers, composant vide — plus deux cas
+LÉGITIMES qui ne doivent pas être mutilés. Il vit dans `GemdosHd.cpp` (comme
+`glueSelfTest` vit dans le Shifter) pour atteindre `createHostFileName` sans ouvrir
+l'API. Rendu possible par **A33** du matin : il construit sa propre machine minimale,
+et il aurait fallu jeter le `throw` mono-instance pour ça.
+
+**Ce que la mutation a appris, et qui vaut plus que le test lui-même.** Trois essais :
+
+| mutation | verdict |
+|---|---|
+| normalisation « / » → « \ » retirée | **13 OK** — `clampToSandbox` rattrape |
+| `clampToSandbox` neutralisé | **13 OK** — la normalisation rattrape |
+| **les deux** retirées | **3 FAIL** — `/etc/passwd` hors du bac à sable |
+
+Donc : la défense en profondeur est **réelle et vérifiée** — deux mécanismes
+indépendants suffisent chacun pour la famille « séparateurs UNIX ». Et le test garantit
+la **propriété** (rien ne sort), pas les **couches** : il ne rougira pas si UNE seule
+défense disparaît. C'est la bonne sémantique pour une garde de sécurité, mais il faut
+l'écrire — sans quoi un lecteur croira que chaque couche est épinglée. Un test par
+couche demanderait d'observer des états intermédiaires, donc de coupler le test à
+l'implémentation : porté au TODO comme décision, pas comme oubli.
+
+Restent non audités : `io/Ikbd.cpp` (1 189 l.) et la pile réseau (~1 030 l.).
+
 ## Évaluation d'architecture — regard extérieur après une journée dans le code (2026-08-28)
 
 Consignée ici comme l'audit du 2026-08-27, et pour la même raison : un jugement qui ne

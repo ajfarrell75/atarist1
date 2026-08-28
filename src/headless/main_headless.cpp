@@ -168,6 +168,8 @@ void usage() {
         "  --mfp-selftest    self-test of the MFP (GPIP/edges/Timer B) then exit\n"
         "  --serloop-selftest self-test of the RS232 loopback line polarity then exit\n"
         "  --msa-selftest    self-test of the .msa re-encoding (round-trip) then exit\n"
+        "  --gemdos-selftest self-test of the GEMDOS hard-disk SANDBOX: mounts a temp\n"
+        "                    folder and checks hostile GEMDOS names cannot escape it\n"
         "  --enec-selftest   self-test of the NE2000/EtherNEC (cartridge-port wire\n"
         "                    protocol, loopback backend) then exit\n"
         "  --usatan-selftest self-test of the UltraSatan (ACSI wire protocol: INQUIRY,\n"
@@ -1120,6 +1122,7 @@ int main(int argc, char** argv) {
     bool        serLoopSelfTest = false;  // auto-test polarité des lignes du bouclage RS-232
     bool        mfpSelfTest  = false;  // auto-test déterministe du MFP (GPIP/fronts/Timer B)
     bool        msaSelfTest  = false;  // auto-test déterministe du ré-encodage .msa
+    bool        gemdosSelfTest = false; // A39 : bac à sable du disque dur GEMDOS
     bool        enecSelfTestFlag = false; // auto-test déterministe NE2000/EtherNEC (fil)
     bool        usatanSelfTestFlag = false;   // auto-test déterministe UltraSatan (fil ACSI)
     bool        netusbeeSelfTestFlag = false; // auto-test déterministe NetUSBee/ISP1160 (fil)
@@ -1266,6 +1269,7 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(a, "--mfp-selftest")) mfpSelfTest = true;
         else if (!std::strcmp(a, "--serloop-selftest")) serLoopSelfTest = true;
         else if (!std::strcmp(a, "--msa-selftest")) msaSelfTest = true;
+        else if (!std::strcmp(a, "--gemdos-selftest")) gemdosSelfTest = true;
         else if (!std::strcmp(a, "--enec-selftest")) enecSelfTestFlag = true;
         else if (!std::strcmp(a, "--usatan-selftest")) usatanSelfTestFlag = true;
         else if (!std::strcmp(a, "--netusbee-selftest")) netusbeeSelfTestFlag = true;
@@ -1405,6 +1409,8 @@ int main(int argc, char** argv) {
     if (mfpSelfTest) return machine.mfp.mfpSelfTest() ? 0 : 1;
     if (serLoopSelfTest) return serialLoopbackSelfTest(machine);
     if (msaSelfTest) return machine.fdc.msaSelfTest() ? 0 : 1;
+    // A39 : monte un dossier temporaire et jette des noms GEMDOS hostiles dessus.
+    if (gemdosSelfTest) return machine.gemdos.sandboxSelfTest() ? 0 : 1;
     if (enecSelfTestFlag) return enecSelfTest(machine);
     if (usatanSelfTestFlag) return usatanSelfTest(machine);
     if (netusbeeSelfTestFlag) return netusbeeSelfTest(machine);

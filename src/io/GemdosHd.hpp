@@ -66,6 +66,12 @@ public:
     // cartouche. Traite l'appel et renvoie true (l'appelant le consomme en NOP).
     bool handleOpcode(uint16_t opcode);
 
+    // A39 (2026-08-28) — auto-test du BAC À SABLE : monte un dossier temporaire et
+    // vérifie qu'une table de noms GEMDOS hostiles reste SOUS la racine. Même forme
+    // que Shifter::glueSelfTest (verdict par code de sortie, détail sur stderr) ;
+    // vit ici pour atteindre createHostFileName sans ouvrir l'API. Cf. son bandeau.
+    bool sandboxSelfTest();
+
 private:
     // ---- Composants 68000 -----------------------------------------------------
     Bus&    bus_;
