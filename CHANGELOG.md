@@ -26,6 +26,95 @@ Ripper, DAC Pro Sound) avec page Dongles, `disks/dongles.txt` et oracle de rejeu
 vérifié note à note** en headless, corpus MIDI piano/blues ; port MIDI ALSA sous Linux ;
 save-state v16. Détail dans les chantiers datés ci-dessous.
 
+## Évaluation d'architecture — regard extérieur après une journée dans le code (2026-08-28)
+
+Consignée ici comme l'audit du 2026-08-27, et pour la même raison : un jugement qui ne
+vit que dans une conversation ne sert à personne dans six mois. Appuyée sur une session
+de travail réelle — neuf chantiers menés dans le `Bus`, le `Shifter`, `Cpu68k`, le
+harnais, la CI et le packaging — donc sur ce qui casse et ce qui tient, pas sur une
+lecture.
+
+**Verdict.** Un cœur d'émulation d'excellente facture, entouré d'un projet qui ne s'est
+pas encore décidé à être un produit. La fidélité matérielle est objectivement au-dessus
+de ce qu'on voit dans un émulateur amateur ; le frontend, la gouvernance et le cycle de
+release sont très en dessous du cœur. L'auto-note de 6,5/10 de la veille est **juste,
+peut-être un peu sévère sur les tests, trop indulgente sur les frontends**.
+
+### Ce qui est vraiment fort
+
+- **La méthode.** « Hatari est la source de vérité : porter d'abord, enquêter ensuite »
+  est appliqué, et produit du vérifiable. Mesuré dans la journée : NeoST et Hatari
+  s'accordent **au pixel** sur trois démos migrées ET sur `spec512_bands`, un motif créé
+  le jour même et entièrement déterminé par le modèle de cycle. Ça ne s'obtient pas par
+  tâtonnement.
+- **La documentation est PORTEUSE.** Chaque décision non triviale porte son *pourquoi*
+  avec le `fichier:ligne` d'amont. C'est ce qui rend une session productive dans 40 000
+  lignes inconnues. Et `check_doc_anchors` / `check_doc_claims` rendent la prose
+  **exécutable** — garder ses propres chiffres de documentation contre une machine est
+  rare au point d'être singulier.
+- **La culture de la réfutation.** Le journal enregistre ce qui a été *démenti* (le
+  paradoxe de signe BL5, le sync-driven, la migration spec512). Consigner une hypothèse
+  morte vaut plus que consigner un succès : ça l'empêche de ressusciter.
+
+### Ce qui ne va pas, par ordre de danger réel
+
+1. **Le risque juridique est le vrai bloquant, et il n'est pas technique.** Dépôt public
+   GPL-3 suivant 37 ROM Atari, 68 jeux commerciaux majoritairement crackés, 5 cartouches
+   Field Service, Cubase Lite ; Pages sert la racine. Le correctif exige une réécriture
+   d'historique — décision de mainteneur. Tout le travail technique tourne autour de ce
+   nœud sans pouvoir le trancher.
+2. **La pyramide de test est inversée.** Avant cette journée : **159 assertions de
+   logique pure pour ~40 000 lignes**, tout le reste validé par comparaison d'images de
+   bout en bout. Un diff pixel dit « 3 400 px faux en (112,57) » — il ne localise rien.
+   Les tables de vérité d'A29 l'ont prouvé le jour même : couper le budget de tranche du
+   blitter de 64 à 63 fait rougir UNE ligne nommée. 257 assertions aujourd'hui ; c'est
+   mieux, ça reste mince.
+3. **Le frontend est la moitié faible, et c'est là que vivent les utilisateurs.**
+   `main.cpp` : **4 814 lignes, dont 2 430 pour `main()`, une boucle de ~1 500 lignes,
+   82 globaux**. Couverture : une capture au boot et trois assertions d'arguments. C'est
+   le plus gros passif structurel (item A9), et le seul module qu'on ne refactorise pas
+   sans poser un filet d'abord.
+4. **L'état global comme habitude de conception.** `Cpu68k` en avait 48, `main.cpp` en a
+   82, le `Shifter` ~90 champs. Ce motif a produit le plafond mono-instance, le verrou
+   hybride A16 (deux moitiés d'un même réglage avec deux défauts contradictoires, des
+   semaines durant) et l'intestabilité. Un tiers corrigé le 2026-08-28 (A33) ; le reste
+   est devant.
+5. **La configuration par variables d'environnement a débordé du laboratoire.** 83
+   verrous `NEOST_*` dans le cœur, dont **33 changent l'émulation**, dans aucun fichier
+   de configuration. Inventoriés et gardés par A34 ; **pas réduits**.
+6. **Trois cibles livrées, une seule validée.** Windows jamais lancé hors CI, APK jamais
+   posé sur un appareil, et le Raspberry Pi — cible déclarée du mode borne — n'a **aucun
+   budget temps réel mesuré**. Le banc de débit ne garde que des ratios sur le poste de
+   dev.
+
+### Deux remarques de fond
+
+- **Le backlog croît plus vite qu'il ne se vide.** L'audit du 27 a produit 22 items ; la
+  journée du 28 en a soldé 4 entièrement et avancé 5. La méthode VOIT mieux qu'elle ne
+  RÉPARE — ce n'est pas un défaut, mais il faut le savoir avant de croire qu'on approche
+  de la fin.
+- **Risque de cérémonie.** Le palier `fast` lance désormais **17 outils**, dont quatre
+  ajoutés le 2026-08-28. Chacun se justifie et chacun a attrapé quelque chose de réel ;
+  la trajectoire mérite néanmoins surveillance. Un garde-fou qui ne mord jamais devient
+  du bruit, puis on désarme le lot.
+
+### Ordre recommandé
+
+1. **Trancher le § BLOQUANT** — rien d'autre ne compte tant qu'un dépôt public distribue
+   des ROM Atari (pas 3 et 4 du séquencement).
+2. **Taguer** — 129 commits non tagués, dont le MegaSTE 12/12 : du travail invisible.
+3. **A9, le frontend**, filet posé AVANT.
+4. **Mesurer sur Pi, une fois.** Un émulateur temps réel qui n'a jamais mesuré son temps
+   réel sur sa cible est un pari.
+
+### Limites de cette évaluation, pour qu'elle soit lisible pour ce qu'elle est
+
+Une session, une plateforme (macOS ARM), et **le GUI n'a jamais été lancé de façon
+interactive** — il est jugé sur sa forme, pas sur son usage. `GemdosHd` (1 704 lignes),
+`Ikbd` et le réseau n'ont pas été audités. Et l'évaluateur a contribué à ce qu'il
+évalue : quatre des chantiers du 2026-08-28 sont PARTIELS, et leurs résidus sont sa
+dette autant que celle du projet.
+
 ## A10 — la couverture Spectrum 512 est RENDUE, sans une ligne de ROM Atari (2026-08-28)
 
 Le matin, la migration EmuTOS des trois étalons `spectrum512_diapo*` était réfutée à
