@@ -121,7 +121,9 @@ add_library(neost_net STATIC
     src/net/SlirpBackend.cpp)
 target_link_libraries(neost_net PUBLIC neost_core)
 
-# libslirp (LGPL 2.1+) : NAT en espace utilisateur — l'accès Internet RÉEL de la
+# libslirp (BSD-3-Clause — corrigé le 2026-08-28 : ce commentaire annonçait
+# « LGPL 2.1+ », la licence du fichier LICENSE livré avec la bibliothèque est bien
+# BSD-3-Clause) : NAT en espace utilisateur — l'accès Internet RÉEL de la
 # NE2000 émulée (NetUSBee/EtherNEC), sans root ni pcap. Optionnel : sans lui,
 # SlirpBackend compile en coquille vide et l'option reste grisée.
 #

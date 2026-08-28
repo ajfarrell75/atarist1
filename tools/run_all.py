@@ -81,6 +81,13 @@ FAST = [
     # précisément là où personne ne recompte.
     ("Affirmations chiffrées de la doc (les nombres cités disent-ils encore vrai ?)",
      [sys.executable, str(TOOLS / "check_doc_claims.py")]),
+    # Purge § BLOQUANT, pas 5 (2026-08-28) : les ancres gardent les symboles, les
+    # chiffres gardent les nombres, ceci garde les LICENCES. Huit jobs de CI
+    # vérifiaient que les fichiers de licence accompagnent les paquets ; aucun ne
+    # lisait leur contenu, et GLFW — statique dans tous les paquets de bureau —
+    # n'y était nommé nulle part.
+    ("Composants tiers livrés (chacun est-il nommé, avec sa licence ?)",
+     [sys.executable, str(TOOLS / "check_licenses.py")]),
     # Auto-tests du HARNAIS lui-même (chantier A4). L'instrument produit TOUTE la
     # preuve du projet, et il avait des pannes silencieuses : trois « bloquants » sur
     # huit venaient de lui lors du balayage du 2026-08-25 (options de pilotage non

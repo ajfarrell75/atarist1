@@ -177,8 +177,32 @@ Bundled third-party components, with thanks:
 | [Moira](https://github.com/dirkwhoffmann/Moira) (vendored) | cycle-exact 68000 core | MIT — © Dirk W. Hoffmann |
 | [Dear ImGui](https://github.com/ocornut/imgui) (submodule) | interface | MIT |
 | [miniaudio](https://miniaud.io/) (submodule) | audio output | MIT-0 / public domain |
+| [GLFW](https://www.glfw.org/) 3.x (built in, statically on macOS/Windows) | window, input, GL context | zlib/libpng |
+| [libmt32emu](https://github.com/munt/munt) 2.8.3 (Munt, vendored, **statically linked**) | Roland MT-32 / CM-32L on MIDI OUT | **LGPL 2.1+** — see note below |
+| [stb_image](https://github.com/nothings/stb) v2.30 | decodes the keyboard photo in the GUI | MIT **or** public domain (Unlicense) |
+| [SDL2](https://libsdl.org/) 2.30.9 (**Android package only**) | window, GLES, audio, life cycle | zlib |
 | [EmuTOS](https://emutos.sourceforge.io/) (`roms/etos*`) | free TOS, the default | GPLv2 |
 | DejaVu / Font Awesome | UI fonts | respective free licences |
+
+Optional at build time, **not shipped in any package**: [libslirp](https://gitlab.freedesktop.org/slirp/libslirp)
+≥ 4.7 (BSD-3-Clause), the user-mode NAT behind the NE2000's real Internet access — the
+release builds are made without it.
+
+⚠ **Atari TOS.** Today the desktop packages also ship `roms/tos102uk.img` and
+`roms/tos162uk.img`. Those are **original Atari ROMs, not free software and not covered
+by the GPL** — they are there only for the ST / STE machine profiles. NeoST does not need
+them: it boots EmuTOS out of the box, and a package can be built without them
+(`NEOST_PACKAGE_NO_ATARI_TOS=1`). The Android package never carries them.
+
+**libmt32emu and the LGPL.** It is linked *statically*, which LGPL 2.1 allows as long as
+the recipient can rebuild against a modified library. NeoST ships its complete source —
+this copy of Munt included, unmodified apart from its CMake file — under GPL 3, which
+satisfies that; § 3 of the LGPL also permits the switch to the GPL, settling
+compatibility. The Roland ROMs are **not** included: you provide them (`roms/mt32/`).
+
+Every package carries the full text of these licences in its `licenses/` directory —
+`GPL-3.0.txt`, `GPL-2.0.txt` and [`THIRD-PARTY.txt`](packaging/licenses/THIRD-PARTY.txt),
+which is the authoritative list.
 
 [Hatari](https://framagit.org/hatari/hatari) and MAME are the **behavioural references**
 — read as sources, and run as an oracle.
