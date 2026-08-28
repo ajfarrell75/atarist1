@@ -17,6 +17,10 @@
 // =============================================================================
 #include "gui/AppConfig.hpp"
 #include "util/HostPath.hpp"
+#include "util/ConfigPath.hpp"
+
+#include <map>
+#include <set>
 #include "io/CartridgeKey.hpp"
 #include "io/PortDevices.hpp"
 #include "io/DongleTable.hpp"
@@ -1202,6 +1206,112 @@ static void testMmioTable() {
     checkBool("la table décrit au moins 12 puces", Bus::mmioTableSize() >= 12, true);
 }
 
+// -----------------------------------------------------------------------------
+//  A36 — OÙ vit neost.cfg ? La règle a quatre cas et deux plateformes ; elle se
+//  teste ici SANS toucher au disque (sondes injectées, comme hostpath::Style).
+//
+//  Le défaut d'origine : `exeDir + "/../neost.cfg"`, point. Correct pour
+//  `build/neost`, l'AppImage et le zip Windows — tous portables. Faux pour un
+//  `/usr/bin/neost`, qui cherchait sa config dans `/usr/`, où l'utilisateur
+//  n'écrit pas : l'écriture échouait en silence.
+// -----------------------------------------------------------------------------
+static void testConfigPath() {
+    std::printf("neost.cfg — où vit la configuration (A36)\n");
+    using namespace neost::cfgpath;
+    using neost::hostpath::Style;
+
+    // Fabrique une sonde : ensemble des fichiers existants, dossiers inscriptibles,
+    // variables d'environnement.
+    auto probe = [](std::set<std::string> files, std::set<std::string> writable,
+                    std::map<std::string, std::string> env) {
+        Probe p;
+        p.exists      = [files](const std::string& f)    { return files.count(f) != 0; };
+        p.dirWritable = [writable](const std::string& d)  { return writable.count(d) != 0; };
+        p.env         = [env](const char* n) {
+            auto it = env.find(n); return it == env.end() ? std::string() : it->second;
+        };
+        return p;
+    };
+
+    // --- 1. Installation PORTABLE : la config existante gagne toujours --------
+    // Arbre de dev, AppImage, zip Windows, borne : rien ne doit changer, et surtout
+    // une mise à jour ne doit pas faire « disparaître » les réglages.
+    checkStr("portable : la config à côté du binaire gagne",
+             resolve("/opt/neost/bin",
+                     probe({"/opt/neost/bin/../neost.cfg"}, {}, {{"HOME", "/home/u"}}),
+                     Style::Posix),
+             "/opt/neost/bin/../neost.cfg");
+
+    // Même quand une config utilisateur existe AUSSI : on ne déplace personne.
+    checkStr("portable : elle gagne même si l'utilisateur en a une",
+             resolve("/opt/neost/bin",
+                     probe({"/opt/neost/bin/../neost.cfg",
+                            "/home/u/.config/neost/neost.cfg"}, {}, {{"HOME", "/home/u"}}),
+                     Style::Posix),
+             "/opt/neost/bin/../neost.cfg");
+
+    // --- 2. Installation SYSTÈME : la config utilisateur existante ------------
+    checkStr("système : la config utilisateur existante est retenue",
+             resolve("/usr/bin",
+                     probe({"/home/u/.config/neost/neost.cfg"}, {}, {{"HOME", "/home/u"}}),
+                     Style::Posix),
+             "/home/u/.config/neost/neost.cfg");
+
+    // --- 3. Rien n'existe : on choisit où ÉCRIRE -----------------------------
+    // /usr n'est pas inscriptible → config utilisateur. C'EST le bug d'origine :
+    // avant A36, on rendait "/usr/bin/../neost.cfg" et l'écriture échouait.
+    checkStr("système, rien n'existe : on écrit chez l'utilisateur",
+             resolve("/usr/bin", probe({}, {}, {{"HOME", "/home/u"}}), Style::Posix),
+             "/home/u/.config/neost/neost.cfg");
+
+    // Dossier du binaire inscriptible (portable neuf) → comportement historique.
+    checkStr("portable neuf : on écrit à côté du binaire",
+             resolve("/opt/neost/bin",
+                     probe({}, {"/opt/neost/bin/.."}, {{"HOME", "/home/u"}}),
+                     Style::Posix),
+             "/opt/neost/bin/../neost.cfg");
+
+    // --- 4. XDG_CONFIG_HOME, et la règle « absolu seulement » ----------------
+    checkStr("XDG_CONFIG_HOME absolu est respecté",
+             resolve("/usr/bin",
+                     probe({}, {}, {{"HOME", "/home/u"}, {"XDG_CONFIG_HOME", "/xdg"}}),
+                     Style::Posix),
+             "/xdg/neost/neost.cfg");
+    // La spec XDG dit d'IGNORER une valeur relative : sinon la config partirait
+    // dans le répertoire courant du lancement, qui n'a rien à voir.
+    checkStr("XDG_CONFIG_HOME RELATIF est ignoré (spec XDG)",
+             resolve("/usr/bin",
+                     probe({}, {}, {{"HOME", "/home/u"}, {"XDG_CONFIG_HOME", "rel/atif"}}),
+                     Style::Posix),
+             "/home/u/.config/neost/neost.cfg");
+
+    // --- 5. Windows : %APPDATA% ---------------------------------------------
+    // ⚠ Le séparateur rendu est « / » : c'est la convention INTERNE de hostpath
+    // (cf. son SEP — « accepté par Win32 aussi »). Le vérifier ici plutôt que de
+    // le supposer : ma première version de ce test attendait des « \ » et a
+    // rougi — le code avait raison, l'attente était fausse.
+    checkStr("Windows : %APPDATA%/neost (séparateur interne « / »)",
+             resolve("C:\\Program Files\\NeoST\\bin",
+                     probe({}, {}, {{"APPDATA", "C:\\Users\\u\\AppData\\Roaming"}}),
+                     Style::Windows),
+             "C:/Users/u/AppData/Roaming/neost/neost.cfg");
+
+    // --- 6. Ni HOME ni XDG : on rend le chemin historique ---------------------
+    // Cas d'un démon sans environnement. On ne devine pas : on rend le chemin
+    // d'avant, et l'écriture échouera EN LE DISANT plutôt qu'en silence.
+    checkStr("sans environnement : repli sur le chemin historique",
+             resolve("/usr/bin", probe({}, {}, {}), Style::Posix),
+             "/usr/bin/../neost.cfg");
+
+    // --- 7. Les profils suivent la config, toujours --------------------------
+    checkStr("profils : à côté de la config utilisateur",
+             profilesDirFor("/home/u/.config/neost/neost.cfg", Style::Posix),
+             "/home/u/.config/neost/profiles");
+    checkStr("profils : à côté de la config portable",
+             profilesDirFor("/opt/neost/bin/../neost.cfg", Style::Posix),
+             "/opt/neost/bin/../profiles");
+}
+
 int main() {
     testDongleTable();
     testCartridgeKey();
@@ -1219,6 +1329,7 @@ int main() {
     testPosixPaths();
     testNativeDefaults();
     testConfigParser();
+    testConfigPath();
     std::printf("[selftest-logic] %d OK, %d FAIL\n", g_ok, g_fail);
     return g_fail == 0 ? 0 : 1;
 }

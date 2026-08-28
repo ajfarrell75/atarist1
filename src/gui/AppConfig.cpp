@@ -2,6 +2,7 @@
 //  AppConfig.cpp — implémentation. Voir AppConfig.hpp pour la raison d'être.
 //  (c) 2026 VERHILLE Arnaud — projet NeoST.
 // =============================================================================
+#include "util/ConfigPath.hpp"
 #include "gui/AppConfig.hpp"
 
 #include <cmath>
@@ -17,7 +18,14 @@ namespace fs = std::filesystem;
 
 namespace neost::appconfig {
 
-std::string cfgPath(const std::string& exeDir) { return exeDir + "/../neost.cfg"; }
+// A36 : la règle vit dans util/ConfigPath.hpp (pure et testable). Ici on la branche
+// sur le vrai disque. Résolue UNE FOIS par exécution : la réponse ne peut pas changer
+// en cours de session, et la sonde d'inscriptibilité écrit un fichier de test.
+std::string cfgPath(const std::string& exeDir) {
+    static const std::string resolved =
+        neost::cfgpath::resolve(exeDir, neost::cfgpath::systemProbe());
+    return resolved;
+}
 
 // Gain d'une voie du mixeur, borné comme le curseur de la page Sound (0..200 %).
 // Test EN POSITIF : NaN (fichier corrompu, « mix_ym=nan ») échoue toute comparaison
@@ -310,11 +318,14 @@ bool writeConfigAtomic(const std::string& finalPath, const Config& w, bool full,
 // neost.cfg (c'est elle qui tranche l'emplacement) : cf. l'appelant. Ne CRÉE rien ; seul
 // l'enregistrement d'un profil crée le dossier.
 std::string profilesDir(const std::string& exeDir) {
-    const std::string primary = exeDir + "/../profiles";
+    // A36 : les profils suivent le neost.cfg RETENU — sinon on écrirait des profils
+    // que la config ne retrouverait pas (config utilisateur d'un côté, profils à
+    // côté du binaire de l'autre). Un dossier `profiles` déjà utilisé à côté du
+    // binaire garde la priorité : on ne déplace pas les profils de quelqu'un.
+    const std::string legacy = exeDir + "/../profiles";
     std::error_code ec;
-    if (fs::is_directory(primary, ec)) return primary;      // déjà utilisé : on y reste
-    if (fs::exists(cfgPath(exeDir), ec)) return primary;    // neost.cfg est là → les profils aussi
-    return "profiles";
+    if (fs::is_directory(legacy, ec)) return legacy;
+    return neost::cfgpath::profilesDirFor(cfgPath(exeDir));
 }
 
 // Nom saisi → nom de FICHIER sûr. Le champ est libre : sans ce filtre, « ../neost.cfg »

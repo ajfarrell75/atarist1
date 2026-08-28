@@ -13,6 +13,66 @@ premier `git submodule update`** — ce qui s'est déjà produit une fois (fork 
 perdu, commits `e4da365`/`a1e52ec` introuvables). La vendorisation fige le code et
 le patch dans l'historique NeoST, à l'épreuve du clobber.
 
+## Pin d'origine — retrouvé le 2026-08-28 (chantier A35)
+
+Ce fichier décrivait les six patches locaux mais **n'enregistrait ni commit ni tag
+upstream** : le fork n'était donc ni rebasable, ni comparable à l'amont. Le pin a été
+retrouvé dans l'historique NeoST lui-même — la trace du sous-module y est encore, et
+elle est reproductible :
+
+```sh
+# Le gitlink du sous-module, commit par commit, jusqu'à sa vendorisation :
+for c in $(git log --format=%H -- extern/moira); do
+    git ls-tree "$c" extern/moira | awk -v c="$c" '{print c, $2, $3}'
+done
+```
+
+| Date | Commit NeoST | Gitlink Moira | Ce que c'est |
+|------|--------------|---------------|--------------|
+| 2026-06-01 | `6e7ab7a` (1ʳᵉ intégration) | **`1efd69467ca13b27b2fb40febd5cb31dbecdea5f`** | **LE PIN DE DÉPART** — avant tout patch local |
+| 2026-06-16 | `a3b5d2c` | `10f77f6b…` | 1ᵉʳ commit du fork local |
+| 2026-06-17 | `c19ba10` | `e4da3650…` | fork local (cité comme « introuvable » ci-dessus) |
+| 2026-06-18 | `54f8faf` | `a1e52eca…` | **tip du fork local** au moment de la vendorisation |
+| 2026-06-25 | `0b96cab` | — | vendorisation : l'arbre remplace le sous-module |
+
+Donc : l'amont d'origine est **`1efd6946`** de `github.com/dirkwhoffmann/Moira`, et le
+code vendorisé correspond au contenu du fork local à `a1e52ec` (dépôt disparu, d'où
+l'impossibilité de rejouer son historique — mais son CONTENU est ici, dans
+l'historique NeoST).
+
+⚠ Ce que ce tableau NE dit PAS : que `1efd6946` existe encore chez l'amont. Il n'a pas
+été vérifié contre GitHub (aucun accès réseau utilisé pour l'établir) — c'est ce que le
+dépôt NeoST a enregistré, ce qui est déjà infiniment mieux que rien. Le vérifier est un
+`git ls-remote` à faire au premier rebase.
+
+**Rebaser, désormais** : cloner l'amont au pin, appliquer le diff `Moira/` du fork
+vendorisé, puis rejouer les six patches ci-dessous un par un (ils sont documentés
+séparément et chacun porte son étalon de validation).
+
+## Re-valider les patches HORS étalons ST — la question du `Cputester`
+
+L'arbre upstream contient un `Cputester/` que la vendorisation a élagué (**~713 Mo de
+corpus ADF** : c'est la raison de l'élagage, et elle tient toujours — ce corpus n'a rien
+à faire dans l'historique d'un dépôt public de 100 Mo).
+
+Aujourd'hui, les six patches ne sont validés QUE par les étalons ST du projet : un
+patch qui casserait une instruction jamais exécutée par EmuTOS ni par nos démos
+passerait inaperçu. La bonne réponse n'est pas de commettre 713 Mo — c'est la même que
+pour l'oracle Hatari : **cloner hors de l'arbre, gitignoré**, et documenter la recette.
+
+```sh
+# Hors du dépôt NeoST, ou dans un chemin gitignoré :
+git clone https://github.com/dirkwhoffmann/Moira /tmp/moira-upstream
+git -C /tmp/moira-upstream checkout 1efd69467ca13b27b2fb40febd5cb31dbecdea5f
+# Diff des sources compilées par NeoST — c'est l'inventaire EXACT des patches locaux :
+diff -ru /tmp/moira-upstream/Moira extern/moira/Moira
+```
+
+Ce `diff` est le premier livrable utile : il transforme « six patches décrits en prose »
+en une liste de hunks vérifiable. Le faire tourner le `Cputester` ensuite dépend de ses
+dépendances propres (corpus ADF, cœur de référence) — **non évalué ici**, faute de
+réseau ; ce qui précède, lui, l'a été.
+
 ## Contenu conservé
 
 Seul `Moira/` (les sources compilées par NeoST), plus `LICENSE`, `README.md` et
