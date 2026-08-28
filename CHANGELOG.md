@@ -15,6 +15,49 @@ Ripper, DAC Pro Sound) avec page Dongles, `disks/dongles.txt` et oracle de rejeu
 vérifié note à note** en headless, corpus MIDI piano/blues ; port MIDI ALSA sous Linux ;
 save-state v16. Détail dans les chantiers datés ci-dessous.
 
+## Tout ce qu'on livre est nommé, avec sa licence — et GLFW ne l'était nulle part (purge pas 5, 2026-08-28)
+
+Cinquième pas du séquencement de la purge (§ BLOQUANT du `TODO.md`). L'item demandait de
+compléter le tableau des composants tiers du README avec libmt32emu, stb_image, libslirp,
+SDL2 et les TOS Atari. En le faisant, il en manquait un **sixième que personne n'avait
+listé** : **GLFW**. Il est compilé en statique dans le binaire macOS (tag 3.4, bâti par
+`packaging/macos/package_macos.sh`) et Windows (MinGW-w64), et embarqué en `.so` dans
+l'AppImage — donc présent dans TOUS les paquets de bureau — et il n'apparaissait ni au
+README, ni dans le `THIRD-PARTY.txt` qui accompagne chaque paquet.
+
+**Les deux documents sont désormais complets et cohérents** : Moira, Dear ImGui,
+miniaudio, **GLFW**, **libmt32emu 2.8.3** (LGPL 2.1+, *lié statiquement*), **stb_image
+v2.30**, **SDL2 2.30.9** (paquet Android), EmuTOS, DejaVu / Font Awesome, plus la mention
+⚠ des TOS Atari que les paquets de bureau redistribuent encore par défaut. La note LGPL
+est explicite sur ce qu'elle impose ici : le lien statique est permis tant que le
+destinataire peut recompiler contre une version modifiée — la GPL 3 du dépôt, qui publie
+cette copie de Munt inchangée, y suffit. Au passage, le `THIRD-PARTY.txt` livré perd ses
+deux appendices FRANÇAIS ajoutés après coup à un document anglais : ils rentrent dans le
+corps du texte.
+
+**Une licence corrigée** : le `CMakeLists.txt` annonçait « libslirp (LGPL 2.1+) ». Le
+fichier `LICENSE` de la bibliothèque installée dit **BSD-3-Clause** (Danny Gasparovski,
+1995-96). Corrigé — et le README précise ce que la CI disait déjà en commentaire :
+libslirp est une dépendance de compilation **optionnelle et NON LIVRÉE**, les builds de
+release sont faits sans elle.
+
+**Le verrou : `tools/check_licenses.py`, au palier `fast`.** Huit jobs de CI vérifiaient
+déjà que les *fichiers* de licence accompagnent chaque paquet ; aucun ne lisait leur
+*contenu*, et c'est exactement là que l'omission se loge. Le contrôle dresse la liste des
+composants livrés depuis les fichiers de build (`extern/<nom>` cité par le CMakeLists ou
+par le paquet Android — `extern/hatari`, ni compilé ni redistribué, est explicitement
+hors liste) et exige que chacun soit nommé, **avec une licence**, dans le README ET dans
+le `THIRD-PARTY.txt`. Il cherche la licence sur TOUTES les lignes qui nomment le
+composant, pas sur la première : la première version n'en regardait qu'une et criait à
+tort sur Moira et GLFW, cités plus haut en prose — un contrôle qui crie à tort finit
+désarmé. Fil-piège vérifié en le déclenchant (ligne GLFW retirée du README → sortie 1 avec
+le motif exact). Ce qu'il ne sait pas voir, et qui reste à relire à la main : les
+bibliothèques que `linuxdeploy` embarque toute seule dans l'AppImage.
+
+Palier `full` vert. Il reste au séquencement les pas **3** (la purge et la réécriture
+d'historique) et **4** (basculer le défaut des paquets sur `NEOST_PACKAGE_NO_ATARI_TOS=1`)
+— les deux sont des décisions de mainteneur, pas du travail technique en attente.
+
 ## Le palier `fast` ne dépend plus d'aucun fichier propriétaire, et un SKIP ne peut plus se cacher dans le vert (purge pas 2, 2026-08-28)
 
 Deuxième pas du séquencement de la purge (§ BLOQUANT du `TODO.md`), dans la foulée

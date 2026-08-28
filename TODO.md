@@ -72,9 +72,19 @@ Les chiffres du tableau sont gardés par `tools/check_doc_claims.py`.
 4. **Basculer le défaut des paquets** : `NEOST_PACKAGE_NO_ATARI_TOS=1` (l'interrupteur
    existe et la CI l'honore ; aujourd'hui les paquets bureau redistribuent `tos102uk.img`
    et `tos162uk.img` par défaut).
-5. **Compléter le tableau des composants tiers du README** : Atari (tant que des TOS sont
-   livrés), **libmt32emu (LGPL 2.1+, lié statiquement — l'omission n'est pas anodine)**,
-   stb_image, libslirp, SDL2 (Android).
+5. ✅ **FAIT le 2026-08-28 — les composants tiers sont tous nommés, avec leur licence.**
+   README **et** `packaging/licenses/THIRD-PARTY.txt` (celui qui accompagne les paquets)
+   listent désormais libmt32emu (LGPL 2.1+, **lié statiquement** — la note explique
+   pourquoi la GPL 3 du dépôt satisfait la condition de relien), stb_image, SDL2 2.30.9
+   (paquet Android), la mention ⚠ des TOS Atari livrés par défaut, et **GLFW** — qui
+   n'était nommé NULLE PART alors qu'il est statique dans tous les paquets de bureau ;
+   c'est l'omission que le pas 5 n'avait pas vue. `libslirp` est documenté comme
+   dépendance de compilation **optionnelle et non livrée** (les builds de release sont
+   faits sans elle), et sa licence corrigée dans le `CMakeLists.txt` : **BSD-3-Clause**,
+   pas « LGPL 2.1+ » comme l'annonçait le commentaire. Verrou : `tools/check_licenses.py`
+   (palier `fast`) exige que tout composant livré soit nommé, avec une licence, dans les
+   DEUX documents — fil-piège vérifié en le déclenchant. Reste hors de sa portée : les
+   bibliothèques que `linuxdeploy` embarque seule dans l'AppImage.
 
 Conformité annexe (non bloquante) :
 - `packaging/linux/make_appimage.sh` tire `linuxdeploy`/`appimagetool` depuis le tag mouvant
