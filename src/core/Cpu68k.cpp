@@ -153,13 +153,16 @@ namespace {
     // dérive faisceau beam-sync (cf. [[ramslot-iack-enable-overscan]]). NEOST_RAM_SLOT=0 désactive.
     bool    g_ramSlot     = []{ const char* s = std::getenv("NEOST_RAM_SLOT"); return s ? std::atoi(s) != 0 : true; }();
     int     g_ramSlotPhase= []{ const char* s = std::getenv("NEOST_RAM_SLOT_PHASE"); return s ? std::atoi(s) : 0; }();
-    // Modèle de dispatch BLOC (DÉFAUT depuis la réfutation du sync-driven) : sync() n'avance QUE
-    // l'horloge ; le dispatch des events se fait par runTo à la frontière d'événement (cf.
-    // Machine::runFrame). PT=true (datation sous-instruction) et RAM_SLOT sont CONSERVÉS — la
-    // convergence cycle d'instruction est indépendante du modèle de dispatch. Le sync-driven
-    // (dispatch mid-instruction, do_cycles WinUAE) DEADLOCKAIT Enchanted Land (boucle beam-sync
-    // jamais servie) SANS corriger le jitter (falsifié) → repassé en OPT-IN NEOST_SYNC_DISPATCH.
-    bool    g_blockDispatch = []{ return std::getenv("NEOST_SYNC_DISPATCH") == nullptr; }();
+    // A34 (2026-08-28) — LE MODÈLE DE DISPATCH EST TRANCHÉ, il n'y en a plus qu'un.
+    // Modèle BLOC : sync() n'avance QUE l'horloge ; le dispatch des événements se fait
+    // par runTo à la frontière d'événement (cf. Machine::runFrame). PT=true (datation
+    // sous-instruction) et RAM_SLOT sont CONSERVÉS — la convergence cycle d'instruction
+    // est indépendante du modèle de dispatch.
+    // Le concurrent (« sync-driven » : dispatch mid-instruction, modèle do_cycles de
+    // WinUAE) vivait derrière NEOST_SYNC_DISPATCH. Il est SUPPRIMÉ : il deadlockait
+    // Enchanted Land (boucle beam-sync jamais servie) sans corriger le jitter qu'il
+    // promettait, et la mesure re-prise le 2026-08-28 sur l'arbre du jour le confirme —
+    // palier `fast` ROUGE, blitter_timer à 245 px là où le modèle BLOC est à 0.
     int     g_desiredIpl  = 0;       // niveau IPL calculé (immédiat, broche « réelle »)
     int     g_appliedIpl  = 0;       // niveau dernier PROPAGÉ à la broche Moira (reg.ipl via POLL_IPL)
     int64_t g_iplChgClock = -1000;   // horloge (cœur) du dernier changement de g_desiredIpl
@@ -448,7 +451,6 @@ public:
     // réentrance : les callbacks de l'ordonnanceur n'exécutent pas le CPU.
     void sync(int n) override {
         setClock(getClock() + n);             // défaut Moira (avance l'horloge du cœur)
-        if (!g_blockDispatch && g_sched && !g_inReset) g_sched->syncTo(busOfClock(static_cast<int64_t>(getClock())));
         // Broches IRQ vidéo PRÉ-ARMÉES (HBL/VBL) : montée au cycle bus EXACT, en
         // cours d'instruction — l'instruction qui ENJAMBE l'événement la voit à son
         // POLL_IPL, comme WinUAE (pin posée dans do_cycles). Cf. Cpu68k::armHblPinAt.
@@ -869,9 +871,8 @@ int Cpu68k::run(int cycles) {
             std::fprintf(stderr, "HT %06X d=%-3lld %s\n", htPc, static_cast<long long>(now - g_htPrev), htDis);
             g_htPrev = now; --g_htN;
         }
-        // Préemption : ACTIVE dans le modèle BLOC (le défaut — runFrame arme beginRun
-        // à chaque bloc) ; dormante seulement en mode piloté par sync
-        // (NEOST_SYNC_DISPATCH), où beginRun n'est jamais appelé.
+        // Préemption du bloc CPU : runFrame arme beginRun à chaque bloc, donc elle est
+        // toujours active (A34 : le second modèle d'exécution a été supprimé).
         if (g_endSlice) { g_endSlice = false; break; }
         // STOP : aucune instruction ne tournera tant qu'un événement ne change pas
         // l'IPL. Au lieu de simuler l'attente cycle par cycle (≈25× plus lent), on

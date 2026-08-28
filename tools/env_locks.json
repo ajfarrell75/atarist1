@@ -1,0 +1,65 @@
+{
+ "_comment": "A34 (2026-08-28) — INVENTAIRE des variables d'environnement NEOST_* lues par le CŒUR (src/core, src/io). Deux familles, et les confondre était le problème : un verrou de COMPORTEMENT change ce que la machine émule (donc ce que valent les étalons), un verrou de TRACE n'ajoute que de l'observation. tools/check_env_locks.py compare cette liste à ce que le code lit VRAIMENT : une variable ajoutée sans être classée fait rougir le palier fast. Ce n'est pas de la bureaucratie — c'est le seul moyen de savoir, avant une release, ce qui peut encore changer l'émulation sans qu'aucun fichier de configuration ne le dise.",
+
+ "behaviour": {
+  "_comment": "CHANGENT L'ÉMULATION. Chacune est un A/B validé ou un chantier en cours ; aucune n'est censée être posée en production. Les étalons sont mesurés avec les DÉFAUTS — armer l'une d'elles invalide toute comparaison au corpus.",
+  "NEOST_WS": "wakeup state STF (1..4, défaut 3=WS3, tranché). Décale les positions horizontales de la Glue, l'IRQ HBL et la VBL.",
+  "NEOST_LINELEN": "canal HBL_Pos/nCyclesPerLine côté Machine (défaut ON, validé WS3). =0 pour l'A/B.",
+  "NEOST_LINELEN_ATTR": "chantier V3 : attribution des écritures à la grille réelle des débuts de ligne (défaut OFF). Cf. A16b.",
+  "NEOST_V2": "tricks par changement de résolution (med-res overscan, scrolls hardware).",
+  "NEOST_RAM_SLOT": "créneau bus RAM (défaut ON) — convergence cycle d'instruction Moira/WinUAE.",
+  "NEOST_RAM_SLOT_PHASE": "phase de la grille du créneau RAM (calibration oracle).",
+  "NEOST_MFP_EXACT": "datation exacte des accès MFP.",
+  "NEOST_IACK": "int-ack vectorisé (défaut ON).",
+  "NEOST_IACK_VIDEO": "durée d'IACK des IRQ vidéo (défaut 14 cyc).",
+  "NEOST_IACK_MFP": "durée d'IACK MFP (défaut 16 cyc, mesuré à l'oracle sur Super Hang-On).",
+  "NEOST_IACK_SYNC": "resynchronisation d'horloge à l'IACK (défaut ON).",
+  "NEOST_IACK_LEAD": "avance de l'IACK (défaut 14).",
+  "NEOST_IACK_AT": "IACK daté au cycle (défaut ON).",
+  "NEOST_IPLDELAY": "délai de propagation de l'IPL (défaut OFF).",
+  "NEOST_IPLDELAY_CYC": "valeur du délai IPL (défaut 4 cyc).",
+  "NEOST_IPLFETCH": "IPL échantillonné au fetch (défaut OFF).",
+  "NEOST_IPLFETCH4": "phase du fetch IPL, instructions 4 cyc.",
+  "NEOST_IPLFETCH2": "phase du fetch IPL, instructions 2 cyc.",
+  "NEOST_ECLOCK_ON": "synchronisation E-Clock des accès 6800 (défaut OFF).",
+  "NEOST_ECLOCK_PHASE": "phase de l'E-Clock.",
+  "NEOST_PIN_ARM": "pré-armement des broches IRQ vidéo.",
+  "NEOST_RAISE_COMMIT": "instant de commit de la montée d'IRQ.",
+  "NEOST_RAISE_WINDOW": "fenêtre de la montée d'IRQ.",
+  "NEOST_VC_OFF": "décalage de la lecture du compteur vidéo (défaut −6, calibré à l'oracle).",
+  "NEOST_VC_WAIT": "wait state de la lecture du compteur vidéo.",
+  "NEOST_SYNC_OFF": "décalage de datation des écritures freq/res (défaut +2).",
+  "NEOST_SYNC_MODE": "mode de datation des écritures de synchro.",
+  "NEOST_HBL_OFF": "décalage de la position de l'IRQ HBL.",
+  "NEOST_MED_CAL": "calibration du décalage source des lignes med-res overscan.",
+  "NEOST_YM_MIXING": "loi de mixage des trois voies du YM2149.",
+  "NEOST_NO_SNAP": "désactive la capture par ligne (lineSnap) — change le rendu.",
+  "NEOST_RENDER_ALL": "force le rendu de toutes les lignes.",
+  "NEOST_QUIET_PARSERS": "coupe l'avertissement RLE des décodeurs d'images (A30). N'affecte PAS l'émulation, mais vit côté cœur : classé ici pour être vu."
+ },
+
+ "trace": {
+  "_comment": "OBSERVATION SEULEMENT : traces, dumps et diagnostics. Aucune ne doit changer un pixel ni un cycle — si l'une le fait, c'est un bug, pas un réglage.",
+  "NEOST_TRACE_CYC": 1, "NEOST_WATCH": 1, "NEOST_STATE_MAP": 1, "NEOST_BUS_DIAG": 1,
+  "NEOST_WRITE_DIAG": 1, "NEOST_FRAME_DIAG": 1, "NEOST_QDELTA_DIAG": 1,
+  "NEOST_HTRACE": 1, "NEOST_HTRACE_PC": 1, "NEOST_HTRACE_SKIP": 1, "NEOST_HTRACE_N": 1,
+  "NEOST_IACK_DISP": 1, "NEOST_RAISE_DIAG": 1, "NEOST_HBL_DIAG": 1, "NEOST_VBL_TRACE": 1,
+  "NEOST_SYNC_TRACE": 1, "NEOST_TB_TRACE": 1, "NEOST_TBGRID_DIAG": 1,
+  "NEOST_MFP_TRACE": 1, "NEOST_MFPRD_DIAG": 1, "NEOST_RENDER_TRACE": 1,
+  "NEOST_PAL_TRACE": 1, "NEOST_PAL_TRACE_ALL": 1, "NEOST_SPEC512_TRACE": 1,
+  "NEOST_BORDER_TRACE": 1, "NEOST_GLUE_DIAG": 1, "NEOST_GLUE_STAT": 1,
+  "NEOST_VARLINE_TRACE": 1, "NEOST_LINELEN_TRACE": 1, "NEOST_LLEN_DUMP": 1,
+  "NEOST_VC_TRACE": 1, "NEOST_BASE_TRACE": 1, "NEOST_COL_DIAG": 1,
+  "NEOST_MED_DIAG": 1, "NEOST_V2_TRACE": 1, "NEOST_BLIT_TRACE": 1,
+  "NEOST_BLIT_START_DIAG": 1, "NEOST_DMASND_TRACE": 1, "NEOST_FDC_DEBUG": 1,
+  "NEOST_FDC_FLUSH_DIAG": 1, "NEOST_FDC_LATE_DIAG": 1, "NEOST_ACSI_TRACE": 1,
+  "NEOST_USB_TRACE": 1, "NEOST_ENEC_TRACE": 1, "NEOST_SCC_TRACE": 1,
+  "NEOST_MIDI_TRACE": 1, "NEOST_GEMDOS_TRACE": 1, "NEOST_DEBUG_IKBD": 1,
+  "NEOST_DEBUG_ACIA": 1, "NEOST_DEBUG_JOY": 1
+ },
+
+ "removed": {
+  "_comment": "Retirées du cœur — gardées ici pour qu'un vieux script qui les pose sache qu'elles ne font plus rien.",
+  "NEOST_SYNC_DISPATCH": "A34 (2026-08-28) : sélectionnait le second modèle d'exécution (dispatch mid-instruction, do_cycles WinUAE). Modèle SUPPRIMÉ — il deadlockait Enchanted Land et rendait le palier fast rouge (blitter_timer 245 px contre 0)."
+ }
+}

@@ -15,6 +15,57 @@ Ripper, DAC Pro Sound) avec page Dongles, `disks/dongles.txt` et oracle de rejeu
 vérifié note à note** en headless, corpus MIDI piano/blues ; port MIDI ALSA sous Linux ;
 save-state v16. Détail dans les chantiers datés ci-dessous.
 
+## A34 — un seul modèle d'exécution, et les 83 verrous du cœur sont enfin classés (2026-08-28)
+
+**La branche morte-vivante est morte.** `Machine::runFrame` et `stepInstruction`
+portaient DEUX modèles d'exécution : le BLOC (défaut — bloc CPU borné au prochain
+événement, dispatch à la frontière) et le « piloté par l'horloge » (`do_cycles` de
+WinUAE, où `sync()` dispatchait au fil de l'instruction), sous `NEOST_SYNC_DISPATCH`.
+Le second n'a jamais été validé par un seul étalon.
+
+**Mesure re-prise sur l'arbre du jour**, comme le garde-fou du plan l'exigeait :
+`NEOST_SYNC_DISPATCH=1` rend le palier `fast` **ROUGE** — `blitter_timer` diverge de
+**245 px** là où le modèle BLOC est à 0. À quoi s'ajoute le deadlock d'Enchanted Land
+déjà consigné (boucle beam-sync jamais servie), et le fait qu'il ne corrigeait pas le
+jitter qu'il promettait. Verdict sans ambiguïté : supprimé — le `else` de `runFrame`,
+celui de `stepInstruction`, le `syncTo` de `NeostMoira::sync`, les deux
+`g_blockDispatch` et les trois commentaires qui expliquaient « quand cette branche est
+dormante ». Une branche morte-vivante dans la boucle d'exécution coûte plus qu'elle ne
+garde : elle double le raisonnement de chaque lecteur et rien ne l'exerce.
+
+**La seconde moitié de l'item : les verrous `NEOST_*`.** Le cœur en lit **83**. Les uns
+changent ce que la machine ÉMULE — donc ce que valent les étalons —, les autres
+n'ajoutent que de la trace. Rien ne les distinguait : ni le nom, ni un fichier, ni un
+test. Avant une release, personne ne pouvait répondre à « qu'est-ce qui peut encore
+changer l'émulation sans qu'aucun fichier de configuration ne le dise ? » autrement
+qu'en relisant le cœur.
+
+`tools/env_locks.json` les classe : **33 de COMPORTEMENT** (wakestate, `LINELEN`,
+`RAM_SLOT`, la famille `IACK`, les décalages de calibration `VC_OFF`/`SYNC_OFF`…) et
+**50 de trace**, plus une famille « retirée » qui garde la trace de
+`NEOST_SYNC_DISPATCH` — un vieux script qui la pose doit savoir qu'elle ne fait plus
+rien. `tools/check_env_locks.py` compare ce manifeste à ce que le code lit VRAIMENT, au
+palier `fast` : une variable lue mais non classée fait rougir, une variable classée que
+plus rien ne lit aussi. Fil-piège vérifié en ajoutant un `getenv` bidon dans
+`Machine.cpp` — attrapé, nommé.
+
+Et le rappel que le contrôle imprime à chaque passage, parce qu'il vaut mieux l'écrire
+que le supposer : **les étalons sont mesurés avec les DÉFAUTS. Armer un verrou de
+comportement invalide toute comparaison au corpus.**
+
+Retombée directe : la priorité MFP n°3 des divergences (« `UpdateTimers` avant lecture
+IPR/ISR/TBDR, 157 cycles de retard ») disait « attendre A34 ». Il n'y a plus rien à
+attendre — le modèle qu'elle espérait est supprimé, et toute correction devra se faire
+DANS le modèle BLOC. Le TODO le dit désormais.
+
+Palier `full` vert.
+
+**Bévue de la session, notée pour ne pas la refaire** : pour annuler une sonde
+temporaire dans `Machine.cpp`, j'ai fait `git checkout src/core/Machine.cpp` — sur un
+fichier qui portait des modifications NON COMMISES. Elles ont été effacées, et il a
+fallu refaire la moitié du chantier. La bonne manière, appliquée partout ailleurs
+aujourd'hui : copier le fichier dans le scratchpad AVANT la sonde, et restaurer au `cp`.
+
 ## A32 — le Shifter perd 1 586 lignes, le GLUE vidéo retrouve son nom (2026-08-28)
 
 `Shifter.cpp` faisait **2 917 lignes** et portait six rôles. Le plus gênant n'était
