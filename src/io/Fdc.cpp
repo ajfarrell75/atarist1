@@ -1317,6 +1317,7 @@ uint8_t Fdc::writeTrackBuffer() {
 // ré-encodage complet pour le .msa.
 void Fdc::writeBack(FloppyDisk& dk, uint64_t off, uint64_t len) {
     if (!dk.raw || dk.path.empty() || off + len > dk.image.size()) return;
+    if (!hostWriteBack_) return;    // A14 (--disk-ro) : RAM seulement, le fichier est intact
 
     if (dk.imgFormat == FloppyDisk::FMT_MSA) {
         // .MSA : format COMPRIMÉ par piste — aucune correspondance entre un offset de
@@ -1585,6 +1586,7 @@ uint8_t Fdc::writeTrackStx() {
 // l'éjection/sortie ; même format de fichier).
 void Fdc::stxPersist(FloppyDisk& dk) {
     if (!dk.stx || dk.wd1772Path.empty()) return;
+    if (!hostWriteBack_) return;    // A14 (--disk-ro) : pas de fichier compagnon .wd1772
     if (!dk.stx->saveWd1772(dk.wd1772Path)) {
         static bool warned = false;
         if (!warned) {
