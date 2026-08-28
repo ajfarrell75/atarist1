@@ -15,6 +15,44 @@ Ripper, DAC Pro Sound) avec page Dongles, `disks/dongles.txt` et oracle de rejeu
 vérifié note à note** en headless, corpus MIDI piano/blues ; port MIDI ALSA sous Linux ;
 save-state v16. Détail dans les chantiers datés ci-dessous.
 
+## A31 — le dispatch MMIO devient une table, et sa cohérence est PROUVÉE (2026-08-28)
+
+Ajouter une puce demandait de toucher six endroits, dont **deux chaînes de `if` de
+~110 lignes** (`Bus::mmioRead8` / `Bus::mmioWrite8`) à ordre sémantique implicite :
+rien ne disait où était « le bon endroit », ni ce qui dépendait de la position.
+
+Les deux fonctions font désormais **5 et 4 lignes**. Chaque branche est devenue un
+handler nommé (`rdMfp`/`wrMfp`, `rdStePads`/`wrStePads`…) dont le corps est déplacé
+TEL QUEL — mêmes wait states, mêmes `updateIpl()`, mêmes octets « void », même ordre
+d'effets — et une **table de 14 plages** les relie : `{lo, hi, porte, read, write,
+nom}`. La porte (`claims`) porte la puce câblée, le modèle de machine, et la parité
+quand elle compte : le RTC RP5C15 ne décode que les adresses IMPAIRES, une adresse
+paire de sa plage doit retomber sur la glue — c'est dans la table, plus dans un `if`.
+
+**Et surtout, l'ordre n'est plus signifiant : il est PROUVÉ qu'il ne l'est pas.**
+`Bus::mmioTableDisjoint()` vérifie que deux plages ne se recouvrent jamais, et
+`selftest_logic.cpp` l'appelle à chaque palier `fast` — sans machine ni ROM. Une
+ligne ajoutée qui chevaucherait une autre fait rougir le palier **en nommant les deux
+coupables** (vérifié en le déclenchant : élargir le SCU sur `$FF8E21` donne
+« chevauchement : scu / mste-cache »). C'est le cœur du sujet : une table dont les
+plages se recouvrent ne vaut pas mieux qu'une chaîne de `if`, elle cache juste
+l'ordre ailleurs.
+
+**Ce que la table N'A PAS absorbé, et pourquoi.** Le port cartouche
+(`$FA0000-$FBFFFF`, dans `read8Slow`) est justement l'exemple que le TODO citait —
+« l'ISP1160 doit précéder la NE2000 ». Or ce n'est PAS un premier-match : les deux
+puces voient le MÊME accès (la fenêtre LSB est aussi le registre CR de la NE2000), et
+faute de schéma on ne suppose aucun décodage exclusif. Le forcer dans une table de
+premier-match l'aurait décrit **faux**. Il reste donc une chaîne, avec sa raison
+écrite au-dessus.
+
+**Coût mesuré** (la table est parcourue linéairement, comme la chaîne l'était) :
+boot 1690 → 1676 tr/s, blitter 1480 → 1499, poll IPRA du MFP 1256 → 1296. ±3 % dans
+les deux sens, donc dans le bruit — et la charge qui martèle le plus le MMIO (le poll
+IPRA) est la plus rapide des deux mesures.
+
+Palier `full` vert : étalons pixel, MegaSTE 12/12, verdicts série, cycle-bench.
+
 ## A28 — le servo audio et la cadence rentrent dans le cœur (2026-08-28)
 
 Le filtre proportionnel d'asservissement audio — même constante `/256`, même clamp

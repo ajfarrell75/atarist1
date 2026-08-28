@@ -1181,6 +1181,27 @@ static void testPacing() {
     }
 }
 
+
+// -----------------------------------------------------------------------------
+//  A31 — la table de plages MMIO du Bus est-elle COHÉRENTE ?
+//
+//  Le défaut qu'A31 corrige n'est pas une lenteur, c'est un ORDRE SÉMANTIQUE
+//  IMPLICITE : deux chaînes de `if` où la position d'une branche décidait du
+//  résultat sans que rien ne le dise. La table ne vaut mieux QUE SI ses plages
+//  sont disjointes — sinon l'ordre des lignes redevient significatif, en silence.
+//  Ce test le PROUVE, à chaque palier `fast`, sans machine ni ROM.
+// -----------------------------------------------------------------------------
+static void testMmioTable() {
+    std::printf("Bus — table de plages MMIO (A31)\n");
+    const char* a = nullptr; const char* b = nullptr;
+    const bool ok = Bus::mmioTableDisjoint(&a, &b);
+    if (!ok) std::printf("  (chevauchement : %s / %s)\n", a ? a : "?", b ? b : "?");
+    checkBool("les plages MMIO sont DISJOINTES (l'ordre des lignes n'est pas signifiant)",
+              ok, true);
+    // Garde anti-vide : une table vidée par accident passerait « disjointe ».
+    checkBool("la table décrit au moins 12 puces", Bus::mmioTableSize() >= 12, true);
+}
+
 int main() {
     testDongleTable();
     testCartridgeKey();
@@ -1193,6 +1214,7 @@ int main() {
     testDmaSoundTruthTable();
     testFdcTruthTable();
     testPacing();
+    testMmioTable();
     testWindowsPaths();
     testPosixPaths();
     testNativeDefaults();

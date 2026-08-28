@@ -417,6 +417,80 @@ private:
 
     uint8_t  mmioRead8 (uint32_t addr);
     void     mmioWrite8(uint32_t addr, uint8_t v);
+
+    // =========================================================================
+    //  A31 — TABLE DE PLAGES MMIO (2026-08-28)
+    //
+    //  Avant : deux chaînes de `if` de ~110 lignes chacune (mmioRead8 /
+    //  mmioWrite8), à ORDRE SÉMANTIQUE IMPLICITE. Ajouter une puce demandait de
+    //  toucher les deux, au bon endroit, sans que rien ne dise où était « le bon
+    //  endroit ». La table le dit : une ligne par puce, plage INCLUSIVE, porte
+    //  explicite, et les deux dispatches se réduisent à une recherche.
+    //
+    //  ⚠ Ce que la table N'A PAS absorbé, et pourquoi : le port cartouche
+    //  ($FA0000-$FBFFFF, read8Slow/write8Slow). L'ISP1160 et la NE2000 y voient
+    //  TOUS DEUX le même accès — ce n'est pas un « premier qui répond gagne »,
+    //  c'est un bus partagé sans schéma connu. Le forcer dans une table de
+    //  premier-match serait le décrire faux.
+    // =========================================================================
+    struct MmioSlot {
+        uint32_t lo, hi;                          // plage INCLUSIVE
+        // Porte : puce câblée + modèle de machine + parité d'adresse quand elle
+        // compte (le RTC ne décode que les adresses IMPAIRES). Rendre false =
+        // l'accès retombe sur la GLUE, exactement comme avant.
+        bool    (Bus::*claims)(uint32_t) const;
+        uint8_t (Bus::*read)(uint32_t);
+        void    (Bus::*write)(uint32_t, uint8_t);
+        const char* name;
+    };
+    static const MmioSlot* mmioTable(std::size_t& count);
+    const MmioSlot* mmioSlotFor(uint32_t addr) const;
+
+    // Portes (cf. MmioSlot::claims).
+    bool claimsShifter (uint32_t) const { return shifter != nullptr; }
+    bool claimsPsg     (uint32_t) const { return psg != nullptr; }
+    bool claimsFdc     (uint32_t) const { return fdc != nullptr; }
+    bool claimsDmaSnd  (uint32_t) const { return dmasnd && machineHasDmaSound(machine); }
+    bool claimsBlitter (uint32_t) const { return blitter && machineHasBlitter(machine); }
+    bool claimsMfp     (uint32_t) const { return mfp != nullptr; }
+    bool claimsIkbd    (uint32_t) const { return ikbd != nullptr; }
+    bool claimsMidi    (uint32_t) const { return midi != nullptr; }
+    // RTC RP5C15 : registres sur adresses IMPAIRES uniquement — une adresse paire
+    // de la plage n'appartient PAS au RTC et doit retomber sur la glue.
+    bool claimsRtc     (uint32_t a) const { return (a & 1) && rtc && machineIsMega(machine); }
+    bool claimsStePads (uint32_t) const { return machineIsSte(machine); }
+    bool claimsMsteCtrl(uint32_t) const { return machine == MachineType::MegaSte; }
+    bool claimsFpu     (uint32_t) const { return machine == MachineType::MegaSte && fpu.present; }
+    bool claimsScu     (uint32_t) const { return machine == MachineType::MegaSte; }
+    bool claimsScc     (uint32_t) const { return machine == MachineType::MegaSte && scc; }
+
+    // Handlers : les CORPS des anciennes branches, déplacés tels quels.
+    uint8_t rdShifter(uint32_t a);  void wrShifter(uint32_t a, uint8_t v);
+    uint8_t rdPsg    (uint32_t a);  void wrPsg    (uint32_t a, uint8_t v);
+    uint8_t rdFdc    (uint32_t a);  void wrFdc    (uint32_t a, uint8_t v);
+    uint8_t rdDmaSnd (uint32_t a);  void wrDmaSnd (uint32_t a, uint8_t v);
+    uint8_t rdBlitter(uint32_t a);  void wrBlitter(uint32_t a, uint8_t v);
+    uint8_t rdMfp    (uint32_t a);  void wrMfp    (uint32_t a, uint8_t v);
+    uint8_t rdIkbd   (uint32_t a);  void wrIkbd   (uint32_t a, uint8_t v);
+    uint8_t rdMidi   (uint32_t a);  void wrMidi   (uint32_t a, uint8_t v);
+    uint8_t rdRtc    (uint32_t a);  void wrRtc    (uint32_t a, uint8_t v);
+    uint8_t rdStePads(uint32_t a);  void wrStePads(uint32_t a, uint8_t v);
+    uint8_t rdMsteCtl(uint32_t a);  void wrMsteCtl(uint32_t a, uint8_t v);
+    uint8_t rdFpu    (uint32_t a);  void wrFpu    (uint32_t a, uint8_t v);
+    uint8_t rdScu    (uint32_t a);  void wrScu    (uint32_t a, uint8_t v);
+    uint8_t rdScc    (uint32_t a);  void wrScc    (uint32_t a, uint8_t v);
+
+public:
+    // Contrôle de COHÉRENCE de la table, appelable sans machine (cf.
+    // tests/selftest_logic.cpp). Deux plages qui se recouvrent rendraient l'ordre
+    // des lignes significatif — c'est-à-dire le défaut qu'A31 corrige. Renvoie
+    // false et NOMME les deux coupables.
+    static bool mmioTableDisjoint(const char** a, const char** b);
+    // Nombre de plages décrites — pour qu'un test puisse dire « la table n'est pas
+    // vide » plutôt que de valider le vide.
+    static std::size_t mmioTableSize();
+private:
+
     // Décodage de banques MMU ($FF8001) : adresse logique RAM (<4Mo) → index
     // physique dans ram[], ou -1 si la banque visée n'est pas peuplée (void).
     // Port fidèle de Hatari stMemory.c (RAS/CAS + aliasing). Cf. Bus.cpp.
