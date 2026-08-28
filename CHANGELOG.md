@@ -15,6 +15,68 @@ Ripper, DAC Pro Sound) avec page Dongles, `disks/dongles.txt` et oracle de rejeu
 vérifié note à note** en headless, corpus MIDI piano/blues ; port MIDI ALSA sous Linux ;
 save-state v16. Détail dans les chantiers datés ci-dessous.
 
+## A16b — le segfault du chantier V3 : un invariant rompu par `replayGlue`, pas un défaut du selftest (2026-08-28)
+
+`NEOST_LINELEN_ATTR=1` faisait SEGFAULTER `--glue-selftest` — sans une ligne de sortie,
+code 139. Le TODO portait l'hypothèse : « probable : `glueLineStart_` vide/désynchronisé
+dans le selftest ». Elle était juste, et le sanitizer la confirme **à la ligne près** :
+
+    runtime error: reference binding to null pointer of type 'long long'
+    AddressSanitizer: SEGV on unknown address 0x000000000000 (READ)
+      #0 Shifter::liveGlueCatchUp(int)   Shifter.cpp:537
+      #1 Shifter::liveLineDisplayed(int) Shifter.cpp:1259
+      #2 Shifter::glueSelfTest()         Shifter.cpp:2219
+
+**Mais le défaut n'était pas dans le selftest.** `glueLineStart_` — l'échelle des débuts
+de ligne réels, le cœur du canal V3 — doit TOUJOURS avoir la taille de `glueLines_` :
+`liveGlueCatchUp` l'indexe sans garde, en s'appuyant dessus, et `Shifter::serialize`
+revalide déjà l'invariant au chargement d'un save-state. Or **seul `beginFrame`** le
+tenait. `replayGlue`, qui redimensionne `glueLines_` aussi, le rompait :
+
+- le glue-selftest appelle `replayGlue()` SANS `beginFrame()` — `glueLineStart_` restait
+  **vide**, `data()` valait `nullptr`, et le premier `liveLineDisplayed()` du test 4bis
+  déréférençait zéro. Crash garanti ;
+- et **en production**, silencieusement : le commentaire de `serialize` admet lui-même que
+  `replayGlue()` peut redimensionner `glueLines_` en cours de trame (lpf changé) — dans ce
+  cas `glueLineStart_` restait plus COURT et les lectures live sortaient du tas. Un bug de
+  mémoire, pas une bizarrerie d'auto-test.
+
+Correctif d'une ligne utile dans `replayGlue` : `resize` (pas `assign` — les débuts de
+ligne calculés par le passage LIVE de la trame en cours sont conservés, seules les lignes
+nouvelles sont mises à zéro). Vérifié sous ASan+UBSan : plus une seule erreur, ni sur
+l'auto-test ni sur 300 trames de No Cooper et Cuddly Demos avec le verrou armé.
+
+**Le garde-fou : `glue_selftest_attr`.** Un chemin opt-in que personne n'exécute pourrit —
+celui-ci segfautait depuis des semaines sans qu'aucun palier ne PUISSE le voir, puisque
+tous tournent avec le verrou à OFF. Le manifeste accepte désormais un champ `env` pour
+rejouer un auto-test sous un verrou d'émulation ; la nouvelle entrée rejoue les 39
+assertions de la machine Glue avec `NEOST_LINELEN_ATTR=1`, pour ~0,1 s. Fil-piège vérifié
+en le déclenchant : correctif retiré, rebuild, le runner rend
+« ÉCHEC glue_selftest_attr (exit -11) » et sort 1.
+
+**Ce que ça ne prouve PAS.** Le palier `full` est vert *avec le verrou armé* — 23 étalons,
+tous à 0 px. C'est une **non-régression du canal**, pas un feu vert : **aucun étalon
+n'exerce la géométrie mi-trame 50↔60 Hz** que V3 vise (priorité n°1 des divergences).
+Promouvoir le verrou sur cette base serait exactement le pari que le § « Garde-fous du
+plan » interdit. Le prochain pas réel est un étalon qui bascule la fréquence EN COURS DE
+TRAME — généré ou calé à l'oracle.
+
+Palier `full` vert, avec et sans le verrou.
+
+**Trouvé en validant ce correctif — le banc de débit criait au loup.** Un `--tier full`
+de contrôle a rendu `blitter/boot = 0,604 (réf 0,888, −32,0 %)` → ÉCHEC ; deux passages
+isolés du MÊME binaire, aussitôt après, donnaient **−2,4 %** et **−6,8 %**, et le palier
+relancé au repos **−2,6 %**. La machine bâtissait un oracle Hatari en parallèle. Le banc
+mesure ses charges SÉQUENTIELLEMENT : une bouffée de charge qui couvre une charge mais pas
+l'étalon de vitesse fausse le ratio, et le « meilleur de REPS » n'y peut rien si la
+bouffée dure plus longtemps que les REPS. Le message d'échec disait déjà « relancer avant
+de conclure » — il le disait à l'humain, et la CI, elle, rougissait. `run_perfbench.py`
+fait désormais une **seconde passe complète avant de rougir** et n'échoue que sur les
+ratios hors tolérance **aux deux passages** ; le surcoût n'est payé que dans le cas qui
+allait échouer, et un vrai surcoût de chemin franchit les deux. C'est la leçon du
+2026-08-25 sur les grandeurs dépendantes de la charge, appliquée à l'outil qui la mesure —
+un garde-fou qui crie au loup finit désarmé.
+
 ## Tout ce qu'on livre est nommé, avec sa licence — et GLFW ne l'était nulle part (purge pas 5, 2026-08-28)
 
 Cinquième pas du séquencement de la purge (§ BLOQUANT du `TODO.md`). L'item demandait de

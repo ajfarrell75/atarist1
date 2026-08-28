@@ -107,7 +107,7 @@ sévérité + `fichier:ligne` des deux côtés dans
 
 | Priorité | Chantier | Effort | Étalon type |
 |----------|----------|--------|-------------|
-| **P1** | Géométrie mid-trame (V3 : attribution de ligne 50↔60 Hz — `RestartVideoCounter` est porté ; bloqué sur le segfault `NEOST_LINELEN_ATTR`, TODO A16b) | élevé | overscan plein écran, ULM Dark Side |
+| **P1** | Géométrie mid-trame (V3 : attribution de ligne 50↔60 Hz — `RestartVideoCounter` est porté ; le segfault `NEOST_LINELEN_ATTR` est CORRIGÉ le 2026-08-28, A16b soldé — le verrou reste OFF faute d'étalon qui bascule la fréquence en cours de trame) | élevé | overscan plein écran, ULM Dark Side |
 | **P1** | Rendu live du retrait BAS + lignes EMPTY/BLANK/NO_DE | moyen | scroller bordure basse Cuddly |
 | **P2** | Blitter : interfoliage `CycInt_Process` par accès bus + `cpu_bus_rmw` (le partage 64/64 est PORTÉ) | moyen | démos CPU+blitter simultanés |
 | **P2** | Son DMA STE : quantification HBL du refill à confronter à l'oracle (compteur live et FIFO PORTÉS) | moyen | STE_Test, sync zik/raster |

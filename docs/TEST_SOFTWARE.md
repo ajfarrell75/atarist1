@@ -241,8 +241,13 @@ python3 tools/compare_screenshot.py tests/out/foo_neost.ppm tests/reference/foo.
 **nocooper_greetings** (V2, réf. oracle archivée) ; fetch auto : **Cuddly Demos**
 (`disks/etalons/cuddly_demos.msa`), **No Cooper** (`disks/etalons/nocooper.msa`),
 **union_demo** (`optional` : SKIP tant que la disquette n'est pas rapatriée).
-Soit **24 entrées** dans `tools/etalons.json` — 9 auto-tests + **15 étalons machine**, dont
+Soit **25 entrées** dans `tools/etalons.json` — 10 auto-tests + **15 étalons machine**, dont
 le `_comment` du fichier rappelle la couverture réelle (ni MegaST, ni TOS 1.00/1.04/1.06).
+Le 10ᵉ auto-test est `glue_selftest_attr` (A16b, 2026-08-28) : le MÊME auto-test Glue
+rejoué avec le verrou expérimental `NEOST_LINELEN_ATTR=1` armé. Un chemin opt-in que
+personne n'exécute pourrit — celui-là segfautait depuis des semaines sans qu'aucun palier
+ne puisse le voir. Un champ `env` du manifeste sert à ça : rejouer un auto-test sous un
+verrou d'émulation, pour ~0,1 s.
 
 ### Auto-tests logique pure (P0 — ms, sans boot ni oracle)
 

@@ -75,13 +75,21 @@ def ensure_disk(entry: dict) -> bool:
     return False
 
 
-def run_selftest(flag: str, cpu: str) -> int:
+def run_selftest(flag: str, cpu: str, extra_env: dict | None = None) -> int:
     # Auto-tests logique pure (P0) : pas de boot, pas d'oracle. La ROM sert juste à
     # construire la machine (RAM) ; --glue-selftest/--spec512-selftest court-circuitent
     # le boot et renvoient le verdict via le code de sortie.
+    # `env` du manifeste (A16b, 2026-08-28) : rejouer le MÊME auto-test avec un verrou
+    # d'émulation armé. Un chemin opt-in que personne n'exécute pourrit — celui-ci
+    # segfautait depuis des semaines sans qu'aucun palier ne puisse le voir.
     cmd = [str(HEADLESS), "roms/etos256us.img", flag, "--cpu", cpu]
-    print("  $", " ".join(cmd))
-    return run_timed(cmd, 300, cwd=ROOT).returncode
+    env = None
+    prefix = ""
+    if extra_env:
+        env = dict(os.environ, **{k: str(v) for k, v in extra_env.items()})
+        prefix = " ".join(f"{k}={v}" for k, v in extra_env.items()) + " "
+    print("  $ " + prefix + " ".join(cmd))
+    return run_timed(cmd, 300, cwd=ROOT, env=env).returncode
 
 
 def run_headless_capture(entry: dict, out_ppm: Path) -> int:
@@ -273,11 +281,14 @@ def run_one(entry: dict, args) -> bool:
                      "usatan_selftest": "--usatan-selftest",
                      "netusbee_selftest": "--netusbee-selftest"}.get(entry.get("type"))
     if selftest_flag:
-        rc = run_selftest(selftest_flag, entry.get("cpu", "moira"))
+        rc = run_selftest(selftest_flag, entry.get("cpu", "moira"), entry.get("env"))
         if rc != 0:
-            print(f"  ÉCHEC {entry['type']} (exit {rc})")
+            print(f"  ÉCHEC {eid} ({entry['type']}, exit {rc})")
             return False
-        print(f"  OK {entry['type']}")
+        # L'ID, pas le TYPE : deux entrées peuvent partager le type (glue_selftest et
+        # glue_selftest_attr rejouent le même auto-test avec un verrou différent) et
+        # le journal affichait alors deux fois la même ligne.
+        print(f"  OK {eid}")
         return True
 
     # ROM absente : distinguer les deux cas AVANT de lancer quoi que ce soit. Sans cela,

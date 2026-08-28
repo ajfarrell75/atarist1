@@ -43,7 +43,8 @@ le lire chronologiquement en entier pour connaître l'état. Ce bloc s'en charge
   ce paragraphe est un futur de juillet 2026.
 - **Ce qui reste d'ouvert n'est PAS ici** : inventaire à rendement décroissant →
   `CYCLE_ACCURACY.md` §4 (V3/attribution de ligne — bloquée sur le segfault
-  `NEOST_LINELEN_ATTR`, TODO A16b —, retrait bas live, interfoliage blitter, WS1-4).
+  `NEOST_LINELEN_ATTR` — son segfault est corrigé le 2026-08-28 (A16b), le verrou
+  reste OFF —, retrait bas live, interfoliage blitter, WS1-4).
 
 Le reste du document est conservé tel quel comme MÉMOIRE du chantier (mesures,
 réfutations, recettes de bancs) — précieux pour ne pas rejouer une piste morte, mais

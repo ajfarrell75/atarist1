@@ -9,6 +9,17 @@
    "max_diff_px": 0
   },
   {
+   "id": "glue_selftest_attr",
+   "name": "Glue bordures — MÊME auto-test, verrou V3 NEOST_LINELEN_ATTR ARMÉ",
+   "subsystem": "shifter/glue",
+   "type": "glue_selftest",
+   "env": {
+    "NEOST_LINELEN_ATTR": "1"
+   },
+   "note": "A16b (2026-08-28). Le canal V3 « attribution à la grille réelle des débuts de ligne » est OFF par défaut et n'était donc exécuté par AUCUN palier : il SEGFAULTAIT depuis des semaines (glueLineStart_ vide → data() == nullptr, confirmé à la ligne par ASan+UBSan : liveGlueCatchUp Shifter.cpp:537 ← liveLineDisplayed ← glueSelfTest) sans que rien ne puisse le signaler. Le correctif tient l'invariant glueLineStart_.size() == glueLines_.size() dans replayGlue ; cette entrée rejoue les 39 assertions du même auto-test avec le verrou ARMÉ, pour que le chemin opt-in cesse d'être un angle mort. Coût : ~0,1 s. ⚠ Vert ici = NON-RÉGRESSION du canal, PAS une preuve qu'il améliore le rendu : aucun étalon n'exerce la géométrie mi-trame 50↔60 Hz qu'il vise.",
+   "max_diff_px": 0
+  },
+  {
    "id": "spec512_selftest",
    "name": "Spectrum 512 re-rendu (auto-test déterministe palette-par-pixel)",
    "subsystem": "shifter/spec512",

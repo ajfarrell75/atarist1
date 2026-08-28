@@ -95,29 +95,19 @@ def measure(args) -> float:
     return FRAMES / min(ts)
 
 
-def main() -> int:
-    if not HEADLESS.exists():
-        print(f"neost-headless absent ({HEADLESS}) — bâtir d'abord.")
-        return 1
-    update = "--update-ratios" in sys.argv
-
+def measure_all() -> dict:
+    """Un passage complet du banc → {clé: ratio vs boot}."""
     print(f"Banc de débit ({FRAMES} trames, meilleur de {REPS}) :")
     rates = {}
     for key, label, args in LOADS:
         rates[key] = measure(args)
         print(f"  {label:44s} {rates[key]:7.0f} tr/s")
-
     base = rates[LOADS[0][0]]
-    measured = {k: v / base for k, v in rates.items()}
+    return {k: v / base for k, v in rates.items()}
 
-    if update or not RATIOS.exists():
-        RATIOS.write_text(json.dumps(measured, indent=2) + "\n", encoding="utf-8")
-        print(f"\nRatios de référence écrits dans {RATIOS.name} :")
-        for k, v in measured.items():
-            print(f"  {k}/boot = {v:.3f}")
-        return 0
 
-    ref = json.loads(RATIOS.read_text(encoding="utf-8"))
+def compare(measured: dict, ref: dict) -> list:
+    """Affiche les ratios et renvoie la liste des clés hors tolérance."""
     print(f"\nRatios (indépendants de la vitesse machine, tolérance ±{TOLERANCE:.0%}) :")
     bad = []
     for k, v in measured.items():
@@ -129,12 +119,52 @@ def main() -> int:
         print(f"  {mark}{k}/boot = {v:.3f} (réf {ref[k]:.3f}, {drift:+.1%})")
         if abs(drift) > TOLERANCE:
             bad.append(k)
+    return bad
 
+
+def main() -> int:
+    if not HEADLESS.exists():
+        print(f"neost-headless absent ({HEADLESS}) — bâtir d'abord.")
+        return 1
+    update = "--update-ratios" in sys.argv
+
+    measured = measure_all()
+
+    if update or not RATIOS.exists():
+        RATIOS.write_text(json.dumps(measured, indent=2) + "\n", encoding="utf-8")
+        print(f"\nRatios de référence écrits dans {RATIOS.name} :")
+        for k, v in measured.items():
+            print(f"  {k}/boot = {v:.3f}")
+        return 0
+
+    ref = json.loads(RATIOS.read_text(encoding="utf-8"))
+    bad = compare(measured, ref)
+
+    # SECONDE PASSE avant de rougir (2026-08-28). Le message d'échec disait déjà
+    # « relancer avant de conclure » — il le disait à l'humain, et la CI, elle,
+    # rougissait. Observé ce jour-là : un `--tier full` a rendu blitter/boot à
+    # −32,0 % (donc ÉCHEC) alors que deux passages isolés du même binaire, aussitôt
+    # après, donnaient −2,4 % et −6,8 % : la machine bâtissait un oracle Hatari en
+    # parallèle. Les charges sont mesurées SÉQUENTIELLEMENT — une bouffée de charge
+    # qui couvre une charge mais pas l'étalon de vitesse fausse le ratio, et le
+    # « meilleur de REPS » n'y peut rien si la bouffée dure plus que les REPS.
+    # La seconde passe ne coûte QUE dans le cas qui allait échouer, et un vrai
+    # surcoût de chemin la franchit deux fois. Un garde-fou qui crie au loup finit
+    # désarmé — c'est la leçon du 2026-08-25 sur les grandeurs dépendantes de la
+    # charge, appliquée à l'outil qui la mesure.
     if bad:
-        print(f"\nÉCHEC — débit relatif hors tolérance : {', '.join(bad)}.")
-        print("Soit un chemin est devenu nettement plus cher, soit la machine était "
-              "très chargée pendant le run — relancer avant de conclure. Si le "
-              "changement est VOULU et mesuré, réétalonner avec --update-ratios.")
+        print(f"\n⚠ hors tolérance au 1ᵉʳ passage : {', '.join(bad)} — SECONDE PASSE "
+              "(une bouffée de charge fausse un ratio ; un vrai surcoût, non).")
+        measured2 = measure_all()
+        bad2 = compare(measured2, ref)
+        confirmed = [k for k in bad if k in bad2]
+        if not confirmed:
+            print("\nDÉBIT OK (le 1ᵉʳ passage était bruité — écart NON reproduit)")
+            return 0
+        print(f"\nÉCHEC — débit relatif hors tolérance aux DEUX passages : "
+              f"{', '.join(confirmed)}.")
+        print("Un chemin est devenu nettement plus cher. Si le changement est VOULU "
+              "et mesuré, réétalonner avec --update-ratios.")
         return 1
     print("\nDÉBIT OK")
     return 0
