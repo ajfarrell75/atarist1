@@ -791,7 +791,7 @@ MFP, périphériques (FDC/son-statuts/bus/SCC/ACIA), son approfondi (cœur YM + 
   modélisés (video.c:3443-3487) ; attribution replayGlue à longueur fixe hors
   `NEOST_LINELEN_ATTR` (depuis A16, 2026-08-27 : l'attribution Shifter a son verrou DÉDIÉ,
   OFF — l'ex-« canal hybride » est démêlé, et le chemin ATTR segfaute sous --glue-selftest,
-  cf. TODO A16b) ;
+  cf. TODO A16b — segfault CORRIGÉ le 2026-08-28, le verrou reste OFF) ;
   ~~CyclesPerVBL±4 si la dernière ligne change de freq~~ **RETIRÉ le 2026-08-25, faux positif
   prouvé** (cf. V3) ;
   STOP réveil granularité 2 cyc (Moira) vs quantum 4 (Hatari) → phase E-clock d'IACK mod 4.

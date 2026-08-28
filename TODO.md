@@ -167,13 +167,6 @@ est continue, les trous sont du travail fait.
 
 ### Consolidation (quelques jours chacun, par opportunité)
 
-- **A16b ⭘ — `NEOST_LINELEN_ATTR` (attribution Shifter à la grille réelle) segfaute
-  sous `--glue-selftest`.** Le chemin expérimental V3 (les 4 sites `glueLineStart_` du
-  Shifter) crashe quand il est armé hors trame réelle — il crashait déjà via l'ancienne
-  recette d'A/B `NEOST_LINELEN=1` avant la séparation des verrous (cf. `CHANGELOG.md`
-  A16). À corriger avant toute promotion du chantier V3 (probable : `glueLineStart_`
-  vide/désynchronisé dans le selftest). La config validée en production est
-  Machine-ON / Shifter-OFF.
 - **A28 ⭘ — Sortir le servo audio et la cadence dans le cœur.** Le filtre proportionnel
   d'asservissement (même constante `/256`, même clamp ±8, même rampe anti-clic) existe en
   **trois copies** (GUI, web, android) et la boucle de rattrapage de cadence aussi ;
@@ -271,7 +264,12 @@ décroissant, par priorité d'impact :
 
 1. **[VIDÉO]** V3 géométrie mid-trame (50↔60 Hz) : le restart du compteur est porté
    (`VC_RESTART`), reste l'**attribution de ligne** — verrou dédié `NEOST_LINELEN_ATTR`
-   (OFF) et un segfault à corriger d'abord (**A16b**).
+   (toujours OFF par défaut). **A16b est soldé le 2026-08-28** : le segfault qui bloquait
+   le chantier est corrigé (invariant `glueLineStart_.size() == glueLines_.size()` rompu
+   par `replayGlue`), et le palier `full` est vert **avec le verrou armé** — mais c'est
+   une NON-RÉGRESSION, pas une preuve : **aucun étalon n'exerce la géométrie mi-trame
+   50↔60 Hz que V3 vise**. Prochain pas réel : un étalon (généré ou oracle) qui bascule
+   la fréquence EN COURS DE TRAME, sans quoi promouvoir le verrou serait un pari.
 2. **[SON]** quantification HBL du refill FIFO à confronter à l'oracle sur un poll serré de
    `$FF8909/0B/0D` — validable par dump WAV + trace.
 3. **[MFP]** `UpdateTimers` avant lecture IPR/ISR/TBDR en mode bloc — retard **mesuré à

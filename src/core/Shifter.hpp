@@ -632,8 +632,12 @@ public:
         ar(glueHblPos_);
         ar(glueCyclesLine_);
         ar.podVec(glueLineStart_);  // std::vector<int64_t>
-        // Invariant : glueLineStart_ est TOUJOURS assigné à glueLines_.size()
-        // (beginFrame Shifter.cpp:427, même source g.linesPerFrame+2 que replayGlue).
+        // Invariant : glueLineStart_ est TOUJOURS assigné à glueLines_.size().
+        // Tenu aux DEUX sites qui dimensionnent glueLines_ : beginFrame (assign) et
+        // replayGlue (resize — A16b, 2026-08-28). replayGlue ne le tenait PAS : le
+        // glue-selftest, qui l'appelle sans beginFrame, déréférençait un vecteur vide
+        // (SIGSEGV), et une trame dont lpf change en cours de route lisait hors du tas
+        // en silence. L'auto-test `glue_selftest_attr` (etalons.json) garde le cas.
         // advanceGlueLive indexe glueLineStart_[wl]/[liveGlueLine_] (Shifter.cpp:454,
         // 461,493) où wl ≤ liveGlueLine_ < glueLines_.size() — SANS garde de lecture
         // (seule l'écriture ligne 496 en a une). Un .state forgé posant un glueLineStart_

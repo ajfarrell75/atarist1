@@ -58,11 +58,28 @@ static bool envFlag(const char* name, bool dflt) {
 //    Machine.cpp (lineLenOn_).
 //  · NEOST_LINELEN_ATTR (défaut OFF, opt-in) — l'ATTRIBUTION à la grille réelle
 //    des débuts de ligne (glueLineStart_) côté Shifter : le chantier V3, resté
-//    expérimental, qui segfaute sous --glue-selftest quand il est armé (le
-//    selftest pilote la Glue hors trame réelle : glueLineStart_ vraisemblablement
-//    vide ou désynchronisé — À CORRIGER avant toute promotion, cf. TODO § V3).
+//    expérimental.
 // Séparer les variables ferme le piège : poser NEOST_LINELEN=1 pour un A/B
 // n'arme plus silencieusement un chemin expérimental non validé.
+//
+// A16b (2026-08-28) — le SEGFAULT est corrigé, et la cause n'était pas dans le
+// selftest. L'hypothèse portée au TODO (« glueLineStart_ vraisemblablement vide ou
+// désynchronisé ») est CONFIRMÉE à la ligne près par ASan+UBSan :
+//     runtime error: reference binding to null pointer of type 'long long'
+//     AddressSanitizer: SEGV on unknown address 0x000000000000 (READ)
+//       #0 Shifter::liveGlueCatchUp(int)   Shifter.cpp:537
+//       #1 Shifter::liveLineDisplayed(int) Shifter.cpp:1259
+//       #2 Shifter::glueSelfTest()         Shifter.cpp:2219
+// glueLineStart_ était VIDE — donc data() == nullptr — parce que seul beginFrame()
+// le dimensionnait, et que replayGlue() redimensionnait glueLines_ SEUL. Le
+// glue-selftest appelle replayGlue() sans beginFrame() : il tombait dessus à coup
+// sûr. Mais le même trou existait EN PRODUCTION, silencieusement, pour une trame
+// dont lpf change en cours de route — cas que le commentaire de Shifter::serialize
+// admet explicitement. Le correctif tient l'invariant dans replayGlue (cf. la note
+// A16b là-bas) ; l'auto-test `glue_selftest_attr` du manifeste le garde armé.
+// Depuis : le palier `full` est vert AVEC NEOST_LINELEN_ATTR=1 (23 étalons, tous à
+// 0 px) — c'est une NON-RÉGRESSION du canal, pas une preuve qu'il améliore quoi que
+// ce soit : aucun étalon n'exerce la géométrie mi-trame 50↔60 Hz qu'il vise.
 bool Shifter::lineLenEnv() {
     static const bool on = envFlag("NEOST_LINELEN", true);
     return on;
@@ -1670,6 +1687,24 @@ void Shifter::replayGlue() {
     const int baseEnd   = baseStart + g.displayLines;    // VDE_Off (263/234)
 
     glueLines_.assign(static_cast<std::size_t>(lpf) + 2, GlueLine{ -1, 0, 0, 0 });
+    // A16b — INVARIANT : glueLineStart_ (échelle des débuts de ligne réels, canal
+    // NEOST_LINELEN_ATTR) a TOUJOURS la taille de glueLines_. C'est le même invariant
+    // que celui revalidé au chargement d'un save-state (cf. Shifter::serialize) : les
+    // sites d'attribution (liveGlueCatchUp) indexent glueLineStart_[wl] SANS garde,
+    // en s'appuyant sur wl ≤ liveGlueLine_ < glueLines_.size().
+    // Il était tenu par beginFrame — et par lui SEUL. replayGlue redimensionnait
+    // glueLines_ tout court, ce qui le rompait dans deux cas :
+    //   · glueSelfTest(), qui appelle replayGlue() SANS beginFrame() : glueLineStart_
+    //     restait VIDE, et le premier liveLineDisplayed() du test déréférençait
+    //     data() == nullptr → SIGSEGV muet (aucune sortie, code 139) ;
+    //   · en production, une trame dont lpf change en cours de route (le commentaire
+    //     de serialize l'admet explicitement) : glueLineStart_ restait plus COURT et
+    //     les lectures live sortaient du tas — silencieusement.
+    // `resize` et non `assign` : les débuts de ligne déjà calculés par le passage LIVE
+    // de la trame en cours sont CONSERVÉS (replayGlue rejoue l'état d'affichage, il
+    // n'invalide pas l'échelle) ; seules les lignes nouvelles sont mises à zéro.
+    if (glueLineStart_.size() != glueLines_.size())
+        glueLineStart_.resize(glueLines_.size(), 0);
     glueStartHBL_   = baseStart;
     glueEndHBL_     = baseEnd;
     glueVOverscan_  = 0;
