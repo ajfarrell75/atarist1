@@ -56,6 +56,12 @@ FAST = [
      [str(SELFTEST)]),
     ("P0 auto-tests logique (tous les *_selftest du manifeste etalons.json)",
      [sys.executable, str(TOOLS / "run_etalons.py"), "--only", selftest_ids()]),
+    # A30 : fuzzing des parseurs d'images disquette. decodeMsa/decodeDim/StxImage
+    # ::parse sont les seules fonctions qui digèrent un fichier venu de l'extérieur.
+    # 20 000 itérations déterministes (graine fixe) — le verdict est reproductible,
+    # et le job `sanitizers` de la CI rend le harnais MORDANT (ASan/UBSan).
+    ("Fuzzing des parseurs d'images disquette (.msa / .dim / .stx)",
+     [str(ROOT / "build" / "neost-fuzz-disk")]),
     # A20 : WRITE TRACK STX (reinterpretSaveTrack + round-trip .wd1772) sur une image
     # FORGÉE en mémoire — le seul test du parseur Pasti, resté EXCLUDE_FROM_ALL et
     # jamais lancé jusqu'à l'audit du 2026-08-27.
@@ -278,12 +284,24 @@ def main() -> int:
     if args.install_hook or args.uninstall_hook:
         return install_hook(args.uninstall_hook)
 
-    for binary in (HEADLESS, SELFTEST, ROOT / "build" / "neost-stx-test"):
+    steps = list(FAST if args.tier == "fast" else FULL)
+    # Binaires requis DÉDUITS des étapes, jamais listés à la main : la liste codée en
+    # dur avait déjà divergé. A20 (2026-08-27) a ajouté `neost-stx-test` au palier ET
+    # à la liste, mais les quatre jobs de CI qui lancent run_all ne bâtissaient que
+    # `neost-headless neost-selftest` — ils sortaient donc en 2 « Build requis » avant
+    # le moindre test. Corrigé côté CI le 2026-08-28, et rendu IMPOSSIBLE ici : la
+    # liste se recalcule depuis les commandes qu'on est sur le point de lancer.
+    needed = []
+    for _label, cmd in steps:
+        for arg in cmd:
+            q = Path(arg)
+            if q.parent == (ROOT / "build") and q not in needed:
+                needed.append(q)
+    for binary in needed:
         if not binary.exists():
             print(f"Build requis : cmake --build build  ({binary} absent)", file=sys.stderr)
             return 2
 
-    steps = list(FAST if args.tier == "fast" else FULL)
     hits = fast_tier_proprietary(FAST)
     if hits:
         print("✗ le palier `fast` a RE-acquis une dépendance propriétaire :",

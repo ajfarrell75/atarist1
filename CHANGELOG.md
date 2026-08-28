@@ -15,6 +15,59 @@ Ripper, DAC Pro Sound) avec page Dongles, `disks/dongles.txt` et oracle de rejeu
 vérifié note à note** en headless, corpus MIDI piano/blues ; port MIDI ALSA sous Linux ;
 save-state v16. Détail dans les chantiers datés ci-dessous.
 
+## A30 — les parseurs d'images disquette passent au fuzzer, et la CI ne bâtissait pas ce qu'elle lance (2026-08-28)
+
+`decodeMsa`, `decodeDim` et `StxImage::parse` sont les seules fonctions du projet qui
+digèrent un fichier venu de l'EXTÉRIEUR — téléchargé, tronqué, corrompu, ou forgé. Leur
+bornage manuel est excellent (il corrige même une lecture hors bornes présente dans
+Hatari) — mais rien ne le PROUVAIT ni ne le GARDAIT.
+
+**Pas libFuzzer, et c'est mesuré, pas supposé** : le clang d'Apple ne livre pas
+`libclang_rt.fuzzer_osx.a`, `-fsanitize=fuzzer` **ne lie pas** sur la plateforme de
+développement du projet. Un harnais libFuzzer y serait du code que personne n'exécute.
+`tests/fuzz_diskimage.cpp` est donc un driver **déterministe** : PRNG xorshift semé,
+corpus de départ construit en mémoire (.msa/.dim/.st valides, en-tête STX, et les cas
+dégénérés), sept mutations orientées TAILLES et CHAMPS DE LONGUEUR — c'est là que les
+parseurs sortent des bornes, pas dans les données. `--seed` rejoue un cas à l'identique.
+La cible `fuzzOne` est écrite sans état ni sortie : brancher libFuzzer dessus, le jour où
+la machine l'a, tient en trois lignes (recette dans l'en-tête du fichier).
+
+**Résultat : 500 000 itérations sur 4 graines, plus 50 000 sous ASan+UBSan — zéro
+violation.** Le bornage tient. C'était le but : le prouver.
+
+**Ce que le harnais vaut vraiment, mesuré par mutation.** En build NORMAL il ne voit
+presque rien : retirer le plafond RLE, puis retirer `if (p + len > raw.size()) return
+false;`, 20 000 itérations chacune — **aucune des deux n'est attrapée**. Sous ASan, la
+seconde donne un `heap-buffer-overflow` en 2 s. C'est écrit tel quel dans `DEV.md` : au
+palier `fast` ce harnais est un test de FUMÉE ; c'est le job `sanitizers` de la CI (qui
+lance `--tier fast`) qui le rend mordant. Un garde-fou dont on surestime la portée est un
+garde-fou qu'on croit avoir.
+
+**Deux trouvailles au passage, dont une qui n'a rien à voir avec le fuzzing.**
+
+1. *Une façade qui « nettoie » cache ce qu'on cherche.* Ma première version de
+   `diskimg::decodeContainer` faisait `out.clear()` entre l'essai MSA et l'essai DIM. Or
+   `Fdc::loadImage` n'en fait pas. Avec le clear, la mutation « plafond RLE retiré »
+   passait inaperçue ; sans lui, le harnais a immédiatement montré que **le contrat
+   « refus ⇒ tampon vide » est FAUX** — `decodeMsa` peut refuser en laissant des pistes
+   décodées derrière lui (270 violations sur 5 000 itérations quand on l'exige). Sans
+   conséquence aujourd'hui (l'appelant repart de `raw` sur ce chemin), mais c'est une
+   dépendance IMPLICITE : elle est désormais écrite, dans le harnais et dans la façade.
+2. *La CI ne bâtissait pas les binaires qu'elle lance.* Les quatre jobs qui appellent
+   `run_all.py` compilaient `--target neost-headless neost-selftest`. Or A20 (la veille) a
+   ajouté `neost-stx-test` au palier `fast` ET à la liste des binaires requis : sans lui,
+   `run_all.py` sort en **2 « Build requis » avant le moindre test**. Vérifié en local en
+   retirant le binaire. Les quatre `--target` sont corrigés — et surtout la liste des
+   binaires requis n'est plus écrite à la main : `run_all.py` la **déduit des commandes
+   qu'il est sur le point de lancer**, donc elle ne peut plus diverger.
+
+Au passage, l'avertissement « .msa: RLE run too long » n'est plus émis qu'**une fois par
+décodage** (il sortait par piste : 86 lignes pour un fichier), et `NEOST_QUIET_PARSERS=1`
+le coupe — c'est ce que pose le harnais, plutôt que de rediriger `stderr` : on ne met
+jamais en sourdine le flux où un sanitizer écrit son rapport.
+
+Palier `full` vert.
+
 ## A29 — le blitter, le son DMA et le FDC ont enfin une table de vérité (2026-08-28)
 
 Le plan le disait depuis l'audit : avant tout chantier structurel, **poser le filet**. Il

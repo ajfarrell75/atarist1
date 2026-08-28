@@ -11,6 +11,7 @@
 //  (c) 2026 VERHILLE Arnaud — projet NeoST.
 // =============================================================================
 #include "io/Fdc.hpp"
+#include "io/DiskImageCodec.hpp"
 #include "core/Cpu68k.hpp"
 #include "core/Bus.hpp"
 #include "core/YM2149.hpp"
@@ -263,6 +264,16 @@ static bool looksLikeMsaHeader(const std::vector<uint8_t>& raw) {
 
 static bool decodeMsa(const std::vector<uint8_t>& raw, std::vector<uint8_t>& out) {
     if (raw.size() < 10 || raw[0] != 0x0E || raw[1] != 0x0F) return false;
+    // Avertissement RLE émis UNE FOIS par décodage (A30) : une image douteuse a
+    // typiquement toutes ses pistes atteintes, et le message sortait par piste —
+    // 86 lignes identiques pour un seul fichier. C'est le harnais de fuzzing qui
+    // l'a rendu visible : 130 lignes par run, noyant tout le reste.
+    // NEOST_QUIET_PARSERS=1 le coupe complètement : le harnais décode des dizaines
+    // de milliers d'images DÉLIBÉRÉMENT corrompues, l'avertissement n'y apprend
+    // rien. Un interrupteur explicite plutôt que rediriger stderr côté harnais —
+    // on ne met JAMAIS en sourdine le flux où un sanitizer écrit son rapport.
+    static const bool quiet = std::getenv("NEOST_QUIET_PARSERS") != nullptr;
+    bool rleWarned = quiet;
     const int spt   = (raw[2] << 8) | raw[3];
     const int sides = ((raw[4] << 8) | raw[5]) + 1;
     const int t0    = (raw[6] << 8) | raw[7];
@@ -294,7 +305,11 @@ static bool decodeMsa(const std::vector<uint8_t>& raw, std::vector<uint8_t>& out
                         // Sans lui, out dépasse target et TOUTE l'image est rejetée →
                         // repli en .st brut INSCRIPTIBLE, qui écrase le fichier source.
                         if (out.size() + cnt > target) {
-                            std::fprintf(stderr, "[FDC] .msa: RLE run too long → truncated (dubious image)\n");
+                            if (!rleWarned) {
+                                rleWarned = true;
+                                std::fprintf(stderr, "[FDC] .msa: RLE run too long → truncated "
+                                                     "(dubious image ; message émis une seule fois)\n");
+                            }
                             cnt = target - out.size();
                         }
                         out.insert(out.end(), cnt, val);
@@ -355,6 +370,23 @@ static int msaFindRun(const uint8_t* p, int n) {
 
 // Comprime `image` (secteurs bruts) au format .MSA complet, en-tête 10 o inclus.
 // Renvoie false si la géométrie ne rend pas compte de la taille de l'image.
+// Façade TESTABLE des deux décodeurs (cf. io/DiskImageCodec.hpp) : même ordre
+// d'essai que Fdc::loadImage. Existe pour que le harnais de fuzzing d'A30 puisse
+// atteindre des fonctions qui, sans elle, resteraient `static` — et donc hors de
+// portée du seul outil capable de prouver leur bornage.
+namespace diskimg {
+bool decodeContainer(const std::vector<uint8_t>& raw, std::vector<uint8_t>& out) {
+    // PAS de out.clear() entre les deux essais : Fdc::loadImage n'en fait pas non
+    // plus (`if (decodeMsa(raw, conv)) … else if (decodeDim(raw, conv))`), et une
+    // façade qui « nettoie » ce que l'appelant réel ne nettoie pas cache justement
+    // la classe de bugs qu'on veut attraper — un décodeur qui refuse en laissant
+    // des octets derrière lui. Constaté en écrivant le harnais : avec un clear(),
+    // la mutation « plafond RLE retiré » passait inaperçue.
+    if (decodeMsa(raw, out)) return true;
+    return decodeDim(raw, out);
+}
+}  // namespace diskimg
+
 static bool encodeMsa(const std::vector<uint8_t>& image, int spt, int sides,
                       std::vector<uint8_t>& out) {
     if (spt < 1 || spt > 56 || sides < 1 || sides > 2) return false;
