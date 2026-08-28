@@ -21,7 +21,7 @@
 #include "core/YM2149.hpp"
 #include "core/DmaSound.hpp"
 #include "core/Blitter.hpp"
-#include "core/Glue.hpp"
+#include "core/MmuGlue.hpp"
 #include "core/Scheduler.hpp"
 #include "io/Mfp.hpp"
 #include "io/Ikbd.hpp"
@@ -199,7 +199,7 @@ public:
     YM2149    psg;
     DmaSound  dmasnd{bus};
     Blitter   blitter{bus};
-    Glue      glue;
+    MmuGlue   glue;
     Mfp       mfp;
     Ikbd      ikbd{mfp};
     Fdc       fdc{bus, psg, mfp};

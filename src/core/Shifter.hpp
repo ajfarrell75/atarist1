@@ -271,7 +271,11 @@ public:
 private:
     static uint32_t stColorToArgb(uint16_t c);   // $0RGB → ARGB8888
     void resizeFor(Mode m);                       // ajuste le buffer si la rés. change
-    uint32_t videoCounter() const;                // adresse vidéo courante ($FF8205/07/09)
+    // A32 : NON const. Elle l'était, et se rattrapait avec quatre `const_cast`
+    // pour appeler liveGlueCatchUp — une méthode qui AVANCE la machine Glue.
+    // Un « const » qui ment coûte plus cher qu'il ne rapporte : le seul appelant
+    // est Shifter::read8, qui n'est pas const non plus.
+    uint32_t videoCounter();                      // adresse vidéo courante ($FF8205/07/09)
 
     // --- Compteur vidéo MATÉRIALISÉ (port pVideoRaster d'Hatari, video.c) --------
     // Le compteur n'est plus purement analytique (base + y×stride) : il est LATCHÉ

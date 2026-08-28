@@ -170,11 +170,21 @@ est continue, les trous sont du travail fait.
 
 ### Chantiers structurels (UN à la fois, jamais combinés)
 
-- **A32 ⭘ — Découper `Shifter` (2 854 lignes, ~90 champs, 6 rôles)** en Shifter
-  (registres + rasterisation) / VideoGlue (machine à états DE/HBL/bordures —
-  `updateGlueState` fait 278 lignes) / VideoCounter (`videoCounter` fait 200 lignes et
-  mute l'état à travers 4 `const_cast`). Rendrait aussi son nom à `Glue.hpp`, réduit à un
-  stub de 31 lignes pendant que le vrai GLUE vit dans le Shifter.
+- **A32 ◐ — Découper `Shifter` : le fichier et les NOMS sont faits, les CLASSES
+  restent.** Fait le 2026-08-28 (détail au `CHANGELOG.md`) : `Shifter.cpp` passe de
+  **2 917 à 1 331 lignes**, la machine à états des bordures vit dans `VideoGlue.cpp`
+  (1 032 l.) et le compteur vidéo dans `VideoCounter.cpp` (441 l.) ; le vrai GLUE
+  vidéo a son en-tête (`VideoGlue.hpp`) et le stub MMU son vrai nom (`MmuGlue.hpp`) ;
+  les **4 `const_cast`** de `videoCounter()` ont disparu (la méthode n'est plus
+  `const` — elle avançait la machine Glue).
+  **Ce qui reste, et pourquoi ça n'a pas été fait d'un bloc** : les trois rôles sont
+  toujours des MÉTHODES DE `Shifter`, parce qu'ils partagent son état par-ligne
+  (`glueLines_`, `glueLineStart_`, `liveGlue*`, `vc*`). En faire trois classes
+  demande d'abord de trancher **qui possède cet état** — et une réponse bâclée y
+  ajouterait des accesseurs croisés, c'est-à-dire le même couplage avec plus de
+  cérémonie. Prochain pas concret : extraire `VideoCounter` en objet membre (ses
+  champs `vc*` sont les moins partagés — `vcFrameBase_`, `vcLineBase_`, `vcLineY_`,
+  `vcRestart*`), mesurer ce que ça casse, et seulement ensuite regarder la Glue.
 - **A33 ⭘ — Lever le mono-instance CPU.** `Cpu68k.cpp:g_bus`/`g_moira`/`g_sched` sont des
   globales ; la classe jette sur une seconde instance. C'est le plafond qui interdit le
   test unitaire d'une `Machine` (1 079 lignes de tests pour 40 200 de source), l'A/B en un

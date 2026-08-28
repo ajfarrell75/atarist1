@@ -15,6 +15,48 @@ Ripper, DAC Pro Sound) avec page Dongles, `disks/dongles.txt` et oracle de rejeu
 vérifié note à note** en headless, corpus MIDI piano/blues ; port MIDI ALSA sous Linux ;
 save-state v16. Détail dans les chantiers datés ci-dessous.
 
+## A32 — le Shifter perd 1 586 lignes, le GLUE vidéo retrouve son nom (2026-08-28)
+
+`Shifter.cpp` faisait **2 917 lignes** et portait six rôles. Le plus gênant n'était
+même pas la taille : c'était le NOM. Un lecteur qui cherchait la machine à états des
+bordures ouvrait `Glue.hpp` — et n'y trouvait qu'un **stub de 31 lignes** portant la
+config mémoire du MMU, pendant que le vrai GLUE vivait anonymement au milieu du
+Shifter, dans un `namespace glue` local à l'unité de compilation.
+
+| | avant | après |
+|---|---|---|
+| `Shifter.cpp` (registres, palette, rasterisation) | 2 917 | **1 331** |
+| `VideoGlue.cpp` (DE/HBL, bordures, Timer B) | — | 1 032 |
+| `VideoCounter.cpp` (`$FF8205/07/09`, faisceau) | — | 441 |
+| `VideoGlue.hpp` (masques, table de timings, wakestate) | — | 168 |
+| `ShifterInternal.hpp` (outillage des trois unités) | — | 63 |
+
+- **Le vrai GLUE a son en-tête** : `VideoGlue.hpp`. Sa table de timings ne prend plus
+  un `Bus&` mais un `MachineType` — c'est cette dépendance-là qui l'empêchait de
+  sortir du `.cpp`, et le GLUE vidéo n'a que faire du bus.
+- **Le stub MMU a son vrai nom** : `MmuGlue.hpp` / `class MmuGlue`, avec un ⚠ en tête
+  qui renvoie vers `VideoGlue.hpp`. Le nom « Glue » ne trompe plus personne.
+- **Les quatre `const_cast` ont disparu.** `videoCounter()` se déclarait `const` et
+  appelait `liveGlueCatchUp` — qui AVANCE la machine Glue — à travers quatre
+  `const_cast<Shifter*>`. Elle n'est plus `const` : son seul appelant, `Shifter::read8`,
+  ne l'est pas non plus. Un `const` qui ment coûte plus cher qu'il ne rapporte.
+- Les verrous d'environnement partagés (`envFlag`, `lineLenAttrEnv`, les décalages de
+  calibration, la table d'éclatement des bitplanes) passent de `static` à `inline`
+  dans `ShifterInternal.hpp` : **une** définition pour trois unités, pas trois copies
+  — un verrou lu deux fois avec deux résultats serait exactement le genre d'hybride
+  qu'A16 a mis des semaines à débusquer.
+
+**Ce qui N'EST PAS fait, et pourquoi ce n'est pas une paresse.** Les trois rôles
+restent des MÉTHODES de `Shifter` : ils partagent son état par-ligne (`glueLines_`,
+`glueLineStart_`, `liveGlue*`, `vc*`). En faire trois CLASSES demande de trancher qui
+possède cet état ; une réponse bâclée y ajouterait des accesseurs croisés — le même
+couplage, avec plus de cérémonie. L'item reste ouvert au TODO avec son prochain pas
+écrit : extraire `VideoCounter` en objet membre (ses champs `vc*` sont les moins
+partagés), mesurer, et regarder la Glue ensuite.
+
+Aucun changement de comportement : pur déplacement de code. Palier `full` vert —
+étalons pixel compris, c'est-à-dire tout ce que ce fichier décide.
+
 ## A31 — le dispatch MMIO devient une table, et sa cohérence est PROUVÉE (2026-08-28)
 
 Ajouter une puce demandait de toucher six endroits, dont **deux chaînes de `if` de

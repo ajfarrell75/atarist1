@@ -59,7 +59,7 @@ précision proposés, **43 confirmés** (36 uniques après déduplication), **8 
 | stMemory.c:851-900 (MMU_ConfToBank + MMU_Size) | Bus.cpp:107-111, 157-164 | porté | bank1 bits 0-1 sur ST/Mega ST seulement, conf 11 → 0. |
 | stMemory.c:1052-1308 (Translate_Addr STF/STE) | Bus.cpp:126-150 + 156-176 | porté | Masques RAS/CAS vérifiés terme à terme (9 cas STF). |
 | stMemory.c:1005-1031 (RAM_SetBankSize) | Bus.cpp:113-124 (ramBanks) | **partiel ⚠** | 2176 et 2560 Ko manquants (le default les traiterait faux) ; sans impact tant que parseRamBytes n'expose que 256k-4m (MachineType.hpp:40-47). |
-| stMemory.c:908-940 ($FF8001 R/W) | Glue.hpp:19,25 lu live par mmuTranslate | porté | Pas de remap : relu à chaque accès, effet identique. |
+| stMemory.c:908-940 ($FF8001 R/W) | MmuGlue.hpp:26,32 lu live par mmuTranslate | porté | Pas de remap : relu à chaque accès, effet identique. |
 | stMemory.c:93-102 (STMemory_Reset : $FF8001=0 à froid) | — | **absent ⚠** | CONFIRMÉ : memConfig_ posé une fois au constructeur (Machine.cpp:69 dans l'arbre) et jamais touché par reset()/hardReset() (Machine.hpp:86-114) → aliasing MMU différent pendant la détection RAM au boot froid. |
 | stMemory.c:558-571, 724-768 (DMA Read/Write + CheckAddr) | Bus.cpp:481-491 (dmaRead8/dmaWrite8) | porté | Zone fautive lit 0x00, écriture perdue, jamais d'exception. |
 | stMemory.c:532-592 (STAddrToPointer/CheckAreaType) | Bus.cpp:183-193 (hostRamPtr) | porté | Test de contiguïté plus strict, repli octet par octet. |

@@ -8,7 +8,7 @@
 #include "core/StateArchive.hpp"
 #include "core/Shifter.hpp"
 #include "core/YM2149.hpp"
-#include "core/Glue.hpp"
+#include "core/MmuGlue.hpp"
 #include "core/Cpu68k.hpp"
 #include "io/Mfp.hpp"
 #include "io/Ikbd.hpp"

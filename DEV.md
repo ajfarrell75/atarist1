@@ -28,7 +28,14 @@ src/
     Bus.{hpp,cpp}           Memory map + dispatch MMIO + bus errors (busFault/buildIoFault).
     Cpu68k.{hpp,cpp}        Wrapper Moira (cycle-exact) : accès mémoire, int-ack vectorisé,
                             hook d'instruction (traceur), reset/IPL.
-    Shifter.{hpp,cpp}       Décodage planaire basse/moyenne/haute → buffer ARGB.
+    Shifter.{hpp,cpp}       Registres vidéo, palette, décodage planaire → buffer ARGB.
+    VideoGlue.hpp           LE GLUE vidéo : masques de bordure, table de timings par
+                            machine, wakeup state (port de Hatari video.c).
+    VideoGlue.cpp           Sa MACHINE À ÉTATS : DE/HBL, retraits de bordure, Timer B.
+    VideoCounter.cpp        Compteur vidéo ($FF8205/07/09), avance du faisceau, restart.
+    ShifterInternal.hpp     Outillage commun aux trois unités ci-dessus (non public).
+    MmuGlue.hpp             Le MMU + la « colle système » ($FF8001). ⚠ CE N'EST PAS le
+                            GLUE vidéo — il s'appelait Glue.hpp et induisait en erreur.
     YM2149.{hpp,cpp}        PSG : registres + synthèse 3 voies + bruit + enveloppe.
     DmaSound.{hpp,cpp}      Son DMA STE + Microwire/LMC1992.
     Blitter.{hpp,cpp}       Blitter ST : données + partage de bus hog ET non-hog (64/64).
