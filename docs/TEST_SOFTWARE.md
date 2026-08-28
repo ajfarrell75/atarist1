@@ -92,7 +92,7 @@ n'honore pas — il lit `EMUDESK.INF`. Mesuré le 2026-08-28 : sous `etos192fr`,
 monté mais Cubase ne démarre pas, **0 octet MIDI émis**, on reste sur le bureau. Et même
 s'il démarrait, Cubase Lite resterait un logiciel commercial : changer la ROM ne
 retirerait pas la dépendance non redistribuable.
-Sans les deux ROM Atari, il reste **9 auto-tests + 11 étalons machine** (ST ×6, STE ×5) — c'était 5 avant la migration A10 du 2026-08-28.
+Sans les deux ROM Atari, il reste **10 auto-tests + 12 étalons machine** (ST ×7, STE ×5) — c'était **5** avant les deux passes d'A10 du 2026-08-28 : migration de trois démos sur EmuTOS, puis l'étalon spec512 GÉNÉRÉ.
 
 Les **4 étalons à disque généré** (`overscan_top`, `trace_odd`, `scroll_8264`,
 `scroll_8265`) ont été migrés sur EmuTOS le 2026-08-19 : leur programme est un secteur de
@@ -120,8 +120,13 @@ glyphes rouges illisibles vers la trame 350) puis abandonne, et le bureau GEM ap
 écran figé de la trame 600 à la fin. Ce n'est **pas** un bug NeoST : **Hatari + `etos192fr`
 rend le même bureau** (22 px d'écart, tous dans la bande de la LED disquette d'Hatari) ;
 `etos256fr` échoue identiquement. Ils restent donc sur `tos102uk` / `tos162us`, et se
-sautent proprement sans ces ROM. Pour racheter la couverture spec512 après la purge, la
-voie restante est l'**étalon généré**, pas la migration de ROM.
+sautent proprement sans ces ROM. **Leur couverture est RENDUE** depuis le 2026-08-28 par
+`spec512_bands`, étalon **généré** (`tools/make_spec512_test.py`) : secteur de boot
+autonome, écran entièrement à l'index 1, `palette[1]` martelée trois fois par ~100
+cycles. La position horizontale de chaque bascule dépend du cycle exact de l'écriture —
+**0 px contre l'oracle Hatari**, sur ROM libre. ⚠ Son image n'est pas statique (période
+de 4 trames : la boucle et la trame ne sont pas commensurables) ; c'est sans conséquence,
+NeoST est déterministe et l'oracle a sa fenêtre de scan.
 
 ### Les images disquette ne sont plus modifiées par les runs (A14, 2026-08-28)
 
@@ -267,7 +272,7 @@ python3 tools/compare_screenshot.py tests/out/foo_neost.ppm tests/reference/foo.
 **nocooper_greetings** (V2, réf. oracle archivée) ; fetch auto : **Cuddly Demos**
 (`disks/etalons/cuddly_demos.msa`), **No Cooper** (`disks/etalons/nocooper.msa`),
 **union_demo** (`optional` : SKIP tant que la disquette n'est pas rapatriée).
-Soit **25 entrées** dans `tools/etalons.json` — 10 auto-tests + **15 étalons machine**, dont
+Soit **26 entrées** dans `tools/etalons.json` — 10 auto-tests + **16 étalons machine**, dont
 le `_comment` du fichier rappelle la couverture réelle (ni MegaST, ni TOS 1.00/1.04/1.06).
 Le 10ᵉ auto-test est `glue_selftest_attr` (A16b, 2026-08-28) : le MÊME auto-test Glue
 rejoué avec le verrou expérimental `NEOST_LINELEN_ATTR=1` armé. Un chemin opt-in que

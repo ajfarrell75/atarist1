@@ -105,10 +105,11 @@ est continue, les trous sont du travail fait.
 ### Reproductibilité & maturité produit (hérités)
 
 - **A3 ◐ — Le corpus de régression n'est pas livrable.** La couverture repose sur les 68
-  jeux crackés et 37 ROM propriétaires du § BLOQUANT. Recompté 2026-08-28 (A10) : **11 étalons
-  pixel sur 15** survivraient au retrait des TOS Atari (`etos_ste_boot`, `overscan_top`,
+  jeux crackés et 37 ROM propriétaires du § BLOQUANT. Recompté 2026-08-28 (A10) : **12 étalons
+  pixel sur 16** survivraient au retrait des TOS Atari (`etos_ste_boot`, `overscan_top`,
   `trace_odd`, `scroll_8264`, `scroll_8265`, `blitter_timer`, `blitter_hog`, `mfp_poll`,
-  plus `cuddly_demos`, `nocooper`, `nocooper_greetings` migrés sur EmuTOS le 2026-08-28) ;
+  plus `cuddly_demos`, `nocooper`, `nocooper_greetings` migrés sur EmuTOS, et
+  `spec512_bands` — l'étalon GÉNÉRÉ qui rend la couverture « palette en cours de ligne ») ;
   les 4 restants sont le reliquat d'**A10**.
 - **A9 ⭘ — Découper `main()`** (`src/main.cpp`, mesuré 2026-08-27 : **4 814 lignes**, dont
   `main()` ≈ 2 420 avec une boucle de ~1 530 lignes et **84 globaux `g_*`** — chiffre gardé
@@ -125,6 +126,13 @@ est continue, les trous sont du travail fait.
   moins pire ; sur `cuddly_demos` la trame voisine est déjà à 7 548 px, sur `nocooper` à
   19 069 px. Détail et preuves dans le `rom_note` de chaque entrée d'`etalons.json`.
   Restent :
+  - ✅ **La couverture spec512 est RENDUE, sans ROM Atari** (2026-08-28) :
+    `spec512_bands`, étalon **généré** (`tools/make_spec512_test.py`) — secteur de boot
+    autonome qui martèle `palette[1]` trois fois par ~100 cycles sur un écran entièrement
+    à l'index 1. La position horizontale de chaque bascule dépend du cycle exact de
+    l'écriture : c'est le seul endroit du rendu où un cycle de CPU se voit à l'œil.
+    **0 px contre l'oracle Hatari** sur ROM libre. Les trois étalons ci-dessous restent
+    donc des SKIP recensés le jour de la purge, mais plus rien d'essentiel ne part avec eux.
   - **`spectrum512_diapo`, `spectrum512_diapo2`, `spectrum512_diapo_ste` — migration
     EmuTOS RÉFUTÉE, ne pas retenter.** Ce disque n'a pas de secteur de boot exécutable
     (somme $FB35) : la diapo est lancée par le dossier `AUTO`, et sous EmuTOS le
