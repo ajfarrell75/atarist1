@@ -80,9 +80,12 @@ Fichiers Hatari clés (← composant NeoST) — table complète dans `DEV.md` :
 ## Tester = le headless (outil n°1)
 
 Pas de framework de test : validation par `neost-headless` (déterministe, traces façon
-MAME + captures PPM) et par la suite d'étalons. Seule exception, la LOGIQUE PURE
-(chemins hôte, format `neost.cfg`) est couverte par `neost-selftest`
-(`tests/selftest_logic.cpp`), sans machine ni ROM. **Détail → `DEV.md`.**
+MAME + captures PPM) et par la suite d'étalons. À côté, `neost-selftest`
+(`tests/selftest_logic.cpp`, palier `fast`) couvre ce qui n'a besoin NI de machine NI de
+ROM : la logique pure (chemins hôte, format `neost.cfg`) **et les tables de vérité « puce
+nue + Scheduler »** — YM2149, MFP+ACIA, RTC, **Blitter, son DMA STE, FDC/DMA disquette**.
+C'est l'étage entre la logique pure et le pixel : il dit « la tranche non-hog s'arrête au
+32ᵉ mot » là où un étalon dit « 3 400 px divergents ». **Détail → `DEV.md`.**
 
 ```sh
 python3 tools/run_all.py --tier fast   # ~12 s : logique + verdicts série + cycle-bench

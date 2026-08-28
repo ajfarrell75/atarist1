@@ -222,6 +222,21 @@ GUI), qui produit des **traces façon MAME** et des **captures PPM**. Ce qu'il n
 couvrir — les fonctions sans machine ni ROM (chemins hôte, format `neost.cfg`) — l'est par
 `./build/neost-selftest` (`tests/selftest_logic.cpp`), premier pas du palier `fast`.
 
+Depuis A29 (2026-08-28), ce binaire porte aussi des **tables de vérité « puce nue +
+Scheduler »** : on instancie la puce seule (plus un `Bus` de 512 Ko et un `Scheduler`
+quand il en faut un), on écrit ses registres, on lit ce qui en sort. Couvertes : YM2149,
+MFP+ACIA, RTC, **Blitter**, **son DMA STE**, **FDC/DMA disquette**. C'est l'étage manquant
+entre la logique pure et le pixel — sans lui, chaque régression du blitter était une
+enquête (« 3 400 px divergents à (112,57) ») là où une table dit « la tranche non-hog
+s'arrête au 32ᵉ mot au lieu du 33ᵉ ». Chaque table a été **vérifiée par mutation** : couper
+`kNonHogBusBlitter` de 64 à 63, retirer le masque 22 bits du pointeur son, inverser la
+polarité des entrées du WD1772 — les trois font rougir la ligne exacte.
+
+⚠ Écrire une de ces tables demande de câbler ce que `Machine` câble : le callback
+`Scheduler::BLITTER`/`FDC` notamment. Sans lui l'échéance est POSÉE mais jamais servie —
+le blit non-hog ne démarre pas et le test mesure du vide (erreur commise en écrivant la
+table du blitter).
+
 ```sh
 ./build/neost-headless <rom> --frames N --trace t.txt --regs --irq
 tail t.txt                                   # localiser la boucle d'attente (PC qui tourne)

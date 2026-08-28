@@ -15,6 +15,52 @@ Ripper, DAC Pro Sound) avec page Dongles, `disks/dongles.txt` et oracle de rejeu
 vérifié note à note** en headless, corpus MIDI piano/blues ; port MIDI ALSA sous Linux ;
 save-state v16. Détail dans les chantiers datés ci-dessous.
 
+## A29 — le blitter, le son DMA et le FDC ont enfin une table de vérité (2026-08-28)
+
+Le plan le disait depuis l'audit : avant tout chantier structurel, **poser le filet**. Il
+manquait un étage. `selftest_logic.cpp` savait déjà instancier une puce NUE avec un
+`Scheduler` (YM2149, MFP+ACIA, RTC) ; au-dessus, il n'y avait plus que le pixel. Résultat :
+une régression du blitter se présentait comme « 3 400 px divergents à (112,57) » et
+l'enquête commençait.
+
+Trois tables ajoutées, **~50 assertions**, sans machine ni ROM — juste un `Bus` de 512 Ko,
+un `Scheduler`, et la puce :
+
+- **Blitter** : copie et incréments, masques de fin (em1 au premier mot, em3 au dernier),
+  les quatre coins de la table HOP/LOP (uns, zéro, S, S XOR D, S AND D), le multi-lignes,
+  et surtout **la tranche non-hog** — 64 accès bus, donc 32 mots avec masques pleins :
+  après la première tranche le mot 31 est copié, le 32 ne l'est pas, BUSY tient encore.
+- **Son DMA STE** : masques d'adresse (22 bits utiles, adresse paire), `$FF8900` qui est un
+  registre MOT (l'octet pair relit 0, pas $FF), masque du contrôle et du mode, et le
+  compteur VIVANT `$FF8909/0B/0D` — celui-là même que la divergence Hatari encore ouverte
+  sur la quantification HBL du refill FIFO fait poller, et qui n'était couvert par RIEN
+  (un étalon pixel ne voit pas le son, un dump WAV ne dit pas où le pointeur en est).
+- **FDC / DMA disquette** : adresse DMA relisible, paire, bornée par la taille RAM ; le
+  compteur de secteurs écrit via `$FF8604` sous SCREG **sans** devenir rémanent ; les bits
+  3-7 du statut DMA qui rejouent le dernier `$FF8604` ; et la polarité des trois entrées du
+  WD1772 quand **aucun lecteur n'est sélectionné** (TR00/INDEX/WPRT sont EFFACÉS, pas
+  forcés).
+
+**Chaque table a été vérifiée par MUTATION**, parce qu'un test qui n'a jamais échoué ne
+prouve rien : `kNonHogBusBlitter` 64 → 63 fait rougir « mot 31 copié (32ᵉ mot) » ; retirer
+le masque `$3F` du pointeur son fait rougir « octet haut masqué à $3F » ; inverser
+`updateStr(TR00|INDEX|WPRT, 0)` fait rougir les trois lignes de polarité. C'est ce que
+donne l'étage manquant : un `fichier:ligne` au lieu d'une enquête.
+
+**Deux pièges rencontrés, consignés dans `DEV.md`.** (1) Écrire une de ces tables demande
+de câbler ce que `Machine` câble — le callback `Scheduler::BLITTER`/`FDC`. Sans lui
+l'échéance est POSÉE mais jamais servie : le blit non-hog ne démarre pas et le test mesure
+du vide. C'est l'erreur que j'ai commise en premier, et elle passait pour un « 0 FAIL ».
+(2) Première version du test FDC : trois assertions VERTES qui n'atteignaient pas la
+branche qu'elles prétendaient couvrir (le statut valait 0 parce que `statusTypeI_` était
+faux). La mutation de polarité ne les faisait PAS rougir — c'est elle qui l'a révélé. Un
+test vert qui n'exerce rien est pire qu'un test absent : il rassure.
+
+`neost-selftest` passe de 159 à **209 assertions**, palier `fast`, coût inchangé à la
+milliseconde près.
+
+Palier `full` vert.
+
 ## A14 — `--disk-ro` : une campagne de test ne modifie plus les images du dépôt (2026-08-28)
 
 Le symptôme était consigné depuis des semaines : deux images **suivies par git** modifiées

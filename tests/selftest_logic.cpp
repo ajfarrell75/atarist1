@@ -26,6 +26,10 @@
 #include "io/MidiAcia.hpp"
 #include "io/Ikbd.hpp"
 #include "io/Rtc.hpp"
+#include "core/Bus.hpp"
+#include "core/Blitter.hpp"
+#include "core/DmaSound.hpp"
+#include "io/Fdc.hpp"
 
 #include <cstdio>
 #include <cstring>
@@ -42,6 +46,18 @@ static void checkStr(const char* what, const std::string& got, const std::string
     ++g_fail;
     std::printf("  FAIL %-46s = \"%s\"\n%54s attendu \"%s\"\n",
                 what, got.c_str(), "", want.c_str());
+}
+
+static void checkHex(const char* what, unsigned got, unsigned want) {
+    if (got == want) { ++g_ok; return; }
+    ++g_fail;
+    std::printf("  FAIL %-46s = $%04X (attendu $%04X)\n", what, got, want);
+}
+
+static void checkInt(const char* what, long got, long want) {
+    if (got == want) { ++g_ok; return; }
+    ++g_fail;
+    std::printf("  FAIL %-46s = %ld (attendu %ld)\n", what, got, want);
 }
 
 static void checkBool(const char* what, bool got, bool want) {
@@ -669,6 +685,380 @@ static void testRtcSecond() {
     checkBool("TIMER EN réarmé : l'heure repart", rtc.getDateTime().sec == fige + 1, true);
 }
 
+// -----------------------------------------------------------------------------
+//  A29 — « puce nue + Scheduler » étendu au BLITTER.
+//
+//  POURQUOI. Le blitter n'était couvert que par deux étalons PIXEL (blitter_timer,
+//  blitter_hog). Quand l'un rougit, le verdict est « 3 400 px divergents à
+//  (112,57) » et l'enquête commence. Une table de vérité, elle, dit « le masque de
+//  fin ne s'applique plus au premier mot » ou « la tranche non-hog fait 63 accès au
+//  lieu de 64 ». Étage manquant entre la logique pure et le pixel.
+//
+//  Ni machine ni ROM : un Bus (512 Ko de RAM), un Scheduler, un Blitter.
+// -----------------------------------------------------------------------------
+namespace {
+
+constexpr uint32_t BLT = 0xFF8A00;      // base des registres blitter
+constexpr uint32_t SRC = 0x020000;      // zones de travail en RAM
+constexpr uint32_t DST = 0x030000;
+
+struct BlitRig {
+    Bus       bus{512u * 1024u};
+    Scheduler sched;
+    Blitter   blit{bus};
+
+    BlitRig() {
+        blit.reset();
+        blit.setScheduler(&sched);
+        // Ce que Machine fait pour de vrai (Machine.cpp) : sans ce câblage,
+        // l'échéance Scheduler::BLITTER est POSÉE mais personne ne la sert — le
+        // blit non-hog ne démarre jamais et le test mesurerait du vide.
+        sched.setCallback(Scheduler::BLITTER, [this] { blit.onSlice(); });
+    }
+
+    void poke16(uint32_t addr, uint16_t v) { bus.write16(addr, v); }
+    uint16_t peek16(uint32_t addr) { return bus.read16(addr); }
+
+    // Programme un blit « une ligne, xCount mots » et le LANCE (l'écriture de
+    // $FF8A3C est ce qui démarre le matériel, cf. Blitter::write16).
+    void program(int xCount, int yCount, int hop, int lop,
+                 uint16_t em1 = 0xFFFF, uint16_t em2 = 0xFFFF, uint16_t em3 = 0xFFFF,
+                 uint8_t skew = 0, int srcInc = 2, int dstInc = 2) {
+        blit.write16(BLT + 0x20, uint16_t(srcInc));      // src X inc
+        blit.write16(BLT + 0x22, 2);                     // src Y inc
+        blit.write32(BLT + 0x24, SRC);
+        blit.write16(BLT + 0x28, em1);
+        blit.write16(BLT + 0x2A, em2);
+        blit.write16(BLT + 0x2C, em3);
+        blit.write16(BLT + 0x2E, uint16_t(dstInc));      // dst X inc
+        blit.write16(BLT + 0x30, 2);                     // dst Y inc
+        blit.write32(BLT + 0x32, DST);
+        blit.write16(BLT + 0x36, uint16_t(xCount));
+        blit.write16(BLT + 0x38, uint16_t(yCount));
+        blit.write8 (BLT + 0x3A, uint8_t(hop));
+        blit.write8 (BLT + 0x3B, uint8_t(lop));
+        blit.write16(BLT + 0x3D - 1, uint16_t((0xC0 << 8) | skew));   // BUSY+HOG puis skew
+    }
+};
+
+}  // namespace
+
+static void testBlitterTruthTable() {
+    std::printf("Blitter (puce nue + Scheduler : table de vérité)\n");
+
+    // --- 1. Copie simple : HOP=2 (source), LOP=3 (D=S), masques pleins ---------
+    {
+        BlitRig r;
+        for (int i = 0; i < 4; ++i) r.poke16(SRC + i * 2, uint16_t(0x1000 + i));
+        for (int i = 0; i < 5; ++i) r.poke16(DST + i * 2, 0xAAAA);   // le 5e est le témoin
+        r.program(4, 1, /*hop*/2, /*lop*/3);
+        checkBool("copie 4 mots : BUSY retombé (HOG)", r.blit.busy(), false);
+        checkHex ("copie 4 mots : mot 0", r.peek16(DST + 0), 0x1000);
+        checkHex ("copie 4 mots : mot 3", r.peek16(DST + 6), 0x1003);
+        checkHex ("copie 4 mots : mot 4 INTACT", r.peek16(DST + 8), 0xAAAA);
+    }
+
+    // --- 2. Masques de fin : em1 au PREMIER mot, em3 au DERNIER ---------------
+    // Le masque protège les bits de la destination qu'il laisse à 0 — c'est ce qui
+    // permet de blitter un rectangle sans écraser les colonnes voisines.
+    {
+        BlitRig r;
+        for (int i = 0; i < 3; ++i) { r.poke16(SRC + i * 2, 0xFFFF);
+                                      r.poke16(DST + i * 2, 0x0000); }
+        r.program(3, 1, 2, 3, /*em1*/0x00FF, /*em2*/0xFFFF, /*em3*/0xFF00);
+        checkHex("masque em1 (1er mot)",     r.peek16(DST + 0), 0x00FF);
+        checkHex("masque em2 (mot milieu)",  r.peek16(DST + 2), 0xFFFF);
+        checkHex("masque em3 (dernier mot)", r.peek16(DST + 4), 0xFF00);
+    }
+
+    // --- 3. HOP et LOP : les quatre coins de la table -------------------------
+    {
+        BlitRig r;
+        r.poke16(SRC, 0xF0F0);
+        r.poke16(DST, 0xFF00);
+        r.program(1, 1, /*hop*/0, /*lop*/3);            // HOP=0 : source = tout à 1
+        checkHex("HOP=0 (uns) + LOP=3 (S)", r.peek16(DST), 0xFFFF);
+
+        r.poke16(DST, 0xFF00);
+        r.program(1, 1, 2, /*lop*/0);                   // LOP=0 : zéro
+        checkHex("LOP=0 (zéro)", r.peek16(DST), 0x0000);
+
+        r.poke16(DST, 0xFF00);
+        r.program(1, 1, 2, /*lop*/15);                  // LOP=15 : uns
+        checkHex("LOP=15 (uns)", r.peek16(DST), 0xFFFF);
+
+        r.poke16(DST, 0xFF00);
+        r.program(1, 1, 2, /*lop*/6);                   // LOP=6 : S XOR D
+        checkHex("LOP=6 (S XOR D)", r.peek16(DST), 0x0FF0);
+
+        r.poke16(DST, 0xFF00);
+        r.program(1, 1, 2, /*lop*/1);                   // LOP=1 : S AND D
+        checkHex("LOP=1 (S AND D)", r.peek16(DST), 0xF000);
+    }
+
+    // --- 4. Plusieurs lignes : les incréments Y sont appliqués ----------------
+    {
+        BlitRig r;
+        for (int l = 0; l < 3; ++l) r.poke16(SRC + l * 2, uint16_t(0x2000 + l));
+        r.program(1, 3, 2, 3);
+        checkHex("3 lignes : ligne 0", r.peek16(DST + 0), 0x2000);
+        checkHex("3 lignes : ligne 2", r.peek16(DST + 4), 0x2002);
+        checkBool("3 lignes : BUSY retombé", r.blit.busy(), false);
+    }
+
+    // --- 5. La tranche NON-HOG fait exactement 64 accès bus -------------------
+    // C'est LE chiffre que les étalons pixel ne savent pas dire. HOP=2/LOP=3 avec
+    // masques pleins = 2 accès par mot (lecture source + écriture destination),
+    // donc 32 mots par tranche. 40 mots demandés → la 1re tranche en fait 32, le
+    // blitter reste BUSY, et la suivante finit le travail.
+    {
+        BlitRig r;
+        for (int i = 0; i < 40; ++i) { r.poke16(SRC + i * 2, uint16_t(0x3000 + i));
+                                       r.poke16(DST + i * 2, 0x0000); }
+        r.blit.write16(BLT + 0x20, 2);  r.blit.write16(BLT + 0x22, 2);
+        r.blit.write32(BLT + 0x24, SRC);
+        r.blit.write16(BLT + 0x28, 0xFFFF); r.blit.write16(BLT + 0x2A, 0xFFFF);
+        r.blit.write16(BLT + 0x2C, 0xFFFF);
+        r.blit.write16(BLT + 0x2E, 2);  r.blit.write16(BLT + 0x30, 2);
+        r.blit.write32(BLT + 0x32, DST);
+        r.blit.write16(BLT + 0x36, 40); r.blit.write16(BLT + 0x38, 1);
+        r.blit.write8 (BLT + 0x3A, 2);  r.blit.write8 (BLT + 0x3B, 3);
+        r.blit.write16(BLT + 0x3C, 0x8000);        // BUSY sans HOG → tranches
+
+        // Sans avancer l'ordonnanceur, rien n'a encore tourné : la 1re tranche est
+        // DATÉE (phase PRE_START), elle n'est pas immédiate.
+        checkBool("non-hog : BUSY armé, blit non fini", r.blit.busy(), true);
+        checkHex ("non-hog : rien n'a encore été copié", r.peek16(DST), 0x0000);
+
+        r.sched.runTo(64);                          // franchit l'échéance +8
+        checkHex ("non-hog : mot 0 copié après la 1re tranche", r.peek16(DST), 0x3000);
+        checkHex ("non-hog : mot 31 copié (32e mot)", r.peek16(DST + 31 * 2), 0x301F);
+        checkHex ("non-hog : mot 32 PAS encore copié", r.peek16(DST + 32 * 2), 0x0000);
+        checkBool("non-hog : BUSY toujours armé", r.blit.busy(), true);
+
+        r.blit.onSlice();                           // tranche suivante
+        checkHex ("non-hog : mot 39 copié après la 2e", r.peek16(DST + 39 * 2), 0x3027);
+        checkBool("non-hog : BUSY retombé à la fin", r.blit.busy(), false);
+    }
+}
+
+// -----------------------------------------------------------------------------
+//  A29 — « puce nue + Scheduler » étendu au SON DMA (STE).
+//
+//  Les registres $FF8909/0B/0D (compteur d'adresse VIVANT) sont au cœur de la
+//  divergence Hatari encore ouverte sur la quantification HBL du refill FIFO ; ils
+//  n'étaient couverts par AUCUN test — un étalon pixel ne voit pas le son, et le
+//  dump WAV ne dit pas OÙ le pointeur en était. Ni machine ni ROM : un Bus, un
+//  Scheduler, un DmaSound.
+// -----------------------------------------------------------------------------
+namespace {
+
+constexpr uint32_t SND = 0xFF8900;
+
+struct SndRig {
+    Bus       bus{512u * 1024u};
+    Scheduler sched;
+    DmaSound  snd{bus};
+
+    SndRig() { snd.setScheduler(&sched); }
+
+    void setStart(uint32_t a) {
+        snd.write8(SND + 0x03, uint8_t(a >> 16));
+        snd.write8(SND + 0x05, uint8_t(a >> 8));
+        snd.write8(SND + 0x07, uint8_t(a));
+    }
+    void setEnd(uint32_t a) {
+        snd.write8(SND + 0x0F, uint8_t(a >> 16));
+        snd.write8(SND + 0x11, uint8_t(a >> 8));
+        snd.write8(SND + 0x13, uint8_t(a));
+    }
+    uint32_t counter() {
+        return (uint32_t(snd.read8(SND + 0x09)) << 16)
+             | (uint32_t(snd.read8(SND + 0x0B)) << 8)
+             |  uint32_t(snd.read8(SND + 0x0D));
+    }
+};
+
+}  // namespace
+
+static void testDmaSoundTruthTable() {
+    std::printf("Son DMA STE (puce nue + Scheduler : table de vérité)\n");
+    SndRig r;
+
+    // --- 1. Masques d'adresse : 22 bits utiles, adresse PAIRE ----------------
+    // L'octet haut est masqué à $3F (le compteur DMA n'a que 22 bits sur ST/STE
+    // ≤ 4 Mo) et le bit0 de l'octet bas est ignoré (adresse paire). Une régression
+    // ici pointerait le son hors RAM — sans qu'aucun pixel ne bouge.
+    r.setStart(0xFFFFFF);
+    checkHex("start : octet haut masqué à $3F", r.snd.read8(SND + 0x03), 0x3F);
+    checkHex("start : octet bas forcé PAIR",    r.snd.read8(SND + 0x07), 0xFE);
+    r.setEnd(0xFFFFFF);
+    checkHex("end : octet haut masqué à $3F",   r.snd.read8(SND + 0x0F), 0x3F);
+    checkHex("end : octet bas forcé PAIR",      r.snd.read8(SND + 0x13), 0xFE);
+
+    // --- 2. $FF8900 est un registre MOT : l'octet PAIR relit 0, pas $FF ------
+    // « move.w $FF8900,d0 » doit rendre $000x. Un $FF0x ferait lire au programme un
+    // état de lecture qui n'existe pas.
+    checkHex("$FF8900 (octet pair) relit 0", r.snd.read8(SND + 0x00), 0x00);
+
+    // --- 3. Contrôle : bits play/repeat seuls, le reste est ignoré -----------
+    r.snd.write8(SND + 0x01, 0xFF);
+    checkHex("contrôle : seuls les bits 0-1 tiennent", r.snd.read8(SND + 0x01), 0x03);
+    r.snd.write8(SND + 0x01, 0x00);
+    checkHex("contrôle : arrêt", r.snd.read8(SND + 0x01), 0x00);
+
+    // --- 4. Mode $FF8921 : masque $8F (mono + fréquence) --------------------
+    r.snd.write8(SND + 0x21, 0xFF);
+    checkHex("mode : masque $8F (mono + fréquence)", r.snd.read8(SND + 0x21), 0x8F);
+
+    // --- 5. Le compteur VIVANT : à l'arrêt il montre l'adresse de DÉBUT ------
+    r.setStart(0x020000);
+    r.setEnd(0x020100);
+    checkHex("compteur à l'arrêt = adresse de début (haut)", (r.counter() >> 16), 0x02);
+    checkInt("compteur à l'arrêt = adresse de début",        long(r.counter()), 0x020000);
+
+    // --- 6. Lecture : le pointeur AVANCE au fil des HBL, puis la trame finit --
+    // C'est le comportement que le poll serré de $FF8909/0B/0D observe sur le vrai
+    // matériel : le fetch DMA (8 octets par tic) est EN AVANCE sur la lecture DAC.
+    for (int i = 0; i < 0x100; ++i) r.bus.write8(0x020000 + i, uint8_t(i));
+    r.snd.write8(SND + 0x21, 0x83);                  // mono, 50 kHz
+    r.snd.write8(SND + 0x01, 0x01);                  // PLAY
+    checkBool("PLAY : la lecture est armée", (r.snd.read8(SND + 0x01) & 1) != 0, true);
+    const uint32_t c0 = r.counter();
+    for (int i = 0; i < 8; ++i) { r.sched.runTo(r.sched.now() + 512); r.snd.onHbl(); }
+    checkBool("le compteur a AVANCÉ après 8 HBL", r.counter() > c0, true);
+    checkBool("le compteur reste dans [start, end]",
+              r.counter() >= 0x020000 && r.counter() <= 0x020100, true);
+
+    // Sans repeat, la trame se termine et la lecture s'arrête d'elle-même.
+    for (int i = 0; i < 400; ++i) { r.sched.runTo(r.sched.now() + 512); r.snd.onHbl(); }
+    checkBool("fin de trame sans repeat : la lecture s'arrête",
+              (r.snd.read8(SND + 0x01) & 1) == 0, true);
+}
+
+// -----------------------------------------------------------------------------
+//  A29 — « puce nue + Scheduler » étendu au FDC / DMA disquette.
+//
+//  Le contrôleur DMA ($FF8600-$FF860F) n'était exercé QUE par des boots complets :
+//  une régression sur le masque d'adresse ou sur le compteur de secteurs ne se
+//  voyait qu'au bout d'un chargement raté, sans dire lequel des deux. Ni machine ni
+//  ROM : un Bus, un YM2149, un Mfp, un Scheduler, un Fdc — et pas de disquette.
+// -----------------------------------------------------------------------------
+namespace {
+
+constexpr uint32_t FDCR = 0xFF8600;
+
+struct FdcRig {
+    Bus       bus{512u * 1024u};
+    YM2149    psg;
+    Mfp       mfp;
+    Scheduler sched;
+    Fdc       fdc{bus, psg, mfp};
+
+    FdcRig() {
+        fdc.setScheduler(&sched);
+        // Ce que Machine fait pour de vrai : sans ce câblage, la machine à états du
+        // WD1772 est datée mais jamais servie — le RESTORE du reset resterait BUSY
+        // pour toujours et le statut ne dirait rien.
+        sched.setCallback(Scheduler::FDC, [this] { fdc.onFdcEvent(); });
+        fdc.reset(true);                                    // reset FROID
+    }
+    // Laisse la machine à états dérouler (le reset lance un RESTORE).
+    void settle(int64_t cycles = 4'000'000) { sched.runTo(sched.now() + cycles); }
+
+    void setMode(uint16_t m) {                       // $FF8606, mot big-endian
+        fdc.write8(FDCR + 0x06, uint8_t(m >> 8));
+        fdc.write8(FDCR + 0x07, uint8_t(m));
+    }
+    void setDmaAddr(uint32_t a) {
+        fdc.write8(FDCR + 0x09, uint8_t(a >> 16));
+        fdc.write8(FDCR + 0x0B, uint8_t(a >> 8));
+        fdc.write8(FDCR + 0x0D, uint8_t(a));
+    }
+    uint32_t dmaAddr() {
+        return (uint32_t(fdc.read8(FDCR + 0x09)) << 16)
+             | (uint32_t(fdc.read8(FDCR + 0x0B)) << 8)
+             |  uint32_t(fdc.read8(FDCR + 0x0D));
+    }
+};
+
+}  // namespace
+
+static void testFdcTruthTable() {
+    std::printf("FDC / DMA disquette (puce nue + Scheduler : table de vérité)\n");
+    FdcRig r;
+
+    // --- 1. Adresse DMA : relisible, PAIRE, et bornée par la taille RAM ------
+    // Le masque vient de FDC_WriteDMAAddress : bit0 toujours 0, et l'octet haut
+    // limité à $3F sous 4 Mo — un diagnostic qui relit le compteur pour vérifier
+    // le nombre d'octets transférés voit tout de suite une régression ici.
+    r.setDmaAddr(0x123456);
+    checkInt("adresse DMA relisible (paire)", long(r.dmaAddr()), 0x123456);
+    r.setDmaAddr(0x123457);
+    checkInt("adresse DMA : bit0 forcé à 0",  long(r.dmaAddr()), 0x123456);
+    r.setDmaAddr(0xFFFFFE);
+    checkInt("adresse DMA : octet haut masqué à $3F (512 Ko)",
+             long(r.dmaAddr()), 0x3FFFFE);
+
+    // --- 2. Compteur de secteurs : écrit via $FF8604 quand SCREG est armé ----
+    // Et NON relisible par les bits rémanents de $FF8604 : Hatari sort avant de
+    // mettre à jour ff8604recent_ (fdc.c:4695-4703). Deux comportements distincts
+    // qu'un boot ne sépare pas.
+    r.setMode(0x0090);                                // SCREG armé
+    r.fdc.write8(FDCR + 0x04, 0x00);
+    r.fdc.write8(FDCR + 0x05, 0x0A);                  // 10 secteurs
+    checkHex("SCREG : $FF8604 ne devient PAS rémanent", r.fdc.read8(FDCR + 0x05), 0x00);
+
+    // --- 3. Registre de piste, et la rémanence de $FF8604 dans le statut DMA -
+    // Mode FDC_TR (A0) : l'écriture ne lance PAS de commande, elle pose la piste.
+    // Et le mot de statut $FF8606 rejoue les bits 3-15 du dernier $FF8604 (vérifié
+    // sur STF réel, cf. Hatari FDC_DmaStatus_ReadWord) — un détail que seul un
+    // programme qui relit le statut voit, et qu'aucun boot ne distingue.
+    r.setMode(0x0080 | 0x0002);                       // SCREG coupé, FDC_TR
+    r.fdc.write8(FDCR + 0x04, 0x00);
+    r.fdc.write8(FDCR + 0x05, 0x5A);
+    checkHex("registre de piste relisible", r.fdc.read8(FDCR + 0x05), 0x5A);
+    checkHex("statut DMA : bits 3-7 = dernier $FF8604",
+             r.fdc.read8(FDCR + 0x07) & 0xF8, 0x5A & 0xF8);
+    checkBool("statut DMA : bit1 = compteur de secteurs non nul",
+              (r.fdc.read8(FDCR + 0x07) & 0x02) != 0, true);
+
+    // --- 4. Densité Mega STE/TT ($FF860E) : mot relisible --------------------
+    r.fdc.write8(FDCR + 0x0E, 0x00);
+    r.fdc.write8(FDCR + 0x0F, 0x03);                  // HD
+    checkHex("densité $FF860F relisible", r.fdc.read8(FDCR + 0x0F), 0x03);
+
+    // --- 5. Le RESTORE du reset froid se termine, statut propre --------------
+    r.settle();
+    r.setMode(0x0080);                                // FDC_CS : registre de statut
+    checkHex("après le reset froid : statut au repos", r.fdc.read8(FDCR + 0x05), 0x00);
+
+    // --- 6. AUCUN lecteur sélectionné : les 3 entrées du WD1772 sont EFFACÉES -
+    // Les bits 1-2 du port A du PSG sélectionnent les lecteurs et sont ACTIFS BAS :
+    // les poser à 1 désélectionne tout. Le statut type I doit alors EFFACER TR00,
+    // INDEX et WPRT (fdc.c : `updateStr(TR00|INDEX|WPRT, 0)`), pas les forcer — une
+    // polarité qu'on inverse sans s'en apercevoir, et que seul un programme lisant
+    // le statut sans disquette distingue.
+    r.psg.write8(0xFF8800, 14);                       // sélection registre 14 (port A)
+    r.psg.write8(0xFF8802, 0x07);                     // face 0 + les DEUX lecteurs OFF
+    r.setMode(0x0080);
+    r.fdc.write8(FDCR + 0x04, 0x00);
+    r.fdc.write8(FDCR + 0x05, 0x00);                  // RESTORE : commande de TYPE I
+    r.settle(32'000'000);                             // ~4 s de temps ST
+    // ⚠ OBSERVÉ, non comparé à l'oracle : sans lecteur sélectionné ce RESTORE ne se
+    // termine pas (BUSY reste posé même après 4 s). C'est plausible — le WD1772
+    // attend un signal qui n'arrive jamais — mais ce n'est PAS vérifié contre
+    // Hatari, donc ce n'est pas ce qu'on affirme ici. Le statut type I, lui, se lit
+    // pendant la commande, et c'est sa POLARITÉ qui est le sujet.
+    const uint8_t st = r.fdc.read8(FDCR + 0x05);
+    checkBool("sans lecteur : TR00 effacé",  (st & 0x04) == 0, true);
+    checkBool("sans lecteur : INDEX effacé", (st & 0x02) == 0, true);
+    checkBool("sans lecteur : WPRT effacé",  (st & 0x40) == 0, true);
+
+    // --- 7. Un registre hors carte relit $FF (pas 0) -------------------------
+    checkHex("$FF8600 (hors carte) relit $FF", r.fdc.read8(FDCR + 0x00), 0xFF);
+}
+
 int main() {
     testDongleTable();
     testCartridgeKey();
@@ -677,6 +1067,9 @@ int main() {
     testMidiTdre();
     testIkbdTdre();
     testRtcSecond();
+    testBlitterTruthTable();
+    testDmaSoundTruthTable();
+    testFdcTruthTable();
     testWindowsPaths();
     testPosixPaths();
     testNativeDefaults();
