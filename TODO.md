@@ -239,7 +239,43 @@ est continue, les trous sont du travail fait.
   (2) **signer / notariser** le `.dmg` et le `.zip`, à faire APRÈS la purge (signer un
   paquet contenant des ROM Atari n'aurait pas de sens).
 
+### Issus de l'évaluation d'architecture du 2026-08-28
+
+- **A38 ⭘ — Le palier `fast` lance 17 outils : un garde-fou qui ne mord jamais devient
+  du bruit.** Quatre ont été ajoutés le 2026-08-28 seul (`check_licenses`,
+  `check_env_locks`, `check_release`, le fuzz des parseurs). Chacun se justifie et
+  chacun a attrapé quelque chose de réel *le jour de sa pose* — mais rien ne le
+  vérifiera plus jamais. Le risque n'est pas le coût (~12 s) : c'est qu'un contrôle
+  cesse d'attraper quoi que ce soit, que personne ne le sache, et qu'on finisse par
+  désarmer le lot en bloc.
+  À faire : (1) tenir, pour chaque contrôle, la **trace de son dernier
+  déclenchement RÉEL** — un fil-piège volontaire ne compte pas ; (2) décider d'une
+  règle de retrait (un contrôle qui n'a rien attrapé en N mois se justifie à nouveau ou
+  s'en va) ; (3) re-mesurer le mur du palier `fast` à chaque ajout, et le dire.
+  ⚠ Ne PAS traiter en ajoutant un 18ᵉ outil qui surveille les 17 autres.
+
+- **A39 ⭘ — Trois modules importants n'ont JAMAIS été audités.** Angles morts nommés
+  par l'évaluation, avec leur taille : `io/GemdosHd.cpp` (**1 704 lignes** — chemins
+  hôte, Pexec, table de handles, c'est-à-dire la surface la plus exposée aux fichiers
+  de l'utilisateur), `io/Ikbd.cpp` (**1 189 lignes**) et la pile réseau
+  (`src/net`, ~1 030 lignes). Aucun n'a de table de vérité ; GemdosHd porte en plus
+  A13 (handles hors save-state). Un audit chacun, dans l'esprit de celui du
+  2026-08-27 : lire contre Hatari, chiffrer, verser les trouvailles ici.
+
+- ⚠ **Et le GUI n'a jamais été exercé INTERACTIVEMENT dans une passe de validation.**
+  Il est jugé sur sa forme (A9 : 4 814 lignes, `main()` 2 430, 82 globaux) et couvert
+  par une capture au boot plus trois assertions d'arguments — jamais par un usage.
+  C'est la même famille qu'**A12** (aucune cible de livraison validée à la main) et ça
+  se traite avec : une passe d'usage réel, consignée.
+
 ### Garde-fous du plan (à NE PAS faire)
+
+- **Croire que le plan se vide** : l'audit du 2026-08-27 a produit 22 items ; la journée
+  du 2026-08-28 en a soldé 4 entièrement et avancé 5 — et en a ajouté 2 (A38, A39). La
+  méthode **VOIT mieux qu'elle ne RÉPARE**, et c'est structurel : auditer coûte une
+  journée, réparer coûte des semaines. Ce n'est pas un défaut tant qu'on le sait ;
+  ça le devient si l'on planifie comme si la liste allait se refermer toute seule.
+  Arbitrer explicitement entre « ouvrir » et « fermer » à chaque session.
 
 - **Rouvrir BL5 sans concevoir une 3ᵉ mesure indépendante** : le paradoxe de signe entre
   les deux instrumentations existantes est documenté (`docs/HATARI_DIVERGENCES.md` § BL5,

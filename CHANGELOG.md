@@ -107,6 +107,16 @@ peut-être un peu sévère sur les tests, trop indulgente sur les frontends**.
 4. **Mesurer sur Pi, une fois.** Un émulateur temps réel qui n'a jamais mesuré son temps
    réel sur sa cible est un pari.
 
+### Ce qui de tout ceci est OUVERT vit au TODO, pas ici
+
+Cette entrée est datée : elle fige un jugement. Les points qui appellent une action ont
+été versés au `TODO.md`, où ils seront relus — **A38** (garde-fous qui ne mordent plus,
+17 outils au palier `fast`), **A39** (trois modules jamais audités : `GemdosHd` 1 704 l.,
+`Ikbd` 1 189 l., le réseau ~1 030 l., plus le GUI jamais exercé interactivement) et un
+garde-fou de plan sur le backlog qui croît plus vite qu'il ne se vide. Le journal
+raconte, le TODO réclame ; confondre les deux, c'est écrire une observation qui ne sera
+jamais relue.
+
 ### Limites de cette évaluation, pour qu'elle soit lisible pour ce qu'elle est
 
 Une session, une plateforme (macOS ARM), et **le GUI n'a jamais été lancé de façon
