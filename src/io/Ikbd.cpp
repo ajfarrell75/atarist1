@@ -153,8 +153,13 @@ int Ikbd::cmdLength(uint8_t opcode) {
         case 0x15: return 1;   // StopJoystick
         case 0x16: return 1;   // InterrogateJoystick
         case 0x17: return 2;   // SetJoystickMonitoring
-        case 0x18: return 1;   // FireButton
-        case 0x19: return 7;   // SetJoystickFireDuration (anti-désync : 6 octets de param)
+        case 0x18: return 1;   // SetJoystickFireDuration (Hatari) = « fire button
+                               // monitoring » de la doc Atari — mono-octet
+        // A39 (2026-08-29) : ce commentaire disait « SetJoystickFireDuration », le nom
+        // que Hatari donne à $18. $19 est le mode KEYCODE manette
+        // (IKBD_Cmd_SetCursorForJoystick) : 6 octets de paramètres, RX/RY/TX/TY/VX/VY.
+        // Les longueurs étaient justes — seule l'étiquette trompait le lecteur.
+        case 0x19: return 7;   // SetCursorForJoystick : mode keycode manette (6 param.)
         case 0x1A: return 1;   // DisableJoysticks
         case 0x1B: return 7;   // SetClock
         case 0x1C: return 1;   // ReadClock

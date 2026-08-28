@@ -92,6 +92,13 @@ public:
     // Événement clavier venant de l'hôte (scancode ST déjà traduit).
     void keyEvent(uint8_t scancode, bool pressed);
 
+    // A39 (2026-08-29) — la table des longueurs de commande, exposée pour le seul
+    // test de protocole (tests/selftest_logic.cpp). Une longueur fausse ne se voit
+    // PAS à l'exécution : elle décale le flux de commandes du jeu qui l'utilise, et
+    // de lui seul. La comparer ligne à ligne à Hatari KeyboardCommands[] est le seul
+    // moyen de la garder.
+    int commandLengthForTest(uint8_t opcode) { return cmdLength(opcode); }
+
     // Mouvement/boutons souris (cf. signe frontend : dx>0 = droite, dy>0 = bas).
     // En mode relatif, draine le Δ en paquets $F8 de 3 octets sous contrôle du
     // seuil ($0B), du signe d'axe Y ($0F/$10), et émet aussi sur changement de
