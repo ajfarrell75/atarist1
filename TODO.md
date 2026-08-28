@@ -223,10 +223,21 @@ est continue, les trous sont du travail fait.
   un dépôt public qu'on cherche justement à alléger) : la voie est la même que pour
   l'oracle Hatari — clone hors arbre, gitignoré, recette documentée. Ses dépendances
   propres n'ont pas été évaluées.
-- **A37 ⭘ — Discipline de release.** Trois tags le même jour (0.5→0.5.2), 0.5.3 sautée
-  sans trace, et le travail majeur depuis le 2026-08-23 (MegaSTE 12/12, CAB/theoldnet,
-  audit + plan A16-A37) n'est pas tagué. Taguer, puis signer/notariser `.dmg` et `.zip`
-  une fois la purge (§ BLOQUANT) faite.
+- **A37 ◐ — Discipline de release : la procédure est écrite et gardée, le TAG est
+  une décision de mainteneur.** Fait le 2026-08-28 : [`docs/RELEASE.md`](docs/RELEASE.md)
+  écrit la procédure en sept pas (dont le piège du cache `NEOST_VERSION_STR`, celui
+  qu'on saute) ; `tools/check_release.py` (palier `fast`) exige que les TROIS numéros
+  disent la même chose — `CMakeLists`, « Version courante » du CHANGELOG, dernière
+  en-tête de release — et refuse un numéro sauté en silence ; le saut de **0.5.3** est
+  désormais consigné au `CHANGELOG.md` (§ *Numéros de version sautés*) avec ce qu'on
+  sait : elle n'a jamais existé, le bump `dec5929` est passé de 0.5.2 à 0.5.4, et la
+  raison n'est pas reconstituable.
+  **Reste, et ce sont des décisions du mainteneur, pas du travail technique en
+  attente** : (1) **poser le tag** — 128 commits depuis la 0.5.4 du 2026-08-23, dont le
+  MegaSTE 12/12, CAB/theoldnet, l'audit et le plan A16-A37, puis A10/A14/A16b/A28-A36 et
+  les pas 2 et 5 de la purge : le numéro et le moment appartiennent au mainteneur ;
+  (2) **signer / notariser** le `.dmg` et le `.zip`, à faire APRÈS la purge (signer un
+  paquet contenant des ROM Atari n'aurait pas de sens).
 
 ### Garde-fous du plan (à NE PAS faire)
 
