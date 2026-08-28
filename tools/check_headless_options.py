@@ -87,6 +87,22 @@ def main() -> int:
           "les scancodes bruts doivent exister : stScancode() ne mappe pas le pavé "
           "numérique, ce qui rendait les menus de compilation impilotables.", out)
 
+    # --- A14 : --disk-ro, l'écriture invitée ne touche plus le fichier hôte ---
+    # Le bug : deux images SUIVIES PAR GIT modifiées dans l'arbre par des runs
+    # (Eliminator le 2026-08-25, disks/diskA.st par le test F du diagnostic le
+    # 2026-08-27). L'option coupe le write-through vers le fichier ; les écritures
+    # restent en RAM, donc la machine invitée ne voit AUCUNE différence.
+    # ⚠ CE TEST-CI ne prouve que l'existence et l'annonce de l'option — le palier
+    # `fast` n'a aucun programme invité qui écrive vraiment sur une disquette (les
+    # *-selftest sortent AVANT la configuration du FDC, l'option ne les concerne
+    # pas). La preuve DE BOUT EN BOUT vit dans tools/run_megaste_diag.py (palier
+    # `full`) : son test F formate les deux disquettes, et le runner échoue si les
+    # images sacrificielles ont bougé d'un octet.
+    out = run(["--disk-ro"], frames=30)
+    check("--disk-ro est accepté et ANNONCÉ", "--disk-ro:" in out,
+          "l'option doit exister et dire ce qu'elle fait : un run archivé doit "
+          "porter la trace de ce qui a été protégé (A14).", out)
+
     # --- Garde-fou anti-« aide silencieuse » ---------------------------------
     # Piège zsh déjà consigné en mémoire projet : une variable multi-mots non quotée
     # devient UN argument, et le headless affiche son aide au lieu d'émuler. Un test

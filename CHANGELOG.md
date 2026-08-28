@@ -15,6 +15,46 @@ Ripper, DAC Pro Sound) avec page Dongles, `disks/dongles.txt` et oracle de rejeu
 vérifié note à note** en headless, corpus MIDI piano/blues ; port MIDI ALSA sous Linux ;
 save-state v16. Détail dans les chantiers datés ci-dessous.
 
+## A14 — `--disk-ro` : une campagne de test ne modifie plus les images du dépôt (2026-08-28)
+
+Le symptôme était consigné depuis des semaines : deux images **suivies par git** modifiées
+dans l'arbre de travail par des runs — Eliminator le 2026-08-25, `disks/diskA.st` par le
+test F du diagnostic le 2026-08-27, restaurées à la main les deux fois. NeoST persiste
+chaque secteur écrit **au fil de l'eau** (write-through), ce qui est le bon comportement
+pour un utilisateur — une coupure ne perd pas la sauvegarde du jeu — et un piège pour une
+campagne de test. Et `disks/etalons/` compte **13 images suivies** : une écriture invitée
+sur l'une d'elles ferait dériver la donnée d'entrée d'un étalon sans qu'une seule ligne de
+code ait bougé.
+
+**`--disk-ro` protège le FICHIER, pas la disquette.** Les écritures continuent d'aller dans
+l'image en RAM — le programme invité relit ce qu'il a écrit, rien ne change pour lui — et
+seul le write-through est coupé (`Fdc::writeBack` pour `.st`/`.msa`/`.dim`, `Fdc::stxPersist`
+pour l'overlay `.wd1772` d'une STX). Une protection en écriture (`dk.writeProtect`), elle,
+changerait ce que le programme OBSERVE, donc la mesure : c'est exactement ce qu'il ne
+fallait pas faire.
+
+**La preuve, sur le seul programme de la pyramide qui formate vraiment une disquette.** Le
+test F du diagnostic MegaSTE écrit sur A *et* B. Sans l'option, les deux fichiers changent
+de md5. Avec, ils sont **intacts** — et le dump série est **byte-identique** à celui du run
+qui écrivait : 11 Pass, 0 Fail, « Q Tests Completed », « No VME board ». La machine invitée
+n'a rien vu. Contre-épreuve à l'échelle du corpus : les 23 étalons passent avec l'option,
+tous à 0 px.
+
+**Deux garde-fous, et le vrai est dans `full`.** `run_megaste_diag.py` passe désormais
+`--disk-ro` et **échoue** si une image sacrificielle a bougé d'un octet (vérifié en le
+déclenchant : option retirée → « ÉCHEC A14 : sacA.st a été MODIFIÉ », code 1). Les copies
+sacrificielles restent : ceinture ET bretelles, elles couvrent les chemins d'écriture hôte
+que `--disk-ro` ne couvre pas. `run_etalons.py` passe l'option sur toutes ses captures. Au
+palier `fast`, `check_headless_options.py` ne vérifie que l'existence et l'annonce de
+l'option — et le dit : aucun programme invité de ce palier n'écrit sur disquette, la preuve
+de bout en bout ne peut pas y vivre.
+
+⚠ Hors périmètre, assumé et écrit : les images **ACSI** (`--acsi`, `--sd1/2`) et le disque
+**GEMDOS** (`--gemdos`) écrivent toujours sur l'hôte. Les protéger demanderait un overlay
+copie-sur-écriture, pas un interrupteur.
+
+Palier `full` vert.
+
 ## A16b — le segfault du chantier V3 : un invariant rompu par `replayGlue`, pas un défaut du selftest (2026-08-28)
 
 `NEOST_LINELEN_ATTR=1` faisait SEGFAULTER `--glue-selftest` — sans une ligne de sortie,

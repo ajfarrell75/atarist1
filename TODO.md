@@ -162,7 +162,6 @@ est continue, les trous sont du travail fait.
   dev). Une passe de validation PAR CIBLE, consignée avec sa config — de la mesure, pas
   du code.
 - **A13** = save-states × GEMDOS HD → § *Périphériques & profils machine*.
-- **A14** = garde lecture-seule des balayages de masse → § *Outillage / qualité*.
 - **A15** = DSL d'injection sans token « mouvement bouton tenu » (pas de DRAG GEM).
 
 ### Consolidation (quelques jours chacun, par opportunité)
@@ -355,10 +354,6 @@ densité HD/ED STX (NeoST plus cohérent) ; RTC en temps émulé (déterminisme 
   l'ajouter en étalon oracle (l'auto_diapo est 100 % borderless).
 
 ### Outillage / qualité
-- **A14 — Balayage de masse : monter les disques en LECTURE SEULE.** Deux images déjà
-  modifiées dans l'arbre git par des runs (Eliminator le 2026-08-25, `diskA.st` par le
-  test F du diag le 2026-08-27 — restaurées). Une option `--disk-ro` (ou un `git status`
-  systématique en fin de campagne).
 - **Étalons headless** : calibrer frames + références Cuddly / Union / Troed / Hatari Test
   Suite ; rapatrier Union (planetemu manuel). Infra en place (`tools/run_etalons.py`).
 - **Comparaison MAME ↔ NeoST** (memory map, bus errors, FDC/MMU FIFO, blitter, SCC).

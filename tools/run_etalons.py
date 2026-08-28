@@ -103,7 +103,15 @@ def run_headless_capture(entry: dict, out_ppm: Path) -> int:
         cmd.append("--fastfdc")
     disk = entry.get("disk")
     if disk:
-        cmd += ["--disk", str(ROOT / disk)]
+        # A14 : --disk-ro sur TOUTE capture d'étalon. 13 images de disks/etalons/ sont
+        # SUIVIES PAR GIT : une écriture invitée sur l'une d'elles modifierait la
+        # donnée d'entrée d'un étalon dans l'arbre, en silence, et la référence
+        # dériverait sans qu'un seul fichier de code ait bougé. L'option ne change
+        # RIEN pour la machine invitée (les écritures restent en RAM, les relectures
+        # les voient) — vérifié à l'octet près sur le diagnostic MegaSTE, dont le
+        # test F formate vraiment les deux disquettes : même dump série, fichiers
+        # intacts. Elle ne coûte donc aucune fidélité, et elle ferme le piège.
+        cmd += ["--disk", str(ROOT / disk), "--disk-ro"]
     if entry.get("keys"):
         cmd += ["--keys", entry["keys"]]
     if entry.get("keys_at"):                 # [trame, "touches"] ou liste de paires — pilotage daté

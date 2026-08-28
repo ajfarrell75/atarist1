@@ -123,6 +123,32 @@ rend le même bureau** (22 px d'écart, tous dans la bande de la LED disquette d
 sautent proprement sans ces ROM. Pour racheter la couverture spec512 après la purge, la
 voie restante est l'**étalon généré**, pas la migration de ROM.
 
+### Les images disquette ne sont plus modifiées par les runs (A14, 2026-08-28)
+
+`neost-headless --disk-ro` : les écritures secteur de la machine invitée restent dans
+l'image **en RAM** ; le fichier hôte (`.st`, `.msa`, `.dim`, et l'overlay `.wd1772` d'une
+STX) n'est jamais réécrit. Ce n'est **pas** une protection en écriture — le programme
+relit ce qu'il a écrit, donc l'émulation est inchangée ; c'est le *write-through* vers le
+fichier qui est coupé.
+
+Pourquoi : deux images **suivies par git** avaient été modifiées dans l'arbre par des runs
+(Eliminator le 2026-08-25, `disks/diskA.st` par le test F du diagnostic le 2026-08-27), et
+`disks/etalons/` en compte 13 — une écriture invitée y ferait dériver la donnée d'entrée
+d'un étalon en silence.
+
+Preuve, sur le seul programme de la pyramide qui formate vraiment une disquette (test F du
+diagnostic MegaSTE, qui écrit sur A **et** B) : avec et sans l'option, le dump série est
+**byte-identique** (11 Pass, 0 Fail, « Q Tests Completed », « No VME board ») ; sans
+l'option les deux fichiers changent de md5, avec l'option ils sont intacts.
+
+Qui l'utilise : `run_etalons.py` sur **toutes** ses captures, et `run_megaste_diag.py`, qui
+**échoue** si ses images sacrificielles ont bougé d'un octet — c'est le garde-fou de bout
+en bout d'A14 (palier `full`). Au palier `fast`, `check_headless_options.py` ne vérifie que
+l'existence et l'annonce de l'option : aucun programme invité n'y écrit sur disquette.
+
+⚠ Hors périmètre : les images **ACSI** (`--acsi`, `--sd1/2`) et le disque **GEMDOS**
+(`--gemdos`) écrivent toujours sur l'hôte. Une image ACSI se protège en la copiant.
+
 ## Ordre de débogage affichage conseillé
 
 Du plus simple au plus violent, chaque étape suppose la précédente acquise :

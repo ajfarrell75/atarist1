@@ -64,6 +64,19 @@ public:
     // spin-up, arrêt moteur) reste au rythme réel, comme Hatari. ⚠ Peut casser les
     // programmes au track-loader maison qui dépendent du débit physique du WD1772.
     void setFastFdc(bool on) { fastFloppy_ = on; }
+
+    // A14 — écriture HÔTE des images disquette (write-through). ON par défaut :
+    // NeoST persiste chaque secteur écrit au fil de l'eau, ce qui est le bon
+    // comportement pour un utilisateur (une coupure ne perd pas la sauvegarde du
+    // jeu). C'est en revanche un PIÈGE pour les campagnes de test : deux images
+    // SUIVIES PAR GIT ont été modifiées dans l'arbre par des runs (Eliminator le
+    // 2026-08-25, disks/diskA.st par le test F du diagnostic le 2026-08-27).
+    // Coupé (--disk-ro), la machine invitée ne voit AUCUNE différence — les
+    // écritures vont toujours dans dk.image, donc les relectures les voient — et
+    // seul le fichier hôte est épargné. Ce n'est PAS une protection en écriture
+    // (dk.writeProtect), qui elle changerait ce que le programme observe.
+    void setHostWriteBack(bool on) { hostWriteBack_ = on; }
+    bool hostWriteBack() const { return hostWriteBack_; }
     bool fastFdc() const { return fastFloppy_; }
 
     // Monte/éjecte une image (.st ou .msa) dans le lecteur `drive` (0 = A, 1 = B).
@@ -427,6 +440,7 @@ private:
     uint8_t  commandType_ = 1;        // 1/2/3/4
     bool     replaceCommandPossible_ = false; // remplaçable pendant prepare+spinup
     bool     fastFloppy_ = false;     // « FDC rapide » (cf. setFastFdc) : délais /N
+    bool     hostWriteBack_ = true;   // écrire les secteurs dans le FICHIER (cf. setHostWriteBack)
     bool     delayIndexPaced_ = false;// le délai courant est cadencé sur la rotation (non accéléré)
     bool     statusTypeI_ = true;     // le STR rapporte un statut type I
     uint8_t  statusTemp_ = 0;         // statut intermédiaire (lecture secteur)

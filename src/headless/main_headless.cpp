@@ -109,6 +109,10 @@ void usage() {
         "  --disk FILE       mount an image in drive A (default disks/diskA.st)\n"
         "  --diskb FILE      mount an image in drive B (second drive)\n"
         "  --fastfdc         fast FDC (delays /10) — speeds up disk access\n"
+        "  --disk-ro         floppy writes stay in RAM: the host .st/.msa/.dim file\n"
+        "                    (and the .wd1772 STX overlay) is never modified. The\n"
+        "                    guest still reads back what it wrote — this protects the\n"
+        "                    FILE, not the disk, so emulation is unchanged\n"
         "  --loopback        \"plug in\" the RS232 and MIDI OUT->IN loopback connectors\n"
         "  --loopback-at N   same, plugged at frame N exactly (recipes with dated key\n"
         "                    injections: the automatic plug waits for the LAST injection,\n"
@@ -1063,6 +1067,7 @@ int main(int argc, char** argv) {
     std::string diskPath   = "disks/diskA.st";
     std::string diskBPath;                       // lecteur B (optionnel, --diskb)
     bool        fastFdc    = false;   // FDC rapide (--fastfdc) : délais commande/transfert ÷10
+    bool        diskRo     = false;   // A14 (--disk-ro) : les écritures ne touchent PAS le fichier hôte
     std::string romPath    = "roms/etos192us.img";
     std::string cartPath;
     std::string printerPath;                     // --printer FILE : capture Centronics (port parallèle)
@@ -1209,6 +1214,7 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(a, "--disk"))       diskPath  = next(a);
         else if (!std::strcmp(a, "--diskb"))      diskBPath = next(a);
         else if (!std::strcmp(a, "--fastfdc"))    fastFdc   = true;
+        else if (!std::strcmp(a, "--disk-ro"))    diskRo    = true;
         else if (!std::strcmp(a, "--cart"))       cartPath  = next(a);
         else if (!std::strcmp(a, "--gemdos"))     gemdosDir = next(a);
         else if (!std::strcmp(a, "--printer"))    printerPath = next(a);
@@ -1411,6 +1417,16 @@ int main(int argc, char** argv) {
     machine.loadDisk(diskPath);   // lecteur A (optionnel)
     if (!diskBPath.empty()) machine.loadDiskB(diskBPath);   // lecteur B (optionnel)
     machine.fdc.setFastFdc(fastFdc);   // FDC rapide (--fastfdc) : accès disque ÷10
+    // A14 : --disk-ro protège le FICHIER, pas la disquette. Les écritures continuent
+    // d'aller dans l'image en RAM (le programme invité relit ce qu'il a écrit, rien
+    // ne change pour lui) ; seul le write-through vers le fichier hôte est coupé.
+    // Une protection en écriture, elle, changerait ce que le programme observe — et
+    // donc la mesure. Le message est imprimé pour qu'un run archivé dise ce qu'il a fait.
+    if (diskRo) {
+        machine.fdc.setHostWriteBack(false);
+        std::fprintf(stderr, "[headless] --disk-ro: floppy writes stay in RAM, "
+                             "host image files are left untouched\n");
+    }
     machine.fdc.setDmaFixture(dmaFixture);   // boîtier de test DMA (--dma-fixture, test D)
     // Disque dur GEMDOS (--gemdos) : installe la cartouche système à $FA0000 →
     // exclusif avec une cartouche externe (--cart), comme Hatari.

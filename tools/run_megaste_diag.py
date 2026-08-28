@@ -97,9 +97,19 @@ def main() -> int:
         shutil.copy(DISK, sac_a)
         shutil.copy(DISK, sac_b)
         dump = work / "serial.txt"
+        # A14 (2026-08-28) — « --disk-ro » : le test F FORMATE les deux disquettes.
+        # Les copies sacrificielles ci-dessus protégeaient déjà l'arbre git ; l'option
+        # coupe le write-through vers le fichier, ce qui rend la protection
+        # STRUCTURELLE au lieu d'être une discipline d'appelant. Vérifié le même jour :
+        # avec et sans l'option, le dump série est BYTE-IDENTIQUE (11 Pass, 0 Fail,
+        # « Q Tests Completed », « No VME board ») — la machine invitée ne voit rien,
+        # elle relit ce qu'elle a écrit depuis l'image en RAM. Sans l'option les deux
+        # fichiers changent de md5 ; avec, ils sont intacts. Les copies restent (une
+        # ceinture ET des bretelles : elles couvrent tout chemin d'écriture hôte que
+        # --disk-ro ne couvrirait pas, ACSI compris).
         cmd = [str(HEADLESS), str(ROM), "--machine", "megaste", "--mem", "1m",
                "--cart", str(CART), "--disk", str(sac_a), "--diskb", str(sac_b),
-               "--fastfdc", "--scancode-at", "320", "10,90,1c,9c",
+               "--fastfdc", "--disk-ro", "--scancode-at", "320", "10,90,1c,9c",
                "--loopback-at", "330", "--dma-fixture",
                "--frames", str(a.frames), "--serial-dump", str(dump)]
         print("  $", " ".join(cmd))
@@ -112,6 +122,17 @@ def main() -> int:
             print(f"  ÉCHEC : neost-headless a rendu {r.returncode}", file=sys.stderr)
             sys.stderr.buffer.write(r.stderr[-2000:])
             return 1
+
+        # GARDE A14 : les images montées doivent être INTACTES. C'est le seul endroit
+        # de la pyramide où un programme invité formate vraiment une disquette — donc
+        # le seul qui puisse prouver « --disk-ro » de bout en bout. Si un jour le
+        # write-through revient, ce test le dit ICI, pas trois semaines plus tard dans
+        # un `git status` surpris.
+        for sac, orig in ((sac_a, DISK), (sac_b, DISK)):
+            if sac.read_bytes() != orig.read_bytes():
+                print(f"  ÉCHEC A14 : {sac.name} a été MODIFIÉ malgré --disk-ro — "
+                      "le write-through vers le fichier hôte est revenu", file=sys.stderr)
+                return 1
 
         text = dump.read_bytes().decode("latin-1")     # le dump porte des octets bruts
         n_pass = text.count("Pass")
