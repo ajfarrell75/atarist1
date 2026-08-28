@@ -232,6 +232,19 @@ s'arrête au 32ᵉ mot au lieu du 33ᵉ ». Chaque table a été **vérifiée pa
 `kNonHogBusBlitter` de 64 à 63, retirer le masque 22 bits du pointeur son, inverser la
 polarité des entrées du WD1772 — les trois font rougir la ligne exacte.
 
+À côté, `./build/neost-fuzz-disk` (A30, 2026-08-28) martèle les **parseurs d'images
+disquette** — `decodeMsa`, `decodeDim`, `StxImage::parse`, les seules fonctions du projet
+qui digèrent un fichier venu de l'extérieur. Driver **déterministe** (PRNG xorshift semé),
+pas libFuzzer : le clang d'Apple ne livre pas `libclang_rt.fuzzer`, `-fsanitize=fuzzer` ne
+lie pas sur macOS. `--iters N` / `--seed N` ; un cas trouvé se rejoue à l'identique.
+
+⚠ **Le palier `fast` n'est qu'un test de fumée pour ce harnais.** Mesuré en retirant deux
+bornes de `decodeMsa` : en build normal, 20 000 itérations n'ont RIEN vu. C'est sous
+sanitizers qu'il mord — la même mutation (`if (p + len > raw.size()) return false;`
+retirée) donne un `heap-buffer-overflow` ASan en moins de 20 000 itérations, en 2 s. Le
+job `sanitizers` de la CI le couvre, puisqu'il lance `--tier fast`. Pour une campagne
+longue : `ASAN_OPTIONS=detect_leaks=0 ./build-asan/neost-fuzz-disk --iters 500000`.
+
 ⚠ Écrire une de ces tables demande de câbler ce que `Machine` câble : le callback
 `Scheduler::BLITTER`/`FDC` notamment. Sans lui l'échéance est POSÉE mais jamais servie —
 le blit non-hog ne démarre pas et le test mesure du vide (erreur commise en écrivant la

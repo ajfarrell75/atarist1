@@ -72,7 +72,7 @@ jobs:
         run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DNEOST_WITH_SLIRP=ON
 
       - name: Compiler
-        run: cmake --build build -j"$(nproc)" --target neost-headless neost-selftest
+        run: cmake --build build -j"$(nproc)" --target neost-headless neost-selftest neost-stx-test neost-fuzz-disk
 
       - name: Auto-test SLIRP (hors ligne — ARP, DHCP, compteurs)
         # La 4ᵉ vérification (sortie DNS réelle) reste opt-in via
@@ -106,7 +106,7 @@ jobs:
         run: cmake -B build -DCMAKE_BUILD_TYPE=Release
 
       - name: Compiler
-        run: cmake --build build -j"$(nproc)" --target neost-headless neost-selftest
+        run: cmake --build build -j"$(nproc)" --target neost-headless neost-selftest neost-stx-test neost-fuzz-disk
 
       # LA raison d'être de ce job (chantier A1, cf. TODO.md § Dette d'architecture).
       # `--tier fast` ne compare AUCUN pixel : il valide des parseurs et des verdicts.
@@ -234,7 +234,7 @@ jobs:
                 -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
 
       - name: Compiler
-        run: cmake --build build -j"$(nproc)" --target neost-headless neost-selftest
+        run: cmake --build build -j"$(nproc)" --target neost-headless neost-selftest neost-stx-test neost-fuzz-disk
 
       # Le palier fast n'exécute quasiment PAS de code invité réel : il valide des
       # parseurs et des verdicts. Une démo de 300 trames, elle, martèle Shifter,

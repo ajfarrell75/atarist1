@@ -274,6 +274,23 @@ set_source_files_properties(tests/selftest_logic.cpp
     PROPERTIES COMPILE_OPTIONS "${NEOST_STRICT_OPTS}")
 
 # =============================================================================
+#  neost-fuzz-disk — FUZZING des parseurs d'images disquette (chantier A30).
+#
+#  decodeMsa / decodeDim / StxImage::parse sont les seules fonctions du projet qui
+#  digèrent un fichier venu de l'EXTÉRIEUR. Driver DÉTERMINISTE (PRNG semé), pas
+#  libFuzzer : le clang d'Apple ne livre pas libclang_rt.fuzzer, un harnais
+#  libFuzzer serait donc du code que personne n'exécute sur la plateforme de
+#  développement. Bâti par défaut et lancé par le palier `fast` — la leçon d'A20
+#  (un test qu'aucun script n'invoque est du code mort) s'applique ici aussi.
+#  Il devient MORDANT dans le job `sanitizers` de la CI (ASan/UBSan).
+# =============================================================================
+add_executable(neost-fuzz-disk tests/fuzz_diskimage.cpp)
+target_link_libraries(neost-fuzz-disk PRIVATE neost_core)
+target_include_directories(neost-fuzz-disk PRIVATE "${CMAKE_SOURCE_DIR}/src")
+set_source_files_properties(tests/fuzz_diskimage.cpp
+    PROPERTIES COMPILE_OPTIONS "${NEOST_STRICT_OPTS}")
+
+# =============================================================================
 #  neost-stx-test — test autonome de la ré-interprétation WRITE TRACK (StxImage).
 #  Ne dépend QUE de StxImage (aucun GUI, aucun Moira). Lancer :
 #    ./build/neost-stx-test "disks/stx/Rick Dangerous - Firebird (UK) (France).stx"

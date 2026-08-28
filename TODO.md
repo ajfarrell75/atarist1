@@ -171,10 +171,6 @@ est continue, les trous sont du travail fait.
   **trois copies** (GUI, web, android) et la boucle de rattrapage de cadence aussi ;
   `kCpuHz` est déclarée quatre fois. Un `AudioPacer`/`FramePacer` dans `neost_core` —
   même recette que `AudioMix`, dont la copie web avait déjà divergé.
-- **A30 ⭘ — Fuzzing des parseurs d'images disque.** `decodeMsa`/`decodeDim` et
-  `StxImage::parse` sont des fonctions pures `octets → bool` : un harnais libFuzzer coûte
-  une soirée. Le bornage manuel est déjà excellent (il corrige même une lecture hors
-  bornes présente dans Hatari) — le fuzzing le prouverait et le garderait.
 
 ### Chantiers structurels (UN à la fois, jamais combinés)
 
