@@ -826,230 +826,258 @@ void Bus::write32(uint32_t addr, uint32_t v) {
 //  Dispatch MMIO ($FF8000-$FFFFFF). Chaque puce expose read8/write8 ; le bus
 //  ne fait QUE router, il ne connaît pas les détails internes des composants.
 // -----------------------------------------------------------------------------
+// =============================================================================
+//  A31 — dispatch MMIO par TABLE (cf. Bus.hpp § TABLE DE PLAGES MMIO).
+//
+//  Les corps ci-dessous sont les anciennes branches des deux chaînes de `if`,
+//  déplacées TELLES QUELLES : mêmes wait states, mêmes updateIpl(), mêmes octets
+//  « void », même ordre d'effets. Le seul changement est QUI les appelle.
+// =============================================================================
+uint8_t Bus::rdShifter(uint32_t a) { return shifter->read8(a); }
+void    Bus::wrShifter(uint32_t a, uint8_t v) { shifter->write8(a, v); }
+
+// Le YM2149 (2 registres : sélecteur $FF8800, donnée $FF8802) est MIROIRÉ sur tout
+// $FF8800-$FF88FF (le matériel ne décode que A1, cf. Hatari IoMem_Init shadow PSG) :
+// psg->read8 décode par (addr & 3), donc le miroir est géré tel quel.
+uint8_t Bus::rdPsg(uint32_t a) {
+    if (cpu) cpu->addPsgWaitCycles();     // wait state YM2149 (4 cyc / 1er accès instr.)
+    return psg->read8(a);
+}
+void Bus::wrPsg(uint32_t a, uint8_t v) {
+    if (cpu) cpu->addPsgWaitCycles();
+    // Écriture OCTET (ou movep) sur adresse IMPAIRE : ombre du registre pair — le YM
+    // ne décode pas A0, $FF8801 agit comme $FF8800 (sélecteur) et $FF8803 comme
+    // $FF8802 (donnée). Port de PSG_ff8801/ff8803_WriteByte (le fix « X-Out musique
+    // muette » d'Hatari). L'octet impair d'un accès MOT reste ignoré (il est porté
+    // par l'octet pair du même accès, comme chez Hatari).
+    if (a & 1) {
+        if (ioAccessWidth() == 1) psg->write8(a & ~1u, v);
+        return;
+    }
+    psg->write8(a, v);
+}
+
+uint8_t Bus::rdFdc(uint32_t a) { return fdc->read8(a); }   // disquette + DMA ($FF8600)
+void    Bus::wrFdc(uint32_t a, uint8_t v) {
+    fdc->write8(a, v);
+    if (cpu) cpu->updateIpl();            // l'INTRQ FDC (GPIP5) a pu changer
+}
+
+uint8_t Bus::rdDmaSnd(uint32_t a) { return dmasnd->read8(a); }          // STE/Mega STE
+void    Bus::wrDmaSnd(uint32_t a, uint8_t v) { dmasnd->write8(a, v); }
+
+uint8_t Bus::rdBlitter(uint32_t a) { return blitter->read8(a); }        // Mega ST/STE
+void    Bus::wrBlitter(uint32_t a, uint8_t v) { blitter->write8(a, v); }
+
+uint8_t Bus::rdMfp(uint32_t a) {
+    // $FFFA31-$FFFA3F (impairs) : VOID chez Hatari (ioMemTabST.c:143-150,
+    // IoMem_VoidRead) — lecture 0xFF, AUCUN wait-state (pas de handler). Le dernier
+    // registre câblé est l'UDR USART à $FFFA2F.
+    // Octets PAIRS : non décodés par le 68901 (registres sur adresses impaires).
+    // Atteignables seulement par un accès MOT (la whitelist faute l'accès octet) :
+    // chez Hatari l'octet pair passe alors par IoMem_BusErrorEvenReadAccess → 0xFF,
+    // jamais par la puce. Sans ce filtre, les default du MFP en faisaient des
+    // cellules RAM fantômes.
+    if (!(a & 1) || (a & 0x3F) >= 0x31) return 0xFF;
+    // Wait state MFP (4 cyc) facturé UNE fois par accès : seul l'octet IMPAIR porte
+    // un registre câblé (Hatari : M68000_WaitState(4) dans le handler du registre ;
+    // l'octet pair d'un accès mot n'ajoute rien).
+    if (cpu) cpu->addMfpWaitCycles();
+    const uint8_t v = mfp->read8(a);
+    if (cpu) cpu->updateIpl();            // l'état d'IRQ a pu changer
+    return v;
+}
+void Bus::wrMfp(uint32_t a, uint8_t v) {
+    // $FFFA31-$FFFA3F : void — écriture ABSORBÉE sans wait-state (cf. rdMfp) ;
+    // l'ancien chemin en faisait 8 octets de RAM relisible cachés dans le MFP.
+    // Octets PAIRS : non décodés, écriture jetée (IoMem_BusErrorEvenWriteAccess).
+    if (!(a & 1) || (a & 0x3F) >= 0x31) return;
+    if (cpu) cpu->addMfpWaitCycles();
+    mfp->write8(a, v);
+    if (cpu) cpu->updateIpl();            // (dé)masquage, fin d'interruption...
+}
+
+uint8_t Bus::rdIkbd(uint32_t a) {
+    // $FFFC01/$FFFC03 : octets impairs non décodés (« void », ioMemTabST.c) → 0xFF
+    // sans effet de bord ACIA ni wait state. Ainsi un accès MOT à $FFFC00 ne touche
+    // l'ACIA qu'une fois (et n'est facturé qu'une fois).
+    if (a & 1) return 0xFF;
+    if (cpu) cpu->addAciaWaitCycles();    // wait state ACIA (6 cyc + E-Clock)
+    const uint8_t v = ikbd->read8(a);     // ACIA clavier $FFFC00/$FFFC02
+    if (cpu) cpu->updateIpl();
+    return v;
+}
+void Bus::wrIkbd(uint32_t a, uint8_t v) {
+    if (a & 1) return;                    // void — écriture absorbée
+    if (cpu) cpu->addAciaWaitCycles();
+    ikbd->write8(a, v);
+    if (cpu) cpu->updateIpl();
+}
+
+uint8_t Bus::rdMidi(uint32_t a) {
+    if (a & 1) return 0xFF;               // $FFFC05/$FFFC07 : void (cf. ACIA clavier)
+    if (cpu) cpu->addAciaWaitCycles();    // ACIA MIDI : même timing que l'ACIA clavier
+    const uint8_t v = midi->read8(a);     // ACIA MIDI ($FFFC04/06) — bouclage OUT→IN
+    if (cpu) cpu->updateIpl();            // une lecture peut effacer l'IRQ ACIA
+    return v;
+}
+void Bus::wrMidi(uint32_t a, uint8_t v) {
+    if (a & 1) return;                    // void — écriture absorbée
+    if (cpu) cpu->addAciaWaitCycles();
+    midi->write8(a, v);
+    if (cpu) cpu->updateIpl();            // un octet bouclé peut lever l'IRQ ACIA
+}
+
+uint8_t Bus::rdRtc(uint32_t a) { return rtc->read8(a); }            // Mega ST / Mega STE
+void    Bus::wrRtc(uint32_t a, uint8_t v) { rtc->write8(a, v); }
+
+// STE / Mega STE : joypads / paddles / lightpen + DIP switches Mega STE
+// ($FF9200-$FF9223). Port fidèle de Hatari joy.c via StePads (multiplexage par le
+// masque écrit en $FF9202, mapping directions/feu des pads A/B, valeurs au repos).
+// L'octet HAUT de $FF9200 = DIP Mega STE (0xBF par défaut ; logique inversée, cf.
+// StePads / IoMemTabMegaSTE_DIPSwitches_Read). Les registres mots ($FF9200/02/20/22)
+// renvoient l'octet voulu en big-endian (haut = adresse paire).
+uint8_t Bus::rdStePads(uint32_t a) {
+    // Accès OCTET interdits (port joy.c) : $FF9200 « n'aime pas être lu en octet »
+    // à l'adresse PAIRE ($FF9201 reste lisible en octet), et les mots lightpen
+    // $FF9220/22 ne se lisent qu'en mot → bus error déclenchée par le périphérique
+    // (comme le FDC $FF8604 en mode octet).
+    if (ioAccessWidth_ == 1 && cpu
+        && (a == 0xFF9200 || (a >= 0xFF9220 && a <= 0xFF9223))) {
+        cpu->triggerBusError(a, false);   // longjmp/throw, sauf double faute
+        return 0xFF;                      // double faute → CPU halté
+    }
+    switch (a) {
+        // $FF9200.w : boutons feu (octet bas) + DIP Mega STE (octet haut).
+        case 0xFF9200: return uint8_t(stePads.readButtonsDip() >> 8);   // DIP
+        case 0xFF9201: return uint8_t(stePads.readButtonsDip() & 0xFF); // boutons
+        // $FF9202.w : directions + boutons (info utile dans l'octet HAUT $FF9202).
+        case 0xFF9202: return uint8_t(stePads.readDirections() >> 8);
+        case 0xFF9203: return uint8_t(stePads.readDirections() & 0xFF);
+        // Paddle/analogique X/Y ($FF9211/13/15/17) : axes hôte ou repli numérique,
+        // plage $04-$43 (cf. StePads::readAnalog).
+        case 0xFF9211: case 0xFF9213:
+        case 0xFF9215: case 0xFF9217: return stePads.readAnalog(a);
+        // Lightpen X/Y ($FF9220-$FF9223) : non supporté → 0 (mots à $FF9220/22).
+        case 0xFF9220: case 0xFF9221:
+        case 0xFF9222: case 0xFF9223: return uint8_t(stePads.readLightpen() >> (a & 1 ? 0 : 8));
+        // Octets non décodés de la plage ($FF9204-$FF9210, etc.) : au repos.
+        default: return 0xFF;
+    }
+}
+void Bus::wrStePads(uint32_t a, uint8_t v) {
+    // $FF9202 = latch de sélection des lignes des joypads (cf.
+    // Joy_StePadMulti_WriteWord). Les autres registres $FF92xx sont en lecture
+    // seule / sans effet (joy.c : Joy_StePadButtons_DIPSwitches_WriteWord ne fait rien).
+    // On latche les deux octets du mot $FF9202/$FF9203.
+    if (a == 0xFF9202 || a == 0xFF9203) { stePads.writeSelectByte(a, v); return; }
+    // Écriture OCTET sur $FF9200 (adresse paire) → bus error, comme en lecture
+    // (Joy_StePadButtons_DIPSwitches_WriteWord). Les autres écritures de la plage
+    // (lightpen incluse : IoMem_WriteWithoutInterception) sont ignorées sans faute.
+    if (a == 0xFF9200 && ioAccessWidth_ == 1 && cpu) { cpu->triggerBusError(a, true); return; }
+}
+
+// Registre Cache/CPU MegaSTE $FF8E21, relisible (latch écrit par TOS 2.x). cf.
+// Bus.hpp megaSteCacheCtrl. $FF8E20/22/23 restent « void » (→ glue → 0xFF).
+uint8_t Bus::rdMsteCtl(uint32_t) { return megaSteCacheCtrl; }
+void Bus::wrMsteCtl(uint32_t, uint8_t v) {
+    // Contrainte matérielle « le cache ne peut être actif qu'à 16 MHz » — si bit0
+    // (cache) est demandé alors que bit1 (vitesse) = 0 (8 MHz), le matériel force
+    // bit0 à 0 (cf. Hatari IoMemTabMegaSTE_CacheCpuCtrl_WriteByte). EFFET réel (port
+    // MegaSTE_CPU_Cache_Update) : cache désactivé → invalidation complète ; bit1 →
+    // bascule du débit cycles 8/16 MHz du cœur CPU.
+    if ((v & 0x02) == 0 && (v & 0x01)) v &= 0xFE;   // cache impossible à 8 MHz
+    megaSteCacheCtrl = v;
+    if ((v & 0x01) == 0) megaSteCacheFlush();
+    if (cpu) cpu->setMegaSteSpeed((v & 0x02) != 0);
+}
+
+// Coprocesseur MC68881 optionnel ($FFFA40-$FFFA5F) — cf. Fpu.hpp. Quand il est
+// absent (défaut), la zone n'est pas whitelistée → bus error avant d'arriver ici.
+uint8_t Bus::rdFpu(uint32_t a) { return fpu.read8(a); }
+void    Bus::wrFpu(uint32_t a, uint8_t v) { fpu.write8(a, v); }
+
+// SCU MegaSTE : registres d'interruption ($FF8E01-$FF8E0F). cf. Scu.hpp.
+uint8_t Bus::rdScu(uint32_t a) { return scu.read8(a); }
+void    Bus::wrScu(uint32_t a, uint8_t v) {
+    // Écrire un masque (dé)masque des IRQ → on recalcule l'IPL CPU (gating conditionnel).
+    if (scu.write8(a, v) && cpu) cpu->updateIpl();
+}
+
+// SCC Z85C30 ($FF8C80-$FF8C87) — Mega STE. Lecture comme écriture peuvent (dé)masquer
+// l'IRQ niveau 5.
+uint8_t Bus::rdScc(uint32_t a) {
+    const uint8_t v = scc->read8(a);
+    if (cpu) cpu->updateIpl();
+    return v;
+}
+void Bus::wrScc(uint32_t a, uint8_t v) {
+    scc->write8(a, v);
+    if (cpu) cpu->updateIpl();
+}
+
+// -----------------------------------------------------------------------------
+//  LA TABLE. L'ordre des lignes suit l'ancienne chaîne de `if` — mais il n'est
+//  plus SIGNIFIANT : les plages sont DISJOINTES, et c'est vérifié par
+//  Bus::mmioTableDisjoint(), appelé depuis tests/selftest_logic.cpp. Une ligne
+//  ajoutée qui chevaucherait une autre fait rougir le palier `fast` en nommant
+//  les deux coupables — au lieu de dépendre en silence de sa position.
+// -----------------------------------------------------------------------------
+const Bus::MmioSlot* Bus::mmioTable(std::size_t& count) {
+    static const MmioSlot kSlots[] = {
+        { stmap::SHIFTER_BASE, stmap::SHIFTER_END,          &Bus::claimsShifter,  &Bus::rdShifter, &Bus::wrShifter, "shifter"   },
+        { stmap::PSG_BASE,     stmap::PSG_BASE + 0xFF,      &Bus::claimsPsg,      &Bus::rdPsg,     &Bus::wrPsg,     "ym2149"    },
+        { stmap::DMA_FDC_BASE, stmap::DMA_FDC_BASE + 0x0F,  &Bus::claimsFdc,      &Bus::rdFdc,     &Bus::wrFdc,     "fdc/dma"   },
+        { stmap::DMASND_BASE,  stmap::DMASND_END - 1,       &Bus::claimsDmaSnd,   &Bus::rdDmaSnd,  &Bus::wrDmaSnd,  "dmasound"  },
+        { 0xFF8A00,            0xFF8A3F,                    &Bus::claimsBlitter,  &Bus::rdBlitter, &Bus::wrBlitter, "blitter"   },
+        { 0xFF8C80,            0xFF8C87,                    &Bus::claimsScc,      &Bus::rdScc,     &Bus::wrScc,     "scc"       },
+        { 0xFF8E01,            0xFF8E0F,                    &Bus::claimsScu,      &Bus::rdScu,     &Bus::wrScu,     "scu"       },
+        { 0xFF8E21,            0xFF8E21,                    &Bus::claimsMsteCtrl, &Bus::rdMsteCtl, &Bus::wrMsteCtl, "mste-cache"},
+        { 0xFF9200,            0xFF9223,                    &Bus::claimsStePads,  &Bus::rdStePads, &Bus::wrStePads, "stepads"   },
+        { stmap::MFP_BASE,     stmap::MFP_BASE + 0x3F,      &Bus::claimsMfp,      &Bus::rdMfp,     &Bus::wrMfp,     "mfp"       },
+        { Fpu::BASE,           Fpu::END - 1,                &Bus::claimsFpu,      &Bus::rdFpu,     &Bus::wrFpu,     "fpu"       },
+        { stmap::ACIA_BASE,    stmap::ACIA_BASE + 3,        &Bus::claimsIkbd,     &Bus::rdIkbd,    &Bus::wrIkbd,    "acia-ikbd" },
+        { 0xFFFC04,            0xFFFC07,                    &Bus::claimsMidi,     &Bus::rdMidi,    &Bus::wrMidi,    "acia-midi" },
+        { 0xFFFC21,            0xFFFC3F,                    &Bus::claimsRtc,      &Bus::rdRtc,     &Bus::wrRtc,     "rtc"       },
+    };
+    count = sizeof(kSlots) / sizeof(kSlots[0]);
+    return kSlots;
+}
+
+std::size_t Bus::mmioTableSize() { std::size_t n = 0; mmioTable(n); return n; }
+
+bool Bus::mmioTableDisjoint(const char** a, const char** b) {
+    std::size_t n = 0;
+    const MmioSlot* t = mmioTable(n);
+    for (std::size_t i = 0; i < n; ++i) {
+        if (t[i].lo > t[i].hi) { if (a) *a = t[i].name; if (b) *b = t[i].name; return false; }
+        for (std::size_t j = i + 1; j < n; ++j)
+            if (t[i].lo <= t[j].hi && t[j].lo <= t[i].hi) {
+                if (a) *a = t[i].name;
+                if (b) *b = t[j].name;
+                return false;
+            }
+    }
+    return true;
+}
+
+const Bus::MmioSlot* Bus::mmioSlotFor(uint32_t addr) const {
+    std::size_t n = 0;
+    const MmioSlot* t = mmioTable(n);
+    for (std::size_t i = 0; i < n; ++i)
+        if (addr >= t[i].lo && addr <= t[i].hi && (this->*(t[i].claims))(addr)) return &t[i];
+    return nullptr;
+}
+
 uint8_t Bus::mmioRead8(uint32_t addr) {
-    if (addr >= stmap::SHIFTER_BASE && addr <= stmap::SHIFTER_END && shifter)
-        return shifter->read8(addr);
-    // Le YM2149 (2 registres : sélecteur $FF8800, donnée $FF8802) est MIROIRÉ sur tout
-    // $FF8800-$FF88FF (le matériel ne décode que A1, cf. Hatari IoMem_Init shadow PSG) :
-    // psg->read8 décode par (addr & 3), donc le miroir est géré tel quel.
-    if (addr >= stmap::PSG_BASE && addr < stmap::PSG_BASE + 0x100 && psg) {
-        if (cpu) cpu->addPsgWaitCycles();     // wait state YM2149 (4 cyc / 1er accès instr.)
-        return psg->read8(addr);
-    }
-    if (addr >= stmap::DMA_FDC_BASE && addr < stmap::DMA_FDC_BASE + 0x10 && fdc)
-        return fdc->read8(addr);          // contrôleur disquette + DMA ($FF8600)
-    if (addr >= stmap::DMASND_BASE && addr < stmap::DMASND_END && dmasnd
-        && machineHasDmaSound(machine))
-        return dmasnd->read8(addr);       // son DMA STE ($FF8900) — STE/Mega STE
-    if (addr >= 0xFF8A00 && addr <= 0xFF8A3F && blitter && machineHasBlitter(machine))
-        return blitter->read8(addr);      // blitter ($FF8A00) — Mega ST/STE/Mega STE
-    if (addr >= stmap::MFP_BASE && addr < stmap::MFP_BASE + 0x40 && mfp) {
-        // $FFFA31-$FFFA3F (impairs) : VOID chez Hatari (ioMemTabST.c:143-150,
-        // IoMem_VoidRead) — lecture 0xFF, AUCUN wait-state (pas de handler). Le
-        // dernier registre câblé est l'UDR USART à $FFFA2F.
-        // Octets PAIRS : non décodés par le 68901 (registres sur adresses
-        // impaires). Atteignables seulement par un accès MOT (la whitelist
-        // faute l'accès octet) : chez Hatari l'octet pair passe alors par
-        // IoMem_BusErrorEvenReadAccess → 0xFF, jamais par la puce. Sans ce
-        // filtre, les default du MFP en faisaient des cellules RAM fantômes.
-        if (!(addr & 1) || (addr & 0x3F) >= 0x31) return 0xFF;
-        // Wait state MFP (4 cyc) facturé UNE fois par accès : seul l'octet IMPAIR
-        // porte un registre câblé (Hatari : M68000_WaitState(4) dans le handler du
-        // registre ; l'octet pair d'un accès mot n'ajoute rien).
-        if (cpu && (addr & 1)) cpu->addMfpWaitCycles();
-        const uint8_t v = mfp->read8(addr);
-        if (cpu) cpu->updateIpl();        // l'état d'IRQ a pu changer
-        return v;
-    }
-    if (addr >= stmap::ACIA_BASE && addr < stmap::ACIA_BASE + 4 && ikbd) {
-        // $FFFC01/$FFFC03 : octets impairs non décodés (« void », ioMemTabST.c) →
-        // 0xFF sans effet de bord ACIA ni wait state. Ainsi un accès MOT à $FFFC00
-        // ne touche l'ACIA qu'une fois (et n'est facturé qu'une fois).
-        if (addr & 1) return 0xFF;
-        if (cpu) cpu->addAciaWaitCycles();     // wait state ACIA (6 cyc + E-Clock)
-        const uint8_t v = ikbd->read8(addr);   // ACIA clavier $FFFC00/$FFFC02
-        if (cpu) cpu->updateIpl();
-        return v;
-    }
-    if (addr >= 0xFFFC04 && addr < 0xFFFC08 && midi) {
-        if (addr & 1) return 0xFF;             // $FFFC05/$FFFC07 : void (cf. ACIA clavier)
-        if (cpu) cpu->addAciaWaitCycles();     // ACIA MIDI : même timing que l'ACIA clavier
-        const uint8_t v = midi->read8(addr);   // ACIA MIDI ($FFFC04/06) — bouclage OUT→IN
-        if (cpu) cpu->updateIpl();             // une lecture peut effacer l'IRQ ACIA
-        return v;
-    }
-    if ((addr & 1) && addr >= 0xFFFC21 && addr <= 0xFFFC3F && rtc && machineIsMega(machine))
-        return rtc->read8(addr);          // RTC RP5C15 — Mega ST / Mega STE
-    // STE / Mega STE : joypads / paddles / lightpen + DIP switches Mega STE
-    // ($FF9200-$FF9223). Port fidèle de Hatari joy.c via StePads (multiplexage par
-    // le masque écrit en $FF9202, mapping directions/feu des pads A/B, valeurs au
-    // repos). L'octet HAUT de $FF9200 = DIP Mega STE (0xBF par défaut ; logique
-    // inversée, cf. StePads / IoMemTabMegaSTE_DIPSwitches_Read). Les registres mots
-    // ($FF9200/02/20/22) renvoient l'octet voulu en big-endian (haut = adresse paire).
-    if (machineIsSte(machine) && addr >= 0xFF9200 && addr <= 0xFF9223) {
-        // Accès OCTET interdits (port joy.c) : $FF9200 « n'aime pas être lu en
-        // octet » à l'adresse PAIRE ($FF9201 reste lisible en octet), et les mots
-        // lightpen $FF9220/22 ne se lisent qu'en mot → bus error déclenchée par
-        // le périphérique (comme le FDC $FF8604 en mode octet).
-        if (ioAccessWidth_ == 1 && cpu
-            && (addr == 0xFF9200 || (addr >= 0xFF9220 && addr <= 0xFF9223))) {
-            cpu->triggerBusError(addr, false);   // longjmp/throw, sauf double faute
-            return 0xFF;                         // double faute → CPU halté
-        }
-        switch (addr) {
-            // $FF9200.w : boutons feu (octet bas) + DIP Mega STE (octet haut).
-            case 0xFF9200: return uint8_t(stePads.readButtonsDip() >> 8);   // DIP
-            case 0xFF9201: return uint8_t(stePads.readButtonsDip() & 0xFF); // boutons
-            // $FF9202.w : directions + boutons (info utile dans l'octet HAUT $FF9202).
-            case 0xFF9202: return uint8_t(stePads.readDirections() >> 8);
-            case 0xFF9203: return uint8_t(stePads.readDirections() & 0xFF);
-            // Paddle/analogique X/Y ($FF9211/13/15/17) : axes hôte ou repli
-            // numérique, plage $04-$43 (cf. StePads::readAnalog).
-            case 0xFF9211: case 0xFF9213:
-            case 0xFF9215: case 0xFF9217: return stePads.readAnalog(addr);
-            // Lightpen X/Y ($FF9220-$FF9223) : non supporté → 0 (mots à $FF9220/22).
-            case 0xFF9220: case 0xFF9221:
-            case 0xFF9222: case 0xFF9223: return uint8_t(stePads.readLightpen() >> (addr & 1 ? 0 : 8));
-            // Octets non décodés de la plage ($FF9204-$FF9210, etc.) : au repos.
-            default: return 0xFF;
-        }
-    }
-    // Registre Cache/CPU MegaSTE $FF8E21, relisible (latch écrit par TOS 2.x). cf.
-    // Bus.hpp megaSteCacheCtrl. $FF8E20/22/23 restent « void » (→ glue → 0xFF).
-    if (machine == MachineType::MegaSte && addr == 0xFF8E21)
-        return megaSteCacheCtrl;
-    // Coprocesseur MC68881 optionnel ($FFFA40-$FFFA5F) — cf. Fpu.hpp.
-    if (machine == MachineType::MegaSte && fpu.present
-        && addr >= Fpu::BASE && addr < Fpu::END)
-        return fpu.read8(addr);
-    // SCU MegaSTE : registres d'interruption ($FF8E01-$FF8E0F). cf. Scu.hpp.
-    if (machine == MachineType::MegaSte && addr >= 0xFF8E01 && addr <= 0xFF8E0F)
-        return scu.read8(addr);
-    // SCC Z85C30 ($FF8C80-$FF8C87) — Mega STE. La lecture peut effacer une IRQ niv5.
-    if (machine == MachineType::MegaSte && scc && addr >= 0xFF8C80 && addr <= 0xFF8C87) {
-        const uint8_t v = scc->read8(addr);
-        if (cpu) cpu->updateIpl();
-        return v;
-    }
-    if (glue)
-        return glue->read8(addr);         // MMU et reste du MMIO
+    if (const MmioSlot* s = mmioSlotFor(addr)) return (this->*(s->read))(addr);
+    if (glue) return glue->read8(addr);   // MMU et reste du MMIO
     return 0xFF;
 }
 
 void Bus::mmioWrite8(uint32_t addr, uint8_t v) {
-    if (addr >= stmap::SHIFTER_BASE && addr <= stmap::SHIFTER_END && shifter) {
-        shifter->write8(addr, v);
-        return;
-    }
-    // Miroir matériel du YM2149 sur tout $FF8800-$FF88FF (cf. read8 / Hatari shadow PSG).
-    if (addr >= stmap::PSG_BASE && addr < stmap::PSG_BASE + 0x100 && psg) {
-        if (cpu) cpu->addPsgWaitCycles();      // wait state YM2149 (4 cyc / 1er accès instr.)
-        // Écriture OCTET (ou movep) sur adresse IMPAIRE : ombre du registre pair —
-        // le YM ne décode pas A0, $FF8801 agit comme $FF8800 (sélecteur) et $FF8803
-        // comme $FF8802 (donnée). Port de PSG_ff8801/ff8803_WriteByte (le fix
-        // « X-Out musique muette » d'Hatari). L'octet impair d'un accès MOT reste
-        // ignoré (il est porté par l'octet pair du même accès, comme chez Hatari).
-        if (addr & 1) {
-            if (ioAccessWidth() == 1) psg->write8(addr & ~1u, v);
-            return;
-        }
-        psg->write8(addr, v);
-        return;
-    }
-    if (addr >= stmap::DMA_FDC_BASE && addr < stmap::DMA_FDC_BASE + 0x10 && fdc) {
-        fdc->write8(addr, v);             // contrôleur disquette + DMA
-        if (cpu) cpu->updateIpl();        // l'INTRQ FDC (GPIP5) a pu changer
-        return;
-    }
-    if (addr >= stmap::DMASND_BASE && addr < stmap::DMASND_END && dmasnd
-        && machineHasDmaSound(machine)) {
-        dmasnd->write8(addr, v);          // son DMA STE ($FF8900) — STE/Mega STE
-        return;
-    }
-    if (addr >= 0xFF8A00 && addr <= 0xFF8A3F && blitter && machineHasBlitter(machine)) {
-        blitter->write8(addr, v);         // blitter ($FF8A00) — Mega ST/STE/Mega STE
-        return;
-    }
-    if (addr >= stmap::MFP_BASE && addr < stmap::MFP_BASE + 0x40 && mfp) {
-        // $FFFA31-$FFFA3F : void — écriture ABSORBÉE sans wait-state (cf. mmioRead8) ;
-        // l'ancien chemin en faisait 8 octets de RAM relisible cachés dans le MFP.
-        // Octets PAIRS : non décodés, écriture jetée (IoMem_BusErrorEvenWriteAccess),
-        // cf. mmioRead8.
-        if (!(addr & 1) || (addr & 0x3F) >= 0x31) return;
-        // Wait state MFP facturé UNE fois par accès : octet impair seulement (cf. mmioRead8).
-        if (cpu && (addr & 1)) cpu->addMfpWaitCycles();
-        mfp->write8(addr, v);
-        if (cpu) cpu->updateIpl();        // (dé)masquage, fin d'interruption...
-        return;
-    }
-    if (addr >= stmap::ACIA_BASE && addr < stmap::ACIA_BASE + 4 && ikbd) {
-        if (addr & 1) return;                  // $FFFC01/$FFFC03 : void — écriture absorbée (cf. mmioRead8)
-        if (cpu) cpu->addAciaWaitCycles();     // wait state ACIA (6 cyc + E-Clock)
-        ikbd->write8(addr, v);
-        if (cpu) cpu->updateIpl();
-        return;
-    }
-    if (addr >= 0xFFFC04 && addr < 0xFFFC08 && midi) {
-        if (addr & 1) return;                  // $FFFC05/$FFFC07 : void — écriture absorbée
-        if (cpu) cpu->addAciaWaitCycles();     // ACIA MIDI : même timing que l'ACIA clavier
-        midi->write8(addr, v);            // ACIA MIDI ($FFFC04/06) — bouclage OUT→IN
-        if (cpu) cpu->updateIpl();        // un octet bouclé peut lever l'IRQ ACIA
-        return;
-    }
-    if ((addr & 1) && addr >= 0xFFFC21 && addr <= 0xFFFC3F && rtc && machineIsMega(machine)) {
-        rtc->write8(addr, v);             // RTC RP5C15 — Mega ST / Mega STE
-        return;
-    }
-    // STE / Mega STE : $FF9202 = latch de sélection des lignes des joypads (cf.
-    // Joy_StePadMulti_WriteWord). Les autres registres $FF92xx sont en lecture
-    // seule / sans effet (joy.c : Joy_StePadButtons_DIPSwitches_WriteWord ne fait
-    // rien). On latche les deux octets du mot $FF9202/$FF9203.
-    if (machineIsSte(machine) && (addr == 0xFF9202 || addr == 0xFF9203)) {
-        stePads.writeSelectByte(addr, v);
-        return;
-    }
-    // Écriture OCTET sur $FF9200 (adresse paire) → bus error, comme en lecture
-    // (Joy_StePadButtons_DIPSwitches_WriteWord). Les autres écritures de la plage
-    // (lightpen incluse : IoMem_WriteWithoutInterception) sont ignorées sans faute.
-    if (machineIsSte(machine) && addr == 0xFF9200 && ioAccessWidth_ == 1 && cpu) {
-        cpu->triggerBusError(addr, true);
-        return;
-    }
-    if (machineIsSte(machine) && addr >= 0xFF9200 && addr <= 0xFF9223)
-        return;                           // joypad/paddle/lightpen : écriture ignorée
-    // Registre Cache/CPU MegaSTE $FF8E21 : latché + contrainte matérielle « le cache ne
-    // peut être actif qu'à 16 MHz » — si bit0 (cache) est demandé alors que bit1 (vitesse)
-    // = 0 (8 MHz), le matériel force bit0 à 0 (cf. Hatari IoMemTabMegaSTE_CacheCpuCtrl_WriteByte).
-    // EFFET réel (port MegaSTE_CPU_Cache_Update) : cache désactivé → invalidation
-    // complète ; bit1 → bascule du débit cycles 8/16 MHz du cœur CPU.
-    if (machine == MachineType::MegaSte && addr == 0xFF8E21) {
-        if ((v & 0x02) == 0 && (v & 0x01)) v &= 0xFE;   // cache impossible à 8 MHz
-        megaSteCacheCtrl = v;
-        if ((v & 0x01) == 0) megaSteCacheFlush();
-        if (cpu) cpu->setMegaSteSpeed((v & 0x02) != 0);
-        return;
-    }
-    // Coprocesseur MC68881 optionnel ($FFFA40-$FFFA5F) — cf. Fpu.hpp. Quand il est
-    // absent (défaut), la zone n'est pas whitelistée → bus error avant d'arriver ici.
-    if (machine == MachineType::MegaSte && fpu.present
-        && addr >= Fpu::BASE && addr < Fpu::END) {
-        fpu.write8(addr, v);
-        return;
-    }
-    // SCU MegaSTE ($FF8E01-$FF8E0F) : écrire un masque (dé)masque des IRQ → on
-    // recalcule l'IPL CPU. cf. Scu.hpp (gating conditionnel).
-    if (machine == MachineType::MegaSte && addr >= 0xFF8E01 && addr <= 0xFF8E0F) {
-        if (scu.write8(addr, v) && cpu) cpu->updateIpl();
-        return;
-    }
-    // SCC Z85C30 ($FF8C80-$FF8C87) — Mega STE. Une écriture peut (dé)masquer l'IRQ niv5.
-    if (machine == MachineType::MegaSte && scc && addr >= 0xFF8C80 && addr <= 0xFF8C87) {
-        scc->write8(addr, v);
-        if (cpu) cpu->updateIpl();
-        return;
-    }
-    if (glue)
-        glue->write8(addr, v);
+    if (const MmioSlot* s = mmioSlotFor(addr)) { (this->*(s->write))(addr, v); return; }
+    if (glue) glue->write8(addr, v);
 }
 
 // A23 : primitive unique du vol de cycles bus — voir la déclaration (Bus.hpp) pour

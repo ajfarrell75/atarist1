@@ -170,11 +170,6 @@ est continue, les trous sont du travail fait.
 
 ### Chantiers structurels (UN à la fois, jamais combinés)
 
-- **A31 ⭘ — Interface `MmioDevice` + table de plages.** Ajouter une puce = 6 points de
-  modification dont les deux chaînes de `if` de ~110 lignes de `Bus::mmioRead8` /
-  `Bus::mmioWrite8`, à ordre sémantique implicite (l'ISP1160 doit précéder la NE2000 —
-  documenté dans l'en-tête, invisible dans le dispatch). Une table triée rend l'ordre
-  explicite et vide les deux fonctions.
 - **A32 ⭘ — Découper `Shifter` (2 854 lignes, ~90 champs, 6 rôles)** en Shifter
   (registres + rasterisation) / VideoGlue (machine à états DE/HBL/bordures —
   `updateGlueState` fait 278 lignes) / VideoCounter (`videoCounter` fait 200 lignes et
