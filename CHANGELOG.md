@@ -26,6 +26,44 @@ Ripper, DAC Pro Sound) avec page Dongles, `disks/dongles.txt` et oracle de rejeu
 vérifié note à note** en headless, corpus MIDI piano/blues ; port MIDI ALSA sous Linux ;
 save-state v16. Détail dans les chantiers datés ci-dessous.
 
+## MIDI — le studio en double : une clé répétable n'est pas une clé (2026-08-29)
+
+Bug rapporté : « Circuit Tracks est en double dans la fenêtre MIDI, ce qui crée un bug ».
+Les deux moitiés étaient vraies et distinctes.
+
+**La cause.** Les listes d'appareils utilisaient des clés RÉPÉTABLES (`midi_out_device=`
+une fois par appareil, `midi_out_channels=` s'appliquant à la précédente). Or
+`parseConfigLine` est partagé avec les **profils nommés**, et un profil s'applique
+PAR-DESSUS la config courante (`Config p = cfg;` puis application des lignes). Là où
+toutes les autres clés remplacent, un `push_back` AJOUTE : charger un profil dupliquait
+chaque appareil. Le format était en désaccord avec la sémantique du reste du fichier, et
+c'est le partage avec les profils — que je n'avais pas vu — qui a transformé ce désaccord
+en bug.
+
+**Le symptôme.** Deux lignes de même nom partageaient le même `ImGui::PushID(name)` :
+leurs cases se pilotaient l'une l'autre. D'où « ça crée un bug » et pas seulement « c'est
+affiché deux fois ».
+
+**Correction.** Une clé, une ligne, une affectation — comme tout le reste du format :
+`midi_out_devices=nom|1-4,10;autre|3`, enregistrements séparés par `;`, champs par `|`,
+ces caractères échappés par `\` dans les noms. L'objection qui avait fait écarter un
+séparateur au départ (« un nom d'appareil contient n'importe quoi ») est levée par
+l'échappement, pas contournée par la répétition. Les listes sont écrites **même vides**,
+sans quoi un profil ne pourrait pas effacer le studio. L'ancien format reste LU pour
+qu'un `neost.cfg` existant ne perde pas son studio en silence ; la première sauvegarde le
+convertit.
+
+Défense en profondeur : l'identifiant ImGui d'une ligne est désormais son INDEX. Deux
+appareils du même MODÈLE branchés ensemble portent le même nom d'affichage et
+produiraient la même collision — cas réel, inscrit au TODO (il demande un identifiant
+unique mémorisé à côté du nom).
+
+`neost-selftest` : aller-retour d'écriture/relecture avec un nom contenant les trois
+caractères de l'encodage, et surtout le SCÉNARIO DU BUG — rejouer les mêmes lignes
+par-dessus une config déjà remplie, ce que fait `loadProfileInto`, doit REMPLACER.
+Mutation vérifiée : rétablir la sémantique d'ajout fait tomber trois assertions. 287 au
+total.
+
 ## MIDI — profil Circuit Tracks et avance de sortie réglable (2026-08-29)
 
 Deux points de la section « Station MIDI » du TODO.

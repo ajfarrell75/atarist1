@@ -116,10 +116,17 @@ passive** : un FluidSynth ou un DAW s'y abonne, mais un expandeur, une groovebox
 clavier maître ne s'abonne à rien. Il fallait donc un patchbay tiers pour relier NeoST à
 du matériel. NeoST **choisit désormais lui-même** ses deux extrémités :
 
-| Réglage | `neost.cfg` (clés RÉPÉTABLES, une paire par appareil) | Effet |
+| Réglage | `neost.cfg` (UNE ligne, comme toute autre clé) | Effet |
 |---|---|---|
-| Destination | `midi_out_device=<nom>` + `midi_out_channels=1,2,10-12` | les canaux nommés partent vers cet appareil |
-| Source | `midi_in_device=<nom>` + `midi_in_channel=N` | l'appareil entre dans le MIDI IN, forcé sur le canal N (0 = tel quel) |
+| Destinations | `midi_out_devices=nom\|1,2,10-12;autre\|3` | chaque appareil reçoit les canaux nommés |
+| Sources | `midi_in_devices=nom\|1;autre\|2` | chaque appareil entre dans le MIDI IN, forcé sur ce canal (0 = tel quel) |
+
+Enregistrements séparés par `;`, champs par `|`, et ces caractères sont échappés par
+`\` dans les noms. ⚠ Le format **répétable** de la première version (`midi_out_device=`
+une fois par appareil) est encore LU, jamais écrit : `parseConfigLine` est partagé avec
+les **profils nommés**, qui s'appliquent *par-dessus* la config courante — là où une clé
+scalaire remplace, une clé répétable AJOUTAIT, si bien que charger un profil dupliquait
+chaque appareil. Une clé, une ligne, une affectation.
 
 **La sortie est un AIGUILLAGE, pas un Thru box.** Chaque destination porte le masque des
 canaux qu'elle reçoit : « instrument 1 de Cubase vers le piano logiciel, instrument 2
