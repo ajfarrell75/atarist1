@@ -255,8 +255,37 @@ endif()
 # =============================================================================
 #  neost-headless — sans interface, pour les traces comparables à MAME.
 # =============================================================================
-add_executable(neost-headless src/headless/main_headless.cpp)
+# ALSA (Linux) : port MIDI VIRTUEL « NeoST MIDI OUT » auquel n'importe quel synthé
+# logiciel s'abonne (FluidSynth, Qsynth, un DAW, un expandeur matériel). C'est
+# l'équivalent du port CoreMIDI de macOS — sans lui, la sortie MIDI de l'ACIA
+# n'atteignait RIEN sous Linux, et l'interface proposait une case morte.
+# Optionnel : sans libasound, le port reste simplement indisponible.
+if(UNIX AND NOT APPLE)
+    find_package(PkgConfig QUIET)
+    if(PkgConfig_FOUND)
+        pkg_check_modules(ALSA QUIET alsa)
+    endif()
+    if(ALSA_FOUND)
+        message(STATUS "NeoST: ALSA ${ALSA_VERSION} trouvée — port MIDI virtuel disponible")
+    else()
+        message(STATUS "NeoST: ALSA absente — pas de port MIDI virtuel (paquet libasound2-dev)")
+    endif()
+endif()
+
+# MidiInHost (et LUI SEUL des deux ponts MIDI hôtes) : --midi-in-device fait entrer
+# un appareil réel dans le MIDI IN du ST. Le pendant sortant reste hors du headless —
+# --midi-dump capture déjà ce que le ST émet, sans dépendre du matériel branché, et
+# lier MidiOutHost tirerait AudioToolbox (synthé GM) dans une cible qui n'a pas d'audio.
+add_executable(neost-headless src/headless/main_headless.cpp src/audio/MidiInHost.cpp)
 target_link_libraries(neost-headless PRIVATE neost_net)  # neost_core via neost_net (PUBLIC)
+if(APPLE)
+    target_link_libraries(neost-headless PRIVATE "-framework CoreFoundation" "-framework CoreMIDI")
+endif()
+if(ALSA_FOUND)
+    target_compile_definitions(neost-headless PRIVATE NEOST_MIDI_ALSA=1)
+    target_include_directories(neost-headless PRIVATE ${ALSA_INCLUDE_DIRS})
+    target_link_libraries(neost-headless PRIVATE ${ALSA_LINK_LIBRARIES})
+endif()
 target_compile_definitions(neost-headless PRIVATE NEOST_VERSION="${NEOST_VERSION_STR}")
 set_source_files_properties(src/headless/main_headless.cpp
     PROPERTIES COMPILE_OPTIONS "${NEOST_STRICT_OPTS}")
@@ -273,9 +302,19 @@ set_source_files_properties(src/headless/main_headless.cpp
 #  (hostpath::Style est un paramètre d'exécution) : c'est la seule façon d'attraper
 #  sur un Mac ou une CI Linux la classe de bugs de l'issue #37.
 # =============================================================================
-add_executable(neost-selftest tests/selftest_logic.cpp)
+# MidiInHost y entre pour son TAMPON DE GIGUE : le drainage vers l'ACIA (n'injecter
+# que ce que le 6850 accepte, perdre le NEUF en saturation) est de la logique pure,
+# testable sans le moindre appareil branché — et c'est précisément la partie qui
+# casse silencieusement, un débordement de 6850 mangeant le statut d'un message.
+add_executable(neost-selftest tests/selftest_logic.cpp src/audio/MidiInHost.cpp)
 target_link_libraries(neost-selftest PRIVATE neost_core)
 target_include_directories(neost-selftest PRIVATE "${CMAKE_SOURCE_DIR}/src")
+if(APPLE)
+    # Le backend CoreMIDI est compilé dans le fichier, donc ses symboles doivent se
+    # résoudre. Pas d'ALSA ici À DESSEIN : le test ne vise que le tampon de gigue, qui
+    # vit hors des #if de backend — l'y lier n'ajouterait aucune couverture.
+    target_link_libraries(neost-selftest PRIVATE "-framework CoreFoundation" "-framework CoreMIDI")
+endif()
 set_source_files_properties(tests/selftest_logic.cpp
     PROPERTIES COMPILE_OPTIONS "${NEOST_STRICT_OPTS}")
 
@@ -464,22 +503,10 @@ endif()
 # code d'amont vit désormais dans l'arbre et se compile avec NeoST.
 # APRÈS le garde-fou GLFW à dessein : seul le GUI s'en sert, et le compiler pour rien
 # coûterait 26 fichiers aux cibles sans pile graphique (CI headless, Android, WASM).
-# ALSA (Linux) : port MIDI VIRTUEL « NeoST MIDI OUT » auquel n'importe quel synthé
-# logiciel s'abonne (FluidSynth, Qsynth, un DAW, un expandeur matériel). C'est
-# l'équivalent du port CoreMIDI de macOS — sans lui, la sortie MIDI de l'ACIA
-# n'atteignait RIEN sous Linux, et l'interface proposait une case morte.
-# Optionnel : sans libasound, le port reste simplement indisponible.
-if(UNIX AND NOT APPLE)
-    find_package(PkgConfig QUIET)
-    if(PkgConfig_FOUND)
-        pkg_check_modules(ALSA QUIET alsa)
-    endif()
-    if(ALSA_FOUND)
-        message(STATUS "NeoST: ALSA ${ALSA_VERSION} trouvée — port MIDI virtuel disponible")
-    else()
-        message(STATUS "NeoST: ALSA absente — pas de port MIDI virtuel (paquet libasound2-dev)")
-    endif()
-endif()
+# (Détection ALSA remontée AVANT les cibles : neost-headless et neost-selftest
+#  compilent src/audio/MidiInHost.cpp et ont besoin d'ALSA_FOUND, or CMake
+#  évalue ce fichier de haut en bas — la détection laissée ici rendait
+#  --midi-in-device silencieusement mort sous Linux.)
 
 add_subdirectory(extern/mt32emu)
 
@@ -495,6 +522,7 @@ add_executable(neost
     src/gui/StKeys.cpp
     src/gui/StbImage.cpp
     src/audio/MidiOutHost.cpp
+    src/audio/MidiInHost.cpp
     src/audio/Mt32Synth.cpp)
 # stb_image (extern/stb, domaine public) : décodage de la photo du clavier (pic/).
 target_include_directories(neost PRIVATE "${CMAKE_SOURCE_DIR}/extern/stb")

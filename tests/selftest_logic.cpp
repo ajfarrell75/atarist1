@@ -28,6 +28,7 @@
 #include "io/Mfp.hpp"
 #include "core/YM2149.hpp"
 #include "core/StateArchive.hpp"
+#include "audio/MidiInHost.hpp"
 #include "io/MidiAcia.hpp"
 #include "io/Ikbd.hpp"
 #include "io/Rtc.hpp"
@@ -619,6 +620,115 @@ static void testMidiTdre() {
     const uint8_t o1 = midi.read8(kData), o2 = midi.read8(kData);
     checkBool("débordement : le status $90 survit", o1 == 0x90, true);
     checkBool("débordement : puis $3C",             o2 == 0x3C, true);
+}
+
+// -----------------------------------------------------------------------------
+//  MIDI IN MATÉRIEL — l'ACIA tire les octets à 31250 bauds
+//
+//  Un appareil branché livre ses octets sur le thread de CoreMIDI/ALSA, quand ça lui
+//  chante. La PREMIÈRE version les poussait dans l'ACIA une fois par trame, ce qui
+//  plafonnait l'entrée à 2 octets/trame (le 6850 n'en tient pas plus) — mesuré
+//  1,76 o/trame, soit ~143 o/s en mono contre 3125 o/s sur un vrai câble : un accord
+//  de dix notes mettait 0,2 s à entrer. C'est désormais l'ACIA qui TIRE, sur son
+//  horloge série (Scheduler::MIDI_RX, 2560 cycles = 10 bits à 31250 bauds).
+//
+//  On éprouve ici le chemin de production complet — MidiInHost + MidiAcia + Scheduler
+//  — sans le moindre appareil branché.
+// -----------------------------------------------------------------------------
+static void testMidiInJitter() {
+    std::printf("MIDI IN hôte (horloge série → ACIA)\n");
+    constexpr uint32_t kCtrl = 0xFFFC04, kData = 0xFFFC06;
+    constexpr int64_t kByte = 2560;          // 10 bits à 31250 bauds
+
+    struct Rig {
+        Mfp mfp; Scheduler sched; MidiAcia midi{mfp}; MidiInHost in;
+        Rig() {
+            midi.setScheduler(&sched);
+            sched.setCallback(Scheduler::MIDI_RX, [this] { midi.onRxPace(); });
+            midi.setRxSource([this](uint8_t& b) { return in.tryPop(b); });
+        }
+        bool rdrf() { return (midi.read8(kCtrl) & 0x01) != 0; }
+    };
+
+    // (1) CADENCE : un accord de 9 octets n'entre pas d'un bloc, il entre au débit du
+    //     câble — ni plus vite (ce serait irréel), ni plus lentement (c'était le bug).
+    {
+        Rig r;
+        const uint8_t accord[9] = {0x90, 0x3C, 0x40, 0x90, 0x40, 0x40, 0x90, 0x43, 0x40};
+        r.in.pushForTest(accord, sizeof accord);
+        std::vector<uint8_t> recu;
+        int64_t fin = -1;
+        for (int i = 0; i < 200 && recu.size() < sizeof accord; ++i) {
+            r.sched.runTo(r.sched.now() + kByte / 4);      // pas fin : 4 par octet
+            while (r.rdrf()) {                              // le ST vide la puce
+                recu.push_back(r.midi.read8(kData));
+                if (recu.size() == sizeof accord) fin = r.sched.now();
+            }
+        }
+        checkBool("accord : les 9 octets arrivent", recu.size() == sizeof accord, true);
+        checkBool("accord : dans l'ordre",
+                  recu.size() == sizeof accord &&
+                  std::equal(recu.begin(), recu.end(), std::begin(accord)), true);
+        // 9 octets = 9 périodes série au plus tôt. La borne haute interdit le retour
+        // du plafond par trame : à 2 octets/trame il aurait fallu ~5 trames, soit
+        // plus de 500 000 cycles, contre 23 040 ici.
+        checkBool("accord : pas plus vite que le câble", fin >= 9 * kByte, true);
+        checkBool("accord : pas plus lentement non plus", fin >= 0 && fin < 12 * kByte, true);
+    }
+
+    // (2) DÉBIT SOUTENU : 200 octets doivent entrer en 200 périodes série (3125 o/s),
+    //     pas en 100 trames. C'est la propriété que l'ancienne version violait.
+    {
+        Rig r;
+        std::vector<uint8_t> flot(200);
+        for (std::size_t i = 0; i < flot.size(); ++i) flot[i] = uint8_t(0x40 + (i % 0x30));
+        r.in.pushForTest(flot.data(), flot.size());
+        std::size_t lus = 0;
+        const int64_t budget = 210 * kByte;               // 200 octets + marge
+        while (r.sched.now() < budget) {
+            r.sched.runTo(r.sched.now() + kByte / 4);
+            while (r.rdrf()) { r.midi.read8(kData); ++lus; }
+        }
+        checkBool("débit : 200 octets en ~200 périodes série", lus == flot.size(), true);
+        checkBool("débit : rien perdu côté hôte", r.in.dropped() == 0, true);
+    }
+
+    // (3) OVERRUN DU MATÉRIEL : si le ST ne lit pas, c'est le 6850 qui perd — et il
+    //     perd le NOUVEL octet en gardant l'ancien (acia.c, état STOP_BIT). Jeter le
+    //     plus ancien ferait disparaître le STATUS d'un message et laisserait des
+    //     données orphelines. L'hôte, lui, ne retient plus rien pour l'éviter.
+    {
+        Rig r;
+        std::vector<uint8_t> flot(20);
+        for (std::size_t i = 0; i < flot.size(); ++i) flot[i] = uint8_t(0x50 + i);
+        r.in.pushForTest(flot.data(), flot.size());
+        // ⚠ Par PETITS PAS : une source ne tire qu'UNE fois par appel à runTo (modèle
+        // Hatari, cf. le masque `fired` du Scheduler). Un runTo d'un bloc de 20
+        // périodes ne ferait donc entrer qu'un octet — ce serait mesurer le test, pas
+        // la puce. L'émulateur avance lui aussi par quanta courts.
+        for (int i = 0; i < 20 * 4; ++i) r.sched.runTo(r.sched.now() + kByte / 4);
+        // personne ne lit : le 6850 garde 2 octets et perd tout le reste
+        const uint8_t o1 = r.midi.read8(kData), o2 = r.midi.read8(kData);
+        checkBool("overrun 6850 : le premier octet survit", o1 == flot[0], true);
+        checkBool("overrun 6850 : puis le deuxième",        o2 == flot[1], true);
+    }
+
+    // (4) TAMPON HÔTE PLEIN : au-delà de kMaxJitter, ce sont les octets NEUFS qui
+    //     tombent, même règle qu'au-dessus. Le tampon existe pour absorber une rafale
+    //     livrée plus vite que 31250 bauds, pas pour stocker indéfiniment.
+    {
+        MidiInHost in3;
+        // ⚠ Motif CHOISI pour être discriminant : un remplissage uint8_t(i) boucle
+        // tous les 256 octets, si bien que la tête « ancienne » et la tête « neuve »
+        // tombent sur la même valeur et que le test passe quelle que soit la politique.
+        std::vector<uint8_t> trop(4096, 0x7F);
+        trop[0] = 0xF1;                                    // marqueur du PLUS ANCIEN
+        in3.pushForTest(trop.data(), trop.size());
+        checkBool("tampon plein : le trop-plein est compté", in3.dropped() > 0, true);
+        uint8_t premier = 0;
+        checkBool("tampon plein : c'est le NEUF qui tombe, pas l'ancien",
+                  in3.tryPop(premier) && premier == trop[0], true);
+    }
 }
 
 // -----------------------------------------------------------------------------
@@ -1515,6 +1625,7 @@ int main() {
     testPortDevices();
     testYmEventDomain();
     testMidiTdre();
+    testMidiInJitter();
     testIkbdTdre();
     testIkbdProtocol();
     testRtcSecond();

@@ -26,7 +26,7 @@ MidiOutHost::~MidiOutHost() {
     { std::lock_guard<std::mutex> lk(mtx_); stop_ = true; }
     cv_.notify_all();
     if (worker_.joinable()) worker_.join();
-    closeSynth(); closeVirtualPort();
+    closeSynth(); closeDestination(); closeVirtualPort();
 }
 
 // -----------------------------------------------------------------------------
@@ -145,13 +145,24 @@ void MidiOutHost::closeSynth() {
 }
 
 // -----------------------------------------------------------------------------
-//  Port CoreMIDI virtuel : les autres applications le voient comme une SOURCE.
+//  Ressources partagées entre le port virtuel (b) et la destination matérielle (c)
+//
+//  macOS : un MIDIClientRef sert les deux (source virtuelle ET port de sortie).
+//  ALSA  : les deux passent par UN port séquenceur — la destination matérielle est
+//  un ABONNEMENT de ce port (snd_seq_connect_to), exactement ce que fait aconnect.
+//  Conséquence assumée : choisir une destination sous Linux fait exister le port
+//  « NeoST MIDI OUT » même si la case du port virtuel est décochée. Sans port
+//  source, il n'y aurait rien à abonner.
+//
+//  ⚠ Les fonctions publiques prennent outMtx_ et les helpers le supposent DÉJÀ pris
+//  (pas de verrou récursif en C++ sans std::recursive_mutex). panic() passe par
+//  emit(), qui verrouille : ne jamais l'appeler le verrou en main.
 // -----------------------------------------------------------------------------
-bool MidiOutHost::openVirtualPort() {
+bool MidiOutHost::ensurePort_() {
 #if defined(NEOST_MIDI_ALSA)
     if (seq_) return true;
     snd_seq_t* seq = nullptr;
-    if (snd_seq_open(&seq, "default", SND_SEQ_OPEN_OUTPUT, 0) < 0) {
+    if (snd_seq_open(&seq, "default", SND_SEQ_OPEN_DUPLEX, 0) < 0) {
         std::fprintf(stderr, "[midi-out] ALSA sequencer unavailable\n");
         return false;
     }
@@ -178,14 +189,11 @@ bool MidiOutHost::openVirtualPort() {
     }
     snd_midi_event_no_status(enc, 1);   // pas de running status en sortie : chaque
                                         // événement du séquenceur est autonome
-    std::lock_guard<std::mutex> lk(outMtx_);
     seq_ = seq; enc_ = enc; src_ = uint32_t(port) + 1;   // +1 : 0 signifie « fermé »
-    std::fprintf(stderr, "[midi-out] ALSA port \"NeoST MIDI OUT\" open — connect a synth to it\n");
     return true;
 #elif defined(__APPLE__)
-    if (src_) return true;
+    if (client_) return true;
     MIDIClientRef client = 0;
-    MIDIEndpointRef src = 0;
     if (const OSStatus st = MIDIClientCreate(CFSTR("NeoST"), nullptr, nullptr, &client); st != noErr) {
         // Muet jusqu'ici : le port « tombait » à 0 dans neost.cfg sans un mot. Cas vu :
         // process sandboxé sans accès au serveur CoreMIDI (MIDIServer) → -10844/… .
@@ -193,13 +201,52 @@ bool MidiOutHost::openVirtualPort() {
                      "access from this process?\n", int(st));
         return false;
     }
-    if (MIDISourceCreate(client, CFSTR("NeoST MIDI OUT"), &src) != noErr) {
-        MIDIClientDispose(client);
+    client_ = client;
+    return true;
+#else
+    return false;
+#endif
+}
+
+// Ne détruit QUE ce que plus personne n'utilise : le port virtuel et la destination
+// se partagent ces ressources, et fermer l'un ne doit pas couper l'autre.
+void MidiOutHost::releasePort_() {
+#if defined(NEOST_MIDI_ALSA)
+    if (userPort_ || dst_) return;
+    if (enc_) { snd_midi_event_free(static_cast<snd_midi_event_t*>(enc_)); enc_ = nullptr; }
+    if (seq_) {
+        if (src_) snd_seq_delete_simple_port(static_cast<snd_seq_t*>(seq_), int(src_) - 1);
+        snd_seq_close(static_cast<snd_seq_t*>(seq_)); seq_ = nullptr;
+    }
+    src_ = 0;
+#elif defined(__APPLE__)
+    if (src_ || dst_ || outPort_) return;
+    if (client_) { MIDIClientDispose(client_); client_ = 0; }
+#endif
+}
+
+// -----------------------------------------------------------------------------
+//  Port MIDI virtuel : les autres applications le voient comme une SOURCE.
+// -----------------------------------------------------------------------------
+bool MidiOutHost::openVirtualPort() {
+#if defined(NEOST_MIDI_ALSA)
+    std::lock_guard<std::mutex> lk(outMtx_);
+    if (!ensurePort_()) return false;
+    userPort_ = true;
+    std::fprintf(stderr, "[midi-out] ALSA port \"NeoST MIDI OUT\" open — connect a synth to it\n");
+    return true;
+#elif defined(__APPLE__)
+    std::lock_guard<std::mutex> lk(outMtx_);
+    if (src_) { userPort_ = true; return true; }
+    if (!ensurePort_()) return false;
+    MIDIEndpointRef src = 0;
+    if (MIDISourceCreate(client_, CFSTR("NeoST MIDI OUT"), &src) != noErr) {
+        releasePort_();
         std::fprintf(stderr, "[midi-out] cannot create the CoreMIDI virtual source\n");
         return false;
     }
-    client_ = client;
     src_ = src;
+    userPort_ = true;
     std::fprintf(stderr, "[midi-out] CoreMIDI virtual source \"NeoST MIDI OUT\" created\n");
     return true;
 #else
@@ -208,19 +255,152 @@ bool MidiOutHost::openVirtualPort() {
 }
 
 void MidiOutHost::closeVirtualPort() {
+    std::lock_guard<std::mutex> lk(outMtx_);
+    userPort_ = false;
 #if defined(NEOST_MIDI_ALSA)
-    std::lock_guard<std::mutex> lk(outMtx_);
-    if (enc_) { snd_midi_event_free(static_cast<snd_midi_event_t*>(enc_)); enc_ = nullptr; }
-    if (seq_) {
-        if (src_) snd_seq_delete_simple_port(static_cast<snd_seq_t*>(seq_), int(src_) - 1);
-        snd_seq_close(static_cast<snd_seq_t*>(seq_)); seq_ = nullptr;
-    }
-    src_ = 0;
+    // Rien à détruire ici : sous ALSA le port EST la ressource partagée, et
+    // releasePort_ ne le supprime que si la destination ne s'en sert plus.
 #elif defined(__APPLE__)
-    std::lock_guard<std::mutex> lk(outMtx_);
-    if (src_)    { MIDIEndpointDispose(src_); src_ = 0; }
-    if (client_) { MIDIClientDispose(client_); client_ = 0; }
+    if (src_) { MIDIEndpointDispose(src_); src_ = 0; }
 #endif
+    releasePort_();
+}
+
+// -----------------------------------------------------------------------------
+//  Destination MATÉRIELLE : le MIDI OUT du ST entre dans l'appareil branché.
+// -----------------------------------------------------------------------------
+#if defined(__APPLE__) && !defined(NEOST_MIDI_ALSA)
+namespace {
+// Nom AFFICHÉ (celui d'Audio MIDI Setup, « Circuit Tracks MIDI ») plutôt que le nom
+// brut du port : c'est celui que l'utilisateur lit sur sa machine, donc le seul qu'il
+// puisse reconnaître dans une liste.
+std::string displayName(MIDIObjectRef obj) {
+    CFStringRef cf = nullptr;
+    if (MIDIObjectGetStringProperty(obj, kMIDIPropertyDisplayName, &cf) != noErr || !cf) return {};
+    char buf[256] = {0};
+    const bool ok = CFStringGetCString(cf, buf, sizeof buf, kCFStringEncodingUTF8);
+    CFRelease(cf);
+    return ok ? std::string(buf) : std::string();
+}
+} // namespace
+#endif
+
+std::vector<std::string> MidiOutHost::destinations() {
+    std::vector<std::string> out;
+#if defined(NEOST_MIDI_ALSA)
+    snd_seq_t* seq = nullptr;
+    if (snd_seq_open(&seq, "default", SND_SEQ_OPEN_DUPLEX, 0) < 0) return out;
+    const int self = snd_seq_client_id(seq);
+    snd_seq_client_info_t* ci = nullptr; snd_seq_port_info_t* pi = nullptr;
+    snd_seq_client_info_malloc(&ci); snd_seq_port_info_malloc(&pi);
+    snd_seq_client_info_set_client(ci, -1);
+    while (snd_seq_query_next_client(seq, ci) >= 0) {
+        const int cid = snd_seq_client_info_get_client(ci);
+        if (cid == self || cid == SND_SEQ_CLIENT_SYSTEM) continue;   // pas nous, pas le système
+        snd_seq_port_info_set_client(pi, cid);
+        snd_seq_port_info_set_port(pi, -1);
+        while (snd_seq_query_next_port(seq, pi) >= 0) {
+            const unsigned caps = snd_seq_port_info_get_capability(pi);
+            if ((caps & (SND_SEQ_PORT_CAP_WRITE | SND_SEQ_PORT_CAP_SUBS_WRITE))
+                != (SND_SEQ_PORT_CAP_WRITE | SND_SEQ_PORT_CAP_SUBS_WRITE)) continue;
+            out.emplace_back(std::string(snd_seq_client_info_get_name(ci)) + ": "
+                             + snd_seq_port_info_get_name(pi));
+        }
+    }
+    snd_seq_port_info_free(pi); snd_seq_client_info_free(ci);
+    snd_seq_close(seq);
+#elif defined(__APPLE__)
+    const ItemCount n = MIDIGetNumberOfDestinations();
+    for (ItemCount i = 0; i < n; ++i) {
+        std::string nm = displayName(MIDIGetDestination(i));
+        if (!nm.empty()) out.push_back(std::move(nm));
+    }
+#endif
+    return out;
+}
+
+bool MidiOutHost::openDestination(const std::string& name) {
+    if (name.empty()) { closeDestination(); return true; }
+    if (dst_ && dstName_ == name) return true;
+    closeDestination();
+    std::lock_guard<std::mutex> lk(outMtx_);
+#if defined(NEOST_MIDI_ALSA)
+    if (!ensurePort_()) return false;
+    // Retrouve le couple client:port derrière le NOM (l'énumération et l'ouverture
+    // sont deux instants distincts : on ne peut pas mémoriser d'index entre les deux).
+    snd_seq_t* seq = static_cast<snd_seq_t*>(seq_);
+    int foundC = -1, foundP = -1;
+    snd_seq_client_info_t* ci = nullptr; snd_seq_port_info_t* pi = nullptr;
+    snd_seq_client_info_malloc(&ci); snd_seq_port_info_malloc(&pi);
+    snd_seq_client_info_set_client(ci, -1);
+    while (foundC < 0 && snd_seq_query_next_client(seq, ci) >= 0) {
+        const int cid = snd_seq_client_info_get_client(ci);
+        if (cid == snd_seq_client_id(seq) || cid == SND_SEQ_CLIENT_SYSTEM) continue;
+        snd_seq_port_info_set_client(pi, cid);
+        snd_seq_port_info_set_port(pi, -1);
+        while (snd_seq_query_next_port(seq, pi) >= 0) {
+            const unsigned caps = snd_seq_port_info_get_capability(pi);
+            if ((caps & (SND_SEQ_PORT_CAP_WRITE | SND_SEQ_PORT_CAP_SUBS_WRITE))
+                != (SND_SEQ_PORT_CAP_WRITE | SND_SEQ_PORT_CAP_SUBS_WRITE)) continue;
+            if (std::string(snd_seq_client_info_get_name(ci)) + ": "
+                + snd_seq_port_info_get_name(pi) == name) {
+                foundC = cid; foundP = snd_seq_port_info_get_port(pi);
+                break;
+            }
+        }
+    }
+    snd_seq_port_info_free(pi); snd_seq_client_info_free(ci);
+    if (foundC < 0) { releasePort_(); return false; }
+    if (snd_seq_connect_to(seq, int(src_) - 1, foundC, foundP) < 0) { releasePort_(); return false; }
+    dst_ = (uint32_t(foundC) << 8 | uint32_t(foundP)) + 1;
+    dstName_ = name;
+    std::fprintf(stderr, "[midi-out] MIDI OUT -> \"%s\" (ALSA %d:%d)\n", name.c_str(), foundC, foundP);
+    return true;
+#elif defined(__APPLE__)
+    if (!ensurePort_()) return false;
+    MIDIEndpointRef found = 0;
+    const ItemCount n = MIDIGetNumberOfDestinations();
+    for (ItemCount i = 0; i < n; ++i) {
+        const MIDIEndpointRef e = MIDIGetDestination(i);
+        if (displayName(e) == name) { found = e; break; }
+    }
+    if (!found) { releasePort_(); return false; }   // débranché : l'appelant re-tentera
+    if (!outPort_) {
+        MIDIPortRef port = 0;
+        if (MIDIOutputPortCreate(client_, CFSTR("NeoST OUT"), &port) != noErr) {
+            releasePort_();
+            std::fprintf(stderr, "[midi-out] cannot create the CoreMIDI output port\n");
+            return false;
+        }
+        outPort_ = port;
+    }
+    dst_ = found;
+    dstName_ = name;
+    std::fprintf(stderr, "[midi-out] MIDI OUT -> \"%s\" (CoreMIDI destination)\n", name.c_str());
+    return true;
+#else
+    (void)name;
+    return false;
+#endif
+}
+
+void MidiOutHost::closeDestination() {
+    // Une note tenue au moment du débranchement resterait tenue POUR TOUJOURS dans un
+    // appareil matériel : il n'a aucune raison de la relâcher. On panique d'abord —
+    // hors verrou, panic() passant par emit() qui le prend.
+    if (dst_) panic();
+    std::lock_guard<std::mutex> lk(outMtx_);
+#if defined(NEOST_MIDI_ALSA)
+    if (dst_ && seq_ && src_)
+        snd_seq_disconnect_to(static_cast<snd_seq_t*>(seq_), int(src_) - 1,
+                              int((dst_ - 1) >> 8), int((dst_ - 1) & 0xFF));
+    dst_ = 0;
+#elif defined(__APPLE__)
+    dst_ = 0;
+    if (outPort_) { MIDIPortDispose(outPort_); outPort_ = 0; }
+#endif
+    dstName_.clear();
+    releasePort_();
 }
 
 // -----------------------------------------------------------------------------
@@ -313,7 +493,8 @@ void MidiOutHost::emit(const uint8_t* msg, int len) {
     snd_seq_event_t ev;
     snd_seq_ev_clear(&ev);
     snd_seq_ev_set_source(&ev, int(src_) - 1);
-    snd_seq_ev_set_subs(&ev);            // vers TOUS les abonnés du port
+    snd_seq_ev_set_subs(&ev);            // vers TOUS les abonnés du port — la
+                                         // destination matérielle en est un (connect_to)
     snd_seq_ev_set_direct(&ev);          // pas de file : on est déjà horodaté en amont
     if (snd_midi_event_encode(static_cast<snd_midi_event_t*>(enc_), msg, len, &ev) > 0
         && ev.type != SND_SEQ_EVENT_NONE)
@@ -323,12 +504,15 @@ void MidiOutHost::emit(const uint8_t* msg, int len) {
     if (synth_ && len <= 3 && msg[0] < 0xF0)
         MusicDeviceMIDIEvent(static_cast<AudioUnit>(synth_), msg[0], len > 1 ? msg[1] : 0,
                              len > 2 ? msg[2] : 0, 0);
-    if (src_) {
+    if (src_ || dst_) {
         alignas(MIDIPacketList) uint8_t buf[4096 + 64];
         MIDIPacketList* list = reinterpret_cast<MIDIPacketList*>(buf);
         MIDIPacket* pkt = MIDIPacketListInit(list);
         pkt = MIDIPacketListAdd(list, sizeof buf, pkt, 0, ByteCount(len), msg);
-        if (pkt) MIDIReceived(src_, list);
+        if (pkt) {
+            if (src_) MIDIReceived(src_, list);              // source virtuelle (abonnés)
+            if (dst_ && outPort_) MIDISend(outPort_, dst_, list);  // appareil matériel
+        }
     }
 #else
     (void)msg; (void)len;

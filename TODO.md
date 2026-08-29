@@ -464,6 +464,42 @@ densité HD/ED STX (NeoST plus cohérent) ; RTC en temps émulé (déterminisme 
   entrées `CHANGELOG.md`). Reformuler ou assumer — un changelog garde normalement la trace
   de ce qu'il a supprimé.
 
+### Station MIDI — le ST comme séquenceur d'un studio moderne (relevé 2026-08-29)
+
+> Cas d'usage visé : un Mac porte les AU/VST et les claviers USB, le ST porte Cubase ou
+> Notator et mène la séance. La **sortie** est déjà au niveau : gigue σ 0,4-1,7 ms et
+> pente de tempo 1,001 mesurées sur 200 notes (`run_midi_sequencer.py`). Ce qui suit est
+> ce qui manque pour y brancher un vrai studio plutôt qu'un seul appareil.
+
+- ~~**Débit d'entrée — plafond à 4,5 % d'un câble MIDI.**~~ **LIVRÉ le 2026-08-29.**
+  L'injection hôte→ACIA se faisait une fois par trame et le 6850 n'accepte que 2 octets :
+  plafond 2 octets/trame, ~143 o/s en mono contre 3 125 o/s sur un vrai câble. C'est
+  désormais l'ACIA qui TIRE, sur `Scheduler::MIDI_RX` (2 560 cycles/octet), comme
+  `IKBD_RX` le fait pour l'ACIA clavier. **Mesuré en temps réel : 40,4 octets/trame,
+  soit ~2 885 o/s — 92 % d'un câble, ×20.** Le débordement redevient celui du matériel
+  (le 6850 perd l'octet neuf) au lieu d'être masqué par une rétention côté hôte.
+- **Un seul appareil de chaque côté.** Un studio en a plusieurs (une groovebox + deux
+  claviers). Il manque la **fusion** de N sources hôtes vers l'unique ACIA (le boîtier de
+  merge d'un vrai studio ST) et la **duplication** de la sortie vers N destinations (le
+  Thru box). `MidiInHost`/`MidiOutHost` ne tiennent qu'un appareil chacun.
+- **Latence de jeu : ~30-35 ms aller-retour** (arithmétique, non mesurée) — la part
+  « entrée » est tombée avec le point ci-dessus (l'octet entre à son cycle, plus au
+  début de la trame) ; restent surtout les 30 ms d'avance fixe en sortie
+  (`MidiOutHost::kLeadMs`, le prix payé pour tuer la gigue). Un pianiste le sent. Rendre
+  cette avance **réglable** : c'est un arbitrage gigue/latence qui appartient à
+  l'utilisateur. Le premier point ci-dessus supprime la part « entrée ».
+- **16 canaux — pas d'interface multi-ports.** Le ST n'a qu'un MIDI OUT ; les **C-Lab
+  Unitor** et **Steinberg Midex** en ajoutaient (32/64 canaux, SMPTE). Curiosité : la
+  *clé* de l'Unitor-N est **déjà émulée** (c'est la même que celle de Notator), mais pas
+  le boîtier. `CartDevice.hpp` sait déjà que MIDEX et Combiner empilaient des clés.
+- **Notator n'a jamais tourné.** Il est cité comme séquenceur voulu au même titre que
+  Cubase, mais aucun étalon ne l'exerce et sa clé garde **deux incertitudes** non
+  tranchées faute de Notator SL original (cf. le point « Clé Notator » plus bas). Tant
+  que le logiciel n'a pas démarré une fois, c'est une promesse, pas une capacité.
+- **Pas de synchro SMPTE/MTC.** L'horloge MIDI traverse (ce ne sont que des octets), donc
+  le ST peut mener un DAW. Le code de temps SMPTE de l'Unitor, non.
+- **Rien sous Windows** : cf. « MIDI OUT Windows » ci-dessous (winmm à écrire).
+
 ### Réseau (extensions NeoST — base livrée 2026-08-12, cf. `docs/EXTENSIONS.md`)
 
 > Les chantiers **clos** de ce front (Slirp 5/5, fenêtres EtherNEC ROM3/ROM4, CAB affiche
@@ -484,8 +520,8 @@ densité HD/ED STX (NeoST plus cohérent) ; RTC en temps émulé (déterminisme 
   par le GUI et le headless ; le menu Android et la démo web n'ont pas de page Dongles.
 - **Clé Steinberg — validation** : `CartridgeKey` (rouge/noire, équations MiSTery) n'a
   jamais vu un Cubase 3.10 / Score / 2.01 réel — il faut une disquette originale (non
-  crackée). Option de confort : choisir une **destination** CoreMIDI
-  (`MIDIGetNumberOfDestinations`) au lieu de la seule source virtuelle.
+  crackée). (La « destination CoreMIDI au lieu de la seule source virtuelle » qui figurait
+  ici est **livrée** le 2026-08-29, dans les deux sens — cf. `docs/EXTENSIONS.md`.)
 - **NetUSBee — périphériques USB hôte** : l'ISP1160 (`io/Isp1160`) est un hub racine
   VIDE ; brancher un clavier/souris HID puis un stockage de masse derrière
   `HcRhPortStatus`. Banc d'essai : pilotes FreeMiNT `netusbee.ucd` + `usb.km`.

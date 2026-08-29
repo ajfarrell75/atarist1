@@ -332,6 +332,9 @@ void Machine::installSchedulerCallbacks() {
     // Idem pour l'ACIA MIDI (~1 octet à 31250 bauds = 2560 cycles) : cadence l'IRQ
     // d'émission des séquenceurs MIDI (cf. MidiAcia::onTxEmpty).
     sched.setCallback(Scheduler::MIDI_TX, [this] { midi.onTxEmpty(); cpu.updateIpl(); });
+    // MIDI_RX : horloge de réception d'un appareil hôte branché (cf. MidiAcia::
+    // setRxSource). updateIpl car un octet entrant lève le canal 6 du MFP sous RIE.
+    sched.setCallback(Scheduler::MIDI_RX, [this] { midi.onRxPace(); cpu.updateIpl(); });
     // Livraison cadencée d'un octet RX à l'USART MFP (injection hôte : modem
     // Hayes) : RxFull (canal 12) par octet, au débit configuré.
     sched.setCallback(Scheduler::SERIAL_RX, [this] { mfp.onSerialRxEvent(); cpu.updateIpl(); });
@@ -679,11 +682,14 @@ static uint32_t cartFingerprint(const std::vector<uint8_t>& cart) {
 // A17 (2026-08-27) : le numéro de version vivait EN DUR à deux endroits (écriture ici,
 // contrôle dans loadStateFile) — et ils s'étaient déjà désynchronisés : le message de
 // rejet annonçait « writes v16 » alors que le build écrivait v17. Constante unique.
-static constexpr uint16_t kStateVersion = 17;
+static constexpr uint16_t kStateVersion = 18;
 static uint32_t stateCrc32(const uint8_t* p, std::size_t n);   // défini plus bas
 void Machine::serializeState(StateArchive& ar) {
     uint32_t magic   = 0x4E535453u;   // 'NSTS'
-    uint16_t version = kStateVersion; // v17 : Rtc::mode_ bit3 = TIMER EN désormais HONORÉ
+    uint16_t version = kStateVersion; // v18 : + Scheduler::MIDI_RX (horloge de réception
+                                      // de l'ACIA MIDI) — SRC_COUNT passe de 20 à 21,
+                                      // donc le tableau due_ sérialisé change de taille ;
+                                      // v17 : Rtc::mode_ bit3 = TIMER EN désormais HONORÉ
                                       // (un état v16 pouvait porter mode_=0, qui fige
                                       // maintenant le compteur) ;
                                       // v16 : + PortDevices (clés joystick/série, DAC, bouton) ;

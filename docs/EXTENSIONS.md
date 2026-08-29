@@ -13,6 +13,7 @@
 > | [NetUSBee](#netusbee--ne2000--hôte-usb-isp1160-sur-le-port-cartouche---netusbee-gui-network) | Ethernet + USB, port cartouche | **matériel réel** |
 > | [EtherNEC](#ethernec--ne2000-sur-le-port-cartouche---ethernec-gui-network) | NE2000, port cartouche | **matériel réel** (montage T. Redelberger) |
 > | [Modem Hayes](#modem-hayes-sur-rs-232---modem-gui-network) | pont RS-232 → TCP | équivalent des modems WiFi ESP8266 vendus pour ST |
+> | [Appareils MIDI hôtes](#appareils-midi-de-lhôte--le-câble-din-du-st-vers-du-vrai-matériel) | expandeur/clavier branché sur la machine | **c'est le câble DIN du ST** |
 > | [Anneau MIDI](#anneau-midi-réseau--midimaze-en-ligne---midi-net-hpl) | MIDIMaze sur UDP | transpose un câblage MIDI réel |
 > | [Clé Steinberg](#clé-steinberg--dongle-cubase-sur-le-port-cartouche---dongle-gui-dongles) | PAL16R8 / EPLD sur /ROM3 | **matériel réel** (clés noire et rouge de Cubase) |
 > | [Périphériques des ports](#périphériques-des-ports--un-par-port--clés-joystick--série-dac-pro-sound-boutons---plug-gui-dongles) | clés joystick/RS-232, DAC parallèle, boutons Multiface/URC | **matériel réel** (11 adaptateurs, inventaire Steem SSE) |
@@ -107,6 +108,59 @@ physique = interface `NetBackend` (boucle locale fournie ; SLIRP/pcap = point
 d'extension quand la lib est présente). **Exclusif d'une cartouche montée** (conflit de
 fenêtre $FA0000 — le montage est refusé avec message). Auto-test : `--enec-selftest`
 (palier `fast`).
+
+## Appareils MIDI de l'hôte — le câble DIN du ST vers du vrai matériel
+
+Le port virtuel « NeoST MIDI OUT » (CoreMIDI / séquenceur ALSA) est une **source
+passive** : un FluidSynth ou un DAW s'y abonne, mais un expandeur, une groovebox ou un
+clavier maître ne s'abonne à rien. Il fallait donc un patchbay tiers pour relier NeoST à
+du matériel. NeoST **choisit désormais lui-même** ses deux extrémités :
+
+| Réglage | `neost.cfg` | Effet |
+|---|---|---|
+| Destination matérielle | `midi_out_device=<nom>` | MIDI OUT du ST → l'appareil |
+| Source matérielle      | `midi_in_device=<nom>`  | l'appareil → MIDI IN du ST |
+
+GUI : Configuration → **MIDI**, deux menus déroulants (*Hardware device*). Headless :
+`--midi-list` énumère les entrées, `--midi-in-device NAME` en branche une. Il n'y a pas
+de `--midi-out-device` côté headless : `--midi-dump` capture déjà ce que le ST émet,
+sans dépendre du matériel branché — c'est ce qu'un test veut.
+
+Quatre choix de conception, chacun payé par un piège réel :
+
+- **Désignation par NOM, jamais par index.** Débrancher un périphérique renumérote tous
+  les autres : une config mémorisée en index se serait mise à piloter le mauvais
+  appareil au branchement suivant.
+- **L'absence n'efface pas le réglage.** Un appareil débranché n'est pas une erreur de
+  configuration : le nom reste dans `neost.cfg`, la page affiche *(not connected)*, et
+  la boucle **re-tente à 1 Hz** — rebrancher le câble USB suffit, sans rouvrir la
+  configuration. (C'est la leçon du `midi_out_port` retombé à 0 sans un mot.)
+- **Panique avant de couper.** Un synthé ne relâche JAMAIS une note tout seul : fermer
+  la destination en plein accord la laisserait tenue indéfiniment dans l'appareil.
+  `closeDestination()` envoie donc CC 120/121/123 sur les 16 canaux **avant** de fermer.
+- **C'est l'ACIA qui tire, à 31 250 bauds.** CoreMIDI livre ses paquets sur son propre
+  thread quand ça lui chante ; `MidiInHost` accumule, et l'ACIA vient prendre un octet
+  toutes les 2 560 cycles (`Scheduler::MIDI_RX`, le pendant de `MIDI_TX` et le même
+  patron qu'`IKBD_RX` pour l'ACIA clavier). La première version poussait les octets une
+  fois par TRAME, ce qui plafonnait l'entrée à 2 octets/trame — mesuré 1,76, soit
+  ~143 o/s contre 3 125 o/s sur un câble : un accord de dix notes mettait 0,2 s à entrer.
+  Après correctif, **40,4 octets/trame mesurés en temps réel (~2 885 o/s, 92 % du câble)**.
+  Le débordement redevient celui du **matériel** : si le ST ne lit pas assez vite, le
+  6850 perd l'octet **neuf** (garder l'ancien préserve le début des messages entamés).
+  Éprouvé par `neost-selftest` sur le chemin complet ACIA + Scheduler, sans appareil.
+  ⚠ Cette mesure n'est possible que dans le **GUI** : le headless émule ~19 fois plus
+  vite que le temps réel, donc une source MIDI réelle y est toujours le facteur limitant.
+
+Sous Linux, la destination matérielle est un **abonnement** du port séquenceur (ce que
+fait `aconnect`) : la choisir fait exister « NeoST MIDI OUT » même si la case du port
+virtuel est décochée — sans port source, il n'y aurait rien à abonner.
+
+Vérifié le 2026-08-29 (macOS, Novation Circuit Tracks + appareils virtuels de test) :
+255 octets entrés dans l'ACIA depuis une source hôte (0 perdu, contre 2 octets pour un
+appareil qu'on ne touche pas), et le SysEx de démarrage de MROS reçu par une destination
+matérielle **port virtuel coupé** — donc portée par la destination seule. Le backend
+ALSA est écrit mais n'a **pas** été exécuté (pas de machine Linux dans la boucle).
+`src/audio/MidiInHost.cpp`, `src/audio/MidiOutHost.cpp`.
 
 ## Anneau MIDI réseau — MIDIMaze en ligne (`--midi-net H:P[:L]`)
 

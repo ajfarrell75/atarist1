@@ -58,6 +58,17 @@ public:
     // Injecte un octet reçu du réseau dans MIDI IN (comme le bouclage, mais depuis
     // l'extérieur). Lève l'IRQ ACIA si RIE est armé.
     void receiveExternal(uint8_t b);
+
+    // --- Source hôte CADENCÉE (appareil MIDI branché sur la machine) --------------
+    // `fn(b)` rend true et remplit b s'il y a un octet à faire entrer. L'ACIA
+    // l'interroge sur l'horloge SÉRIE (2560 cycles = 10 bits à 31250 bauds), pas une
+    // fois par trame : c'est la différence entre 3125 o/s (un vrai câble) et
+    // 2 octets/trame (~143 o/s en mono), plafond mesuré de l'ancienne injection.
+    // Le débordement redevient alors celui du matériel : si le ST ne lit pas assez
+    // vite, c'est le 6850 qui perd l'octet neuf (pushRx), pas l'hôte qui retient.
+    void setRxSource(std::function<bool(uint8_t&)> fn);
+    bool rxSourced() const { return static_cast<bool>(rxSource_); }
+    void onRxPace();                         // échéance MIDI_RX : un octet a fini d'entrer
     // Le 6850 n'a que 2 octets (RDR + registre à décalage) : l'anneau réseau doit
     // n'injecter QUE lorsque la puce a de la place, sinon overrun (jitter buffer
     // côté adaptateur — cf. MidiRing). Vrai = receiveExternal ne débordera pas.
@@ -78,6 +89,10 @@ public:
         txEnableInt_ = false;
         tdre_ = true;                        // ACIA_SR_TX_EMPTY
         if (sched_) sched_->cancel(Scheduler::MIDI_TX);
+        // L'horloge de réception, elle, ne s'arrête pas au reset : le câble continue
+        // de porter des octets pendant qu'on remet la puce à zéro. On la RÉARME (et on
+        // ne la laisse pas éteinte) tant qu'une source hôte est branchée.
+        armRxPace();
     }
 
     // Échéance MIDI_TX : le registre d'émission s'est vidé (~1 octet MIDI après
@@ -116,5 +131,8 @@ private:
     std::function<void(uint8_t)> midiSink_;
     std::function<void(uint8_t, int64_t)> midiSinkTimed_;
     bool loopback_ = false;                  // fiche de bouclage OUT→IN branchée ?
+    // Source hôte cadencée (cf. setRxSource). Non sérialisée (liaison frontend).
+    std::function<bool(uint8_t&)> rxSource_;
+    void armRxPace();                        // (ré)arme l'échéance MIDI_RX si source
     void pushRx(uint8_t v);                  // ajoute un octet à MIDI IN (RDR + shift)
 };
