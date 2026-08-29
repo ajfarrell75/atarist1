@@ -48,6 +48,7 @@
 #include "net/SlirpBackend.hpp"
 #ifdef NEOST_WITH_NET
 #include "net/HayesModem.hpp"
+#include "audio/MidiInHost.hpp"
 #include "net/MidiRing.hpp"
 #endif
 #include "core/Tracer.hpp"
@@ -144,6 +145,10 @@ void usage() {
         "                    also lands in slot 1 when the UltraSatan sits on ID 0)\n"
         "  --midi-net H:P[:L]  MIDI ring over UDP (MIDI Maze online): send MIDI OUT to\n"
         "                    peer H:P, receive MIDI IN on local port L (default 6820)\n"
+        "  --midi-in-device NAME  feed MIDI IN from a HOST device (master keyboard,\n"
+        "                    groovebox...). Exact name from --midi-list. MIDI OUT to a\n"
+        "                    host device is a GUI setting: here --midi-dump logs it\n"
+        "  --midi-list       list the host MIDI input devices then exit\n"
         "  --dongle MODEL    Steinberg key on the cartridge port (/ROM3, $FB0000):\n"
         "                    cubase3 (red key: Cubase 3.10/Score/Audio), cubase2 (black\n"
         "                    key: Cubase 2.01, needs a 68000-exact bus pattern), auto,\n"
@@ -1092,6 +1097,8 @@ int main(int argc, char** argv) {
     int         buttonAtFrame = -1;              // --button-at N : bouton Multiface/URC
     std::string midiDumpPath;                    // --midi-dump FILE : journal « cycle octet » du MIDI OUT
     int         midiNetListen  = 6820;           // port d'écoute par défaut
+    std::string midiInDevice;                    // --midi-in-device : appareil hôte → MIDI IN
+    bool        midiList = false;                // --midi-list : énumère puis sort
     std::string soundDumpPath;                   // --sound-dump F : WAV 48 kHz de la boucle --frames
     std::string serialDumpPath;                  // --serial-dump F : octets série RS-232 bruts (verdicts)
     bool        outFail    = false;   // une SORTIE fichier a échoué → exit ≠ 0 (jamais silencieux)
@@ -1233,6 +1240,8 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(a, "--sd1"))             { ultrasatan = true; sd1Img = next(a); }
         else if (!std::strcmp(a, "--sd2"))             { ultrasatan = true; sd2Img = next(a); }
         else if (!std::strcmp(a, "--midi-dump")) midiDumpPath = next(a);
+        else if (!std::strcmp(a, "--midi-in-device")) midiInDevice = next(a);
+        else if (!std::strcmp(a, "--midi-list")) midiList = true;
         else if (!std::strcmp(a, "--dongle"))    dongleModel  = next(a);
         else if (!std::strcmp(a, "--adapter"))   plugs.emplace_back("", next(a));
         else if (!std::strcmp(a, "--plug"))      { const std::string v = next(a); const auto eq = v.find('=');
@@ -1393,6 +1402,18 @@ int main(int argc, char** argv) {
         else                                      romPath   = a;
     }
 
+    // --midi-list : ce qui est branché MAINTENANT, aux noms exacts attendus par
+    // --midi-in-device (et par midi_in_device / midi_out_device de neost.cfg).
+    // AVANT toute machine : énumérer les appareils de l'hôte n'a rien à voir avec une
+    // ROM, et l'exiger ferait échouer la commande là où l'on cherche justement à
+    // savoir comment s'appelle le clavier qu'on vient de brancher.
+    if (midiList) {
+        const auto ins = MidiInHost::sources();
+        std::printf("MIDI input devices (%zu):\n", ins.size());
+        for (const auto& d : ins) std::printf("  %s\n", d.c_str());
+        if (ins.empty()) std::printf("  (none plugged in)\n");
+        return 0;
+    }
     // Abaisse la machine si le TOS ne la supporte pas (TOS <= 1.04 → ST), comme Hatari.
     machType = Machine::adjustMachineForTos(machType, romPath);
     Machine machine(ramBytes, cpuCore, machType);
@@ -1584,6 +1605,24 @@ int main(int argc, char** argv) {
     }
     // Anneau MIDI réseau (--midi-net) : MIDI OUT → UDP → pair aval ; datagrammes
     // de l'amont → MIDI IN. Débranche le bouclage interne de l'ACIA MIDI.
+    //
+    // --midi-in-device : un appareil RÉEL de la machine hôte entre dans le MIDI IN du
+    // ST. Le pendant sortant n'est PAS ici : côté OUT, le headless a déjà --midi-dump,
+    // qui capture ce que le ST envoie sans dépendre du matériel branché — c'est ce
+    // qu'un test veut. Choisir une destination matérielle reste un réglage du GUI.
+    MidiInHost midiIn;
+    if (!midiInDevice.empty()) {
+        if (midiIn.open(midiInDevice)) {
+            // L'ACIA tire les octets à 31250 bauds (Scheduler::MIDI_RX), pas une
+            // rafale par trame : cf. MidiAcia::setRxSource.
+            machine.midi.setRxSource([&midiIn](uint8_t& b) { return midiIn.tryPop(b); });
+            std::fprintf(stderr, "[headless] MIDI IN <- \"%s\"\n", midiInDevice.c_str());
+        }
+        else
+            std::fprintf(stderr, "[headless] --midi-in-device: \"%s\" not found "
+                         "(--midi-list to see what is plugged in)\n", midiInDevice.c_str());
+
+    }
 #ifdef NEOST_WITH_NET
     std::unique_ptr<MidiRing> midiRing;
     if (!midiNetPeer.empty()) {
@@ -2095,6 +2134,15 @@ int main(int argc, char** argv) {
             outFail = true;
         }
     }
+    // Bilan de l'ENTRÉE, symétrique de celui du --midi-dump. C'est la seule preuve
+    // DÉTERMINISTE que l'appareil hôte a bien alimenté l'ACIA : ce qu'un programme ST
+    // fait ensuite des octets (les rejouer, les ignorer) dépend de LUI, pas de nous,
+    // et ne peut donc pas servir de mesure du pont d'entrée.
+    if (midiIn.isOpen())
+        std::fprintf(stderr, "[headless] MIDI IN: %llu bytes into the ACIA from \"%s\""
+                     " (%llu dropped, host buffer full)\n",
+                     (unsigned long long)midiIn.delivered(), midiIn.name().c_str(),
+                     (unsigned long long)midiIn.dropped());
     // --serial-dump FILE : écrit les octets série bruts dans FILE (capture propre pour
     // les runners de verdict, ex. tools/run_selftests.py qui y cherche NEOST-TEST: … PASS).
     if (!serialDumpPath.empty()) {

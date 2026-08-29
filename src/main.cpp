@@ -262,6 +262,7 @@ static void saveConfig(const std::string& exeDir, Config& c, Machine* machine = 
 #include "imgui_internal.h"   // gestionnaire de réglages personnalisé (ImGuiSettingsHandler)
 #include "imgui_impl_glfw.h"
 #include "gui/KeyboardWindow.hpp"
+#include "audio/MidiInHost.hpp"
 #include "audio/MidiOutHost.hpp"
 #include "audio/Mt32Synth.hpp"
 #include "imgui_impl_opengl2.h"
@@ -1730,6 +1731,15 @@ struct ConfigUi {
     int  reqMidiOutGm = -1, reqMidiOutPort = -1, reqMidiOutMt32 = -1, reqMt32Model = -1;
     bool reqMidiPanic = false;            // bouton « All notes off » de la page MIDI
     int  reqMidiLoopback = -1;            // case OUT->IN de la page MIDI
+    // Appareils MIDI hôtes (page MIDI). Les listes sont RAFRAÎCHIES PAR LA BOUCLE, pas
+    // par la page : énumérer CoreMIDI 60 fois par seconde pour dessiner deux menus
+    // déroulants serait absurde, et un appareil branché à chaud n'a pas besoin
+    // d'apparaître à la milliseconde (cf. le rafraîchissement 1 Hz de la boucle).
+    std::vector<std::string> midiOutDevs, midiInDevs;   // lecture : ce qui est branché
+    std::string midiOutDevCur, midiInDevCur;            // lecture : ce qui est OUVERT ("" = rien)
+    bool midiOutDevSet = false, midiInDevSet = false;   // requête : appliquer le nom ci-dessous
+    std::string reqMidiOutDevice, reqMidiInDevice;
+    uint64_t midiInBytes = 0;             // lecture : octets entrés dans le ST (preuve de vie)
     int  reqDongle = -1;                  // clé cartouche : 0 none, 1 cubase2, 2 cubase3, 3 auto, 4 notator
     int  reqPlugPort = -1, reqPlugDev = -1; // page Dongles : brancher reqPlugDev sur reqPlugPort
     bool reqPortButton = false;           // bouton Multiface / Ultimate Ripper (page Dongles)
@@ -2101,6 +2111,34 @@ void drawConfigWindow(ConfigUi& ui) {
         ImGui::TextDisabled("MIDI OUT of the ST (ACIA 6850)");
         ImGui::Separator();
 
+        // Menu déroulant d'appareils hôtes, commun à la sortie et à l'entrée. Rend
+        // true et remplit `picked` quand l'utilisateur choisit (chaîne vide = None).
+        // L'appareil MÉMORISÉ mais absent reste affiché, marqué : le débranchement
+        // d'un synthé ne doit pas effacer silencieusement le réglage — c'est le même
+        // piège que le midi_out_port retombé à 0 sans un mot.
+        auto deviceCombo = [](const char* id, const std::vector<std::string>& devs,
+                              const std::string& want, const std::string& open,
+                              std::string& picked) {
+            bool changed = false;
+            const bool missing = !want.empty() && open != want;
+            char label[160];
+            std::snprintf(label, sizeof label, "%s%s",
+                          want.empty() ? "None" : want.c_str(),
+                          missing ? "  (not connected)" : "");
+            ImGui::SetNextItemWidth(320.f);
+            if (ImGui::BeginCombo(id, label)) {
+                if (ImGui::Selectable("None", want.empty())) { picked.clear(); changed = true; }
+                for (const auto& d : devs)
+                    if (ImGui::Selectable(d.c_str(), d == want)) { picked = d; changed = true; }
+                if (missing)   // toujours re-sélectionnable sans attendre le retour du matériel
+                    if (ImGui::Selectable((want + "  (not connected)").c_str(), true)) {
+                        picked = want; changed = true;
+                    }
+                ImGui::EndCombo();
+            }
+            return changed;
+        };
+
         // (a) Port virtuel : la voie RECOMMANDÉE pour du General MIDI.
         if (MidiOutHost::portAvailable()) {
             bool port = cfg.midiOutPort;
@@ -2115,6 +2153,23 @@ void drawConfigWindow(ConfigUi& ui) {
             bool no = false; ImGui::Checkbox("Virtual MIDI port \"NeoST MIDI OUT\"", &no);
             ImGui::EndDisabled();
             ImGui::TextDisabled("  Not in this build (needs libasound2-dev).");
+        }
+        ImGui::Separator();
+
+        // (a bis) DESTINATION MATÉRIELLE. Le port virtuel ci-dessus est PASSIF : il
+        // attend qu'un logiciel s'y abonne, et un expandeur ne s'abonne à rien. Ceci
+        // est le câble DIN du ST vers l'appareil, sans patchbay tiers au milieu.
+        if (MidiOutHost::portAvailable()) {
+            ImGui::TextDisabled("Hardware device (synth, groovebox, keyboard)");
+            std::string pick;
+            if (deviceCombo("##midiout", ui.midiOutDevs, cfg.midiOutDevice,
+                            ui.midiOutDevCur, pick)) {
+                ui.reqMidiOutDevice = pick; ui.midiOutDevSet = true;
+            }
+            if (ui.midiOutDevs.empty())
+                ImGui::TextDisabled("  Nothing plugged in right now.");
+            else
+                ImGui::TextDisabled("  Straight into the gear - no patchbay needed.");
         }
         ImGui::Separator();
 
@@ -2153,8 +2208,27 @@ void drawConfigWindow(ConfigUi& ui) {
         }
         ImGui::Separator();
 
-        // MIDI IN : la fiche de bouclage, jusqu'ici cachée dans le menu Machine.
-        ImGui::TextDisabled("MIDI IN");
+        // MIDI IN : la source matérielle, puis la fiche de bouclage (jusqu'ici cachée
+        // dans le menu Machine).
+        ImGui::TextDisabled("MIDI IN of the ST (ACIA 6850)");
+        if (MidiInHost::available()) {
+            ImGui::TextDisabled("Hardware device (master keyboard, sequencer)");
+            std::string pick;
+            if (deviceCombo("##midiin", ui.midiInDevs, cfg.midiInDevice,
+                            ui.midiInDevCur, pick)) {
+                ui.reqMidiInDevice = pick; ui.midiInDevSet = true;
+            }
+            if (ui.midiInDevs.empty())
+                ImGui::TextDisabled("  Nothing plugged in right now.");
+            else if (!ui.midiInDevCur.empty())
+                // Preuve de vie : sans ce compteur, « rien ne se passe » ne dit pas
+                // si le câble est muet ou si c'est le programme ST qui n'écoute pas.
+                ImGui::TextDisabled("  %llu bytes into the ST so far.",
+                                    (unsigned long long)ui.midiInBytes);
+            else
+                ImGui::TextDisabled("  Play it: the ST sees a real MIDI cable.");
+        }
+        ImGui::Spacing();
         bool loop = cfg.midiLoopback;   // cfg est CONST ici : on passe par une requête
         if (ImGui::Checkbox("Loopback cable OUT->IN", &loop)) ui.reqMidiLoopback = loop ? 1 : 0;
         ImGui::TextDisabled("  A real ST has none. Cubase MIDI Thru = feedback.");
@@ -2856,6 +2930,9 @@ int main(int argc, char** argv) {
     // Sortie MIDI hôte (macOS) : synthé GM intégré et/ou port CoreMIDI virtuel. Dès
     // qu'une sortie est ouverte, l'ACIA y envoie MIDI OUT (au lieu du bouclage).
     MidiOutHost midiOut;
+    // Entrée MIDI hôte : un appareil branché (clavier maître, groovebox) entre dans
+    // le MIDI IN du ST. Drainé une fois par trame, cf. la boucle principale.
+    MidiInHost midiIn;
     // Roland MT-32/CM-32L (Munt) : rendu DANS la sortie audio, daté au cycle (pas de gigue).
     Mt32Synth mt32;
     // Fréquence de sortie visée. Ce n'est PAS forcément celle qu'on obtiendra : le
@@ -2871,6 +2948,12 @@ int main(int argc, char** argv) {
                 g_stateMsgFrames = 300;
             }
         } else midiOut.closeVirtualPort();
+        // Destination MATÉRIELLE. L'échec est SILENCIEUX à dessein : un appareil
+        // débranché n'est pas une erreur de configuration, et effacer son nom ferait
+        // perdre le réglage au premier câble USB retiré. On le garde, la boucle
+        // re-tente, la page affiche « (not connected) ».
+        if (!cfg.midiOutDevice.empty()) midiOut.openDestination(cfg.midiOutDevice);
+        else                            midiOut.closeDestination();
         if (cfg.midiOutMt32) {
             if (!mt32.isOpen() && !mt32.open(resolveData(cfg.mt32Roms, exeDir), audioRate, cfg.mt32Model)) {
                 g_stateMsg = "MT-32: " + mt32.lastError(); g_stateMsgFrames = 300;
@@ -2886,6 +2969,18 @@ int main(int argc, char** argv) {
         else machine.midi.setMidiSinkTimed({});
     };
     midiOutApply();
+    // Entrée matérielle : même politique que la destination — on garde le nom, on
+    // re-tente, on ne dit rien tant que l'appareil n'est pas là.
+    auto midiInApply = [&]() {
+        if (!cfg.midiInDevice.empty()) midiIn.open(cfg.midiInDevice);
+        else                           midiIn.close();
+        // L'ACIA TIRE les octets sur son horloge série (2560 cycles/octet), au lieu
+        // d'une rafale par trame qui plafonnait l'entrée à ~143 o/s. Cf. MidiAcia::
+        // setRxSource. La lambda survit à un débranchement : tryPop rend false.
+        if (midiIn.isOpen()) machine.midi.setRxSource([&midiIn](uint8_t& b) { return midiIn.tryPop(b); });
+        else                 machine.midi.setRxSource({});
+    };
+    midiInApply();
     machine.mfp.setColorMonitor(!cfg.mono);   // moniteur mémorisé (avant le reset)
     machine.fdc.setFastFdc(cfg.fastfdc);      // FDC rapide mémorisé (accès disque ÷10)
     // Socket MC68881 (Mega STE uniquement, cf. Fpu.hpp) : sonde + trapping.
@@ -3499,6 +3594,16 @@ int main(int argc, char** argv) {
                 // débogueur (sites runFrame du mode pausé) ne compte pas, c'est voulu :
                 // l'option sert un harnais, pas une session de débogage.
                 if (g_runFrames > 0 && --g_runFrames == 0) {
+                    // Bilan de l'entrée MIDI hôte, comme le headless. Le GUI est le SEUL
+                    // à tourner en temps réel : le headless émule ~19x plus vite, donc
+                    // une source MIDI réelle y est toujours le facteur limitant et n'y
+                    // mesure jamais le débit de l'ACIA. C'est donc ici, et nulle part
+                    // ailleurs, qu'on peut vérifier les 3125 o/s du câble.
+                    if (midiIn.isOpen())
+                        std::fprintf(stderr, "[main] MIDI IN: %llu bytes into the ACIA from \"%s\""
+                                     " (%llu dropped)\n",
+                                     (unsigned long long)midiIn.delivered(), midiIn.name().c_str(),
+                                     (unsigned long long)midiIn.dropped());
                     if (!g_shotPath.empty()) {
                         const uint32_t* px = machine.shifter.pixels();
                         const int w = machine.shifter.width(), h = machine.shifter.height();
@@ -3856,6 +3961,24 @@ int main(int argc, char** argv) {
         cfgUi.curAcsi   = cfg.acsi.empty()   ? std::string() : resolvePath(cfg.acsi);
         cfgUi.curSd2    = cfg.sd2.empty()    ? std::string() : resolvePath(cfg.sd2);
         cfgUi.mt32Status = mt32.isOpen() ? (mt32.model() + " running") : mt32.lastError();
+        // Appareils MIDI hôtes : énumération et RECONNEXION à 1 Hz. Le débranchement
+        // d'un câble USB ne doit pas demander de rouvrir la configuration, et 60
+        // énumérations CoreMIDI par seconde pour deux menus seraient du gaspillage.
+        {
+            static auto lastMidiScan = clock::now() - std::chrono::seconds(2);
+            if (clock::now() - lastMidiScan >= std::chrono::seconds(1)) {
+                lastMidiScan = clock::now();
+                cfgUi.midiOutDevs = MidiOutHost::destinations();
+                cfgUi.midiInDevs  = MidiInHost::sources();
+                if (!cfg.midiOutDevice.empty() && midiOut.destinationName() != cfg.midiOutDevice)
+                    midiOut.openDestination(cfg.midiOutDevice);
+                if (!cfg.midiInDevice.empty() && midiIn.name() != cfg.midiInDevice)
+                    midiIn.open(cfg.midiInDevice);
+            }
+        }
+        cfgUi.midiOutDevCur = midiOut.destinationName();
+        cfgUi.midiInDevCur  = midiIn.name();
+        cfgUi.midiInBytes   = midiIn.delivered();
         if (!cfgUi.mixInit) {            // sème les faders depuis la config (une fois)
             cfgUi.mixYm = cfg.mixYm; cfgUi.mixDma = cfg.mixDma; cfgUi.mixDac = cfg.mixDac;
             cfgUi.mixDrive = cfg.mixDrive; cfgUi.mixMt32 = cfg.mixMt32; cfgUi.mixInit = true;
@@ -3949,6 +4072,20 @@ int main(int argc, char** argv) {
             if (cfgUi.mixDone) { saveConfig(exeDir, cfg, &machine); cfgUi.mixDone = false; }
             if (cfgUi.reqMidiOutGm >= 0)   { cfg.midiOutGm   = cfgUi.reqMidiOutGm   == 1; cfgUi.reqMidiOutGm   = -1; midiOutApply(); saveConfig(exeDir, cfg, &machine); }
             if (cfgUi.reqMidiOutPort >= 0) { cfg.midiOutPort = cfgUi.reqMidiOutPort == 1; cfgUi.reqMidiOutPort = -1; midiOutApply(); saveConfig(exeDir, cfg, &machine); }
+            if (cfgUi.midiOutDevSet) {
+                cfg.midiOutDevice = cfgUi.reqMidiOutDevice; cfgUi.midiOutDevSet = false;
+                midiOutApply();
+                if (!cfg.midiOutDevice.empty() && !midiOut.destinationOpen())
+                    { g_stateMsg = "MIDI OUT: \"" + cfg.midiOutDevice + "\" not connected"; g_stateMsgFrames = 240; }
+                saveConfig(exeDir, cfg, &machine);
+            }
+            if (cfgUi.midiInDevSet) {
+                cfg.midiInDevice = cfgUi.reqMidiInDevice; cfgUi.midiInDevSet = false;
+                midiInApply();
+                if (!cfg.midiInDevice.empty() && !midiIn.isOpen())
+                    { g_stateMsg = "MIDI IN: \"" + cfg.midiInDevice + "\" not connected"; g_stateMsgFrames = 240; }
+                saveConfig(exeDir, cfg, &machine);
+            }
             if (cfgUi.reqMidiOutMt32 >= 0) { cfg.midiOutMt32 = cfgUi.reqMidiOutMt32 == 1; cfgUi.reqMidiOutMt32 = -1; midiOutApply(); saveConfig(exeDir, cfg, &machine); }
             if (cfgUi.reqMidiLoopback >= 0) { cfg.midiLoopback = cfgUi.reqMidiLoopback == 1;
                                               cfgUi.reqMidiLoopback = -1;

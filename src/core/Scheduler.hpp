@@ -58,6 +58,13 @@ public:
     // re-remplit ~1 octet MIDI (10 bits à 31250 bauds = 2560 cycles) après une
     // écriture donnée sous TIE — cadence l'IRQ « transmetteur prêt » des
     // séquenceurs qui streament la sortie MIDI par interruption (cf. midi.c).
+    // MIDI_RX = livraison cadencée d'un octet du MONDE EXTÉRIEUR à l'ACIA MIDI :
+    // l'horloge de réception tourne en permanence à 31250 bauds (10 bits = 2560
+    // cycles) tant qu'une source hôte est branchée, et fait entrer AU PLUS un octet
+    // par période — comme le registre à décalage d'un 6850 sur un vrai câble.
+    // Auparavant l'injection se faisait une fois par TRAME, ce qui plafonnait
+    // l'entrée à 2 octets/trame (~143 o/s en mono) contre 3125 o/s sur un câble :
+    // un accord un peu dense entrait au ralenti. Symétrique de MIDI_TX.
     // BLITTER = tranche non-hog suivante du blitter : 64 accès bus blitter (256
     // cycles, CPU arrêté) alternés avec 64 accès CPU (cf. Blitter::onSlice).
     // VC_RESTART = rechargement du compteur vidéo en fin de trame (port
@@ -65,7 +72,7 @@ public:
     // SERIAL_RX = livraison cadencée d'un octet RX à l'USART MFP (injection côté
     // hôte : modem Hayes — cf. Mfp::receiveByte). Un octet toutes
     // les ~10 périodes bit au débit configuré, IRQ RxFull (canal 12) par octet.
-    enum Source { RENDER, TIMER_A, TIMER_B, TIMER_B_DELAY, TIMER_C, TIMER_D, MFP_IRQ, FDC, FDC_INDEX, DMASND, IKBD, IKBD_RX, IKBD_TX, MIDI_TX, SERIAL_RX, MICROWIRE, BLITTER, VC_RESTART, HBL, VBL, SRC_COUNT };
+    enum Source { RENDER, TIMER_A, TIMER_B, TIMER_B_DELAY, TIMER_C, TIMER_D, MFP_IRQ, FDC, FDC_INDEX, DMASND, IKBD, IKBD_RX, IKBD_TX, MIDI_TX, MIDI_RX, SERIAL_RX, MICROWIRE, BLITTER, VC_RESTART, HBL, VBL, SRC_COUNT };
 
     using Callback = std::function<void()>;
 

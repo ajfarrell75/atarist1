@@ -26,6 +26,72 @@ Ripper, DAC Pro Sound) avec page Dongles, `disks/dongles.txt` et oracle de rejeu
 vérifié note à note** en headless, corpus MIDI piano/blues ; port MIDI ALSA sous Linux ;
 save-state v16. Détail dans les chantiers datés ci-dessous.
 
+## MIDI IN — l'ACIA tire à 31 250 bauds au lieu d'une rafale par trame (2026-08-29)
+
+Défaut de la livraison du jour même, trouvé en mesurant plutôt qu'en supposant. L'entrée
+hôte poussait ses octets dans l'ACIA **une fois par trame**, et le 6850 n'en accepte que
+2 : plafond de **2 octets/trame**, mesuré 1,76 sous flux saturé (10 564 octets en 6 000
+trames) — soit ~143 o/s en mono, ~100 o/s en PAL, contre **3 125 o/s** sur un vrai câble
+MIDI, 4,5 %. Un accord de dix notes mettait 0,2 s à entrer ; un balayage de molette de
+hauteur (~300 o/s) creusait un retard qui grandissait.
+
+C'est désormais l'**ACIA qui tire** : `MidiAcia::setRxSource` + échéance
+`Scheduler::MIDI_RX`, un octet toutes les 2 560 cycles (10 bits à 31 250 bauds). Le
+pendant exact de `MIDI_TX` en émission, et le même patron qu'`IKBD_RX` pour l'ACIA
+clavier. Conséquence de fidélité : le débordement redevient celui du **matériel** — si
+le ST ne lit pas assez vite, c'est le 6850 qui perd l'octet **neuf** — au lieu d'être
+masqué par une rétention côté hôte.
+
+**Mesuré en temps réel (GUI, mono 71 Hz, source hôte à 3 000 o/s) : 76 800 octets en
+1 900 trames = 40,4 o/trame, ~2 885 o/s, 92 % d'un câble.** Facteur 20, et hors
+d'atteinte de l'ancien plafond. ⚠ La mesure n'est possible **que** dans le GUI : le
+headless émule ~19 fois plus vite que le temps réel, donc une source MIDI réelle y reste
+toujours le facteur limitant — le bilan `MIDI IN: N bytes` y est ajouté aussi, mais il
+mesure l'hôte, pas la puce.
+
+`neost-selftest` éprouve le chemin complet (MidiInHost + MidiAcia + Scheduler) sans le
+moindre appareil : cadence bornée des deux côtés (ni plus vite ni plus lentement que le
+câble), 200 octets en ~200 périodes série, overrun matériel, tampon hôte saturé. Un
+piège rencontré et consigné dans le test : une source ne tire qu'**une fois par appel à
+`runTo`** (masque `fired` du Scheduler, modèle Hatari) — un test qui avance d'un gros
+bloc ne mesure que lui-même.
+
+**Save-state v18** : `SRC_COUNT` passe de 20 à 21, le tableau `due_` sérialisé change de
+taille. Les états v17 sont refusés.
+
+## MIDI — NeoST choisit son appareil, dans les deux sens (2026-08-29)
+
+Le MIDI OUT de NeoST ne savait sortir que vers un **port virtuel** (source CoreMIDI /
+port ALSA « NeoST MIDI OUT »), et le MIDI IN n'avait aucune entrée hôte du tout. Or une
+source virtuelle est **passive** : un FluidSynth s'y abonne, un expandeur ou une
+groovebox ne s'abonne à rien. Piloter du vrai matériel demandait donc un patchbay tiers
+entre les deux — constaté sur un Novation Circuit Tracks, qui n'entendait NeoST qu'à
+travers un pont écrit pour l'occasion.
+
+- **Destination matérielle** (`midi_out_device=`, GUI Configuration → MIDI) : le MIDI OUT
+  du ST entre directement dans l'appareil. `MidiOutHost::destinations()` énumère,
+  `openDestination()` ouvre par NOM.
+- **Source matérielle** (`midi_in_device=`, même page) : un clavier maître ou un
+  séquenceur entre dans le MIDI IN du ST. Classe neuve `MidiInHost`, câblée sur
+  `MidiAcia::receiveExternal` — le chemin que l'anneau MIDI réseau utilisait déjà.
+- Headless : `--midi-list` (énumère) et `--midi-in-device NAME`. Pas de
+  `--midi-out-device` : `--midi-dump` capture déjà la sortie sans dépendre du matériel.
+
+Quatre décisions, chacune contre un piège concret : désignation **par nom** (un index se
+serait mis à pointer le mauvais appareil au débranchement suivant) ; un appareil absent
+**n'efface pas** le réglage et la boucle re-tente à 1 Hz (branchement à chaud) ; panique
+CC 120/121/123 **avant** de fermer une destination (un synthé ne relâche jamais une note
+tout seul) ; **tampon de gigue** en entrée qui ne livre que ce que `rxCanAccept()`
+autorise, en perdant les octets NEUFS en saturation comme un vrai 6850 en overrun.
+
+Vérifié (macOS, Circuit Tracks + appareils virtuels de test) : 255 octets entrés dans
+l'ACIA depuis une source hôte, 0 perdu — contre 2 octets pour un appareil qu'on ne
+touche pas ; SysEx de démarrage de MROS reçu par une destination matérielle **port
+virtuel coupé**, donc portée par la destination seule ; panique observée à la fermeture.
+`neost-selftest` couvre le tampon de gigue sans aucun appareil branché (3 propriétés,
+2 mutations vérifiées : jeter l'ancien, ignorer le refus du 6850). ⚠ Le backend **ALSA**
+est écrit mais **n'a pas été exécuté** — aucune machine Linux dans la boucle.
+
 ## A11 — les deux écarts oracle « inexpliqués » sont tranchés : un n'existait pas (2026-08-29)
 
 Deux étalons dormaient en `ref_kind: snapshot` depuis le 2026-08-19 avec un résidu oracle

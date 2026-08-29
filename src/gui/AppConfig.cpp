@@ -82,6 +82,8 @@ void parseConfigLine(Config& c, std::string line) {
     else if (line.rfind("midi_loopback=", 0) == 0) c.midiLoopback = (line.substr(14) == "1");
     else if (line.rfind("midi_out_gm=", 0) == 0) c.midiOutGm = (line.substr(12) == "1");
     else if (line.rfind("midi_out_port=", 0) == 0) c.midiOutPort = (line.substr(14) == "1");
+    else if (line.rfind("midi_out_device=", 0) == 0) c.midiOutDevice = line.substr(16);
+    else if (line.rfind("midi_in_device=", 0) == 0) c.midiInDevice = line.substr(15);
     else if (line.rfind("midi_out_mt32=", 0) == 0) c.midiOutMt32 = (line.substr(14) == "1");
     else if (line.rfind("mt32_roms=", 0) == 0) c.mt32Roms = line.substr(10);
     else if (line.rfind("mt32_model=", 0) == 0) c.mt32Model = line.substr(11);
@@ -202,6 +204,8 @@ void writeConfigKeys(std::ostream& f, const Config& w, bool full) {
       << "\nmidi_loopback=" << (w.midiLoopback ? 1 : 0)
       << "\nmidi_out_gm=" << (w.midiOutGm ? 1 : 0)
       << "\nmidi_out_port=" << (w.midiOutPort ? 1 : 0)
+      << "\nmidi_out_device=" << w.midiOutDevice
+      << "\nmidi_in_device=" << w.midiInDevice
       << "\nmidi_out_mt32=" << (w.midiOutMt32 ? 1 : 0)
       << "\nmt32_roms=" << w.mt32Roms
       << "\nmt32_model=" << w.mt32Model

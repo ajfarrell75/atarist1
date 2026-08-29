@@ -115,6 +115,33 @@ void MidiAcia::receiveExternal(uint8_t b) {
     pushRx(b);                       // octet de l'anneau MIDI → MIDI IN
 }
 
+// -----------------------------------------------------------------------------
+//  Source hôte cadencée sur l'horloge série (appareil MIDI branché sur la machine)
+// -----------------------------------------------------------------------------
+void MidiAcia::setRxSource(std::function<bool(uint8_t&)> fn) {
+    rxSource_ = std::move(fn);
+    if (rxSource_) armRxPace();
+    else if (sched_) sched_->cancel(Scheduler::MIDI_RX);
+}
+
+void MidiAcia::armRxPace() {
+    // L'horloge tourne en PERMANENCE tant qu'un appareil est branché, même sans
+    // octet à faire entrer : c'est ce que fait un vrai récepteur série, et ça évite
+    // d'avoir à réveiller l'ordonnanceur depuis le thread de l'hôte.
+    if (rxSource_ && sched_)
+        sched_->schedule(Scheduler::MIDI_RX, sched_->now() + kMidiTxByteCycles);
+}
+
+void MidiAcia::onRxPace() {
+    if (!rxSource_) return;          // débranché entre l'armement et l'échéance
+    uint8_t b = 0;
+    // pushRx applique la règle du 6850 : récepteur plein → c'est le NOUVEL octet qui
+    // tombe. C'est l'overrun du MATÉRIEL, et il est désormais au bon endroit — l'hôte
+    // ne retient plus rien pour l'éviter, il livre au débit du câble.
+    if (rxSource_(b)) pushRx(b);
+    armRxPace();
+}
+
 void MidiAcia::onTxEmpty() {
     // Le registre d'émission s'est vidé (octet « parti » sur MIDI OUT) : TDRE
     // repasse à 1 → re-lève l'IRQ « transmetteur prêt » tant que TIE est armé.

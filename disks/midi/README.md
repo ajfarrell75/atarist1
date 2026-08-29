@@ -49,10 +49,21 @@ Cubase jette la piste de notes). Tout cela a été **mesuré** avec l'étalon ci
 1. `neost.cfg` : `gemdos=disks/midi`, `rom=roms/tos104fr.img`, `machine=megast`,
    `mem=1m`, `mono=1`, `midi_out_port=1` (et `midi_out_gm=0`, `midi_out_mt32=0` pour
    ne pas doubler le son). Ou Configuration → MIDI → *Virtual port*.
-2. Dans Pianoteq : *Options → Devices → MIDI input* : cocher **« NeoST MIDI OUT »**
-   (NeoST crée une *source* CoreMIDI virtuelle, il ne choisit pas de destination).
+2. Dans Pianoteq : *Options → Devices → MIDI input* : cocher **« NeoST MIDI OUT »**.
+   Le port virtuel est une *source* PASSIVE : c'est au logiciel de s'y abonner.
 3. Cubase se lance seul. *File → Import…* → OK → `C:\CHOPIN\RAINDROP.MID` →
    **Enter du pavé numérique** = Play (`0` = Stop).
+
+## Jouer dans un appareil MATÉRIEL (expandeur, groovebox, clavier)
+
+Un synthé matériel ne s'abonne à rien : le port virtuel ci-dessus ne l'atteint pas, et
+il fallait un patchbay tiers au milieu. Depuis le 2026-08-29, NeoST **choisit lui-même
+sa destination** : `midi_out_device=<nom>` dans `neost.cfg`, ou Configuration → MIDI →
+*Hardware device*. Le nom est celui qu'affiche le système (« Circuit Tracks MIDI ») ;
+`neost-headless --midi-list` les énumère. Symétriquement, `midi_in_device=<nom>` fait
+ENTRER un clavier maître dans le MIDI IN du ST — Cubase l'enregistre alors comme il
+enregistrerait un clavier branché sur le DIN de la machine. Détails et pièges
+(branchement à chaud, notes bloquées) → [`../../docs/EXTENSIONS.md`](../../docs/EXTENSIONS.md).
 
 Les octets MIDI sont livrés à l'heure de leur cycle 68000 (+30 ms fixes) : pas de
 gigue de trame ; tempo mesuré exact à +0,1 %. Si Pianoteq signale des « duplicate

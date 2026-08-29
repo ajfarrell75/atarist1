@@ -296,7 +296,9 @@ un TOS FR : A/Q, Z/W, M permutés, sinon « M » tombe en virgule dans un sélec
 ainsi qu'on pilote Vroom : clic droit au titre, clic droit en course). Debug entrées :
 `NEOST_DEBUG_IKBD=1` (commandes reçues par l'IKBD), `NEOST_DEBUG_ACIA=1` (chaque lecture
 du data register $FFFC02 : valeur, file restante, cycle). MIDI : `--midi-dump FILE`
-(chaque octet MIDI OUT daté du cycle 68000 → `tools/midi_compare.py`), `--dongle
+(chaque octet MIDI OUT daté du cycle 68000 → `tools/midi_compare.py`), `--midi-list`
+(appareils MIDI de l'hôte) et `--midi-in-device NAME` (un clavier maître entre dans le
+MIDI IN du ST ; bilan « N bytes into the ACIA » en fin de run), `--dongle
 cubase3|cubase2|auto` (clé Steinberg sur /ROM3, cf. `docs/EXTENSIONS.md`).
 
 Format de trace (la séquence de PC est le signal de diff) :

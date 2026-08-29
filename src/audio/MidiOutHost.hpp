@@ -11,6 +11,16 @@
 //        matériel peut écouter : CoreMIDI sous macOS, séquenceur ALSA sous Linux.
 //        C'est la voie recommandée pour du General MIDI — un FluidSynth ou un Qsynth
 //        branché dessus rendra ces fichiers bien mieux qu'un MT-32.
+//    (c) DESTINATION MATÉRIELLE choisie par son nom (openDestination) : le MIDI OUT
+//        du ST entre DIRECTEMENT dans l'expandeur, la boîte à rythmes ou le clavier
+//        branché sur la machine hôte. (b) ne le remplace pas : une source virtuelle
+//        est PASSIVE, c'est au logiciel d'en face de s'y abonner, et l'appareil
+//        matériel, lui, ne s'abonne à rien — il fallait jusqu'ici un patchbay tiers
+//        pour relier les deux. C'est le câble MIDI DIN du ST vers le synthé, rejoué.
+//
+//  Les appareils sont désignés par leur NOM, jamais par leur index : débrancher un
+//  périphérique renumérote tous les autres, et une config mémorisée en index se
+//  serait mise à piloter le mauvais appareil au branchement suivant.
 //
 //  Les octets arrivent un par un depuis le thread d'émulation ; un petit parseur
 //  (running status, SysEx, temps réel) reconstitue les messages. Sur une plateforme
@@ -24,6 +34,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
+#include <string>
 #include <mutex>
 #include <thread>
 #include <vector>
@@ -51,7 +62,18 @@ public:
     void closeVirtualPort();
     bool portOpen() const { return src_ != 0; }
 
-    bool anyOpen() const { return synthOpen() || portOpen(); }
+    // --- Destination MATÉRIELLE (expandeur, groovebox, clavier branché sur l'hôte) ---
+    // destinations() énumère ce qui est branché MAINTENANT : à rappeler pour voir un
+    // appareil connecté à chaud. openDestination() prend un NOM (cf. l'en-tête) et
+    // échoue sans bruit si l'appareil n'est pas là — l'appelant garde le nom en
+    // config et re-tente, c'est ce qui rend le branchement à chaud transparent.
+    static std::vector<std::string> destinations();
+    bool openDestination(const std::string& name);
+    void closeDestination();
+    bool destinationOpen() const { return dst_ != 0; }
+    const std::string& destinationName() const { return dstName_; }
+
+    bool anyOpen() const { return synthOpen() || portOpen() || destinationOpen(); }
 
     // Un octet MIDI OUT de l'ACIA, livré IMMÉDIATEMENT (thread d'émulation).
     void byte(uint8_t b);
@@ -76,6 +98,16 @@ private:
     uint32_t src_ = 0;                  // MIDIEndpointRef / port ALSA + 1 (0 = fermé)
     void* seq_ = nullptr;               // snd_seq_t*        (Linux)
     void* enc_ = nullptr;               // snd_midi_event_t* (Linux)
+    // Destination matérielle. macOS : outPort_ = MIDIPortRef, dst_ = MIDIEndpointRef.
+    // ALSA : dst_ = (client << 8 | port) + 1, l'abonnement partant de notre port src_
+    // — d'où ensurePort_(), qui crée ce port même quand la case « port virtuel » est
+    // décochée (sans port source, rien à abonner : la destination serait morte).
+    uint32_t outPort_ = 0;
+    uint32_t dst_ = 0;
+    std::string dstName_;
+    bool userPort_ = false;             // le port virtuel a-t-il été demandé POUR LUI-MÊME ?
+    bool ensurePort_();                 // crée client/port si besoin (partagé b + c)
+    void releasePort_();                // détruit ce que plus personne n'utilise
 
     // Parseur : statut courant, octets de données attendus/accumulés, SysEx.
     uint8_t status_ = 0;

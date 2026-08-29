@@ -45,6 +45,11 @@ struct Config { std::string rom; std::string disk; std::string diskb; std::strin
                 bool midiLoopback = false; // fiche de bouclage MIDI OUT→IN (diagnostics ; OFF = vrai ST)
                 bool midiOutGm = false;    // MIDI OUT → synthé General MIDI intégré (macOS)
                 bool midiOutPort = false;  // MIDI OUT → port CoreMIDI virtuel « NeoST MIDI OUT » (macOS)
+                // Appareils MIDI hôtes, désignés par leur NOM (vide = aucun). Un index
+                // se serait mis à pointer le mauvais appareil dès qu'on en débranche un
+                // autre ; le nom survit au débranchement ET permet la reconnexion à chaud.
+                std::string midiOutDevice;  // MIDI OUT → destination matérielle (expandeur, groovebox…)
+                std::string midiInDevice;   // MIDI IN  ← source matérielle (clavier maître, séquenceur…)
                 // ACTIF PAR DÉFAUT depuis que Munt est vendorisé (extern/mt32emu) : la
                 // bibliothèque est toujours là, il n'y a plus de raison d'attendre que
                 // l'utilisateur découvre l'option. Sans ROM Roland dans mt32Roms,
