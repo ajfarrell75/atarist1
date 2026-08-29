@@ -60,6 +60,9 @@ struct Config { std::string rom; std::string disk; std::string diskb; std::strin
                 struct MidiInDev  { std::string name; int channel = 0; };  // 0 = tel quel
                 std::vector<MidiOutDev> midiOutDevices;
                 std::vector<MidiInDev>  midiInDevices;
+                // Avance de livraison du MIDI OUT, en ms (0-200). Arbitrage
+                // gigue/latence : cf. MidiOutHost::setLeadMs et son témoin lateBytes.
+                int midiLeadMs = 30;
                 // ACTIF PAR DÉFAUT depuis que Munt est vendorisé (extern/mt32emu) : la
                 // bibliothèque est toujours là, il n'y a plus de raison d'attendre que
                 // l'utilisateur découvre l'option. Sans ROM Roland dans mt32Roms,

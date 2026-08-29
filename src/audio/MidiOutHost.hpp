@@ -32,6 +32,7 @@
 #pragma once
 #include "audio/MidiMessageParser.hpp"
 #include "core/Pacing.hpp"
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
@@ -101,11 +102,25 @@ public:
     // délivre à l'heure dite : latence fixe (inaudible), gigue nulle.
     // A28 : UNE seule définition de l'horloge CPU/bus, dans core/Pacing.hpp.
     static constexpr double kCpuHz = neost::pacing::kCpuHz;
-    static constexpr int    kLeadMs = 30;
+    // AVANCE de livraison, en ms. C'est un ARBITRAGE, et il appartient à
+    // l'utilisateur : plus elle est courte, plus le jeu au clavier est direct ; plus
+    // elle est longue, mieux elle absorbe un à-coup de la boucle GUI (drag de
+    // fenêtre, rafale disque). Trop courte, l'octet est déjà en RETARD au moment
+    // d'être programmé et part immédiatement — la gigue revient. C'est ce que compte
+    // lateBytes() : le réglage a un témoin, on n'a pas à deviner où est la limite.
+    static constexpr int kDefaultLeadMs = 30;
+    void setLeadMs(int ms);
+    int  leadMs() const { return leadMs_; }
+    uint64_t lateBytes() const { return lateBytes_.load(std::memory_order_relaxed); }
     void anchor(int64_t cycle, std::chrono::steady_clock::time_point hostTime);
     void byteAt(uint8_t b, int64_t cycle);
 
 private:
+    std::atomic<int> leadMs_{kDefaultLeadMs};
+    // Octets déjà en retard au moment d'être programmés : l'avance était trop courte
+    // pour absorber le retard de la boucle hôte. Lu par l'interface.
+    std::atomic<uint64_t> lateBytes_{0};
+
     void* graph_ = nullptr;             // AUGraph (macOS)
     void* synth_ = nullptr;             // AudioUnit DLSMusicDevice (macOS)
     uint32_t client_ = 0;               // MIDIClientRef (macOS)

@@ -487,9 +487,13 @@ densité HD/ED STX (NeoST plus cohérent) ; RTC en temps émulé (déterminisme 
   par canal** (chaque destination reçoit le masque de canaux qu'on lui donne ; les
   messages système vont à toutes). Reste ouvert ci-dessous : le multi-PORTS, qui est un
   autre sujet — l'aiguillage répartit 16 canaux, il n'en crée pas 32.
-- **Latence de jeu : ~30-35 ms aller-retour** (arithmétique, non mesurée) — la part
-  « entrée » est tombée avec le point ci-dessus (l'octet entre à son cycle, plus au
-  début de la trame) ; restent surtout les 30 ms d'avance fixe en sortie
+- ~~**Latence de jeu.**~~ **RÉGLABLE depuis le 2026-08-29** (`midi_lead_ms=`, curseur
+  0-100 ms sur la page MIDI ; mesuré : 190 ms d'écart de livraison pour 200 ms commandés).
+  La part « entrée » était déjà tombée avec le point précédent. ⚠ L'avance ne protège PAS
+  du cas courant — l'émulation d'une trame prend moins de temps réel qu'une trame, donc à
+  0 ms d'avance aucun octet n'est en retard sur un run sain (mesuré) ; elle protège du
+  RATTRAPAGE quand la boucle décroche. D'où le témoin `lateBytes` : le réglage se baisse
+  jusqu'à ce qu'il se déclenche, plutôt qu'à l'aveugle. Ce qui reste ouvert : ~30 ms
   (`MidiOutHost::kLeadMs`, le prix payé pour tuer la gigue). Un pianiste le sent. Rendre
   cette avance **réglable** : c'est un arbitrage gigue/latence qui appartient à
   l'utilisateur. Le premier point ci-dessus supprime la part « entrée ».
@@ -502,10 +506,13 @@ densité HD/ED STX (NeoST plus cohérent) ; RTC en temps émulé (déterminisme 
   Cubase, mais aucun étalon ne l'exerce et sa clé garde **deux incertitudes** non
   tranchées faute de Notator SL original (cf. le point « Clé Notator » plus bas). Tant
   que le logiciel n'a pas démarré une fois, c'est une promesse, pas une capacité.
-- **Profils d'appareil.** L'aiguillage se règle canal par canal ; pour un appareil connu
-  (les deux synthés + les 4 drums d'un Circuit Tracks, par exemple) un profil nommé
-  poserait le masque d'un clic. ⚠ Suppose un plan de canaux **vérifié** sur l'appareil,
-  pas deviné — c'est un réglage de la machine, pas une constante universelle.
+- ~~**Profils d'appareil.**~~ **LIVRÉ le 2026-08-29** (`src/audio/MidiDeviceProfiles.hpp`).
+  Une entrée pour l'instant : **Novation Circuit Tracks**, d'après son *Programmer's
+  Reference Guide* v3 — Synth 1 canal 1, Synth 2 canal 2, pistes MIDI 1-2 canaux 3-4,
+  **Drums 1-4 tous sur le canal 10** (ils se distinguent par la NOTE : 60, 62, 64, 65),
+  canal 16 réservé au Project Control. Le bouton pose le masque `$020F`, l'infobulle
+  donne le plan. ⚠ Ce sont des défauts d'usine, réassignables en Setup View : la table
+  n'accepte qu'une source constructeur **citée**, jamais une supposition.
 - **Canal forcé par source : pas de « splitter » clavier.** Un vrai boîtier de fusion sait
   aussi couper un clavier en zones (grave → canal 1, aigu → canal 2). Ici une source = un
   canal.
