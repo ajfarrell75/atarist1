@@ -2132,6 +2132,12 @@ void drawConfigWindow(ConfigUi& ui) {
             }
             return out;
         };
+        // ⚠ L'identifiant ImGui d'une ligne est son INDEX, jamais son nom. Deux lignes
+        // homonymes partageraient sinon le même ID et leurs cases se piloteraient l'une
+        // l'autre — c'est le symptôme qu'a produit le doublon de config du format à
+        // clés répétables. Deux appareils du même MODÈLE branchés ensemble donnent
+        // aussi des noms identiques : l'index protège des deux cas.
+        int rowId = 0;
 
         // Rangée de 16 canaux. Boutons plutôt que cases à cocher : à cette densité
         // c'est le NUMÉRO qu'on cherche des yeux, pas la case.
@@ -2176,7 +2182,7 @@ void drawConfigWindow(ConfigUi& ui) {
                 bool live = false;
                 for (const auto& d : ui.midiOutOpen) if (d.name == name) { live = true; break; }
 
-                ImGui::PushID(name.c_str());
+                ImGui::PushID(rowId++);
                 bool want = on;
                 if (ImGui::Checkbox("##on", &want)) changed = true;
                 ImGui::SameLine();
@@ -2282,7 +2288,7 @@ void drawConfigWindow(ConfigUi& ui) {
                 bool live = false;
                 for (const auto& n : ui.midiInOpen) if (n == name) { live = true; break; }
 
-                ImGui::PushID(name.c_str());
+                ImGui::PushID(rowId++);
                 bool want = on;
                 if (ImGui::Checkbox("##on", &want)) changed = true;
                 ImGui::SameLine();

@@ -43,6 +43,49 @@ static float mixGain(const std::string& s) {
 // Même règle : NaN → défaut, sinon bornage au plus proche. Impact d'une valeur
 // folle : des uniformes GL absurdes (écran illisible), pas de corruption — mais
 // l'incohérence de validation était le vrai défaut.
+// Listes d'appareils MIDI : UNE clé, UNE ligne, une AFFECTATION — comme toutes les
+// autres clés du format. La première version utilisait des clés RÉPÉTABLES
+// (midi_out_device= une fois par appareil) et c'était un piège : parseConfigLine est
+// partagé avec les PROFILS nommés, qui s'appliquent PAR-DESSUS la config courante
+// (loadProfileInto). Là où une clé scalaire remplace, un push_back AJOUTE — charger
+// un profil dupliquait donc chaque appareil, et deux lignes de même nom se partagent
+// le même ImGui::PushID, donc leurs cases se pilotaient l'une l'autre.
+//
+// Encodage : enregistrements séparés par « ; », champs par « | », et les trois
+// caractères spéciaux (antislash, ; et |) sont échappés par un antislash DANS LE
+// NOM. Un nom d'appareil peut contenir n'importe quoi — c'est ce qui avait fait
+// écarter un séparateur au départ ; l'échappement lève l'objection sans ramener la
+// répétition.
+std::string escapeField(const std::string& s) {
+    std::string out;
+    for (char ch : s) {
+        if (ch == '\\' || ch == ';' || ch == '|') out += '\\';
+        out += ch;
+    }
+    return out;
+}
+
+std::vector<std::vector<std::string>> decodeRecords(const std::string& s) {
+    std::vector<std::vector<std::string>> recs;
+    std::vector<std::string> cur{std::string()};
+    bool esc = false, any = false;
+    for (char ch : s) {
+        any = true;
+        if (esc)              { cur.back() += ch; esc = false; }
+        else if (ch == '\\')  { esc = true; }
+        else if (ch == '|')   { cur.emplace_back(); }
+        else if (ch == ';')   { recs.push_back(cur); cur.assign(1, std::string()); }
+        else                  { cur.back() += ch; }
+    }
+    if (any) recs.push_back(cur);
+    // Un enregistrement sans nom n'est pas un appareil : on le jette plutôt que de
+    // faire apparaître une ligne vide dans l'interface.
+    recs.erase(std::remove_if(recs.begin(), recs.end(),
+                              [](const std::vector<std::string>& r) { return r.empty() || r[0].empty(); }),
+               recs.end());
+    return recs;
+}
+
 // Masque de canaux MIDI ↔ texte. « 1-16 » (tous), « 2 », « 1,3,10-12 ». Format
 // compact à l'écriture : les suites consécutives sont repliées en intervalle, ce qui
 // rend neost.cfg lisible et modifiable à la main.
@@ -121,9 +164,22 @@ void parseConfigLine(Config& c, std::string line) {
     else if (line.rfind("midi_loopback=", 0) == 0) c.midiLoopback = (line.substr(14) == "1");
     else if (line.rfind("midi_out_gm=", 0) == 0) c.midiOutGm = (line.substr(12) == "1");
     else if (line.rfind("midi_out_port=", 0) == 0) c.midiOutPort = (line.substr(14) == "1");
-    // Clés RÉPÉTABLES : une par appareil. Le masque/canal qui suit s'applique au
-    // dernier appareil déclaré — un séparateur dans la valeur aurait buté sur les
-    // noms d'appareils, qui contiennent n'importe quoi.
+    else if (line.rfind("midi_out_devices=", 0) == 0) {
+        c.midiOutDevices.clear();
+        for (const auto& r : decodeRecords(line.substr(17)))
+            c.midiOutDevices.push_back({r[0], r.size() > 1 ? parseChannelMask(r[1]) : uint16_t(0xFFFF)});
+    }
+    else if (line.rfind("midi_in_devices=", 0) == 0) {
+        c.midiInDevices.clear();
+        for (const auto& r : decodeRecords(line.substr(16))) {
+            const int ch = r.size() > 1 ? std::atoi(r[1].c_str()) : 0;
+            c.midiInDevices.push_back({r[0], (ch >= 1 && ch <= 16) ? ch : 0});
+        }
+    }
+    // HÉRITÉ (clés répétables, format du 2026-08-29 au matin) : encore LU pour qu'un
+    // neost.cfg d'avant ne perde pas son studio en silence, jamais ÉCRIT — la
+    // première sauvegarde le convertit. Ces clés portent le défaut décrit plus haut ;
+    // c'est sans conséquence sur un neost.cfg, lu dans une Config NEUVE.
     else if (line.rfind("midi_out_device=", 0) == 0) c.midiOutDevices.push_back({line.substr(16), 0xFFFF});
     else if (line.rfind("midi_out_channels=", 0) == 0) {
         if (!c.midiOutDevices.empty()) c.midiOutDevices.back().channels = parseChannelMask(line.substr(18));
@@ -286,14 +342,18 @@ void writeConfigKeys(std::ostream& f, const Config& w, bool full) {
       << "\nvolume=" << w.volume
       << "\naudio_latency_ms=" << w.audioLatencyMs
       << "\ndrivesound=" << (w.driveSound ? 1 : 0) << "\n";
-    // Appareils MIDI hôtes : une paire de lignes par appareil, dans l'ordre (le
-    // masque/canal s'applique à la ligne d'appareil qui précède). Rien d'écrit quand
-    // il n'y en a pas — un neost.cfg sans studio reste aussi court qu'avant.
-    for (const auto& d : w.midiOutDevices)
-        f << "midi_out_device=" << d.name << "\nmidi_out_channels="
-          << formatChannelMask(d.channels) << "\n";
-    for (const auto& d : w.midiInDevices)
-        f << "midi_in_device=" << d.name << "\nmidi_in_channel=" << d.channel << "\n";
+    // Appareils MIDI hôtes : UNE ligne par liste. Toujours écrites, même vides —
+    // c'est ce qui permet à un profil d'EFFACER le studio, là où une clé absente
+    // laisserait en place celui d'avant.
+    f << "midi_out_devices=";
+    for (std::size_t i = 0; i < w.midiOutDevices.size(); ++i)
+        f << (i ? ";" : "") << escapeField(w.midiOutDevices[i].name) << '|'
+          << formatChannelMask(w.midiOutDevices[i].channels);
+    f << "\nmidi_in_devices=";
+    for (std::size_t i = 0; i < w.midiInDevices.size(); ++i)
+        f << (i ? ";" : "") << escapeField(w.midiInDevices[i].name) << '|'
+          << w.midiInDevices[i].channel;
+    f << "\n";
     if (full)
         f << "showHex=" << (w.showHex ? 1 : 0)
           << "\nshowCpu=" << (w.showCpu ? 1 : 0)

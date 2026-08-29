@@ -197,6 +197,64 @@ static void testConfigParser() {
     using namespace neost::appconfig;
     std::printf("neost.cfg (analyse / écriture)\n");
 
+    // --- Listes d'appareils MIDI : le piège des PROFILS ------------------------
+    // parseConfigLine est partagé avec les profils nommés, qui s'appliquent PAR-DESSUS
+    // la config courante. Une clé scalaire remplace ; la première version de ces listes
+    // utilisait des clés RÉPÉTABLES et faisait donc un push_back — charger un profil
+    // DUPLIQUAIT chaque appareil, et deux lignes de même nom partagent le même
+    // ImGui::PushID, donc leurs cases se pilotaient l'une l'autre. Bug rapporté par
+    // l'utilisateur (« Circuit Tracks est en double »), corrigé en revenant à
+    // « une clé, une ligne, une affectation ».
+    {
+        Config c;
+        // Nom TORDU à dessein : les trois caractères de l'encodage. Un nom d'appareil
+        // peut contenir n'importe quoi — c'est l'objection qui avait fait écarter un
+        // séparateur au départ, et que l'échappement lève.
+        const std::string tordu = "Ac;me | Piano \\ 2";
+        c.midiOutDevices = {{tordu, 0x000F}, {"Circuit Tracks MIDI", 0x0200}};
+        c.midiInDevices  = {{tordu, 3}, {"Circuit Tracks MIDI", 0}};
+
+        std::ostringstream os;
+        writeConfigKeys(os, c, true);
+        const std::string texte = os.str();
+
+        auto rejouer = [&](Config& dst) {
+            std::istringstream is(texte);
+            std::string ligne;
+            while (std::getline(is, ligne)) parseConfigLine(dst, ligne);
+        };
+
+        Config relu;
+        rejouer(relu);
+        checkBool("cfg MIDI : 2 sorties relues", relu.midiOutDevices.size() == 2, true);
+        checkBool("cfg MIDI : nom à séparateurs préservé",
+                  !relu.midiOutDevices.empty() && relu.midiOutDevices[0].name == tordu, true);
+        checkBool("cfg MIDI : masque de canaux préservé",
+                  relu.midiOutDevices.size() == 2 && relu.midiOutDevices[1].channels == 0x0200, true);
+        checkBool("cfg MIDI : canal forcé préservé",
+                  !relu.midiInDevices.empty() && relu.midiInDevices[0].channel == 3, true);
+
+        // LE test du bug : rejouer les MÊMES lignes par-dessus une config DÉJÀ remplie,
+        // exactement ce que fait loadProfileInto. Les listes doivent être REMPLACÉES.
+        rejouer(relu);
+        checkBool("cfg MIDI : un profil REMPLACE, il n'ajoute pas (sorties)",
+                  relu.midiOutDevices.size() == 2, true);
+        checkBool("cfg MIDI : un profil REMPLACE, il n'ajoute pas (entrées)",
+                  relu.midiInDevices.size() == 2, true);
+
+        // Un profil qui ne déclare AUCUN appareil doit pouvoir vider le studio : la
+        // ligne est donc écrite même vide (une clé absente laisserait l'ancien en place).
+        Config vide;
+        std::ostringstream ov;
+        writeConfigKeys(ov, vide, true);
+        checkBool("cfg MIDI : la liste vide est écrite (un profil peut effacer)",
+                  ov.str().find("midi_out_devices=") != std::string::npos, true);
+        std::istringstream iv(ov.str());
+        std::string l2;
+        while (std::getline(iv, l2)) parseConfigLine(relu, l2);
+        checkBool("cfg MIDI : et elle efface bien", relu.midiOutDevices.empty(), true);
+    }
+
     // CRLF : un fichier passé par Windows, un éditeur ou un partage réseau. Le '\r'
     // collé faisait tomber CHAQUE clé sur son défaut, en silence (machine ST demandée,
     // STE démarrée) — et saveConfig réécrivait ensuite les '\r', rendant la panne
