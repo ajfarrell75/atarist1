@@ -43,13 +43,26 @@ void MidiOutHost::byteAt(uint8_t b, int64_t cycle) {
         if (!anchored_) { when = std::chrono::steady_clock::now(); }
         else {
             const double dt = double(cycle - anchorCycle_) / kCpuHz;
-            when = anchorHost_ + std::chrono::microseconds(int64_t(dt * 1e6)) + std::chrono::milliseconds(kLeadMs);
+            when = anchorHost_ + std::chrono::microseconds(int64_t(dt * 1e6))
+                 + std::chrono::milliseconds(leadMs_.load(std::memory_order_relaxed));
+            // Déjà passé : l'avance n'a pas suffi à absorber le retard de la boucle,
+            // l'octet partira sans ordre temporel — c'est la gigue qui revient. On le
+            // COMPTE plutôt que de l'ignorer : c'est le témoin qui dit à
+            // l'utilisateur qu'il a trop baissé.
+            if (when < std::chrono::steady_clock::now())
+                lateBytes_.fetch_add(1, std::memory_order_relaxed);
         }
         // L'ordre des octets est SACRÉ (running status, SysEx) : jamais avant le précédent.
         if (!queue_.empty() && when < queue_.back().when) when = queue_.back().when;
         queue_.push_back({when, b});
     }
     cv_.notify_one();
+}
+
+void MidiOutHost::setLeadMs(int ms) {
+    // 0 = livraison au plus tôt (latence minimale, gigue maximale). Au-delà de
+    // 200 ms on ne règle plus une latence, on ajoute un délai : borné.
+    leadMs_.store(ms < 0 ? 0 : (ms > 200 ? 200 : ms), std::memory_order_relaxed);
 }
 
 void MidiOutHost::workerLoop() {

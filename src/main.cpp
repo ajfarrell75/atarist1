@@ -262,6 +262,7 @@ static void saveConfig(const std::string& exeDir, Config& c, Machine* machine = 
 #include "imgui_internal.h"   // gestionnaire de réglages personnalisé (ImGuiSettingsHandler)
 #include "imgui_impl_glfw.h"
 #include "gui/KeyboardWindow.hpp"
+#include "audio/MidiDeviceProfiles.hpp"
 #include "audio/MidiInHost.hpp"
 #include "audio/MidiOutHost.hpp"
 #include "audio/Mt32Synth.hpp"
@@ -1744,6 +1745,8 @@ struct ConfigUi {
     std::vector<Config::MidiOutDev> reqMidiOut;
     std::vector<Config::MidiInDev>  reqMidiIn;
     uint64_t midiInBytes = 0;             // lecture : octets entrés dans le ST (preuve de vie)
+    uint64_t midiLateBytes = 0;           // lecture : octets sortis en retard (avance trop courte)
+    int  reqMidiLead = -1;                // requête : nouvelle avance en ms
     int  reqDongle = -1;                  // clé cartouche : 0 none, 1 cubase2, 2 cubase3, 3 auto, 4 notator
     int  reqPlugPort = -1, reqPlugDev = -1; // page Dongles : brancher reqPlugDev sur reqPlugPort
     bool reqPortButton = false;           // bouton Multiface / Ultimate Ripper (page Dongles)
@@ -2183,6 +2186,15 @@ void drawConfigWindow(ConfigUi& ui) {
                 if (want) {
                     ImGui::Indent(24.f);
                     if (channelRow(mask)) changed = true;
+                    // Profil d'appareil CONNU : pose le masque d'un clic au lieu de
+                    // seize. L'infobulle donne le plan complet — pour un Circuit
+                    // Tracks, savoir que les 4 drums partagent le canal 10 et se
+                    // distinguent par la NOTE est ce qui manque au moment de
+                    // séquencer, pas au moment de câbler.
+                    if (const auto* prof = neost::midi::profileFor(name)) {
+                        if (ImGui::SmallButton(prof->label)) { mask = prof->channels; changed = true; }
+                        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", prof->detail);
+                    }
                     ImGui::Unindent(24.f);
                     next.push_back({name, mask});
                 }
@@ -2233,6 +2245,23 @@ void drawConfigWindow(ConfigUi& ui) {
 
         // MIDI IN : la source matérielle, puis la fiche de bouclage (jusqu'ici cachée
         // dans le menu Machine).
+        // Avance de livraison : l'arbitrage gigue/latence, rendu à l'utilisateur.
+        // Le témoin d'octets en retard est ce qui rend le réglage utilisable — sans
+        // lui, on baisse à l'aveugle jusqu'à ce que « ça sonne bizarre ».
+        {
+            int lead = cfg.midiLeadMs;
+            ImGui::SetNextItemWidth(220.f);
+            if (ImGui::SliderInt("Output lead (ms)", &lead, 0, 100)) ui.reqMidiLead = lead;
+            if (ui.midiLateBytes)
+                ImGui::TextColored(ImVec4(1.f, .7f, .35f, 1.f),
+                                   "  %llu bytes sent late - raise the lead.",
+                                   (unsigned long long)ui.midiLateBytes);
+            else
+                ImGui::TextDisabled("  Lower = more direct to play, less slack for a"
+                                    " GUI hiccup.");
+        }
+        ImGui::Separator();
+
         ImGui::TextDisabled("MIDI IN of the ST (ACIA 6850)");
         // FUSION. Le ST n'a qu'UNE prise MIDI IN : réunir plusieurs claviers dessus
         // est le rôle d'un boîtier de fusion, et NeoST en tient lieu (entrelacement
@@ -3034,6 +3063,7 @@ int main(int argc, char** argv) {
             });
         else machine.midi.setMidiSinkTimed({});
     };
+    midiOut.setLeadMs(cfg.midiLeadMs);
     midiOutApply();
     // Entrée matérielle : même politique que la destination — on garde le nom, on
     // re-tente, on ne dit rien tant que l'appareil n'est pas là.
@@ -3667,6 +3697,9 @@ int main(int argc, char** argv) {
                     // une source MIDI réelle y est toujours le facteur limitant et n'y
                     // mesure jamais le débit de l'ACIA. C'est donc ici, et nulle part
                     // ailleurs, qu'on peut vérifier les 3125 o/s du câble.
+                    if (midiOut.anyOpen())
+                        std::fprintf(stderr, "[main] MIDI OUT: lead %d ms, %llu byte(s) sent late\n",
+                                     midiOut.leadMs(), (unsigned long long)midiOut.lateBytes());
                     if (midiIn.isOpen())
                         std::fprintf(stderr, "[main] MIDI IN: %llu bytes into the ACIA from \"%s\""
                                      " (%llu dropped)\n",
@@ -4049,6 +4082,7 @@ int main(int argc, char** argv) {
         cfgUi.midiOutOpen   = midiOut.openDestinations();
         cfgUi.midiInOpen    = midiIn.openNames();
         cfgUi.midiInBytes   = midiIn.delivered();
+        cfgUi.midiLateBytes = midiOut.lateBytes();
         if (!cfgUi.mixInit) {            // sème les faders depuis la config (une fois)
             cfgUi.mixYm = cfg.mixYm; cfgUi.mixDma = cfg.mixDma; cfgUi.mixDac = cfg.mixDac;
             cfgUi.mixDrive = cfg.mixDrive; cfgUi.mixMt32 = cfg.mixMt32; cfgUi.mixInit = true;
@@ -4142,6 +4176,11 @@ int main(int argc, char** argv) {
             if (cfgUi.mixDone) { saveConfig(exeDir, cfg, &machine); cfgUi.mixDone = false; }
             if (cfgUi.reqMidiOutGm >= 0)   { cfg.midiOutGm   = cfgUi.reqMidiOutGm   == 1; cfgUi.reqMidiOutGm   = -1; midiOutApply(); saveConfig(exeDir, cfg, &machine); }
             if (cfgUi.reqMidiOutPort >= 0) { cfg.midiOutPort = cfgUi.reqMidiOutPort == 1; cfgUi.reqMidiOutPort = -1; midiOutApply(); saveConfig(exeDir, cfg, &machine); }
+            if (cfgUi.reqMidiLead >= 0) {
+                cfg.midiLeadMs = cfgUi.reqMidiLead; cfgUi.reqMidiLead = -1;
+                midiOut.setLeadMs(cfg.midiLeadMs);
+                saveConfig(exeDir, cfg, &machine);
+            }
             if (cfgUi.midiDevsDirty) {
                 cfgUi.midiDevsDirty = false;
                 cfg.midiOutDevices = cfgUi.reqMidiOut;

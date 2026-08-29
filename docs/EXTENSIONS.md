@@ -176,9 +176,38 @@ Quatre choix de conception, chacun payé par un piège réel :
   ⚠ Cette mesure n'est possible que dans le **GUI** : le headless émule ~19 fois plus
   vite que le temps réel, donc une source MIDI réelle y est toujours le facteur limitant.
 
-Sous Linux, la destination matérielle est un **abonnement** du port séquenceur (ce que
-fait `aconnect`) : la choisir fait exister « NeoST MIDI OUT » même si la case du port
-virtuel est décochée — sans port source, il n'y aurait rien à abonner.
+**Profils d'appareil.** Cocher seize cases pour une machine dont le plan de canaux est
+public est du travail perdu : `src/audio/MidiDeviceProfiles.hpp` pose le masque d'un clic
+pour les appareils connus. Première entrée, le **Novation Circuit Tracks** (*Programmer's
+Reference Guide* v3) :
+
+| Piste | Canal | Notes |
+|---|---|---|
+| Synth 1 / Synth 2 | 1 / 2 | |
+| MIDI 1 / MIDI 2 | 3 / 4 | pistes MIDI externes |
+| **Drums 1-4** | **10** (les quatre) | 60 = Drum 1, 62 = Drum 2, 64 = Drum 3, 65 = Drum 4 |
+| — | 16 | réservé au Project Control |
+
+Les quatre percussions partagent donc **un seul canal** et se distinguent par la **note** :
+pour les séquencer depuis le ST, une piste sur le canal 10 avec ces quatre hauteurs.
+⚠ Défauts d'usine, réassignables dans le Setup View de la machine — la table du dépôt
+n'accepte qu'une source constructeur **citée**, jamais une supposition.
+
+**Avance de livraison** (`midi_lead_ms=`, curseur 0-100 ms). Chaque octet est reposé à
+l'heure hôte correspondant à son cycle 68000, plus cette avance : c'est elle qui tue la
+gigue de trame (σ 0,4-1,7 ms mesurée sur l'étalon Cubase), et c'est elle qu'on paie en
+latence quand on joue au clavier à travers le ST. Mesuré : 190 ms d'écart de livraison
+pour 200 ms commandés. ⚠ Elle ne protège **pas** du cas courant — l'émulation d'une trame
+prend moins de temps réel qu'une trame, donc à 0 ms aucun octet n'est en retard sur un run
+sain — mais du **rattrapage** quand la boucle GUI décroche (drag de fenêtre, rafale
+disque). Le compteur d'octets « sent late » de la page MIDI est le témoin : on baisse
+jusqu'à ce qu'il bouge.
+
+Sous Linux, les destinations matérielles sont **adressées explicitement**
+(`snd_seq_ev_set_dest`) et NON abonnées comme le ferait `aconnect` : un abonné recevrait
+le flux entier, ce qui interdirait le filtrage par canal — c'est-à-dire tout l'intérêt de
+l'aiguillage. Choisir une destination fait tout de même exister le port « NeoST MIDI OUT »
+même si sa case est décochée : sans port source, il n'y aurait rien d'où émettre.
 
 Aiguillage et fusion vérifiés le 2026-08-29 (macOS, deux destinations virtuelles) : la
 panique de fermeture diffuse des CC sur les 16 canaux, et chaque destination n'a reçu que

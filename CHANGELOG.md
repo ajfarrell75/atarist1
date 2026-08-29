@@ -26,6 +26,44 @@ Ripper, DAC Pro Sound) avec page Dongles, `disks/dongles.txt` et oracle de rejeu
 vérifié note à note** en headless, corpus MIDI piano/blues ; port MIDI ALSA sous Linux ;
 save-state v16. Détail dans les chantiers datés ci-dessous.
 
+## MIDI — profil Circuit Tracks et avance de sortie réglable (2026-08-29)
+
+Deux points de la section « Station MIDI » du TODO.
+
+**Profils d'appareil** (`src/audio/MidiDeviceProfiles.hpp`). Cocher seize cases pour une
+machine dont le plan de canaux est public est du travail perdu. Première entrée, le
+**Novation Circuit Tracks**, d'après son *Programmer's Reference Guide* v3 : Synth 1
+canal 1, Synth 2 canal 2, pistes MIDI 1-2 canaux 3-4, **Drums 1-4 tous sur le canal 10**
+— ils se distinguent par la NOTE (60, 62, 64, 65), pas par le canal — et canal 16 réservé
+au Project Control. Le bouton pose le masque `$020F`, l'infobulle donne le plan complet,
+qui est justement ce qui manque au moment de séquencer les percussions et non au moment
+de câbler. ⚠ Ce sont des défauts d'usine, réassignables en Setup View : la table n'accepte
+qu'une source constructeur **citée**. Un plan deviné enverrait chercher une panne qui
+n'existe pas.
+
+**Avance de livraison réglable** (`midi_lead_ms=`, curseur 0-100 ms). Elle était figée à
+30 ms — la moitié de la latence de jeu, et un arbitrage qui appartient à l'utilisateur :
+plus courte, le clavier répond plus direct ; plus longue, elle absorbe un à-coup de la
+boucle GUI. Vérifié : **190 ms d'écart de livraison mesurés pour 200 ms commandés**.
+
+Résultat NÉGATIF, consigné parce qu'il contredit l'intuition qui a motivé le chantier :
+à 0 ms d'avance, **aucun octet n'est en retard** sur un run sain. L'émulation d'une trame
+prend moins de temps réel qu'une trame, donc l'octet daté au milieu de la trame est
+encore dans le futur au moment d'être programmé. L'avance ne protège pas du cas courant
+mais du RATTRAPAGE, quand la boucle décroche et enchaîne jusqu'à 6 trames. D'où le témoin
+`lateBytes` (compté quand l'échéance est déjà passée) exposé dans la page MIDI et dans le
+bilan `--run-frames` : on baisse le réglage jusqu'à ce qu'il bouge, au lieu de deviner.
+
+Deux instruments se sont révélés inaptes en route, ce qui vaut d'être noté : le sink
+horodaté est noyé dans la gigue de démarrage des processus (663 ms d'écart relevé pour
+200 ms attendus, sur un tirage), et `NEOST_MIDIOUT_TRACE` pose son `t0` au PREMIER octet
+livré — un décalage uniforme s'y annule par construction. Seul un protocole à démarrage
+contrôlé, comparant deux runs, a donné les 190 ms.
+
+Corrigé au passage dans `docs/EXTENSIONS.md` : la phrase « sous Linux la destination est
+un abonnement » était devenue fausse au chantier précédent (les destinations sont
+adressées explicitement depuis l'aiguillage par canal, un abonné recevant tout).
+
 ## MIDI — un studio entier : fusion en entrée, aiguillage par canal en sortie (2026-08-29)
 
 NeoST ne tenait qu'UN appareil de chaque côté. Un studio en a plusieurs — une groovebox
