@@ -45,11 +45,21 @@ struct Config { std::string rom; std::string disk; std::string diskb; std::strin
                 bool midiLoopback = false; // fiche de bouclage MIDI OUT→IN (diagnostics ; OFF = vrai ST)
                 bool midiOutGm = false;    // MIDI OUT → synthé General MIDI intégré (macOS)
                 bool midiOutPort = false;  // MIDI OUT → port CoreMIDI virtuel « NeoST MIDI OUT » (macOS)
-                // Appareils MIDI hôtes, désignés par leur NOM (vide = aucun). Un index
-                // se serait mis à pointer le mauvais appareil dès qu'on en débranche un
-                // autre ; le nom survit au débranchement ET permet la reconnexion à chaud.
-                std::string midiOutDevice;  // MIDI OUT → destination matérielle (expandeur, groovebox…)
-                std::string midiInDevice;   // MIDI IN  ← source matérielle (clavier maître, séquenceur…)
+                // Appareils MIDI hôtes, désignés par leur NOM (un index se serait mis à
+                // pointer le mauvais appareil dès qu'on en débranche un autre ; le nom
+                // survit au débranchement ET permet la reconnexion à chaud).
+                //
+                // SORTIE : un AIGUILLAGE, pas un Thru box. Chaque destination porte le
+                // masque des canaux qu'elle reçoit — « instrument 1 de Cubase vers le
+                // piano logiciel, instrument 2 vers la groovebox ». Les messages système
+                // (horloge, SysEx) vont à toutes, les filtrer casserait la synchro.
+                // ENTRÉE : une FUSION. Chaque source peut être forcée sur son canal,
+                // sans quoi deux claviers émettant tous deux sur le canal 1 seraient
+                // inséparables et finiraient sur la même piste du séquenceur.
+                struct MidiOutDev { std::string name; uint16_t channels = 0xFFFF; };
+                struct MidiInDev  { std::string name; int channel = 0; };  // 0 = tel quel
+                std::vector<MidiOutDev> midiOutDevices;
+                std::vector<MidiInDev>  midiInDevices;
                 // ACTIF PAR DÉFAUT depuis que Munt est vendorisé (extern/mt32emu) : la
                 // bibliothèque est toujours là, il n'y a plus de raison d'attendre que
                 // l'utilisateur découvre l'option. Sans ROM Roland dans mt32Roms,

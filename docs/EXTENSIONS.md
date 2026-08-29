@@ -116,15 +116,40 @@ passive** : un FluidSynth ou un DAW s'y abonne, mais un expandeur, une groovebox
 clavier maître ne s'abonne à rien. Il fallait donc un patchbay tiers pour relier NeoST à
 du matériel. NeoST **choisit désormais lui-même** ses deux extrémités :
 
-| Réglage | `neost.cfg` | Effet |
+| Réglage | `neost.cfg` (clés RÉPÉTABLES, une paire par appareil) | Effet |
 |---|---|---|
-| Destination matérielle | `midi_out_device=<nom>` | MIDI OUT du ST → l'appareil |
-| Source matérielle      | `midi_in_device=<nom>`  | l'appareil → MIDI IN du ST |
+| Destination | `midi_out_device=<nom>` + `midi_out_channels=1,2,10-12` | les canaux nommés partent vers cet appareil |
+| Source | `midi_in_device=<nom>` + `midi_in_channel=N` | l'appareil entre dans le MIDI IN, forcé sur le canal N (0 = tel quel) |
 
-GUI : Configuration → **MIDI**, deux menus déroulants (*Hardware device*). Headless :
-`--midi-list` énumère les entrées, `--midi-in-device NAME` en branche une. Il n'y a pas
-de `--midi-out-device` côté headless : `--midi-dump` capture déjà ce que le ST émet,
-sans dépendre du matériel branché — c'est ce qu'un test veut.
+**La sortie est un AIGUILLAGE, pas un Thru box.** Chaque destination porte le masque des
+canaux qu'elle reçoit : « instrument 1 de Cubase vers le piano logiciel, instrument 2
+vers la groovebox » se règle chez NeoST, sans toucher au réglage des appareils. Un même
+canal peut partir vers plusieurs destinations (superposition). ⚠ Les messages **système**
+(horloge, start/stop, SysEx) n'ont pas de canal et vont à **toutes** les destinations :
+les filtrer désynchroniserait le studio.
+
+**L'entrée est un boîtier de FUSION.** Le ST n'a qu'une prise MIDI IN ; plusieurs
+appareils y sont réunis. Un tel boîtier ne mélange pas des octets, il entrelace des
+**messages** : deux claviers joués ensemble émettent `90 3C 40` et `90 40 40` au même
+instant, et entrelacés octet par octet ils donneraient `90 90 3C 40 40 40`, du charabia.
+D'où un décodeur par source (`MidiMessageParser`, partagé avec la sortie). Le statut
+n'est ré-émis dans le flux fusionné que s'il a **changé** : une source seule garde son
+running status, deux sources qui alternent le voient correctement réinséré.
+
+**Canalisation — sans elle, pas d'enregistrement multipiste.** Deux claviers émettent
+tous deux sur le canal 1 par défaut : un séquenceur ne peut alors pas les séparer et
+tout atterrit sur la même piste. Forcés sur 1 et 2, ils deviennent enregistrables
+simultanément sur deux pistes. Ce que le séquenceur ST en fait le regarde — les Cubase
+complets et Notator savent enregistrer plusieurs canaux sur plusieurs pistes, Cubase
+Lite non.
+
+GUI : Configuration → **MIDI**. La sortie est une **matrice** appareils × 16 canaux (un
+clic par affectation, `all` / `none` par ligne) ; l'entrée, une liste d'appareils avec le
+canal forcé de chacun. Headless : `--midi-list` énumère les entrées,
+`--midi-in-device NAME` (**répétable**, fusionnées) et `--midi-in-channel N` (s'applique
+à l'appareil précédent). Il n'y a pas de `--midi-out-device` côté headless :
+`--midi-dump` capture déjà ce que le ST émet, sans dépendre du matériel branché — c'est
+ce qu'un test veut.
 
 Quatre choix de conception, chacun payé par un piège réel :
 
@@ -154,6 +179,11 @@ Quatre choix de conception, chacun payé par un piège réel :
 Sous Linux, la destination matérielle est un **abonnement** du port séquenceur (ce que
 fait `aconnect`) : la choisir fait exister « NeoST MIDI OUT » même si la case du port
 virtuel est décochée — sans port source, il n'y aurait rien à abonner.
+
+Aiguillage et fusion vérifiés le 2026-08-29 (macOS, deux destinations virtuelles) : la
+panique de fermeture diffuse des CC sur les 16 canaux, et chaque destination n'a reçu que
+les siens (`B0 78 00…` pour celle du canal 1, `B1 78 00…` pour celle du canal 2, 9 octets
+chacune sur 48 messages), tandis que le SysEx de démarrage de MROS est arrivé aux **deux**.
 
 Vérifié le 2026-08-29 (macOS, Novation Circuit Tracks + appareils virtuels de test) :
 255 octets entrés dans l'ACIA depuis une source hôte (0 perdu, contre 2 octets pour un

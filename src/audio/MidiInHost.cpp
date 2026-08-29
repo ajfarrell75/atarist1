@@ -27,15 +27,49 @@ bool MidiInHost::available() {
 }
 
 // -----------------------------------------------------------------------------
-//  Tampon de gigue
+//  Fusion : octets d'une source → messages → file commune
 // -----------------------------------------------------------------------------
-void MidiInHost::push(const uint8_t* data, std::size_t n) {
+void MidiInHost::feed(Device& d, const uint8_t* data, std::size_t n) {
+    for (std::size_t i = 0; i < n; ++i)
+        d.parser.byte(data[i], [this, &d](const uint8_t* msg, int len) {
+            emitMessage(d, msg, len);
+        });
+}
+
+void MidiInHost::emitMessage(Device& d, const uint8_t* msg, int len) {
+    if (len <= 0) return;
+    uint8_t head = msg[0];
+    // CANALISATION : le quartet de canal des messages de VOIE ($80-$EF) est
+    // réécrit. Les messages système ($F0-$FF) n'ont pas de canal — on n'y touche
+    // pas, sinon on casserait horloge, SysEx et start/stop.
+    if (d.forceChannel >= 1 && d.forceChannel <= 16 && head >= 0x80 && head < 0xF0)
+        head = uint8_t((head & 0xF0) | uint8_t(d.forceChannel - 1));
+
     std::lock_guard<std::mutex> lk(mtx_);
-    for (std::size_t i = 0; i < n; ++i) {
-        // Saturé : c'est le NEUF qui tombe (overrun de 6850, cf. MidiAcia::pushRx).
-        if (jitter_.size() >= kMaxJitter) { dropped_.fetch_add(1, std::memory_order_relaxed); continue; }
-        jitter_.push_back(data[i]);
+    // Running status : on ne réécrit le statut que s'il a CHANGÉ dans le flux
+    // fusionné. Une source seule garde donc son running status (le flux ne
+    // grossit pas) ; deux sources qui alternent le voient réinséré — sans quoi
+    // les données de l'une seraient lues sous le statut de l'autre.
+    const bool voice = head >= 0x80 && head < 0xF0;
+    const bool omitStatus = voice && head == lastStatus_ && len > 1;
+    const std::size_t need = omitStatus ? std::size_t(len - 1) : std::size_t(len);
+
+    // Saturé : c'est le MESSAGE NEUF ENTIER qui tombe. Jeter un fragment
+    // laisserait des octets orphelins dans le flux — le pire des deux maux, et
+    // c'est aussi la règle du 6850 en overrun (garder l'ancien, cf. MidiAcia).
+    if (jitter_.size() + need > kMaxJitter) {
+        dropped_.fetch_add(uint64_t(len), std::memory_order_relaxed);
+        return;
     }
+    if (!omitStatus) jitter_.push_back(head);
+    for (int i = 1; i < len; ++i) jitter_.push_back(msg[i]);
+
+    // Suivi du running status du flux : seuls les messages de VOIE l'établissent ;
+    // le système commun ($F0-$F7) l'ANNULE ; le temps réel ($F8-$FF) le laisse
+    // intact — c'est précisément pour ça qu'il peut tomber n'importe où.
+    if (voice)             lastStatus_ = head;
+    else if (head < 0xF8)  lastStatus_ = 0;
+
     pending_.store(jitter_.size(), std::memory_order_relaxed);
 }
 
@@ -50,6 +84,28 @@ bool MidiInHost::tryPop(uint8_t& out) {
     pending_.store(jitter_.size(), std::memory_order_relaxed);
     delivered_.fetch_add(1, std::memory_order_relaxed);
     return true;
+}
+
+MidiInHost::Device* MidiInHost::deviceForTest(int slot, int forceChannel) {
+    while (int(devices_.size()) <= slot) {
+        auto d = std::make_unique<Device>();
+        d->owner = this;
+        d->name = "test:" + std::to_string(devices_.size());
+        devices_.push_back(std::move(d));
+    }
+    devices_[std::size_t(slot)]->forceChannel = forceChannel;
+    return devices_[std::size_t(slot)].get();
+}
+
+void MidiInHost::pushForTest(int slot, const uint8_t* data, std::size_t n, int forceChannel) {
+    feed(*deviceForTest(slot, forceChannel), data, n);
+}
+
+std::vector<std::string> MidiInHost::openNames() const {
+    std::vector<std::string> out;
+    out.reserve(devices_.size());
+    for (const auto& d : devices_) out.push_back(d->name);
+    return out;
 }
 
 // -----------------------------------------------------------------------------
@@ -110,136 +166,160 @@ std::vector<std::string> MidiInHost::sources() {
 //  Ouverture / fermeture
 // -----------------------------------------------------------------------------
 #if defined(__APPLE__) && !defined(NEOST_MIDI_ALSA)
-// Callback CoreMIDI : thread temps réel du serveur MIDI. On n'y fait QUE recopier
-// des octets sous verrou — pas d'allocation hors du deque, pas d'appel bloquant.
-void MidiInHost::coreMidiRead(const ::MIDIPacketList* pkts, void* refCon, void* /*srcRef*/) {
+// Callback CoreMIDI : thread temps réel du serveur MIDI. srcConnRefCon identifie
+// LA SOURCE (posé à la connexion) — c'est ce qui permet à chaque appareil d'avoir
+// son propre décodeur, donc à la fusion de se faire aux frontières de messages.
+void MidiInHost::coreMidiRead(const ::MIDIPacketList* pkts, void* refCon, void* srcRef) {
     auto* self = static_cast<MidiInHost*>(refCon);
-    if (!self || !pkts) return;
+    auto* dev  = static_cast<Device*>(srcRef);
+    if (!self || !dev || !pkts) return;
     const MIDIPacket* p = &pkts->packet[0];
     for (UInt32 i = 0; i < pkts->numPackets; ++i) {
-        self->push(p->data, p->length);
+        self->feed(*dev, p->data, p->length);
         p = MIDIPacketNext(p);
     }
 }
 #endif
 
-bool MidiInHost::open(const std::string& name) {
-    if (name.empty()) { close(); return true; }
-    if (open_ && name_ == name) return true;
+std::size_t MidiInHost::setDevices(const std::vector<Want>& want) {
     close();
+    if (want.empty()) return 0;
 #if defined(NEOST_MIDI_ALSA)
     snd_seq_t* seq = nullptr;
     if (snd_seq_open(&seq, "default", SND_SEQ_OPEN_DUPLEX, 0) < 0) {
         std::fprintf(stderr, "[midi-in] ALSA sequencer unavailable\n");
-        return false;
+        return 0;
     }
     snd_seq_set_client_name(seq, "NeoST");
+    // UN port d'écoute pour toutes les sources : la fusion se fait chez nous, et
+    // l'événement ALSA porte son adresse d'origine (ev->source) — de quoi retrouver
+    // le décodeur de chaque appareil.
     const int port = snd_seq_create_simple_port(
         seq, "NeoST MIDI IN",
         SND_SEQ_PORT_CAP_WRITE | SND_SEQ_PORT_CAP_SUBS_WRITE,
         SND_SEQ_PORT_TYPE_MIDI_GENERIC | SND_SEQ_PORT_TYPE_APPLICATION);
-    if (port < 0) { snd_seq_close(seq); return false; }
-
-    // Retrouve client:port derrière le nom (cf. MidiOutHost::openDestination).
-    int foundC = -1, foundP = -1;
-    snd_seq_client_info_t* ci = nullptr; snd_seq_port_info_t* pi = nullptr;
-    snd_seq_client_info_malloc(&ci); snd_seq_port_info_malloc(&pi);
-    snd_seq_client_info_set_client(ci, -1);
-    while (foundC < 0 && snd_seq_query_next_client(seq, ci) >= 0) {
-        const int cid = snd_seq_client_info_get_client(ci);
-        if (cid == snd_seq_client_id(seq) || cid == SND_SEQ_CLIENT_SYSTEM) continue;
-        snd_seq_port_info_set_client(pi, cid);
-        snd_seq_port_info_set_port(pi, -1);
-        while (snd_seq_query_next_port(seq, pi) >= 0) {
-            const unsigned caps = snd_seq_port_info_get_capability(pi);
-            if ((caps & (SND_SEQ_PORT_CAP_READ | SND_SEQ_PORT_CAP_SUBS_READ))
-                != (SND_SEQ_PORT_CAP_READ | SND_SEQ_PORT_CAP_SUBS_READ)) continue;
-            if (std::string(snd_seq_client_info_get_name(ci)) + ": "
-                + snd_seq_port_info_get_name(pi) == name) {
-                foundC = cid; foundP = snd_seq_port_info_get_port(pi);
-                break;
-            }
-        }
-    }
-    snd_seq_port_info_free(pi); snd_seq_client_info_free(ci);
-    if (foundC < 0 || snd_seq_connect_from(seq, port, foundC, foundP) < 0) {
-        snd_seq_delete_simple_port(seq, port); snd_seq_close(seq);
-        return false;
-    }
-    // Décodeur événement → octets MIDI bruts. no_status(1) : chaque message ressort
-    // avec son octet de statut, sans running status — le ST reçoit un flux explicite.
+    if (port < 0) { snd_seq_close(seq); return 0; }
     snd_midi_event_t* dec = nullptr;
     if (snd_midi_event_new(1024, &dec) < 0) {
-        snd_seq_disconnect_from(seq, port, foundC, foundP);
         snd_seq_delete_simple_port(seq, port); snd_seq_close(seq);
-        return false;
+        return 0;
     }
+    // no_status(1) : chaque message ressort avec son statut. La compaction du
+    // running status se fait ensuite, sur le flux FUSIONNÉ (cf. emitMessage).
     snd_midi_event_no_status(dec, 1);
-    seq_ = seq; dec_ = dec;
-    port_ = uint32_t(port) + 1;
-    src_  = (uint32_t(foundC) << 8 | uint32_t(foundP)) + 1;
-    name_ = name; open_ = true; stop_ = false;
-    reader_ = std::thread([this] { readerLoop(); });
-    std::fprintf(stderr, "[midi-in] \"%s\" -> MIDI IN (ALSA %d:%d)\n", name.c_str(), foundC, foundP);
-    return true;
-#elif defined(__APPLE__)
-    MIDIEndpointRef found = 0;
-    const ItemCount n = MIDIGetNumberOfSources();
-    for (ItemCount i = 0; i < n; ++i) {
-        const MIDIEndpointRef e = MIDIGetSource(i);
-        if (displayName(e) == name) { found = e; break; }
+
+    snd_seq_client_info_t* ci = nullptr; snd_seq_port_info_t* pi = nullptr;
+    snd_seq_client_info_malloc(&ci); snd_seq_port_info_malloc(&pi);
+    for (const Want& w : want) {
+        int foundC = -1, foundP = -1;
+        snd_seq_client_info_set_client(ci, -1);
+        while (foundC < 0 && snd_seq_query_next_client(seq, ci) >= 0) {
+            const int cid = snd_seq_client_info_get_client(ci);
+            if (cid == snd_seq_client_id(seq) || cid == SND_SEQ_CLIENT_SYSTEM) continue;
+            snd_seq_port_info_set_client(pi, cid);
+            snd_seq_port_info_set_port(pi, -1);
+            while (snd_seq_query_next_port(seq, pi) >= 0) {
+                const unsigned caps = snd_seq_port_info_get_capability(pi);
+                if ((caps & (SND_SEQ_PORT_CAP_READ | SND_SEQ_PORT_CAP_SUBS_READ))
+                    != (SND_SEQ_PORT_CAP_READ | SND_SEQ_PORT_CAP_SUBS_READ)) continue;
+                if (std::string(snd_seq_client_info_get_name(ci)) + ": "
+                    + snd_seq_port_info_get_name(pi) == w.name) {
+                    foundC = cid; foundP = snd_seq_port_info_get_port(pi);
+                    break;
+                }
+            }
+        }
+        if (foundC < 0 || snd_seq_connect_from(seq, port, foundC, foundP) < 0) continue;
+        auto d = std::make_unique<Device>();
+        d->owner = this; d->name = w.name; d->forceChannel = w.forceChannel;
+        d->src = (uint32_t(foundC) << 8 | uint32_t(foundP)) + 1;
+        devices_.push_back(std::move(d));
+        std::fprintf(stderr, "[midi-in] \"%s\" -> MIDI IN (ALSA %d:%d)%s\n",
+                     w.name.c_str(), foundC, foundP,
+                     w.forceChannel ? " channelized" : "");
     }
-    if (!found) return false;              // débranché : l'appelant re-tentera
+    snd_seq_port_info_free(pi); snd_seq_client_info_free(ci);
+    if (devices_.empty()) {
+        snd_midi_event_free(dec);
+        snd_seq_delete_simple_port(seq, port); snd_seq_close(seq);
+        return 0;
+    }
+    seq_ = seq; dec_ = dec; port_ = uint32_t(port) + 1;
+    stop_ = false;
+    reader_ = std::thread([this] { readerLoop(); });
+    return devices_.size();
+#elif defined(__APPLE__)
     MIDIClientRef client = 0;
     if (const OSStatus st = MIDIClientCreate(CFSTR("NeoST IN"), nullptr, nullptr, &client); st != noErr) {
         std::fprintf(stderr, "[midi-in] MIDIClientCreate failed (OSStatus %d): no CoreMIDI "
                      "access from this process?\n", int(st));
-        return false;
+        return 0;
     }
     MIDIPortRef port = 0;
     if (MIDIInputPortCreate(client, CFSTR("NeoST IN"), &MidiInHost::coreMidiRead, this, &port) != noErr) {
         MIDIClientDispose(client);
         std::fprintf(stderr, "[midi-in] cannot create the CoreMIDI input port\n");
-        return false;
+        return 0;
     }
-    if (MIDIPortConnectSource(port, found, nullptr) != noErr) {
-        MIDIPortDispose(port); MIDIClientDispose(client);
-        std::fprintf(stderr, "[midi-in] cannot connect \"%s\"\n", name.c_str());
-        return false;
+    client_ = client; port_ = port;
+    for (const Want& w : want) {
+        MIDIEndpointRef found = 0;
+        const ItemCount n = MIDIGetNumberOfSources();
+        for (ItemCount i = 0; i < n; ++i) {
+            const MIDIEndpointRef e = MIDIGetSource(i);
+            if (displayName(e) == w.name) { found = e; break; }
+        }
+        if (!found) continue;              // débranché : l'appelant re-tentera
+        auto d = std::make_unique<Device>();
+        d->owner = this; d->name = w.name; d->forceChannel = w.forceChannel; d->src = found;
+        // refCon de la CONNEXION = l'appareil : le callback saura de qui vient
+        // chaque paquet, donc quel décodeur alimenter.
+        if (MIDIPortConnectSource(port, found, d.get()) != noErr) {
+            std::fprintf(stderr, "[midi-in] cannot connect \"%s\"\n", w.name.c_str());
+            continue;
+        }
+        std::fprintf(stderr, "[midi-in] \"%s\" -> MIDI IN (CoreMIDI)%s\n", w.name.c_str(),
+                     w.forceChannel ? " channelized" : "");
+        devices_.push_back(std::move(d));
     }
-    client_ = client; port_ = port; src_ = found;
-    name_ = name; open_ = true;
-    std::fprintf(stderr, "[midi-in] \"%s\" -> MIDI IN (CoreMIDI source)\n", name.c_str());
-    return true;
+    if (devices_.empty()) { closeBackend(); return 0; }
+    return devices_.size();
 #else
-    (void)name;
-    return false;
+    (void)want;
+    return 0;
 #endif
 }
 
-void MidiInHost::close() {
+void MidiInHost::closeBackend() {
 #if defined(NEOST_MIDI_ALSA)
     if (reader_.joinable()) { stop_ = true; reader_.join(); }
     if (seq_) {
         snd_seq_t* seq = static_cast<snd_seq_t*>(seq_);
-        if (port_ && src_)
-            snd_seq_disconnect_from(seq, int(port_) - 1, int((src_ - 1) >> 8), int((src_ - 1) & 0xFF));
+        for (const auto& d : devices_)
+            if (port_ && d->src)
+                snd_seq_disconnect_from(seq, int(port_) - 1,
+                                        int((d->src - 1) >> 8), int((d->src - 1) & 0xFF));
         if (port_) snd_seq_delete_simple_port(seq, int(port_) - 1);
         snd_seq_close(seq); seq_ = nullptr;
     }
     if (dec_) { snd_midi_event_free(static_cast<snd_midi_event_t*>(dec_)); dec_ = nullptr; }
 #elif defined(__APPLE__)
     if (port_) {
-        if (src_) MIDIPortDisconnectSource(port_, src_);
+        for (const auto& d : devices_)
+            if (d->src) MIDIPortDisconnectSource(port_, d->src);
         MIDIPortDispose(port_);
     }
     if (client_) MIDIClientDispose(client_);
 #endif
-    client_ = port_ = src_ = 0;
-    open_ = false;
-    name_.clear();
+    client_ = port_ = 0;
+}
+
+void MidiInHost::close() {
+    closeBackend();
+    devices_.clear();
     std::lock_guard<std::mutex> lk(mtx_);
     jitter_.clear();     // un appareil débranché ne doit pas rejouer son passé
+    lastStatus_ = 0;
     pending_.store(0, std::memory_order_relaxed);
 }
 
@@ -254,14 +334,21 @@ void MidiInHost::readerLoop() {
     std::vector<pollfd> pfds(nfds > 0 ? std::size_t(nfds) : 1);
     while (!stop_) {
         snd_seq_poll_descriptors(seq, pfds.data(), unsigned(pfds.size()), POLLIN);
-        // Timeout de 100 ms : c'est ce qui rend `stop_` efficace — un snd_seq_event_input
-        // bloquant ne se laisse pas interrompre proprement à la fermeture.
+        // Timeout de 100 ms : c'est ce qui rend `stop_` efficace — un
+        // snd_seq_event_input bloquant ne s'interrompt pas proprement.
         if (::poll(pfds.data(), nfds_t(pfds.size()), 100) <= 0) continue;
         snd_seq_event_t* ev = nullptr;
         while (!stop_ && snd_seq_event_input(seq, &ev) >= 0 && ev) {
-            uint8_t buf[256];
-            const long n = snd_midi_event_decode(dec, buf, sizeof buf, ev);
-            if (n > 0) push(buf, std::size_t(n));
+            // Retrouve l'appareil par l'adresse d'origine de l'événement : chaque
+            // source a son décodeur, sans quoi la fusion mélangerait des octets.
+            const uint32_t key = (uint32_t(ev->source.client) << 8 | ev->source.port) + 1;
+            Device* dev = nullptr;
+            for (const auto& d : devices_) if (d->src == key) { dev = d.get(); break; }
+            if (dev) {
+                uint8_t buf[256];
+                const long n = snd_midi_event_decode(dec, buf, sizeof buf, ev);
+                if (n > 0) feed(*dev, buf, std::size_t(n));
+            }
             if (snd_seq_event_input_pending(seq, 0) <= 0) break;
         }
     }

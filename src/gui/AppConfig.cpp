@@ -43,6 +43,45 @@ static float mixGain(const std::string& s) {
 // Même règle : NaN → défaut, sinon bornage au plus proche. Impact d'une valeur
 // folle : des uniformes GL absurdes (écran illisible), pas de corruption — mais
 // l'incohérence de validation était le vrai défaut.
+// Masque de canaux MIDI ↔ texte. « 1-16 » (tous), « 2 », « 1,3,10-12 ». Format
+// compact à l'écriture : les suites consécutives sont repliées en intervalle, ce qui
+// rend neost.cfg lisible et modifiable à la main.
+uint16_t parseChannelMask(const std::string& s) {
+    uint16_t m = 0;
+    std::size_t i = 0;
+    while (i < s.size()) {
+        while (i < s.size() && (s[i] == ',' || s[i] == ' ')) ++i;
+        int a = 0; bool got = false;
+        while (i < s.size() && s[i] >= '0' && s[i] <= '9') { a = a * 10 + (s[i++] - '0'); got = true; }
+        if (!got) break;
+        int b = a;
+        if (i < s.size() && s[i] == '-') {
+            ++i; b = 0;
+            while (i < s.size() && s[i] >= '0' && s[i] <= '9') b = b * 10 + (s[i++] - '0');
+        }
+        for (int c = a; c <= b; ++c)
+            if (c >= 1 && c <= 16) m = uint16_t(m | (1u << (c - 1)));
+    }
+    // Un masque VIDE serait une destination muette, ce qu'on n'écrit jamais : une
+    // ligne illisible vaut donc « tous les canaux » plutôt qu'un appareil sourd
+    // dont l'utilisateur chercherait la panne.
+    return m ? m : uint16_t(0xFFFF);
+}
+
+std::string formatChannelMask(uint16_t m) {
+    std::string out;
+    for (int c = 1; c <= 16; ) {
+        if (!((m >> (c - 1)) & 1)) { ++c; continue; }
+        int e = c;
+        while (e < 16 && ((m >> e) & 1)) ++e;
+        if (!out.empty()) out += ',';
+        out += std::to_string(c);
+        if (e > c) { out += '-'; out += std::to_string(e); }
+        c = e + 1;
+    }
+    return out.empty() ? std::string("1-16") : out;
+}
+
 static float crtF(const std::string& s, float lo, float hi, float dflt) {
     const float v = std::strtof(s.c_str(), nullptr);
     return std::isnan(v) ? dflt : std::clamp(v, lo, hi);
@@ -82,8 +121,20 @@ void parseConfigLine(Config& c, std::string line) {
     else if (line.rfind("midi_loopback=", 0) == 0) c.midiLoopback = (line.substr(14) == "1");
     else if (line.rfind("midi_out_gm=", 0) == 0) c.midiOutGm = (line.substr(12) == "1");
     else if (line.rfind("midi_out_port=", 0) == 0) c.midiOutPort = (line.substr(14) == "1");
-    else if (line.rfind("midi_out_device=", 0) == 0) c.midiOutDevice = line.substr(16);
-    else if (line.rfind("midi_in_device=", 0) == 0) c.midiInDevice = line.substr(15);
+    // Clés RÉPÉTABLES : une par appareil. Le masque/canal qui suit s'applique au
+    // dernier appareil déclaré — un séparateur dans la valeur aurait buté sur les
+    // noms d'appareils, qui contiennent n'importe quoi.
+    else if (line.rfind("midi_out_device=", 0) == 0) c.midiOutDevices.push_back({line.substr(16), 0xFFFF});
+    else if (line.rfind("midi_out_channels=", 0) == 0) {
+        if (!c.midiOutDevices.empty()) c.midiOutDevices.back().channels = parseChannelMask(line.substr(18));
+    }
+    else if (line.rfind("midi_in_device=", 0) == 0) c.midiInDevices.push_back({line.substr(15), 0});
+    else if (line.rfind("midi_in_channel=", 0) == 0) {
+        if (!c.midiInDevices.empty()) {
+            const int ch = std::atoi(line.substr(16).c_str());
+            c.midiInDevices.back().channel = (ch >= 1 && ch <= 16) ? ch : 0;
+        }
+    }
     else if (line.rfind("midi_out_mt32=", 0) == 0) c.midiOutMt32 = (line.substr(14) == "1");
     else if (line.rfind("mt32_roms=", 0) == 0) c.mt32Roms = line.substr(10);
     else if (line.rfind("mt32_model=", 0) == 0) c.mt32Model = line.substr(11);
@@ -204,8 +255,7 @@ void writeConfigKeys(std::ostream& f, const Config& w, bool full) {
       << "\nmidi_loopback=" << (w.midiLoopback ? 1 : 0)
       << "\nmidi_out_gm=" << (w.midiOutGm ? 1 : 0)
       << "\nmidi_out_port=" << (w.midiOutPort ? 1 : 0)
-      << "\nmidi_out_device=" << w.midiOutDevice
-      << "\nmidi_in_device=" << w.midiInDevice
+
       << "\nmidi_out_mt32=" << (w.midiOutMt32 ? 1 : 0)
       << "\nmt32_roms=" << w.mt32Roms
       << "\nmt32_model=" << w.mt32Model
@@ -231,6 +281,14 @@ void writeConfigKeys(std::ostream& f, const Config& w, bool full) {
       << "\nvolume=" << w.volume
       << "\naudio_latency_ms=" << w.audioLatencyMs
       << "\ndrivesound=" << (w.driveSound ? 1 : 0) << "\n";
+    // Appareils MIDI hôtes : une paire de lignes par appareil, dans l'ordre (le
+    // masque/canal s'applique à la ligne d'appareil qui précède). Rien d'écrit quand
+    // il n'y en a pas — un neost.cfg sans studio reste aussi court qu'avant.
+    for (const auto& d : w.midiOutDevices)
+        f << "midi_out_device=" << d.name << "\nmidi_out_channels="
+          << formatChannelMask(d.channels) << "\n";
+    for (const auto& d : w.midiInDevices)
+        f << "midi_in_device=" << d.name << "\nmidi_in_channel=" << d.channel << "\n";
     if (full)
         f << "showHex=" << (w.showHex ? 1 : 0)
           << "\nshowCpu=" << (w.showCpu ? 1 : 0)
