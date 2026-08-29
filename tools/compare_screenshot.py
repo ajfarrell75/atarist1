@@ -22,8 +22,17 @@ ACTIVE = (48, 29, 320, 200)   # x, y, w, h
 BUFFER = (0, 0, 416, 276)
 # Rectangle de la LED disquette incrustée par Hatari dans ses captures AVI (coin haut
 # droit, #E00000). Elle n'existe pas côté NeoST : toute comparaison couvrant le buffer
-# entier accuserait 50 px d'écart constant qui ne sont PAS une divergence de rendu.
-HATARI_LED = (403, 3, 10, 5)   # x, y, w, h
+# entier accuserait un écart constant qui n'est PAS une divergence de rendu.
+#
+# La LED mesure 10x5 à l'œil, mais Hatari capture en 2x et le sous-échantillonnage
+# MÊLE ses bords au fond : il reste un LISERÉ d'un pixel tout autour, invisible sur
+# fond noir (noir mêlé de noir) et bien visible sur fond coloré. Le masque a longtemps
+# valu (403, 3, 10, 5) et laissait donc passer ce liseré — c'est l'intégralité des
+# « 22 px inexpliqués » de l'étalon trace_odd (fond vert), soldés le 2026-08-29 : les
+# 72 pixels concernés portent des teintes que le Shifter ne PEUT PAS produire
+# (octets à nibbles inégaux ou impairs, cf. stColorToArgb), donc aucune n'est du rendu.
+# D'où le rectangle élargi d'un pixel sur chaque bord.
+HATARI_LED = (402, 2, 12, 6)   # x, y, w, h
 
 
 def _read_ppm(path: Path) -> tuple[int, int, bytes]:
