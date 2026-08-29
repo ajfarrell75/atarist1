@@ -30,6 +30,7 @@
 //  (c) 2026 VERHILLE Arnaud — projet NeoST.
 // =============================================================================
 #pragma once
+#include "audio/MidiEndpoint.hpp"
 #include "audio/MidiMessageParser.hpp"
 #include "core/Pacing.hpp"
 #include <atomic>
@@ -77,9 +78,13 @@ public:
     struct Dest {
         std::string name;
         uint16_t channels = 0xFFFF;     // bit n = canal n+1 ; 0xFFFF = tous
+        // Identifiant unique de l'hôte (CoreMIDI). Vide = inconnu : on retombe sur le
+        // nom, avec la règle « un point de terminaison n'est jamais pris deux fois »
+        // qui suffit à séparer deux appareils homonymes (cf. MidiEndpoint.hpp).
+        std::string uid;
     };
     // Ce qui est branché MAINTENANT (à rappeler pour voir un branchement à chaud).
-    static std::vector<std::string> destinations();
+    static std::vector<neost::midi::Endpoint> destinations();
     // Ouvre EXACTEMENT cet ensemble. Un appareil absent est ignoré SANS BRUIT :
     // l'appelant garde son nom en config et rappelle, ce qui rend le rebranchement
     // à chaud transparent. Rend le nombre réellement ouvert.
@@ -133,7 +138,7 @@ private:
     // par canal). D'où ensurePort_(), qui crée le port source même quand la case
     // « port virtuel » est décochée — sans port, rien d'où émettre.
     uint32_t outPort_ = 0;
-    struct OpenDest { std::string name; uint16_t channels; uint32_t ep; };
+    struct OpenDest { std::string name; uint16_t channels; uint32_t ep; std::string uid; };
     std::vector<OpenDest> dests_;
     bool userPort_ = false;             // le port virtuel a-t-il été demandé POUR LUI-MÊME ?
     void sendTo(const OpenDest& d, const uint8_t* msg, int len);   // (verrou DÉJÀ pris)

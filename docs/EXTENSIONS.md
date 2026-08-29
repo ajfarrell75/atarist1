@@ -160,9 +160,19 @@ ce qu'un test veut.
 
 Quatre choix de conception, chacun payé par un piège réel :
 
-- **Désignation par NOM, jamais par index.** Débrancher un périphérique renumérote tous
-  les autres : une config mémorisée en index se serait mise à piloter le mauvais
-  appareil au branchement suivant.
+- **Désignation par NOM + IDENTIFIANT UNIQUE, jamais par index.** Débrancher un
+  périphérique renumérote tous les autres : une config mémorisée en index se serait mise
+  à piloter le mauvais appareil au branchement suivant. Mais le nom seul ne suffit pas
+  non plus — deux machines du **même modèle** portent exactement le même nom. La config
+  mémorise donc `kMIDIPropertyUniqueID` (CoreMIDI) à côté du nom, et l'appariement fait
+  deux passes : identifiant d'abord, nom ensuite, en n'attribuant **jamais deux fois le
+  même point de terminaison**. Deux claviers identiques s'ouvrent chacun sur le sien,
+  y compris sous ALSA (pas d'identifiant stable, mais la non-réattribution suffit quand
+  les deux sont branchés). L'identifiant est **appris** à la première ouverture, donc
+  une config qui ne connaît qu'un nom devient sûre d'elle-même. Interface : suffixe
+  « #1 / #2 » sur les homonymes. Logique d'appariement : `src/audio/MidiEndpoint.hpp`,
+  fonction PURE — c'est ce qui la rend testable sans deux appareils identiques sous la
+  main.
 - **L'absence n'efface pas le réglage.** Un appareil débranché n'est pas une erreur de
   configuration : le nom reste dans `neost.cfg`, la page affiche *(not connected)*, et
   la boucle **re-tente à 1 Hz** — rebrancher le câble USB suffit, sans rouvrir la

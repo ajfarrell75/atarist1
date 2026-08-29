@@ -167,13 +167,15 @@ void parseConfigLine(Config& c, std::string line) {
     else if (line.rfind("midi_out_devices=", 0) == 0) {
         c.midiOutDevices.clear();
         for (const auto& r : decodeRecords(line.substr(17)))
-            c.midiOutDevices.push_back({r[0], r.size() > 1 ? parseChannelMask(r[1]) : uint16_t(0xFFFF)});
+            c.midiOutDevices.push_back({r[0], r.size() > 1 ? parseChannelMask(r[1]) : uint16_t(0xFFFF),
+                                        r.size() > 2 ? r[2] : std::string()});
     }
     else if (line.rfind("midi_in_devices=", 0) == 0) {
         c.midiInDevices.clear();
         for (const auto& r : decodeRecords(line.substr(16))) {
             const int ch = r.size() > 1 ? std::atoi(r[1].c_str()) : 0;
-            c.midiInDevices.push_back({r[0], (ch >= 1 && ch <= 16) ? ch : 0});
+            c.midiInDevices.push_back({r[0], (ch >= 1 && ch <= 16) ? ch : 0,
+                                       r.size() > 2 ? r[2] : std::string()});
         }
     }
     // HÉRITÉ (clés répétables, format du 2026-08-29 au matin) : encore LU pour qu'un
@@ -348,11 +350,12 @@ void writeConfigKeys(std::ostream& f, const Config& w, bool full) {
     f << "midi_out_devices=";
     for (std::size_t i = 0; i < w.midiOutDevices.size(); ++i)
         f << (i ? ";" : "") << escapeField(w.midiOutDevices[i].name) << '|'
-          << formatChannelMask(w.midiOutDevices[i].channels);
+          << formatChannelMask(w.midiOutDevices[i].channels) << '|'
+          << escapeField(w.midiOutDevices[i].uid);
     f << "\nmidi_in_devices=";
     for (std::size_t i = 0; i < w.midiInDevices.size(); ++i)
         f << (i ? ";" : "") << escapeField(w.midiInDevices[i].name) << '|'
-          << w.midiInDevices[i].channel;
+          << w.midiInDevices[i].channel << '|' << escapeField(w.midiInDevices[i].uid);
     f << "\n";
     if (full)
         f << "showHex=" << (w.showHex ? 1 : 0)

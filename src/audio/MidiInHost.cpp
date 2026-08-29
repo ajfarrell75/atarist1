@@ -101,6 +101,13 @@ void MidiInHost::pushForTest(int slot, const uint8_t* data, std::size_t n, int f
     feed(*deviceForTest(slot, forceChannel), data, n);
 }
 
+std::vector<neost::midi::Endpoint> MidiInHost::openEndpoints() const {
+    std::vector<neost::midi::Endpoint> out;
+    out.reserve(devices_.size());
+    for (const auto& d : devices_) out.push_back({d->name, d->uid});
+    return out;
+}
+
 std::vector<std::string> MidiInHost::openNames() const {
     std::vector<std::string> out;
     out.reserve(devices_.size());
@@ -113,6 +120,14 @@ std::vector<std::string> MidiInHost::openNames() const {
 // -----------------------------------------------------------------------------
 #if defined(__APPLE__) && !defined(NEOST_MIDI_ALSA)
 namespace {
+// kMIDIPropertyUniqueID : STABLE d'un branchement à l'autre. Seul critère qui sépare
+// deux claviers du même modèle, qui portent rigoureusement le même nom.
+std::string uniqueId(MIDIObjectRef obj) {
+    SInt32 uid = 0;
+    if (MIDIObjectGetIntegerProperty(obj, kMIDIPropertyUniqueID, &uid) != noErr) return {};
+    return std::to_string(long(uid));
+}
+
 std::string displayName(MIDIObjectRef obj) {
     CFStringRef cf = nullptr;
     if (MIDIObjectGetStringProperty(obj, kMIDIPropertyDisplayName, &cf) != noErr || !cf) return {};
@@ -124,8 +139,8 @@ std::string displayName(MIDIObjectRef obj) {
 } // namespace
 #endif
 
-std::vector<std::string> MidiInHost::sources() {
-    std::vector<std::string> out;
+std::vector<neost::midi::Endpoint> MidiInHost::sources() {
+    std::vector<neost::midi::Endpoint> out;
 #if defined(NEOST_MIDI_ALSA)
     snd_seq_t* seq = nullptr;
     if (snd_seq_open(&seq, "default", SND_SEQ_OPEN_DUPLEX, 0) < 0) return out;
@@ -143,8 +158,9 @@ std::vector<std::string> MidiInHost::sources() {
             // Une SOURCE se lit et se laisse abonner : READ | SUBS_READ.
             if ((caps & (SND_SEQ_PORT_CAP_READ | SND_SEQ_PORT_CAP_SUBS_READ))
                 != (SND_SEQ_PORT_CAP_READ | SND_SEQ_PORT_CAP_SUBS_READ)) continue;
-            out.emplace_back(std::string(snd_seq_client_info_get_name(ci)) + ": "
-                             + snd_seq_port_info_get_name(pi));
+            // uid vide : ALSA n'a pas d'identifiant stable (cf. MidiEndpoint.hpp).
+            out.push_back({std::string(snd_seq_client_info_get_name(ci)) + ": "
+                           + snd_seq_port_info_get_name(pi), std::string()});
         }
     }
     snd_seq_port_info_free(pi); snd_seq_client_info_free(ci);
@@ -152,11 +168,12 @@ std::vector<std::string> MidiInHost::sources() {
 #elif defined(__APPLE__)
     const ItemCount n = MIDIGetNumberOfSources();
     for (ItemCount i = 0; i < n; ++i) {
-        std::string nm = displayName(MIDIGetSource(i));
-        // « NeoST MIDI OUT » est NOTRE propre source virtuelle : la proposer en
-        // entrée offrirait un bouclage OUT→IN déguisé, avec le larsen que la fiche
-        // de bouclage débranchée par défaut cherche précisément à éviter.
-        if (!nm.empty() && nm.rfind("NeoST", 0) != 0) out.push_back(std::move(nm));
+        const MIDIEndpointRef e = MIDIGetSource(i);
+        std::string nm = displayName(e);
+        // « NeoST MIDI OUT » est NOTRE propre source virtuelle : la proposer en entrée
+        // offrirait un bouclage OUT→IN déguisé, avec le larsen que la fiche de bouclage
+        // débranchée par défaut cherche précisément à éviter.
+        if (!nm.empty() && nm.rfind("NeoST", 0) != 0) out.push_back({std::move(nm), uniqueId(e)});
     }
 #endif
     return out;
@@ -184,6 +201,15 @@ void MidiInHost::coreMidiRead(const ::MIDIPacketList* pkts, void* refCon, void* 
 std::size_t MidiInHost::setDevices(const std::vector<Want>& want) {
     close();
     if (want.empty()) return 0;
+
+    // Appariement AVANT ouverture : identifiant d'abord, nom ensuite, et jamais deux
+    // fois le même point (cf. MidiEndpoint.hpp). Deux claviers du même modèle sont
+    // ainsi ouverts chacun sur le sien, au lieu que le premier soit pris deux fois.
+    const auto have = sources();
+    std::vector<neost::midi::Wanted> keys;
+    keys.reserve(want.size());
+    for (const Want& w : want) keys.push_back({w.name, w.uid});
+    const std::vector<int> pick = neost::midi::matchEndpoints(keys, have);
 #if defined(NEOST_MIDI_ALSA)
     snd_seq_t* seq = nullptr;
     if (snd_seq_open(&seq, "default", SND_SEQ_OPEN_DUPLEX, 0) < 0) {
@@ -210,7 +236,12 @@ std::size_t MidiInHost::setDevices(const std::vector<Want>& want) {
 
     snd_seq_client_info_t* ci = nullptr; snd_seq_port_info_t* pi = nullptr;
     snd_seq_client_info_malloc(&ci); snd_seq_port_info_malloc(&pi);
-    for (const Want& w : want) {
+    for (std::size_t wi = 0; wi < want.size(); ++wi) {
+        if (pick[wi] < 0) continue;
+        const Want& w = want[wi];
+        const std::string target = have[std::size_t(pick[wi])].name;
+        int rank = 0, seen = 0;
+        for (int e = 0; e < pick[wi]; ++e) if (have[std::size_t(e)].name == target) ++rank;
         int foundC = -1, foundP = -1;
         snd_seq_client_info_set_client(ci, -1);
         while (foundC < 0 && snd_seq_query_next_client(seq, ci) >= 0) {
@@ -223,7 +254,7 @@ std::size_t MidiInHost::setDevices(const std::vector<Want>& want) {
                 if ((caps & (SND_SEQ_PORT_CAP_READ | SND_SEQ_PORT_CAP_SUBS_READ))
                     != (SND_SEQ_PORT_CAP_READ | SND_SEQ_PORT_CAP_SUBS_READ)) continue;
                 if (std::string(snd_seq_client_info_get_name(ci)) + ": "
-                    + snd_seq_port_info_get_name(pi) == w.name) {
+                    + snd_seq_port_info_get_name(pi) == target && seen++ == rank) {
                     foundC = cid; foundP = snd_seq_port_info_get_port(pi);
                     break;
                 }
@@ -231,11 +262,11 @@ std::size_t MidiInHost::setDevices(const std::vector<Want>& want) {
         }
         if (foundC < 0 || snd_seq_connect_from(seq, port, foundC, foundP) < 0) continue;
         auto d = std::make_unique<Device>();
-        d->owner = this; d->name = w.name; d->forceChannel = w.forceChannel;
+        d->owner = this; d->name = target; d->forceChannel = w.forceChannel;
         d->src = (uint32_t(foundC) << 8 | uint32_t(foundP)) + 1;
         devices_.push_back(std::move(d));
         std::fprintf(stderr, "[midi-in] \"%s\" -> MIDI IN (ALSA %d:%d)%s\n",
-                     w.name.c_str(), foundC, foundP,
+                     target.c_str(), foundC, foundP,
                      w.forceChannel ? " channelized" : "");
     }
     snd_seq_port_info_free(pi); snd_seq_client_info_free(ci);
@@ -262,23 +293,30 @@ std::size_t MidiInHost::setDevices(const std::vector<Want>& want) {
         return 0;
     }
     client_ = client; port_ = port;
-    for (const Want& w : want) {
+    const ItemCount nsrc = MIDIGetNumberOfSources();
+    for (std::size_t wi = 0; wi < want.size(); ++wi) {
+        if (pick[wi] < 0) continue;        // débranché : l'appelant re-tentera
+        const Want& w = want[wi];
+        const auto& ep = have[std::size_t(pick[wi])];
+        // Retrouvé par son IDENTIFIANT : c'est le seul lien fiable entre la liste
+        // rendue par sources() (qui saute les noms vides et les nôtres) et CoreMIDI.
         MIDIEndpointRef found = 0;
-        const ItemCount n = MIDIGetNumberOfSources();
-        for (ItemCount i = 0; i < n; ++i) {
+        for (ItemCount i = 0; i < nsrc; ++i) {
             const MIDIEndpointRef e = MIDIGetSource(i);
-            if (displayName(e) == w.name) { found = e; break; }
+            if (uniqueId(e) == ep.uid && displayName(e) == ep.name) { found = e; break; }
         }
-        if (!found) continue;              // débranché : l'appelant re-tentera
+        if (!found) continue;
         auto d = std::make_unique<Device>();
-        d->owner = this; d->name = w.name; d->forceChannel = w.forceChannel; d->src = found;
+        d->owner = this; d->name = ep.name; d->uid = ep.uid;
+        d->forceChannel = w.forceChannel; d->src = found;
         // refCon de la CONNEXION = l'appareil : le callback saura de qui vient
         // chaque paquet, donc quel décodeur alimenter.
         if (MIDIPortConnectSource(port, found, d.get()) != noErr) {
             std::fprintf(stderr, "[midi-in] cannot connect \"%s\"\n", w.name.c_str());
             continue;
         }
-        std::fprintf(stderr, "[midi-in] \"%s\" -> MIDI IN (CoreMIDI)%s\n", w.name.c_str(),
+        std::fprintf(stderr, "[midi-in] \"%s\" -> MIDI IN (CoreMIDI uid %s)%s\n",
+                     ep.name.c_str(), ep.uid.c_str(),
                      w.forceChannel ? " channelized" : "");
         devices_.push_back(std::move(d));
     }

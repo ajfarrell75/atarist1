@@ -28,6 +28,7 @@
 #include "io/Mfp.hpp"
 #include "core/YM2149.hpp"
 #include "core/StateArchive.hpp"
+#include "audio/MidiEndpoint.hpp"
 #include "audio/MidiInHost.hpp"
 #include "io/MidiAcia.hpp"
 #include "io/Ikbd.hpp"
@@ -211,8 +212,8 @@ static void testConfigParser() {
         // peut contenir n'importe quoi — c'est l'objection qui avait fait écarter un
         // séparateur au départ, et que l'échappement lève.
         const std::string tordu = "Ac;me | Piano \\ 2";
-        c.midiOutDevices = {{tordu, 0x000F}, {"Circuit Tracks MIDI", 0x0200}};
-        c.midiInDevices  = {{tordu, 3}, {"Circuit Tracks MIDI", 0}};
+        c.midiOutDevices = {{tordu, 0x000F, "111"}, {"Circuit Tracks MIDI", 0x0200, "-901138834"}};
+        c.midiInDevices  = {{tordu, 3, "222"}, {"Circuit Tracks MIDI", 0, ""}};
 
         std::ostringstream os;
         writeConfigKeys(os, c, true);
@@ -233,6 +234,12 @@ static void testConfigParser() {
                   relu.midiOutDevices.size() == 2 && relu.midiOutDevices[1].channels == 0x0200, true);
         checkBool("cfg MIDI : canal forcé préservé",
                   !relu.midiInDevices.empty() && relu.midiInDevices[0].channel == 3, true);
+        // L'identifiant DOIT survivre : c'est lui qui distingue deux appareils du même
+        // modèle d'un lancement à l'autre. Un négatif est un uid CoreMIDI valide.
+        checkBool("cfg MIDI : identifiant unique préservé",
+                  relu.midiOutDevices.size() == 2 && relu.midiOutDevices[1].uid == "-901138834", true);
+        checkBool("cfg MIDI : identifiant vide préservé vide",
+                  relu.midiInDevices.size() == 2 && relu.midiInDevices[1].uid.empty(), true);
 
         // LE test du bug : rejouer les MÊMES lignes par-dessus une config DÉJÀ remplie,
         // exactement ce que fait loadProfileInto. Les listes doivent être REMPLACÉES.
@@ -678,6 +685,72 @@ static void testMidiTdre() {
     const uint8_t o1 = midi.read8(kData), o2 = midi.read8(kData);
     checkBool("débordement : le status $90 survit", o1 == 0x90, true);
     checkBool("débordement : puis $3C",             o2 == 0x3C, true);
+}
+
+// -----------------------------------------------------------------------------
+//  APPAREILS HOMONYMES — désigner sans ambiguïté
+//
+//  Deux machines du MÊME MODÈLE branchées ensemble (le cas d'un studio : deux
+//  claviers identiques) portent EXACTEMENT le même nom d'affichage. Les désigner par
+//  le nom seul, c'est ouvrir deux fois le même appareil et laisser l'autre muet.
+//  L'index n'est pas la solution non plus : il se renumérote au débranchement d'un
+//  voisin, et la config se mettrait à piloter la mauvaise machine.
+//
+//  On ne peut PAS éprouver ça sur le matériel du développeur (un seul appareil
+//  branché) : c'est exactement pourquoi l'appariement est une fonction PURE.
+// -----------------------------------------------------------------------------
+static void testMidiHomonymes() {
+    std::printf("Appareils MIDI homonymes (appariement nom + identifiant)\n");
+    using neost::midi::Endpoint;
+    using neost::midi::Wanted;
+    using neost::midi::matchEndpoints;
+    using neost::midi::displayLabel;
+
+    // Deux claviers identiques + un troisième appareil.
+    const std::vector<Endpoint> have = {
+        {"Piano 88", "111"}, {"Piano 88", "222"}, {"Circuit Tracks MIDI", "333"}};
+
+    // (1) Deux entrées de config par le NOM SEUL (config d'avant les identifiants) :
+    //     elles doivent tomber sur DEUX points distincts, pas deux fois le premier.
+    {
+        const auto pick = matchEndpoints({{"Piano 88", ""}, {"Piano 88", ""}}, have);
+        checkBool("homonymes : deux entrées, deux points distincts",
+                  pick.size() == 2 && pick[0] == 0 && pick[1] == 1, true);
+    }
+
+    // (2) L'IDENTIFIANT prime, et il prime AVANT que le nom ne serve : sans cette
+    //     priorité, l'entrée par nom raflerait le point que l'autre réclamait par son
+    //     identifiant. Ici le second veut explicitement « 111 » — il doit l'obtenir.
+    {
+        const auto pick = matchEndpoints({{"Piano 88", ""}, {"Piano 88", "111"}}, have);
+        checkBool("homonymes : l'identifiant passe avant le nom",
+                  pick.size() == 2 && pick[1] == 0 && pick[0] == 1, true);
+    }
+
+    // (3) LE bénéfice de l'identifiant : l'ordre d'énumération change au rebranchement
+    //     (débrancher un voisin renumérote tout). Le nom seul suivrait la position ;
+    //     l'identifiant, lui, retrouve la bonne machine.
+    {
+        const std::vector<Endpoint> reordonne = {
+            {"Circuit Tracks MIDI", "333"}, {"Piano 88", "222"}, {"Piano 88", "111"}};
+        const auto pick = matchEndpoints({{"Piano 88", "111"}}, reordonne);
+        checkBool("homonymes : l'identifiant survit à la renumérotation",
+                  pick.size() == 1 && pick[0] == 2, true);
+    }
+
+    // (4) Appareil ABSENT : -1, et surtout il ne vole pas le point d'un autre.
+    {
+        const auto pick = matchEndpoints({{"Fantôme", "999"}, {"Piano 88", ""}}, have);
+        checkBool("homonymes : l'absent rend -1", pick.size() == 2 && pick[0] == -1, true);
+        checkBool("homonymes : et ne vole rien au suivant", pick.size() == 2 && pick[1] == 0, true);
+    }
+
+    // (5) Étiquettes : le suffixe n'apparaît QUE s'il y a ambiguïté — sinon on
+    //     alourdirait toutes les listes pour rien.
+    checkBool("homonymes : étiquette suffixée #1", displayLabel(have, 0) == "Piano 88 #1", true);
+    checkBool("homonymes : étiquette suffixée #2", displayLabel(have, 1) == "Piano 88 #2", true);
+    checkBool("homonymes : nom unique laissé nu",
+              displayLabel(have, 2) == "Circuit Tracks MIDI", true);
 }
 
 // -----------------------------------------------------------------------------
@@ -1738,6 +1811,7 @@ int main() {
     testYmEventDomain();
     testMidiTdre();
     testMidiInJitter();
+    testMidiHomonymes();
     testIkbdTdre();
     testIkbdProtocol();
     testRtcSecond();
