@@ -1202,39 +1202,81 @@ des chasseurs bien ciblés (code frais de la session) plus que des vérificateur
 chaque correctif ci-dessus a été RE-vérifié à la main contre les sources Hatari avant d'être
 appliqué.
 
-## 11ᵉ passe — deux résidus MESURÉS sur les étalons à disque généré (2026-08-19)
+## 11ᵉ passe — deux résidus MESURÉS sur les étalons à disque généré (2026-08-19), TRANCHÉS le 2026-08-29 : un artefact de mesure, un écart réel
 
 Découverts en migrant les étalons vers EmuTOS (découplage juridique) : leurs références
 sont des **self-captures** (`ref_kind: snapshot`), donc elles gardaient la non-régression
 de NeoST contre lui-même **sans jamais confronter ces étalons à l'oracle**. Confrontation
 faite (Hatari v2.6.1-devel bâti le jour même, même disque, même ROM, même trame) :
 
-| Étalon | NeoST ↔ oracle | Localisation | Nature |
-|--------|----------------|--------------|--------|
-| `overscan_top` | **194 px / 114816 (0,17 %)** | 8 premières lignes du buffer (y=0..7) ; 1ᵉʳ écart (x=32, y=0) NeoST `#000000` vs Hatari `#666666` | ouvert |
-| `trace_odd` | **22 px / 114816 (0,02 %)** | 6 scanlines, 1ᵉʳ écart (x=402, y=2) NeoST `#00EE00` vs Hatari `#00B200` — même teinte, intensité différente | ouvert |
+| Étalon | Écart annoncé (2026-08-19) | Verdict (2026-08-29) |
+|--------|-----------------------------|----------------------|
+| `trace_odd` | 22 px / 114816 | **ARTEFACT DE MESURE — soldé à 0 px**, promu `ref_kind: oracle` |
+| `overscan_top` | 194 px / 114816 | **ÉCART DE RENDU RÉEL de 144 px** (les 50 autres étaient la LED de Hatari), localisé et nommé — reste `snapshot` |
 
-**Ce que le contrôle croisé établit déjà** :
-- l'écart est **indépendant de la ROM** : mesuré identique (194 px) sous `etos192fr` et sous
-  `tos102uk`, et l'oracle lui-même est **byte-identique entre les deux ROM** (0 px) — ces
-  disques sont des secteurs de boot autonomes, le TOS ne fait que les charger ;
-- il est **indépendant du numéro de trame demandé** au sens où les deux étalons capturent une
-  image stable (motif statique) : ce n'est pas un décalage d'une trame ;
-- les deux résidus sont sur les **premières lignes de trame**, ce qui pointe la même famille
-  que les items V3 « attribution de ligne » / `CyclesPerVBL` de `TODO.md`, pas deux bugs sans
-  rapport. `trace_odd` ajoute une composante **d'intensité de couleur** (`#00EE00` vs
-  `#00B200`) qui, elle, ressemble à une conversion de niveau palette et mérite d'être
-  regardée séparément.
+### `trace_odd` : ce n'était pas du rendu (soldé)
+
+Hatari incruste une **LED disquette** dans ses captures AVI ; `compare_screenshot.py` la
+masque depuis toujours. Le masque valait `(403, 3, 10, 5)` — la taille de la LED **à
+l'œil**. Or l'oracle capture en **2×** puis sous-échantillonne : il subsiste un **liseré
+d'un pixel tout autour**, mêlé au fond. Sur fond noir, du noir mêlé de noir ne se voit
+pas ; sur le fond **vert** de cet étalon, si. Les « 22 px » étaient ce liseré, rien
+d'autre. Masque corrigé en `(402, 2, 12, 6)` → **0 px**.
+
+La preuve qui a permis de trancher **ne dépend pas du masque** : les 72 pixels concernés
+portent des teintes que le Shifter **ne peut pas produire**. `Shifter::stColorToArgb`
+construit chaque octet par `v |= v << 4`, donc à nibbles **égaux**, et sur ST le bit 3 du
+nibble n'existe pas : les seuls octets atteignables sont `00 22 44 66 88 AA CC EE`.
+Les teintes en cause — `#00B200`, `#007700`, `#E00000` — n'en sont pas. Aucun réglage de
+palette, aucun bug de rendu ne les produit : elles ne peuvent venir que de l'incrustation.
+
+⛔ L'hypothèse de 2026-08-19 — « même famille que le résidu d'`overscan_top`, les deux sont
+sur les premières lignes de trame » — est **RÉFUTÉE**. Les deux cas n'ont rien de commun :
+l'un est une incrustation de l'oracle, l'autre est du rendu NeoST. Ne pas la rouvrir.
+
+### `overscan_top` : écart réel, 144 px, localisé (ouvert)
+
+Mesuré **stable sur les 61 trames** de la fenêtre de balayage : aucune dépendance de phase,
+c'est structurel. Les 144 pixels sont sur les **5 premières lignes de la trame** —
+exactement celles qu'**ouvre le retrait de bordure haute**. Au-delà (`y ≥ 5`) les deux
+images sont **identiques au pixel** : le retrait de bordure haute lui-même est donc
+**conforme**, ce n'est pas lui qui est en cause.
+
+Ce qui diffère est le traitement de la **bordure GAUCHE** sur ces lignes de transition —
+relevé de la ligne `y=0`, plages de couleur :
+
+| x | 0..31 | 32..43 | 44..47 | 48..351 | 352..363 | 364..367 | 368..415 |
+|---|---|---|---|---|---|---|---|
+| NeoST  | noir | noir | blanc | blanc | blanc | noir | noir |
+| Hatari | noir | `$333` | `$333` | blanc | `$555` | `$555` | noir |
+
+soit une fenêtre de **320 px décalée de −4** côté NeoST (blanc en `44..363`) contre une
+fenêtre de **336 px** côté Hatari (contenu en `32..367`).
+
+NeoST applique le décalage `LEFT_OFF` standard de **−4 px** et garde une fenêtre de
+**320 px** ; Hatari rend une fenêtre de **336 px** (`x=32..367`) dont les 16 px de tête et
+les 16 px de queue portent des index de palette autres que 0 et 15. Les deux teintes
+(`#666666` = `$333`, `#AAAAAA` = `$555`) sont des **coloris ST légaux** au sens du test
+ci-dessus : c'est bien du rendu.
+
+Piste, non instruite : `glue::LEFT_OFF` / `LEFT_OFF_MED` et la table `shEff` de
+`Shifter.cpp` (le `default: −4`, « left-off standard calibré »). ⚠ Ce chemin est calibré à
+0 px contre plusieurs démos (No Cooper, Closure, Cuddly) : **aucun réglage sur la foi de ce
+seul étalon**. La référence reste une **self-capture** — elle garde la non-régression, elle
+ne prouve pas la conformité sur ces 5 lignes.
 
 **Contre-épreuve utile** : `scroll_8264` et `scroll_8265`, capturés dans les mêmes conditions
-(STE, disque généré), sont à **0 px de l'oracle** — leurs références ont donc été promues en
-`ref_kind: oracle` le même jour. Le rendu STE fin n'est pas en cause : c'est bien le haut de
-trame.
+(STE, disque généré), sont à **0 px** de l'oracle — leurs références ont été promues en
+`ref_kind: oracle` dès le 2026-08-19. Le rendu STE fin n'est pas en cause.
 
-⚠ Tant que ces deux résidus ne sont pas expliqués, leurs références **restent des
-self-captures** : les promouvoir en `oracle` ferait échouer la suite, et les re-baseliner sur
-l'oracle figerait un écart non compris dans l'autre sens. Le chiffre est consigné dans
-`tools/etalons.json` (`ref_note`) pour que le prochain lecteur ne le redécouvre pas.
+**Ce que le contrôle croisé de 2026-08-19 établissait déjà, et qui tient toujours** :
+l'écart d'`overscan_top` est **indépendant de la ROM** (identique sous `etos192fr` et
+`tos102uk`, l'oracle étant lui-même byte-identique entre les deux — ces disques sont des
+secteurs de boot autonomes, le TOS ne fait que les charger) et **indépendant du numéro de
+trame** (motif statique).
+
+**Bilan de corpus** : 10 étalons machine sur 16 sont désormais référencés à l'oracle Hatari
+(9 avant), un seul écart oracle mesuré reste ouvert.
 
 ## Extensions NeoST sans équivalent Hatari (divergences délibérées, hors fidélité)
 

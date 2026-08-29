@@ -137,8 +137,8 @@ est continue, les trous sont du travail fait.
     EmuTOS RÉFUTÉE, ne pas retenter.** Ce disque n'a pas de secteur de boot exécutable
     (somme $FB35) : la diapo est lancée par le dossier `AUTO`, et sous EmuTOS le
     programme démarre puis abandonne (bureau figé dès la trame 600). Ce n'est pas un bug
-    NeoST — **l'oracle Hatari + EmuTOS rend le même bureau** (22 px, tous dans la bande
-    de la LED disquette d'Hatari) ; `etos256fr` échoue pareil. Seule voie restante :
+    NeoST — **l'oracle Hatari + EmuTOS rend le même bureau** (écart entièrement dans la
+    bande de la LED disquette d'Hatari) ; `etos256fr` échoue pareil. Seule voie restante :
     l'**étalon généré** (esprit `tools/make_overscan_test.py`) — un secteur de boot
     autonome qui écrit la palette en cours de ligne, calé à l'oracle.
   - **`union_demo`** : disque absent du dépôt (fetch planetemu manuel), donc non testable
@@ -161,9 +161,22 @@ est continue, les trous sont du travail fait.
 - **A11 ⭘ — L'oracle ne tourne dans aucune CI.** Job planifié ou manuel (pas au push) qui
   clone Hatari au pin via `tools/setup_hatari.sh`, régénère les captures des étalons
   `ref_kind: oracle` et compare aux réfs commises. Fermerait la dernière boucle de
-  validation entièrement manuelle. À la même occasion : **statuer sur les deux étalons
-  `snapshot` à écart oracle mesuré et inexpliqué** (`overscan_top` : 194 px,
-  `trace_odd` : 22 px — la suite garde NeoST contre lui-même sur ces deux cas).
+  validation entièrement manuelle. ✅ Le volet « statuer sur les deux étalons `snapshot` à
+  écart oracle inexpliqué » est **SOLDÉ le 2026-08-29** (détail : `CHANGELOG.md`,
+  `docs/HATARI_DIVERGENCES.md` 11ᵉ passe) — `trace_odd` était un **artefact de mesure**
+  (masque LED d'un pixel trop étroit) et est promu `ref_kind: oracle` à 0 px ; il reste de
+  cet item l'**écart réel d'`overscan_top`**, ci-dessous.
+- **A40 ⭘ — `overscan_top` : 144 px d'écart oracle RÉEL, localisé, cause non établie.**
+  Sorti d'A11 le 2026-08-29. Stable sur les 61 trames de la fenêtre (structurel, pas de
+  phase). Les 144 px sont sur les **5 premières lignes de trame**, celles qu'ouvre le
+  retrait de bordure haute ; **au-delà les deux images sont identiques au pixel**, donc le
+  retrait de bordure haute lui-même est CONFORME. Ce qui diverge est la **bordure gauche**
+  sur ces lignes de transition : NeoST garde une fenêtre de 320 px décalée de −4
+  (`glue::LEFT_OFF`, `default: −4` de la table `shEff`, `Shifter.cpp`), Hatari rend une
+  fenêtre de **336 px** dont les 16 px de tête et de queue portent des index ≠ 0/15.
+  ⚠ Ce chemin est calibré à 0 px contre No Cooper, Closure et Cuddly : **ne rien régler sur
+  la foi de ce seul étalon** — lire `video.c` d'abord (méthode imposée), et la référence
+  reste une self-capture tant que ce n'est pas compris.
 - **A12 ⭘ — Aucune cible de livraison validée sur du matériel réel.** Windows jamais lancé
   hors CI, APK Android jamais posé sur un appareil (QEMU seul), aucun budget temps réel
   mesuré sur le Raspberry Pi visé (le perfbench ne garde que des ratios sur le poste de

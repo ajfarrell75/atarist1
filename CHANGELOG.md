@@ -26,6 +26,48 @@ Ripper, DAC Pro Sound) avec page Dongles, `disks/dongles.txt` et oracle de rejeu
 vérifié note à note** en headless, corpus MIDI piano/blues ; port MIDI ALSA sous Linux ;
 save-state v16. Détail dans les chantiers datés ci-dessous.
 
+## A11 — les deux écarts oracle « inexpliqués » sont tranchés : un n'existait pas (2026-08-29)
+
+Deux étalons dormaient en `ref_kind: snapshot` depuis le 2026-08-19 avec un résidu oracle
+mesuré et jamais instruit — `overscan_top` 194 px, `trace_odd` 22 px. La note du corpus les
+rangeait dans la « même famille » (premières lignes de trame). Elle avait tort sur les deux.
+
+**`trace_odd` : 22 px qui n'étaient pas du rendu.** Hatari incruste une LED disquette dans
+ses captures ; `compare_screenshot.py` la masque depuis toujours, sur `(403, 3, 10, 5)` — sa
+taille À L'ŒIL. Mais l'oracle capture en 2× puis sous-échantillonne : il reste un liseré d'un
+pixel tout autour. Sur fond noir, du noir mêlé de noir ne se voit pas ; sur le fond VERT de
+cet étalon, si. Masque corrigé en `(402, 2, 12, 6)` → **0 px**, et l'étalon est promu
+`ref_kind: oracle` (10 des 16 étalons machine sont maintenant adossés à Hatari, 9 avant).
+
+Ce qui a permis de trancher SANS dépendre du masque, et qui est la partie réutilisable : les
+72 pixels en cause portent des teintes que le Shifter **ne peut pas produire**.
+`stColorToArgb` construit chaque octet par `v |= v << 4` — nibbles égaux — et sur ST le bit 3
+du nibble n'existe pas : les seuls octets atteignables sont `00 22 44 66 88 AA CC EE`. Or on
+lisait `#00B200`, `#007700`, `#E00000`. Aucun réglage de palette ne les produit. Le même test
+appliqué à `overscan_top` donne l'inverse : ses teintes (`$333`, `$555`) sont légales.
+**Une couleur impossible est une preuve ; une couleur plausible n'en est pas une.**
+
+**`overscan_top` : l'écart est réel, mais il valait 144 et non 194.** Les 50 px de différence
+sont la LED — le chiffre de 2026-08-19 avait été relevé au crop `buffer`, sans masque. Un
+écart annoncé sans dire ce que la mesure inclut n'est pas une mesure ; c'est la deuxième fois
+de la semaine que ça mord.
+
+Les 144 px restants sont **stables sur les 61 trames** de la fenêtre (structurel, aucune
+dépendance de phase) et tiennent sur les **5 premières lignes** — celles qu'ouvre le retrait
+de bordure haute. Au-delà, les deux images sont identiques au pixel : **le retrait de bordure
+haute lui-même est conforme**, ce n'est pas lui qui est en cause. Ce qui diverge est la
+bordure GAUCHE sur ces lignes de transition — NeoST garde une fenêtre de 320 px décalée de
+−4, Hatari en rend une de 336. Localisé, nommé, non corrigé : ce chemin est calibré à 0 px
+contre No Cooper, Closure et Cuddly, et rien ne sera réglé sur la foi d'un seul étalon.
+L'item reste ouvert au TODO (**A40**) avec sa mesure et sa piste.
+
+**Ce que le masque élargi coûte** : 22 pixels de plus exclus de chaque comparaison. Vérifié
+plutôt que supposé — sur les 15 captures du corpus, ces 22 pixels sont **uniformément la
+couleur de bordure**. Le masque ne cache aucun signal.
+
+Palier `full` vert. `tests/reference/trace_odd.ppm` retirée : une entrée `oracle` ne la lit
+jamais, la garder aurait été un fichier mort qui a l'air d'une référence.
+
 ## A39 — l'IKBD passe son audit : le protocole est pincé, une étiquette était fausse (2026-08-29)
 
 Deuxième module de la liste des jamais-audités. `io/Ikbd.cpp` fait 1 189 lignes et
