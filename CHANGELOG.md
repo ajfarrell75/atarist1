@@ -26,6 +26,52 @@ Ripper, DAC Pro Sound) avec page Dongles, `disks/dongles.txt` et oracle de rejeu
 vérifié note à note** en headless, corpus MIDI piano/blues ; port MIDI ALSA sous Linux ;
 save-state v16. Détail dans les chantiers datés ci-dessous.
 
+## MIDI — un studio entier : fusion en entrée, aiguillage par canal en sortie (2026-08-29)
+
+NeoST ne tenait qu'UN appareil de chaque côté. Un studio en a plusieurs — une groovebox
+et deux claviers d'un côté, un piano logiciel et un expandeur de l'autre.
+
+**Sortie : un AIGUILLAGE, pas un Thru box.** Chaque destination porte le masque des
+canaux qu'elle reçoit (`midi_out_device=` + `midi_out_channels=`, clés répétables) :
+« instrument 1 de Cubase vers le piano logiciel, instrument 2 vers la groovebox » se
+règle chez NeoST, sans toucher au réglage des appareils. Un même canal peut partir vers
+plusieurs destinations (superposition). Les messages **système** (horloge, start/stop,
+SysEx) n'ont pas de canal et vont à **toutes** : les filtrer désynchroniserait le studio.
+Sous ALSA, les destinations sont adressées explicitement (`snd_seq_ev_set_dest`) et non
+abonnées — un abonné recevrait tout, ce qui interdirait le filtrage.
+
+**Entrée : un boîtier de FUSION.** Le ST n'a qu'une prise MIDI IN. Un tel boîtier ne
+mélange pas des octets, il entrelace des MESSAGES : deux claviers joués ensemble émettent
+`90 3C 40` et `90 40 40` au même instant, et entrelacés octet par octet ils donneraient
+`90 90 3C 40 40 40` — du charabia. D'où un décodeur PAR SOURCE. Le statut n'est ré-émis
+dans le flux fusionné que s'il a CHANGÉ : une source seule garde son running status, deux
+sources qui alternent le voient réinséré.
+
+**Canalisation — sans elle, pas d'enregistrement multipiste.** Deux claviers émettent tous
+deux sur le canal 1 par défaut : le séquenceur ne peut pas les séparer et tout finit sur
+la même piste. `midi_in_channel=N` réécrit le quartet de canal des messages de voie (pas
+des messages système, qui n'en ont pas). Ce que le séquenceur ST en fait le regarde — les
+Cubase complets et Notator enregistrent plusieurs canaux sur plusieurs pistes, Lite non.
+
+`MidiMessageParser.hpp` : le décodeur octets→messages, jusque-là privé de MidiOutHost,
+devient partagé — la fusion en avait besoin, et deux copies auraient divergé. Extraction
+vérifiée SANS régression par l'étalon Cubase (200 notes, pente 1,00097, gigue σ 0,45 ms,
+identique).
+
+GUI : matrice appareils × 16 canaux en sortie (un clic par affectation, `all`/`none` par
+ligne), liste avec canal forcé en entrée. Headless : `--midi-in-device` devient RÉPÉTABLE
+(fusion) et `--midi-in-channel N` s'applique à l'appareil précédent — un séparateur dans
+la valeur aurait buté sur les noms ALSA, qui contiennent déjà « : ».
+
+Vérifié bout en bout (macOS, deux destinations virtuelles) : la panique de fermeture
+diffuse des CC sur les 16 canaux, et chaque destination n'a reçu QUE les siens — `B0 78
+00…` pour celle du canal 1, `B1 78 00…` pour celle du canal 2, 9 octets chacune sur 48
+messages — tandis que le SysEx de démarrage de MROS est arrivé aux DEUX. `neost-selftest`
+couvre la fusion (messages intacts et ordonnés quand deux sources s'entrelacent), la
+canalisation (deux sources → deux canaux distincts) et le temps réel (l'horloge $F8
+traverse sans casser le running status) ; mutation vérifiée : un décodeur unique partagé
+par les sources fait tomber le test de fusion.
+
 ## MIDI IN — l'ACIA tire à 31 250 bauds au lieu d'une rafale par trame (2026-08-29)
 
 Défaut de la livraison du jour même, trouvé en mesurant plutôt qu'en supposant. L'entrée

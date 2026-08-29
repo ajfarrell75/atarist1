@@ -655,41 +655,48 @@ static void testMidiInJitter() {
     {
         Rig r;
         const uint8_t accord[9] = {0x90, 0x3C, 0x40, 0x90, 0x40, 0x40, 0x90, 0x43, 0x40};
-        r.in.pushForTest(accord, sizeof accord);
+        r.in.pushForTest(0, accord, sizeof accord);
+        // Le flux fusionné COMPACTE le running status : les deux notes suivantes
+        // n'ont pas à répéter $90. Même musique, 7 octets au lieu de 9 — et c'est
+        // ce que ferait un vrai boîtier de fusion.
+        const std::vector<uint8_t> attendu = {0x90, 0x3C, 0x40, 0x40, 0x40, 0x43, 0x40};
         std::vector<uint8_t> recu;
         int64_t fin = -1;
-        for (int i = 0; i < 200 && recu.size() < sizeof accord; ++i) {
+        for (int i = 0; i < 200 && recu.size() < attendu.size(); ++i) {
             r.sched.runTo(r.sched.now() + kByte / 4);      // pas fin : 4 par octet
             while (r.rdrf()) {                              // le ST vide la puce
                 recu.push_back(r.midi.read8(kData));
-                if (recu.size() == sizeof accord) fin = r.sched.now();
+                if (recu.size() == attendu.size()) fin = r.sched.now();
             }
         }
-        checkBool("accord : les 9 octets arrivent", recu.size() == sizeof accord, true);
-        checkBool("accord : dans l'ordre",
-                  recu.size() == sizeof accord &&
-                  std::equal(recu.begin(), recu.end(), std::begin(accord)), true);
-        // 9 octets = 9 périodes série au plus tôt. La borne haute interdit le retour
-        // du plafond par trame : à 2 octets/trame il aurait fallu ~5 trames, soit
-        // plus de 500 000 cycles, contre 23 040 ici.
-        checkBool("accord : pas plus vite que le câble", fin >= 9 * kByte, true);
-        checkBool("accord : pas plus lentement non plus", fin >= 0 && fin < 12 * kByte, true);
+        checkBool("accord : les 3 notes arrivent", recu == attendu, true);
+        // 7 octets = 7 périodes série au plus tôt. La borne haute interdit le retour
+        // du plafond par trame : à 2 octets/trame il aurait fallu ~4 trames, soit
+        // plus de 400 000 cycles, contre ~18 000 ici.
+        checkBool("accord : pas plus vite que le câble", fin >= 7 * kByte, true);
+        checkBool("accord : pas plus lentement non plus", fin >= 0 && fin < 10 * kByte, true);
     }
 
     // (2) DÉBIT SOUTENU : 200 octets doivent entrer en 200 périodes série (3125 o/s),
     //     pas en 100 trames. C'est la propriété que l'ancienne version violait.
     {
         Rig r;
-        std::vector<uint8_t> flot(200);
-        for (std::size_t i = 0; i < flot.size(); ++i) flot[i] = uint8_t(0x40 + (i % 0x30));
-        r.in.pushForTest(flot.data(), flot.size());
+        // De VRAIS messages : les octets passent par un décodeur, qui jette à raison
+        // les données orphelines. 66 note-on = 198 octets ; le running status du flux
+        // fusionné les compacte à 2 octets après le premier, d'où 134 octets attendus.
+        std::vector<uint8_t> flot;
+        for (int i = 0; i < 66; ++i) {
+            flot.push_back(0x90); flot.push_back(uint8_t(1 + i)); flot.push_back(0x40);
+        }
+        r.in.pushForTest(0, flot.data(), flot.size());
+        const std::size_t attendu = 3 + 65 * 2;   // 1er message entier, puis running status
         std::size_t lus = 0;
-        const int64_t budget = 210 * kByte;               // 200 octets + marge
+        const int64_t budget = 150 * kByte;               // le flux + marge
         while (r.sched.now() < budget) {
             r.sched.runTo(r.sched.now() + kByte / 4);
             while (r.rdrf()) { r.midi.read8(kData); ++lus; }
         }
-        checkBool("débit : 200 octets en ~200 périodes série", lus == flot.size(), true);
+        checkBool("débit : le flux entier en ~autant de périodes série", lus == attendu, true);
         checkBool("débit : rien perdu côté hôte", r.in.dropped() == 0, true);
     }
 
@@ -699,9 +706,12 @@ static void testMidiInJitter() {
     //     données orphelines. L'hôte, lui, ne retient plus rien pour l'éviter.
     {
         Rig r;
-        std::vector<uint8_t> flot(20);
-        for (std::size_t i = 0; i < flot.size(); ++i) flot[i] = uint8_t(0x50 + i);
-        r.in.pushForTest(flot.data(), flot.size());
+        // Un message complet, puis de quoi noyer la puce (running status : 2 octets
+        // par note supplémentaire). Le flux entrant dans l'ACIA commence donc par
+        // 90 3C, et ce sont ces deux octets-là qui doivent survivre.
+        std::vector<uint8_t> flot = {0x90, 0x3C, 0x40};
+        for (int i = 0; i < 20; ++i) { flot.push_back(0x90); flot.push_back(uint8_t(0x40 + i)); flot.push_back(0x40); }
+        r.in.pushForTest(0, flot.data(), flot.size());
         // ⚠ Par PETITS PAS : une source ne tire qu'UNE fois par appel à runTo (modèle
         // Hatari, cf. le masque `fired` du Scheduler). Un runTo d'un bloc de 20
         // périodes ne ferait donc entrer qu'un octet — ce serait mesurer le test, pas
@@ -709,33 +719,77 @@ static void testMidiInJitter() {
         for (int i = 0; i < 20 * 4; ++i) r.sched.runTo(r.sched.now() + kByte / 4);
         // personne ne lit : le 6850 garde 2 octets et perd tout le reste
         const uint8_t o1 = r.midi.read8(kData), o2 = r.midi.read8(kData);
-        checkBool("overrun 6850 : le premier octet survit", o1 == flot[0], true);
-        checkBool("overrun 6850 : puis le deuxième",        o2 == flot[1], true);
+        checkBool("overrun 6850 : le premier octet survit", o1 == 0x90, true);
+        checkBool("overrun 6850 : puis le deuxième",        o2 == 0x3C, true);
     }
 
-    // (4) TAMPON HÔTE PLEIN : au-delà de kMaxJitter, ce sont les octets NEUFS qui
-    //     tombent, même règle qu'au-dessus. Le tampon existe pour absorber une rafale
-    //     livrée plus vite que 31250 bauds, pas pour stocker indéfiniment.
+    // (4) TAMPON HÔTE PLEIN : au-delà de kMaxJitter, c'est le MESSAGE NEUF ENTIER
+    //     qui tombe — jamais un fragment, qui laisserait des octets orphelins dans
+    //     le flux. Le tampon absorbe une rafale livrée plus vite que 31250 bauds,
+    //     il ne stocke pas indéfiniment.
     {
         MidiInHost in3;
-        // ⚠ Motif CHOISI pour être discriminant : un remplissage uint8_t(i) boucle
-        // tous les 256 octets, si bien que la tête « ancienne » et la tête « neuve »
-        // tombent sur la même valeur et que le test passe quelle que soit la politique.
-        std::vector<uint8_t> trop(4096, 0x7F);
-        trop[0] = 0xF1;                                    // marqueur du PLUS ANCIEN
-        in3.pushForTest(trop.data(), trop.size());
+        std::vector<uint8_t> trop = {0x90, 0x01, 0x40};      // marqueur du PLUS ANCIEN
+        for (int i = 0; i < 2000; ++i) {
+            trop.push_back(0x90); trop.push_back(0x02); trop.push_back(0x40);
+        }
+        in3.pushForTest(0, trop.data(), trop.size());
         checkBool("tampon plein : le trop-plein est compté", in3.dropped() > 0, true);
-        uint8_t premier = 0;
+        uint8_t a = 0, b = 0;
         checkBool("tampon plein : c'est le NEUF qui tombe, pas l'ancien",
-                  in3.tryPop(premier) && premier == trop[0], true);
+                  in3.tryPop(a) && in3.tryPop(b) && a == 0x90 && b == 0x01, true);
+    }
+
+    // (5) FUSION : deux claviers joués ENSEMBLE. Leurs octets arrivent entrelacés ;
+    //     ce qui entre dans le ST doit être des messages INTACTS. C'est toute la
+    //     raison d'être d'un boîtier de fusion — entrelacer des octets bruts
+    //     donnerait « 90 90 3C 40 40 40 », du charabia.
+    {
+        MidiInHost in;
+        const uint8_t a1[2] = {0x90, 0x3C};                  // clavier A : message ENTAMÉ
+        const uint8_t b1[3] = {0x90, 0x40, 0x40};            // clavier B : message COMPLET
+        const uint8_t a2[1] = {0x40};                        // clavier A : sa fin
+        in.pushForTest(0, a1, 2);
+        in.pushForTest(1, b1, 3);
+        in.pushForTest(0, a2, 1);
+        std::vector<uint8_t> flux; uint8_t b = 0;
+        while (in.tryPop(b)) flux.push_back(b);
+        // B sort en entier (il a fini le premier), puis A. Le statut de A est OMIS :
+        // il est identique à celui déjà posé — running status, et c'est correct.
+        const std::vector<uint8_t> attendu = {0x90, 0x40, 0x40, 0x3C, 0x40};
+        checkBool("fusion : les messages restent intacts et ordonnés", flux == attendu, true);
+    }
+
+    // (6) CANALISATION : deux claviers émettent tous deux sur le canal 1. Sans
+    //     réécriture du canal, un séquenceur ne peut PAS les séparer et tout finit
+    //     sur la même piste. Forcés sur 1 et 2, ils deviennent enregistrables sur
+    //     deux pistes simultanément.
+    {
+        MidiInHost in;
+        const uint8_t note[3] = {0x90, 0x3C, 0x40};
+        in.pushForTest(0, note, 3, 1);                       // clavier A → canal 1
+        in.pushForTest(1, note, 3, 2);                       // clavier B → canal 2
+        std::vector<uint8_t> flux; uint8_t b = 0;
+        while (in.tryPop(b)) flux.push_back(b);
+        const std::vector<uint8_t> attendu = {0x90, 0x3C, 0x40, 0x91, 0x3C, 0x40};
+        checkBool("canalisation : deux sources, deux canaux distincts", flux == attendu, true);
+    }
+
+    // (7) TEMPS RÉEL : l'horloge MIDI ($F8) peut tomber N'IMPORTE OÙ, y compris
+    //     entre deux messages en running status, et ne doit PAS casser ce running
+    //     status — sinon la note suivante serait lue comme un message neuf.
+    {
+        MidiInHost in;
+        const uint8_t s[7] = {0x90, 0x3C, 0x40, 0xF8, 0x3E, 0x40, 0xF8};
+        in.pushForTest(0, s, 7);
+        std::vector<uint8_t> flux; uint8_t b = 0;
+        while (in.tryPop(b)) flux.push_back(b);
+        const std::vector<uint8_t> attendu = {0x90, 0x3C, 0x40, 0xF8, 0x3E, 0x40, 0xF8};
+        checkBool("temps réel : l'horloge passe sans casser le running status",
+                  flux == attendu, true);
     }
 }
 
-// -----------------------------------------------------------------------------
-//  ACIA du CLAVIER — même 6850, même règle : acia.c ACIA_Write_TDR efface TDRE
-//  hors de toute condition, et il sert AUSSI cette ACIA-là (acia.c:643). C'est le
-//  frein de la boucle d'attente d'Ikbdws (TOS), qui scrute au lieu d'interrompre.
-// -----------------------------------------------------------------------------
 static void testIkbdTdre() {
     std::printf("ACIA clavier (TDRE, frein de l'émetteur)\n");
     Mfp mfp; Scheduler sched; Ikbd ikbd(mfp);

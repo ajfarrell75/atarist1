@@ -19,14 +19,13 @@
 #endif
 
 MidiOutHost::MidiOutHost() {
-    sysex_.reserve(256);
     worker_ = std::thread([this] { workerLoop(); });
 }
 MidiOutHost::~MidiOutHost() {
     { std::lock_guard<std::mutex> lk(mtx_); stop_ = true; }
     cv_.notify_all();
     if (worker_.joinable()) worker_.join();
-    closeSynth(); closeDestination(); closeVirtualPort();
+    closeSynth(); closeDestinations(); closeVirtualPort();
 }
 
 // -----------------------------------------------------------------------------
@@ -212,7 +211,7 @@ bool MidiOutHost::ensurePort_() {
 // se partagent ces ressources, et fermer l'un ne doit pas couper l'autre.
 void MidiOutHost::releasePort_() {
 #if defined(NEOST_MIDI_ALSA)
-    if (userPort_ || dst_) return;
+    if (userPort_ || !dests_.empty()) return;
     if (enc_) { snd_midi_event_free(static_cast<snd_midi_event_t*>(enc_)); enc_ = nullptr; }
     if (seq_) {
         if (src_) snd_seq_delete_simple_port(static_cast<snd_seq_t*>(seq_), int(src_) - 1);
@@ -220,7 +219,7 @@ void MidiOutHost::releasePort_() {
     }
     src_ = 0;
 #elif defined(__APPLE__)
-    if (src_ || dst_ || outPort_) return;
+    if (src_ || !dests_.empty() || outPort_) return;
     if (client_) { MIDIClientDispose(client_); client_ = 0; }
 #endif
 }
@@ -319,108 +318,94 @@ std::vector<std::string> MidiOutHost::destinations() {
     return out;
 }
 
-bool MidiOutHost::openDestination(const std::string& name) {
-    if (name.empty()) { closeDestination(); return true; }
-    if (dst_ && dstName_ == name) return true;
-    closeDestination();
+std::size_t MidiOutHost::setDestinations(const std::vector<Dest>& want) {
+    closeDestinations();
+    if (want.empty()) return 0;
     std::lock_guard<std::mutex> lk(outMtx_);
+    if (!ensurePort_()) return 0;
 #if defined(NEOST_MIDI_ALSA)
-    if (!ensurePort_()) return false;
-    // Retrouve le couple client:port derrière le NOM (l'énumération et l'ouverture
-    // sont deux instants distincts : on ne peut pas mémoriser d'index entre les deux).
     snd_seq_t* seq = static_cast<snd_seq_t*>(seq_);
-    int foundC = -1, foundP = -1;
     snd_seq_client_info_t* ci = nullptr; snd_seq_port_info_t* pi = nullptr;
     snd_seq_client_info_malloc(&ci); snd_seq_port_info_malloc(&pi);
-    snd_seq_client_info_set_client(ci, -1);
-    while (foundC < 0 && snd_seq_query_next_client(seq, ci) >= 0) {
-        const int cid = snd_seq_client_info_get_client(ci);
-        if (cid == snd_seq_client_id(seq) || cid == SND_SEQ_CLIENT_SYSTEM) continue;
-        snd_seq_port_info_set_client(pi, cid);
-        snd_seq_port_info_set_port(pi, -1);
-        while (snd_seq_query_next_port(seq, pi) >= 0) {
-            const unsigned caps = snd_seq_port_info_get_capability(pi);
-            if ((caps & (SND_SEQ_PORT_CAP_WRITE | SND_SEQ_PORT_CAP_SUBS_WRITE))
-                != (SND_SEQ_PORT_CAP_WRITE | SND_SEQ_PORT_CAP_SUBS_WRITE)) continue;
-            if (std::string(snd_seq_client_info_get_name(ci)) + ": "
-                + snd_seq_port_info_get_name(pi) == name) {
-                foundC = cid; foundP = snd_seq_port_info_get_port(pi);
-                break;
+    for (const Dest& w : want) {
+        // Retrouve le couple client:port derrière le NOM (l'énumération et l'ouverture
+        // sont deux instants distincts : pas d'index mémorisable entre les deux).
+        int foundC = -1, foundP = -1;
+        snd_seq_client_info_set_client(ci, -1);
+        while (foundC < 0 && snd_seq_query_next_client(seq, ci) >= 0) {
+            const int cid = snd_seq_client_info_get_client(ci);
+            if (cid == snd_seq_client_id(seq) || cid == SND_SEQ_CLIENT_SYSTEM) continue;
+            snd_seq_port_info_set_client(pi, cid);
+            snd_seq_port_info_set_port(pi, -1);
+            while (snd_seq_query_next_port(seq, pi) >= 0) {
+                const unsigned caps = snd_seq_port_info_get_capability(pi);
+                if ((caps & (SND_SEQ_PORT_CAP_WRITE | SND_SEQ_PORT_CAP_SUBS_WRITE))
+                    != (SND_SEQ_PORT_CAP_WRITE | SND_SEQ_PORT_CAP_SUBS_WRITE)) continue;
+                if (std::string(snd_seq_client_info_get_name(ci)) + ": "
+                    + snd_seq_port_info_get_name(pi) == w.name) {
+                    foundC = cid; foundP = snd_seq_port_info_get_port(pi);
+                    break;
+                }
             }
         }
+        if (foundC < 0) continue;                 // débranché : l'appelant re-tentera
+        dests_.push_back({w.name, w.channels, (uint32_t(foundC) << 8 | uint32_t(foundP)) + 1});
+        std::fprintf(stderr, "[midi-out] MIDI OUT -> \"%s\" (ALSA %d:%d) channels $%04X\n",
+                     w.name.c_str(), foundC, foundP, unsigned(w.channels));
     }
     snd_seq_port_info_free(pi); snd_seq_client_info_free(ci);
-    if (foundC < 0) { releasePort_(); return false; }
-    if (snd_seq_connect_to(seq, int(src_) - 1, foundC, foundP) < 0) { releasePort_(); return false; }
-    dst_ = (uint32_t(foundC) << 8 | uint32_t(foundP)) + 1;
-    dstName_ = name;
-    std::fprintf(stderr, "[midi-out] MIDI OUT -> \"%s\" (ALSA %d:%d)\n", name.c_str(), foundC, foundP);
-    return true;
 #elif defined(__APPLE__)
-    if (!ensurePort_()) return false;
-    MIDIEndpointRef found = 0;
-    const ItemCount n = MIDIGetNumberOfDestinations();
-    for (ItemCount i = 0; i < n; ++i) {
-        const MIDIEndpointRef e = MIDIGetDestination(i);
-        if (displayName(e) == name) { found = e; break; }
-    }
-    if (!found) { releasePort_(); return false; }   // débranché : l'appelant re-tentera
     if (!outPort_) {
         MIDIPortRef port = 0;
         if (MIDIOutputPortCreate(client_, CFSTR("NeoST OUT"), &port) != noErr) {
             releasePort_();
             std::fprintf(stderr, "[midi-out] cannot create the CoreMIDI output port\n");
-            return false;
+            return 0;
         }
         outPort_ = port;
     }
-    dst_ = found;
-    dstName_ = name;
-    std::fprintf(stderr, "[midi-out] MIDI OUT -> \"%s\" (CoreMIDI destination)\n", name.c_str());
-    return true;
+    for (const Dest& w : want) {
+        MIDIEndpointRef found = 0;
+        const ItemCount n = MIDIGetNumberOfDestinations();
+        for (ItemCount i = 0; i < n; ++i) {
+            const MIDIEndpointRef e = MIDIGetDestination(i);
+            if (displayName(e) == w.name) { found = e; break; }
+        }
+        if (!found) continue;                     // débranché : l'appelant re-tentera
+        dests_.push_back({w.name, w.channels, found});
+        std::fprintf(stderr, "[midi-out] MIDI OUT -> \"%s\" (CoreMIDI) channels $%04X\n",
+                     w.name.c_str(), unsigned(w.channels));
+    }
 #else
-    (void)name;
-    return false;
+    (void)want;
 #endif
+    if (dests_.empty()) releasePort_();
+    return dests_.size();
 }
 
-void MidiOutHost::closeDestination() {
+void MidiOutHost::closeDestinations() {
     // Une note tenue au moment du débranchement resterait tenue POUR TOUJOURS dans un
     // appareil matériel : il n'a aucune raison de la relâcher. On panique d'abord —
     // hors verrou, panic() passant par emit() qui le prend.
-    if (dst_) panic();
+    if (!dests_.empty()) panic();
     std::lock_guard<std::mutex> lk(outMtx_);
-#if defined(NEOST_MIDI_ALSA)
-    if (dst_ && seq_ && src_)
-        snd_seq_disconnect_to(static_cast<snd_seq_t*>(seq_), int(src_) - 1,
-                              int((dst_ - 1) >> 8), int((dst_ - 1) & 0xFF));
-    dst_ = 0;
-#elif defined(__APPLE__)
-    dst_ = 0;
+    dests_.clear();
+#if defined(__APPLE__) && !defined(NEOST_MIDI_ALSA)
     if (outPort_) { MIDIPortDispose(outPort_); outPort_ = 0; }
 #endif
-    dstName_.clear();
     releasePort_();
 }
 
-// -----------------------------------------------------------------------------
-//  Parseur d'octets → messages
-// -----------------------------------------------------------------------------
-namespace {
-int dataBytesFor(uint8_t status) {
-    switch (status & 0xF0) {
-    case 0xC0: case 0xD0: return 1;                 // Program Change, Channel Pressure
-    case 0x80: case 0x90: case 0xA0: case 0xB0: case 0xE0: return 2;
-    default: break;
-    }
-    switch (status) {                                // système commun
-    case 0xF1: case 0xF3: return 1;
-    case 0xF2: return 2;
-    default: return 0;
-    }
+std::vector<MidiOutHost::Dest> MidiOutHost::openDestinations() const {
+    std::vector<Dest> out;
+    out.reserve(dests_.size());
+    for (const auto& d : dests_) out.push_back({d.name, d.channels});
+    return out;
 }
-} // namespace
 
+// -----------------------------------------------------------------------------
+//  Octets → messages (décodeur partagé, cf. MidiMessageParser.hpp)
+// -----------------------------------------------------------------------------
 void MidiOutHost::byte(uint8_t b) { parse(b); }
 
 void MidiOutHost::parse(uint8_t b) {
@@ -432,34 +417,7 @@ void MidiOutHost::parse(uint8_t b) {
         std::fprintf(stderr, "[midi-out] %.1f %02X\n",
                      std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count(), b);
     }
-    if (b >= 0xF8) { emit(&b, 1); return; }          // temps réel : passe-droit, même en SysEx
-    if (inSysex_) {
-        if (b == 0xF7) {                             // fin de SysEx
-            sysex_.push_back(b);
-            emit(sysex_.data(), int(sysex_.size()));
-            sysex_.clear(); inSysex_ = false;
-        } else if (b & 0x80) {                       // statut : SysEx interrompu
-            sysex_.clear(); inSysex_ = false;
-            byte(b);
-        } else if (sysex_.size() < 4096) {
-            sysex_.push_back(b);
-        }
-        return;
-    }
-    if (b & 0x80) {
-        if (b == 0xF0) { inSysex_ = true; sysex_.assign(1, b); status_ = 0; return; }
-        status_ = b; needed_ = dataBytesFor(b); got_ = 0;
-        if (needed_ == 0) { emit(&b, 1); status_ = 0; }
-        return;
-    }
-    if (!status_) return;                            // donnée orpheline
-    data_[got_++] = b;
-    if (got_ >= needed_) {
-        uint8_t msg[3] = {status_, data_[0], data_[1]};
-        emit(msg, 1 + needed_);
-        got_ = 0;                                    // running status : le statut reste armé
-        if (status_ >= 0xF0) status_ = 0;            // pas de running status pour le système commun
-    }
+    parser_.byte(b, [this](const uint8_t* msg, int len) { emit(msg, len); });
 }
 
 // -----------------------------------------------------------------------------
@@ -481,40 +439,73 @@ void MidiOutHost::panic() {
         emit(resetCtrl, 3);
         emit(allNotesOff, 3);
     }
-    // Le parseur d'octets est repris à zéro : un SysEx interrompu par la panique
-    // laisserait sinon l'analyse au milieu d'un message.
-    status_ = 0; needed_ = 0; got_ = 0; inSysex_ = false; sysex_.clear();
+    // Le décodeur est repris à zéro : un SysEx interrompu par la panique laisserait
+    // sinon l'analyse au milieu d'un message.
+    parser_.reset();
 }
 
-void MidiOutHost::emit(const uint8_t* msg, int len) {
+void MidiOutHost::sendTo(const OpenDest& d, const uint8_t* msg, int len) {
 #if defined(NEOST_MIDI_ALSA)
-    std::lock_guard<std::mutex> lk(outMtx_);
     if (!seq_ || !enc_ || !src_) return;
     snd_seq_event_t ev;
     snd_seq_ev_clear(&ev);
     snd_seq_ev_set_source(&ev, int(src_) - 1);
-    snd_seq_ev_set_subs(&ev);            // vers TOUS les abonnés du port — la
-                                         // destination matérielle en est un (connect_to)
+    // Adressage EXPLICITE (pas set_subs) : un abonné recevrait tout le flux, ce qui
+    // interdirait le filtrage par canal qui fait tout l'intérêt de l'aiguillage.
+    snd_seq_ev_set_dest(&ev, int((d.ep - 1) >> 8), int((d.ep - 1) & 0xFF));
     snd_seq_ev_set_direct(&ev);          // pas de file : on est déjà horodaté en amont
     if (snd_midi_event_encode(static_cast<snd_midi_event_t*>(enc_), msg, len, &ev) > 0
         && ev.type != SND_SEQ_EVENT_NONE)
         snd_seq_event_output_direct(static_cast<snd_seq_t*>(seq_), &ev);
 #elif defined(__APPLE__)
+    if (!outPort_) return;
+    alignas(MIDIPacketList) uint8_t buf[4096 + 64];
+    MIDIPacketList* list = reinterpret_cast<MIDIPacketList*>(buf);
+    MIDIPacket* pkt = MIDIPacketListInit(list);
+    pkt = MIDIPacketListAdd(list, sizeof buf, pkt, 0, ByteCount(len), msg);
+    if (pkt) MIDISend(outPort_, d.ep, list);
+#else
+    (void)d; (void)msg; (void)len;
+#endif
+}
+
+void MidiOutHost::emit(const uint8_t* msg, int len) {
+    if (len <= 0) return;
     std::lock_guard<std::mutex> lk(outMtx_);
+
+    // AIGUILLAGE. Un message de VOIE ($80-$EF) porte son canal dans le quartet bas et
+    // ne part que vers les destinations qui l'écoutent. Les messages SYSTÈME
+    // ($F0-$FF : horloge, start/stop, SysEx) n'ont pas de canal et vont à TOUTES :
+    // les filtrer désynchroniserait le studio.
+    const bool voice = msg[0] >= 0x80 && msg[0] < 0xF0;
+    const int  ch    = voice ? (msg[0] & 0x0F) : -1;
+    for (const auto& d : dests_)
+        if (ch < 0 || ((d.channels >> ch) & 1)) sendTo(d, msg, len);
+
+    // Le synthé intégré et le port virtuel reçoivent le flux ENTIER : ce ne sont pas
+    // des appareils d'un studio à aiguiller, mais des sorties générales (un DAW
+    // abonné au port virtuel fait son propre tri).
+#if defined(NEOST_MIDI_ALSA)
+    if (seq_ && enc_ && src_ && userPort_) {
+        snd_seq_event_t ev;
+        snd_seq_ev_clear(&ev);
+        snd_seq_ev_set_source(&ev, int(src_) - 1);
+        snd_seq_ev_set_subs(&ev);        // vers les abonnés du port virtuel
+        snd_seq_ev_set_direct(&ev);
+        if (snd_midi_event_encode(static_cast<snd_midi_event_t*>(enc_), msg, len, &ev) > 0
+            && ev.type != SND_SEQ_EVENT_NONE)
+            snd_seq_event_output_direct(static_cast<snd_seq_t*>(seq_), &ev);
+    }
+#elif defined(__APPLE__)
     if (synth_ && len <= 3 && msg[0] < 0xF0)
         MusicDeviceMIDIEvent(static_cast<AudioUnit>(synth_), msg[0], len > 1 ? msg[1] : 0,
                              len > 2 ? msg[2] : 0, 0);
-    if (src_ || dst_) {
+    if (src_) {
         alignas(MIDIPacketList) uint8_t buf[4096 + 64];
         MIDIPacketList* list = reinterpret_cast<MIDIPacketList*>(buf);
         MIDIPacket* pkt = MIDIPacketListInit(list);
         pkt = MIDIPacketListAdd(list, sizeof buf, pkt, 0, ByteCount(len), msg);
-        if (pkt) {
-            if (src_) MIDIReceived(src_, list);              // source virtuelle (abonnés)
-            if (dst_ && outPort_) MIDISend(outPort_, dst_, list);  // appareil matériel
-        }
+        if (pkt) MIDIReceived(src_, list);
     }
-#else
-    (void)msg; (void)len;
 #endif
 }

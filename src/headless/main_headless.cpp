@@ -146,8 +146,13 @@ void usage() {
         "  --midi-net H:P[:L]  MIDI ring over UDP (MIDI Maze online): send MIDI OUT to\n"
         "                    peer H:P, receive MIDI IN on local port L (default 6820)\n"
         "  --midi-in-device NAME  feed MIDI IN from a HOST device (master keyboard,\n"
-        "                    groovebox...). Exact name from --midi-list. MIDI OUT to a\n"
-        "                    host device is a GUI setting: here --midi-dump logs it\n"
+        "                    groovebox...). REPEATABLE: several devices are MERGED at\n"
+        "                    message boundaries, like a hardware merge box. Exact name\n"
+        "                    from --midi-list. MIDI OUT routing is a GUI setting: here\n"
+        "                    --midi-dump logs what the ST sends\n"
+        "  --midi-in-channel N  force the PREVIOUS --midi-in-device onto channel N\n"
+        "                    (1-16). Without it two keyboards both sending on channel 1\n"
+        "                    are indistinguishable to the sequencer\n"
         "  --midi-list       list the host MIDI input devices then exit\n"
         "  --dongle MODEL    Steinberg key on the cartridge port (/ROM3, $FB0000):\n"
         "                    cubase3 (red key: Cubase 3.10/Score/Audio), cubase2 (black\n"
@@ -1097,7 +1102,7 @@ int main(int argc, char** argv) {
     int         buttonAtFrame = -1;              // --button-at N : bouton Multiface/URC
     std::string midiDumpPath;                    // --midi-dump FILE : journal « cycle octet » du MIDI OUT
     int         midiNetListen  = 6820;           // port d'écoute par défaut
-    std::string midiInDevice;                    // --midi-in-device : appareil hôte → MIDI IN
+    std::vector<MidiInHost::Want> midiInDevices; // --midi-in-device (répétable) : appareils hôtes → MIDI IN
     bool        midiList = false;                // --midi-list : énumère puis sort
     std::string soundDumpPath;                   // --sound-dump F : WAV 48 kHz de la boucle --frames
     std::string serialDumpPath;                  // --serial-dump F : octets série RS-232 bruts (verdicts)
@@ -1240,7 +1245,13 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(a, "--sd1"))             { ultrasatan = true; sd1Img = next(a); }
         else if (!std::strcmp(a, "--sd2"))             { ultrasatan = true; sd2Img = next(a); }
         else if (!std::strcmp(a, "--midi-dump")) midiDumpPath = next(a);
-        else if (!std::strcmp(a, "--midi-in-device")) midiInDevice = next(a);
+        else if (!std::strcmp(a, "--midi-in-device")) midiInDevices.push_back({next(a), 0});
+        // Le canal s'applique au dernier appareil déclaré : un séparateur DANS la
+        // valeur aurait buté sur les noms ALSA, qui contiennent déjà « : ».
+        else if (!std::strcmp(a, "--midi-in-channel")) {
+            const int ch = std::atoi(next(a));
+            if (!midiInDevices.empty() && ch >= 1 && ch <= 16) midiInDevices.back().forceChannel = ch;
+        }
         else if (!std::strcmp(a, "--midi-list")) midiList = true;
         else if (!std::strcmp(a, "--dongle"))    dongleModel  = next(a);
         else if (!std::strcmp(a, "--adapter"))   plugs.emplace_back("", next(a));
@@ -1611,16 +1622,19 @@ int main(int argc, char** argv) {
     // qui capture ce que le ST envoie sans dépendre du matériel branché — c'est ce
     // qu'un test veut. Choisir une destination matérielle reste un réglage du GUI.
     MidiInHost midiIn;
-    if (!midiInDevice.empty()) {
-        if (midiIn.open(midiInDevice)) {
+    if (!midiInDevices.empty()) {
+        const std::size_t n = midiIn.setDevices(midiInDevices);
+        if (n) {
             // L'ACIA tire les octets à 31250 bauds (Scheduler::MIDI_RX), pas une
-            // rafale par trame : cf. MidiAcia::setRxSource.
+            // rafale par trame : cf. MidiAcia::setRxSource. Plusieurs appareils sont
+            // FUSIONNÉS aux frontières de messages (cf. MidiInHost).
             machine.midi.setRxSource([&midiIn](uint8_t& b) { return midiIn.tryPop(b); });
-            std::fprintf(stderr, "[headless] MIDI IN <- \"%s\"\n", midiInDevice.c_str());
+            std::fprintf(stderr, "[headless] MIDI IN <- %zu device(s) merged\n", n);
         }
-        else
-            std::fprintf(stderr, "[headless] --midi-in-device: \"%s\" not found "
-                         "(--midi-list to see what is plugged in)\n", midiInDevice.c_str());
+        if (n != midiInDevices.size())
+            std::fprintf(stderr, "[headless] --midi-in-device: %zu of %zu not found "
+                         "(--midi-list to see what is plugged in)\n",
+                         midiInDevices.size() - n, midiInDevices.size());
 
     }
 #ifdef NEOST_WITH_NET
@@ -2141,7 +2155,7 @@ int main(int argc, char** argv) {
     if (midiIn.isOpen())
         std::fprintf(stderr, "[headless] MIDI IN: %llu bytes into the ACIA from \"%s\""
                      " (%llu dropped, host buffer full)\n",
-                     (unsigned long long)midiIn.delivered(), midiIn.name().c_str(),
+                     (unsigned long long)midiIn.delivered(), midiIn.openNames().front().c_str(),
                      (unsigned long long)midiIn.dropped());
     // --serial-dump FILE : écrit les octets série bruts dans FILE (capture propre pour
     // les runners de verdict, ex. tools/run_selftests.py qui y cherche NEOST-TEST: … PASS).

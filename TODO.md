@@ -111,9 +111,11 @@ est continue, les trous sont du travail fait.
   plus `cuddly_demos`, `nocooper`, `nocooper_greetings` migrés sur EmuTOS, et
   `spec512_bands` — l'étalon GÉNÉRÉ qui rend la couverture « palette en cours de ligne ») ;
   les 4 restants sont le reliquat d'**A10**.
-- **A9 ⭘ — Découper `main()`** (`src/main.cpp`, mesuré 2026-08-27 : **4 814 lignes**, dont
-  `main()` ≈ 2 420 avec une boucle de ~1 530 lignes et **84 globaux `g_*`** — chiffre gardé
-  par `check_doc_claims.py`). Le filet préalable existe (boot GUI dans `run_all.py`, mode
+- **A9 ⭘ — Découper `main()`** (`src/main.cpp`, mesuré 2026-08-29 : **5 013 lignes**, dont
+  `main()` ≈ 2 490 avec une boucle de ~1 530 lignes et **84 globaux `g_*`** — chiffre gardé
+  par `check_doc_claims.py`). ⚠ +199 lignes depuis le 2026-08-27, dont l'essentiel est la
+  page MIDI (matrice d'aiguillage, liste de fusion) : chaque fonctionnalité d'interface
+  atterrit ici faute de découpage, ce qui rend ce chantier un peu plus cher à chaque fois. Le filet préalable existe (boot GUI dans `run_all.py`, mode
   harnais sans trace — cf. `CHANGELOG.md`) ; reste le découpage : une `struct App`
   absorbant les globaux, `main()` sous 300 lignes, en généralisant le pattern de requêtes
   de `MediaPages`. Ne PAS refondre la boucle en même temps qu'autre chose.
@@ -478,17 +480,21 @@ densité HD/ED STX (NeoST plus cohérent) ; RTC en temps émulé (déterminisme 
   `IKBD_RX` le fait pour l'ACIA clavier. **Mesuré en temps réel : 40,4 octets/trame,
   soit ~2 885 o/s — 92 % d'un câble, ×20.** Le débordement redevient celui du matériel
   (le 6850 perd l'octet neuf) au lieu d'être masqué par une rétention côté hôte.
-- **Un seul appareil de chaque côté.** Un studio en a plusieurs (une groovebox + deux
-  claviers). Il manque la **fusion** de N sources hôtes vers l'unique ACIA (le boîtier de
-  merge d'un vrai studio ST) et la **duplication** de la sortie vers N destinations (le
-  Thru box). `MidiInHost`/`MidiOutHost` ne tiennent qu'un appareil chacun.
+- ~~**Un seul appareil de chaque côté.**~~ **LIVRÉ le 2026-08-29.** Entrée : boîtier de
+  **fusion** (N sources → l'unique ACIA, entrelacement aux frontières de MESSAGES, un
+  décodeur par source) avec **canalisation** par source, sans quoi deux claviers émettant
+  tous deux sur le canal 1 seraient inséparables pour le séquenceur. Sortie : **aiguillage
+  par canal** (chaque destination reçoit le masque de canaux qu'on lui donne ; les
+  messages système vont à toutes). Reste ouvert ci-dessous : le multi-PORTS, qui est un
+  autre sujet — l'aiguillage répartit 16 canaux, il n'en crée pas 32.
 - **Latence de jeu : ~30-35 ms aller-retour** (arithmétique, non mesurée) — la part
   « entrée » est tombée avec le point ci-dessus (l'octet entre à son cycle, plus au
   début de la trame) ; restent surtout les 30 ms d'avance fixe en sortie
   (`MidiOutHost::kLeadMs`, le prix payé pour tuer la gigue). Un pianiste le sent. Rendre
   cette avance **réglable** : c'est un arbitrage gigue/latence qui appartient à
   l'utilisateur. Le premier point ci-dessus supprime la part « entrée ».
-- **16 canaux — pas d'interface multi-ports.** Le ST n'a qu'un MIDI OUT ; les **C-Lab
+- **16 canaux — pas d'interface multi-ports.** (L'aiguillage livré répartit les 16 canaux
+  du ST entre plusieurs appareils ; il n'en ajoute pas.) Le ST n'a qu'un MIDI OUT ; les **C-Lab
   Unitor** et **Steinberg Midex** en ajoutaient (32/64 canaux, SMPTE). Curiosité : la
   *clé* de l'Unitor-N est **déjà émulée** (c'est la même que celle de Notator), mais pas
   le boîtier. `CartDevice.hpp` sait déjà que MIDEX et Combiner empilaient des clés.
@@ -496,6 +502,13 @@ densité HD/ED STX (NeoST plus cohérent) ; RTC en temps émulé (déterminisme 
   Cubase, mais aucun étalon ne l'exerce et sa clé garde **deux incertitudes** non
   tranchées faute de Notator SL original (cf. le point « Clé Notator » plus bas). Tant
   que le logiciel n'a pas démarré une fois, c'est une promesse, pas une capacité.
+- **Profils d'appareil.** L'aiguillage se règle canal par canal ; pour un appareil connu
+  (les deux synthés + les 4 drums d'un Circuit Tracks, par exemple) un profil nommé
+  poserait le masque d'un clic. ⚠ Suppose un plan de canaux **vérifié** sur l'appareil,
+  pas deviné — c'est un réglage de la machine, pas une constante universelle.
+- **Canal forcé par source : pas de « splitter » clavier.** Un vrai boîtier de fusion sait
+  aussi couper un clavier en zones (grave → canal 1, aigu → canal 2). Ici une source = un
+  canal.
 - **Pas de synchro SMPTE/MTC.** L'horloge MIDI traverse (ce ne sont que des octets), donc
   le ST peut mener un DAW. Le code de temps SMPTE de l'Unitor, non.
 - **Rien sous Windows** : cf. « MIDI OUT Windows » ci-dessous (winmm à écrire).

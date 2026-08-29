@@ -11,12 +11,13 @@
 //        matériel peut écouter : CoreMIDI sous macOS, séquenceur ALSA sous Linux.
 //        C'est la voie recommandée pour du General MIDI — un FluidSynth ou un Qsynth
 //        branché dessus rendra ces fichiers bien mieux qu'un MT-32.
-//    (c) DESTINATION MATÉRIELLE choisie par son nom (openDestination) : le MIDI OUT
-//        du ST entre DIRECTEMENT dans l'expandeur, la boîte à rythmes ou le clavier
-//        branché sur la machine hôte. (b) ne le remplace pas : une source virtuelle
-//        est PASSIVE, c'est au logiciel d'en face de s'y abonner, et l'appareil
-//        matériel, lui, ne s'abonne à rien — il fallait jusqu'ici un patchbay tiers
-//        pour relier les deux. C'est le câble MIDI DIN du ST vers le synthé, rejoué.
+//    (c) DESTINATIONS MATÉRIELLES choisies par leur nom (setDestinations), CHACUNE
+//        avec le masque des canaux qu'elle reçoit : le MIDI OUT du ST entre
+//        DIRECTEMENT dans l'expandeur, la boîte à rythmes ou le clavier branché sur
+//        la machine hôte, et l'instrument 1 peut aller ailleurs que l'instrument 2.
+//        (b) ne remplace pas (c) : une source virtuelle est PASSIVE, c'est au
+//        logiciel d'en face de s'y abonner, et l'appareil matériel, lui, ne s'abonne
+//        à rien — il fallait jusqu'ici un patchbay tiers pour relier les deux.
 //
 //  Les appareils sont désignés par leur NOM, jamais par leur index : débrancher un
 //  périphérique renumérote tous les autres, et une config mémorisée en index se
@@ -29,6 +30,7 @@
 //  (c) 2026 VERHILLE Arnaud — projet NeoST.
 // =============================================================================
 #pragma once
+#include "audio/MidiMessageParser.hpp"
 #include "core/Pacing.hpp"
 #include <chrono>
 #include <condition_variable>
@@ -62,18 +64,30 @@ public:
     void closeVirtualPort();
     bool portOpen() const { return src_ != 0; }
 
-    // --- Destination MATÉRIELLE (expandeur, groovebox, clavier branché sur l'hôte) ---
-    // destinations() énumère ce qui est branché MAINTENANT : à rappeler pour voir un
-    // appareil connecté à chaud. openDestination() prend un NOM (cf. l'en-tête) et
-    // échoue sans bruit si l'appareil n'est pas là — l'appelant garde le nom en
-    // config et re-tente, c'est ce qui rend le branchement à chaud transparent.
+    // --- Destinations MATÉRIELLES (expandeurs, groovebox, claviers) ---------------
+    // PLUSIEURS appareils, chacun avec le masque des canaux MIDI qu'il reçoit : c'est
+    // un AIGUILLAGE, pas un simple Thru box. « Instrument 1 de Cubase vers le piano
+    // logiciel, instrument 2 vers la groovebox » = canal 1 vers l'un, canal 2 vers
+    // l'autre, sans avoir à reconfigurer les appareils eux-mêmes. Un même canal peut
+    // partir vers plusieurs destinations (superposition).
+    //
+    // ⚠ Les messages SYSTÈME (horloge, start/stop, SysEx, $F0-$FF) n'ont pas de canal
+    // et vont à TOUTES les destinations : les filtrer casserait la synchro.
+    struct Dest {
+        std::string name;
+        uint16_t channels = 0xFFFF;     // bit n = canal n+1 ; 0xFFFF = tous
+    };
+    // Ce qui est branché MAINTENANT (à rappeler pour voir un branchement à chaud).
     static std::vector<std::string> destinations();
-    bool openDestination(const std::string& name);
-    void closeDestination();
-    bool destinationOpen() const { return dst_ != 0; }
-    const std::string& destinationName() const { return dstName_; }
+    // Ouvre EXACTEMENT cet ensemble. Un appareil absent est ignoré SANS BRUIT :
+    // l'appelant garde son nom en config et rappelle, ce qui rend le rebranchement
+    // à chaud transparent. Rend le nombre réellement ouvert.
+    std::size_t setDestinations(const std::vector<Dest>& want);
+    void closeDestinations();
+    std::size_t destinationCount() const { return dests_.size(); }
+    std::vector<Dest> openDestinations() const;
 
-    bool anyOpen() const { return synthOpen() || portOpen() || destinationOpen(); }
+    bool anyOpen() const { return synthOpen() || portOpen() || !dests_.empty(); }
 
     // Un octet MIDI OUT de l'ACIA, livré IMMÉDIATEMENT (thread d'émulation).
     void byte(uint8_t b);
@@ -98,24 +112,21 @@ private:
     uint32_t src_ = 0;                  // MIDIEndpointRef / port ALSA + 1 (0 = fermé)
     void* seq_ = nullptr;               // snd_seq_t*        (Linux)
     void* enc_ = nullptr;               // snd_midi_event_t* (Linux)
-    // Destination matérielle. macOS : outPort_ = MIDIPortRef, dst_ = MIDIEndpointRef.
-    // ALSA : dst_ = (client << 8 | port) + 1, l'abonnement partant de notre port src_
-    // — d'où ensurePort_(), qui crée ce port même quand la case « port virtuel » est
-    // décochée (sans port source, rien à abonner : la destination serait morte).
+    // Destinations matérielles. macOS : outPort_ = MIDIPortRef, ep = MIDIEndpointRef.
+    // ALSA : ep = (client << 8 | port) + 1, ADRESSÉ EXPLICITEMENT à chaque envoi
+    // (pas d'abonnement : un abonné recevrait tout, ce qui interdirait le filtrage
+    // par canal). D'où ensurePort_(), qui crée le port source même quand la case
+    // « port virtuel » est décochée — sans port, rien d'où émettre.
     uint32_t outPort_ = 0;
-    uint32_t dst_ = 0;
-    std::string dstName_;
+    struct OpenDest { std::string name; uint16_t channels; uint32_t ep; };
+    std::vector<OpenDest> dests_;
     bool userPort_ = false;             // le port virtuel a-t-il été demandé POUR LUI-MÊME ?
+    void sendTo(const OpenDest& d, const uint8_t* msg, int len);   // (verrou DÉJÀ pris)
     bool ensurePort_();                 // crée client/port si besoin (partagé b + c)
     void releasePort_();                // détruit ce que plus personne n'utilise
 
-    // Parseur : statut courant, octets de données attendus/accumulés, SysEx.
-    uint8_t status_ = 0;
-    int     needed_ = 0;
-    uint8_t data_[2] = {0, 0};
-    int     got_ = 0;
-    bool    inSysex_ = false;
-    std::vector<uint8_t> sysex_;
+    // Reconstitution des messages : partagée avec MidiInHost (cf. MidiMessageParser).
+    neost::midi::Parser parser_;
 
     void emit(const uint8_t* msg, int len);     // message complet → synthé + port
     void parse(uint8_t b);                      // octet → parseur → emit (thread de livraison)

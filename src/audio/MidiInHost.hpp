@@ -1,32 +1,46 @@
 // =============================================================================
-//  MidiInHost.hpp — Entrée MIDI hôte : un appareil branché sur la machine (clavier
-//  maître, groovebox, séquenceur matériel) entre dans le MIDI IN du ST.
+//  MidiInHost.hpp — Entrée MIDI hôte : PLUSIEURS appareils branchés sur la machine
+//  (claviers maîtres, groovebox, séquenceur matériel) entrent dans le MIDI IN du ST.
 //
 //  C'est le pendant de MidiOutHost : là où celui-ci fait sortir l'ACIA 6850 vers le
 //  monde, celui-ci fait ENTRER le monde dans l'ACIA (MidiAcia::receiveExternal).
 //  Backends : CoreMIDI (macOS), séquenceur ALSA (Linux). Ailleurs, coquille vide.
 //
-//  Câblage (frontend) — UNE fois, à l'ouverture ; l'ACIA tire ensuite toute seule :
-//    midiIn.open("Circuit Tracks MIDI");
+//  ── C'est un BOÎTIER DE FUSION, pas un simple aiguillage ──────────────────────
+//  Le ST n'a qu'UNE prise MIDI IN. Réunir plusieurs appareils dessus est le rôle
+//  d'un boîtier de fusion, et un tel boîtier ne mélange PAS des octets : il
+//  entrelace des MESSAGES. Deux claviers joués ensemble émettent « 90 3C 40 » et
+//  « 90 40 40 » au même instant ; entrelacés octet par octet ils donneraient
+//  « 90 90 3C 40 40 40 » — du charabia. D'où un décodeur PAR SOURCE
+//  (MidiMessageParser) et une file fusionnée où chaque message entre d'un bloc.
+//
+//  ── CANALISATION : sans elle, pas d'enregistrement multipiste ────────────────
+//  Deux claviers émettent tous les deux sur le canal 1 par défaut : un séquenceur
+//  ne peut alors pas les séparer, tout atterrit sur la même piste. Chaque source
+//  peut donc être FORCÉE sur son canal (forceChannel 1-16, 0 = tel quel) : le
+//  quartet de canal des messages de voie est réécrit à l'entrée. Ce que le
+//  séquenceur ST fait ensuite de ces canaux distincts le regarde — les Cubase
+//  complets et Notator savent enregistrer plusieurs canaux sur plusieurs pistes,
+//  Cubase Lite non.
+//
+//  ── Running status ───────────────────────────────────────────────────────────
+//  Le statut n'est ré-émis dans le flux fusionné que s'il a CHANGÉ : une source
+//  seule garde donc son running status (le flux ne grossit pas), et deux sources
+//  qui alternent le voient correctement réinséré (sans quoi les données de l'une
+//  seraient lues sous le statut de l'autre).
+//
+//  ── Cadence ──────────────────────────────────────────────────────────────────
+//  ⚠ C'est l'ACIA qui fixe le débit, pas nous (MidiAcia::setRxSource → échéance
+//  Scheduler::MIDI_RX, un octet toutes les 2560 cycles = 31250 bauds). La toute
+//  première version poussait les octets une fois par TRAME, ce qui plafonnait
+//  l'entrée à ~143 o/s contre 3125 o/s sur un câble. Le tampon reste BORNÉ
+//  (kMaxJitter) pour absorber une rafale livrée plus vite que le câble ; au-delà
+//  c'est le MESSAGE neuf entier qui tombe — jamais un fragment, qui laisserait des
+//  octets orphelins dans le flux.
+//
+//  Câblage (frontend) — UNE fois ; l'ACIA tire ensuite toute seule :
+//    midiIn.setDevices({{"Piano 1", 1}, {"Piano 2", 2}});
 //    machine.midi.setRxSource([&](uint8_t& b) { return midiIn.tryPop(b); });
-//
-//  POURQUOI un tampon de gigue. CoreMIDI livre ses paquets sur son PROPRE thread,
-//  quand ça lui chante, alors que l'émulation avance par tranches. On accumule donc
-//  côté hôte, et l'ACIA vient TIRER les octets un par un.
-//
-//  ⚠ C'est l'ACIA qui fixe la cadence, pas nous (MidiAcia::setRxSource → échéance
-//  Scheduler::MIDI_RX, un octet toutes les 2560 cycles = 31250 bauds). La première
-//  version poussait les octets une fois par TRAME, ce qui plafonnait l'entrée à
-//  2 octets/trame — mesuré 1,76, soit ~143 o/s en mono contre 3125 o/s sur un vrai
-//  câble : un accord de dix notes mettait 0,2 s à entrer. Le débit est maintenant
-//  celui du câble, et le débordement redevient celui du MATÉRIEL (le 6850 perd
-//  l'octet neuf si le ST ne lit pas assez vite) au lieu d'être masqué par une
-//  rétention côté hôte.
-//
-//  Le tampon reste BORNÉ (kMaxJitter) pour le cas où l'hôte livre plus vite que
-//  31250 bauds sur une rafale. Au-delà, ce sont les octets NEUFS qui tombent, comme
-//  dans un vrai 6850 en overrun : garder l'ancien préserve le début des messages
-//  déjà entamés.
 //
 //  (c) 2026 VERHILLE Arnaud — projet NeoST.
 // =============================================================================
@@ -34,11 +48,13 @@
 #include <atomic>
 #include <cstdint>
 #include <deque>
-#include <functional>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
+
+#include "audio/MidiMessageParser.hpp"
 
 #ifdef __APPLE__
 struct MIDIPacketList;   // avancé : évite d'inclure CoreMIDI.h dans tout le GUI
@@ -46,6 +62,13 @@ struct MIDIPacketList;   // avancé : évite d'inclure CoreMIDI.h dans tout le G
 
 class MidiInHost {
 public:
+    // Un appareil voulu : son nom d'affichage, et le canal sur lequel le forcer
+    // (1-16 ; 0 = laisser tel quel).
+    struct Want {
+        std::string name;
+        int forceChannel = 0;
+    };
+
     MidiInHost() = default;
     ~MidiInHost();
     MidiInHost(const MidiInHost&) = delete;
@@ -55,50 +78,65 @@ public:
     // Appareils branchés MAINTENANT (à rappeler pour voir un branchement à chaud).
     static std::vector<std::string> sources();
 
-    // Ouvre PAR NOM (les index se renumérotent au débranchement — cf. MidiOutHost).
-    // Échec sans bruit si l'appareil n'est pas là : l'appelant garde le nom et
-    // re-tente, ce qui rend le branchement à chaud transparent.
-    bool open(const std::string& name);
+    // Ouvre EXACTEMENT cet ensemble (par NOM : les index se renumérotent au
+    // débranchement). Un appareil absent est ignoré SANS BRUIT — l'appelant garde
+    // son nom en config et rappelle setDevices, ce qui rend le rebranchement à
+    // chaud transparent. Rend le nombre d'appareils réellement ouverts.
+    std::size_t setDevices(const std::vector<Want>& want);
     void close();
-    bool isOpen() const { return open_; }
-    const std::string& name() const { return name_; }
+    bool isOpen() const { return !devices_.empty(); }
+    std::size_t deviceCount() const { return devices_.size(); }
+    std::vector<std::string> openNames() const;
 
-    // Rend le prochain octet, s'il y en a un. Appelé par l'ACIA sur son horloge
-    // série (cf. MidiAcia::setRxSource) — jamais par le frontend.
+    // Rend le prochain octet du flux FUSIONNÉ, s'il y en a un. Appelé par l'ACIA
+    // sur son horloge série (cf. MidiAcia::setRxSource) — jamais par le frontend.
     bool tryPop(uint8_t& out);
 
     uint64_t delivered() const { return delivered_.load(std::memory_order_relaxed); }
     uint64_t dropped() const { return dropped_.load(std::memory_order_relaxed); }
 
-    // Injection DIRECTE dans le tampon, sans backend ni appareil : neost-selftest
-    // éprouve ainsi le drainage (ordre, non-débordement du 6850, perte du NEUF en
-    // saturation) sur une machine où rien n'est branché — donc aussi en CI.
-    void pushForTest(const uint8_t* data, std::size_t n) { push(data, n); }
+    // Source SYNTHÉTIQUE (sans backend ni appareil) : neost-selftest éprouve ainsi
+    // la fusion, la canalisation et la saturation sur une machine où rien n'est
+    // branché — donc aussi en CI. `slot` distingue les sources à fusionner.
+    void pushForTest(int slot, const uint8_t* data, std::size_t n, int forceChannel = 0);
 
 private:
-    static constexpr std::size_t kMaxJitter = 1024;     // ~2 trames de MIDI saturé
+    // ~2 trames de MIDI saturé : de quoi absorber une rafale, pas de quoi stocker.
+    static constexpr std::size_t kMaxJitter = 1024;
 
-    void push(const uint8_t* data, std::size_t n);      // appelé par le callback/thread
+    struct Device {
+        std::string name;
+        int forceChannel = 0;              // 0 = tel quel, 1-16 = canalisé
+        neost::midi::Parser parser;        // décodeur PROPRE à cette source
+        MidiInHost* owner = nullptr;       // pour le callback CoreMIDI (srcConnRefCon)
+        uint32_t src = 0;                  // MIDIEndpointRef / (client<<8|port)+1
+    };
+
+    void feed(Device& d, const uint8_t* data, std::size_t n);   // octets → décodeur
+    void emitMessage(Device& d, const uint8_t* msg, int len);   // message → file fusionnée
+    Device* deviceForTest(int slot, int forceChannel);
+    void closeBackend();                                        // ferme client/port/thread
+
 #ifdef __APPLE__
     // Callback CoreMIDI (thread temps réel du MIDIServer). Membre statique : c'est
-    // le seul moyen d'atteindre push() sans l'exposer publiquement.
+    // le seul moyen d'atteindre feed() sans l'exposer publiquement.
     static void coreMidiRead(const ::MIDIPacketList* pkts, void* refCon, void* srcRef);
 #endif
 
     mutable std::mutex mtx_;
-    std::deque<uint8_t> jitter_;
-    // Compte atomique du tampon : l'ACIA interroge tryPop() 3125 fois par seconde,
-    // et le cas ÉCRASANT est « rien à prendre ». Ce compteur lui évite de prendre le
-    // verrou pour se l'entendre dire.
+    std::deque<uint8_t> jitter_;           // flux FUSIONNÉ, prêt pour l'ACIA
+    // Compte atomique du tampon : l'ACIA interroge tryPop() 3125 fois par seconde et
+    // repart presque toujours les mains vides. Lui éviter le verrou pour ça.
     std::atomic<std::size_t> pending_{0};
-    std::string name_;
-    bool open_ = false;
-    // Lues par le thread GUI (compteur de la page MIDI), écrites par l'émulation.
+    uint8_t lastStatus_ = 0;               // running status DU FLUX FUSIONNÉ
+    // Pointeurs STABLES : le refCon d'une connexion CoreMIDI pointe dessus, un
+    // vector<Device> qui réalloue les rendrait pendants.
+    std::vector<std::unique_ptr<Device>> devices_;
+    // Lues par le thread GUI (compteurs de la page MIDI), écrites par l'émulation.
     std::atomic<uint64_t> delivered_{0}, dropped_{0};
 
     uint32_t client_ = 0;        // MIDIClientRef   (macOS)
     uint32_t port_   = 0;        // MIDIPortRef     (macOS) / port ALSA + 1
-    uint32_t src_    = 0;        // MIDIEndpointRef (macOS) / (client<<8|port)+1 (ALSA)
     void* seq_ = nullptr;        // snd_seq_t*        (Linux)
     void* dec_ = nullptr;        // snd_midi_event_t* (Linux)
     std::thread reader_;         // boucle de lecture ALSA (CoreMIDI a son callback)
