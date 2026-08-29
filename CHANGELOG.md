@@ -26,6 +26,22 @@ Ripper, DAC Pro Sound) avec page Dongles, `disks/dongles.txt` et oracle de rejeu
 vérifié note à note** en headless, corpus MIDI piano/blues ; port MIDI ALSA sous Linux ;
 save-state v16. Détail dans les chantiers datés ci-dessous.
 
+## Interface — « Memory (hex) » et « CPU 68000 » se ferment enfin (2026-08-29)
+
+Rapporté par l'utilisateur. Ces deux fenêtres d'inspection appelaient `ImGui::Begin`
+SANS son paramètre `p_open` : ImGui ne dessine alors aucune croix, et le seul moyen de
+les faire disparaître était le menu Windows — qu'il faut savoir chercher. Elles étaient
+les DEUX SEULES du projet dans ce cas (Joystick, CRT Effects, Debugger, Floppies,
+Configuration et Keyboard passent toutes leur drapeau), donc une incohérence pure, pas
+un choix.
+
+L'état était déjà persisté (`showHex=` / `showCpu=` dans `neost.cfg`, vérifié : la valeur
+fait l'aller-retour config → global → config) : la croix se comporte exactement comme
+l'entrée de menu, fenêtre fermée = fenêtre encore fermée au lancement suivant.
+
+Restent volontairement non fermables : l'écran ST (fenêtre de base) et les incrustations
+du mode borne.
+
 ## MIDI — le studio en double : une clé répétable n'est pas une clé (2026-08-29)
 
 Bug rapporté : « Circuit Tracks est en double dans la fenêtre MIDI, ce qui crée un bug ».

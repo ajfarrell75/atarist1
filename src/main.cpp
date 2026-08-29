@@ -701,7 +701,12 @@ void onKey(GLFWwindow*, int key, int scancode, int action, int mods) {
 #if defined(NEOST_WITH_IMGUI)
 void drawHexViewer(Bus& bus) {
     static int base = 0;
-    ImGui::Begin("Memory (hex)");
+    // `p_open` : c'est lui qui donne la CROIX de fermeture. Ces deux fenêtres
+    // d'inspection étaient les seules du projet à l'omettre — Joystick, CRT,
+    // Debugger, Floppies, Configuration et Keyboard le passent toutes —, donc les
+    // seules qu'on ne pouvait fermer que par le menu Windows. L'état est déjà
+    // persisté (cfg.showHex), la croix se comporte donc comme l'entrée de menu.
+    ImGui::Begin("Memory (hex)", &g_showHex);
     ImGui::InputInt("Base address", &base, 16, 256,
                     ImGuiInputTextFlags_CharsHexadecimal | ImGuiInputTextFlags_EnterReturnsTrue);
     // Le champ ne doit pas confisquer durablement le clavier du ST : dès qu'il
@@ -729,7 +734,7 @@ void drawHexViewer(Bus& bus) {
 
 // reqReset passe à true si le bouton RESET est cliqué.
 void drawCpuState(Cpu68k& cpu, bool& reqReset) {
-    ImGui::Begin("CPU 68000");
+    ImGui::Begin("CPU 68000", &g_showCpu);   // croix de fermeture, cf. drawHexViewer
     if (IconButton(ICON_FA_POWER_OFF, "Reset (hardware RESET)")) reqReset = true;
     ImGui::Separator();
     ImGui::Text("PC = %08X    SR = %04X", cpu.pc(), cpu.sr());
