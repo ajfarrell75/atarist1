@@ -1421,7 +1421,13 @@ int main(int argc, char** argv) {
     if (midiList) {
         const auto ins = MidiInHost::sources();
         std::printf("MIDI input devices (%zu):\n", ins.size());
-        for (const auto& d : ins) std::printf("  %s\n", d.c_str());
+        // L'étiquette suffixe « #n » les HOMONYMES : deux claviers du même modèle
+        // portent le même nom, et une liste qui les affiche à l'identique ne sert à
+        // rien. L'identifiant unique, lui, est ce que la config mémorise.
+        for (std::size_t i = 0; i < ins.size(); ++i)
+            std::printf("  %-40s uid %s\n",
+                        neost::midi::displayLabel(ins, i).c_str(),
+                        ins[i].uid.empty() ? "(none)" : ins[i].uid.c_str());
         if (ins.empty()) std::printf("  (none plugged in)\n");
         return 0;
     }

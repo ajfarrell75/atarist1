@@ -513,13 +513,18 @@ densité HD/ED STX (NeoST plus cohérent) ; RTC en temps émulé (déterminisme 
   canal 16 réservé au Project Control. Le bouton pose le masque `$020F`, l'infobulle
   donne le plan. ⚠ Ce sont des défauts d'usine, réassignables en Setup View : la table
   n'accepte qu'une source constructeur **citée**, jamais une supposition.
-- **Appareils HOMONYMES non distinguables.** La config désigne les appareils par leur
-  nom d'affichage ; deux machines du MÊME MODÈLE branchées ensemble (deux claviers
-  identiques) portent le même nom et sont donc ambiguës — la première trouvée gagne.
-  L'interface, elle, ne casse plus (les lignes sont identifiées par leur INDEX depuis le
-  2026-08-29, cf. le doublon rapporté). Trancher demanderait un identifiant unique
-  (`kMIDIPropertyUniqueID` sous CoreMIDI) mémorisé À CÔTÉ du nom, le nom restant le
-  repli quand l'identifiant a changé.
+- ~~**Appareils HOMONYMES non distinguables.**~~ **LIVRÉ le 2026-08-29**
+  (`src/audio/MidiEndpoint.hpp`). La config mémorise désormais l'identifiant unique de
+  l'hôte (`kMIDIPropertyUniqueID` sous CoreMIDI) À CÔTÉ du nom, et l'appariement fait
+  deux passes — identifiant d'abord, nom ensuite — en n'attribuant **jamais deux fois le
+  même point de terminaison**. Deux claviers du même modèle s'ouvrent donc chacun sur le
+  sien, y compris sous **ALSA** qui n'a pas d'identifiant stable (la règle de
+  non-réattribution suffit tant qu'ils sont branchés ensemble). L'identifiant est
+  **appris** à la première ouverture d'un appareil désigné par son seul nom, si bien
+  qu'une config d'avant devient sûre toute seule. Étiquettes suffixées « #1 / #2 » dans
+  l'interface, sans quoi deux lignes seraient rigoureusement identiques.
+  ⚠ Ce qui reste hors de portée : deux appareils homonymes dont un seul est branché,
+  sous ALSA — rien ne permet alors de savoir lequel.
 - **Canal forcé par source : pas de « splitter » clavier.** Un vrai boîtier de fusion sait
   aussi couper un clavier en zones (grave → canal 1, aigu → canal 2). Ici une source = un
   canal.

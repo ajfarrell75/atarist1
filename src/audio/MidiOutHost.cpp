@@ -286,6 +286,14 @@ namespace {
 // Nom AFFICHÉ (celui d'Audio MIDI Setup, « Circuit Tracks MIDI ») plutôt que le nom
 // brut du port : c'est celui que l'utilisateur lit sur sa machine, donc le seul qu'il
 // puisse reconnaître dans une liste.
+// kMIDIPropertyUniqueID : STABLE d'un branchement à l'autre, contrairement à l'index.
+// C'est le seul critère qui sépare deux appareils du même modèle.
+std::string uniqueId(MIDIObjectRef obj) {
+    SInt32 uid = 0;
+    if (MIDIObjectGetIntegerProperty(obj, kMIDIPropertyUniqueID, &uid) != noErr) return {};
+    return std::to_string(long(uid));
+}
+
 std::string displayName(MIDIObjectRef obj) {
     CFStringRef cf = nullptr;
     if (MIDIObjectGetStringProperty(obj, kMIDIPropertyDisplayName, &cf) != noErr || !cf) return {};
@@ -297,8 +305,8 @@ std::string displayName(MIDIObjectRef obj) {
 } // namespace
 #endif
 
-std::vector<std::string> MidiOutHost::destinations() {
-    std::vector<std::string> out;
+std::vector<neost::midi::Endpoint> MidiOutHost::destinations() {
+    std::vector<neost::midi::Endpoint> out;
 #if defined(NEOST_MIDI_ALSA)
     snd_seq_t* seq = nullptr;
     if (snd_seq_open(&seq, "default", SND_SEQ_OPEN_DUPLEX, 0) < 0) return out;
@@ -315,8 +323,11 @@ std::vector<std::string> MidiOutHost::destinations() {
             const unsigned caps = snd_seq_port_info_get_capability(pi);
             if ((caps & (SND_SEQ_PORT_CAP_WRITE | SND_SEQ_PORT_CAP_SUBS_WRITE))
                 != (SND_SEQ_PORT_CAP_WRITE | SND_SEQ_PORT_CAP_SUBS_WRITE)) continue;
-            out.emplace_back(std::string(snd_seq_client_info_get_name(ci)) + ": "
-                             + snd_seq_port_info_get_name(pi));
+            // uid VIDE : ALSA n'a pas d'équivalent stable (client:port change à chaque
+            // branchement). L'appariement retombe sur le nom + « jamais deux fois le
+            // même point », ce qui sépare tout de même deux homonymes présents ensemble.
+            out.push_back({std::string(snd_seq_client_info_get_name(ci)) + ": "
+                           + snd_seq_port_info_get_name(pi), std::string()});
         }
     }
     snd_seq_port_info_free(pi); snd_seq_client_info_free(ci);
@@ -324,8 +335,9 @@ std::vector<std::string> MidiOutHost::destinations() {
 #elif defined(__APPLE__)
     const ItemCount n = MIDIGetNumberOfDestinations();
     for (ItemCount i = 0; i < n; ++i) {
-        std::string nm = displayName(MIDIGetDestination(i));
-        if (!nm.empty()) out.push_back(std::move(nm));
+        const MIDIEndpointRef e = MIDIGetDestination(i);
+        std::string nm = displayName(e);
+        if (!nm.empty()) out.push_back({std::move(nm), uniqueId(e)});
     }
 #endif
     return out;
@@ -334,16 +346,29 @@ std::vector<std::string> MidiOutHost::destinations() {
 std::size_t MidiOutHost::setDestinations(const std::vector<Dest>& want) {
     closeDestinations();
     if (want.empty()) return 0;
+
+    // Appariement AVANT toute ouverture : identifiant d'abord, nom ensuite, et jamais
+    // deux fois le même point de terminaison (cf. MidiEndpoint.hpp). C'est ce qui
+    // permet à deux appareils du même modèle d'être ouverts chacun sur le sien.
+    const auto have = destinations();
+    std::vector<neost::midi::Wanted> keys;
+    keys.reserve(want.size());
+    for (const Dest& w : want) keys.push_back({w.name, w.uid});
+    const std::vector<int> pick = neost::midi::matchEndpoints(keys, have);
+
     std::lock_guard<std::mutex> lk(outMtx_);
     if (!ensurePort_()) return 0;
 #if defined(NEOST_MIDI_ALSA)
     snd_seq_t* seq = static_cast<snd_seq_t*>(seq_);
     snd_seq_client_info_t* ci = nullptr; snd_seq_port_info_t* pi = nullptr;
     snd_seq_client_info_malloc(&ci); snd_seq_port_info_malloc(&pi);
-    for (const Dest& w : want) {
-        // Retrouve le couple client:port derrière le NOM (l'énumération et l'ouverture
-        // sont deux instants distincts : pas d'index mémorisable entre les deux).
-        int foundC = -1, foundP = -1;
+    for (std::size_t w = 0; w < want.size(); ++w) {
+        if (pick[w] < 0) continue;                // absent : l'appelant re-tentera
+        const std::string& target = have[std::size_t(pick[w])].name;
+        int foundC = -1, foundP = -1, seen = 0;
+        // Le rang compte : deux ports homonymes existent, il faut CELUI qu'on a apparié.
+        int rank = 0;
+        for (int e = 0; e < pick[w]; ++e) if (have[std::size_t(e)].name == target) ++rank;
         snd_seq_client_info_set_client(ci, -1);
         while (foundC < 0 && snd_seq_query_next_client(seq, ci) >= 0) {
             const int cid = snd_seq_client_info_get_client(ci);
@@ -355,16 +380,17 @@ std::size_t MidiOutHost::setDestinations(const std::vector<Dest>& want) {
                 if ((caps & (SND_SEQ_PORT_CAP_WRITE | SND_SEQ_PORT_CAP_SUBS_WRITE))
                     != (SND_SEQ_PORT_CAP_WRITE | SND_SEQ_PORT_CAP_SUBS_WRITE)) continue;
                 if (std::string(snd_seq_client_info_get_name(ci)) + ": "
-                    + snd_seq_port_info_get_name(pi) == w.name) {
+                    + snd_seq_port_info_get_name(pi) == target && seen++ == rank) {
                     foundC = cid; foundP = snd_seq_port_info_get_port(pi);
                     break;
                 }
             }
         }
-        if (foundC < 0) continue;                 // débranché : l'appelant re-tentera
-        dests_.push_back({w.name, w.channels, (uint32_t(foundC) << 8 | uint32_t(foundP)) + 1});
+        if (foundC < 0) continue;
+        dests_.push_back({target, want[w].channels,
+                          (uint32_t(foundC) << 8 | uint32_t(foundP)) + 1, std::string()});
         std::fprintf(stderr, "[midi-out] MIDI OUT -> \"%s\" (ALSA %d:%d) channels $%04X\n",
-                     w.name.c_str(), foundC, foundP, unsigned(w.channels));
+                     target.c_str(), foundC, foundP, unsigned(want[w].channels));
     }
     snd_seq_port_info_free(pi); snd_seq_client_info_free(ci);
 #elif defined(__APPLE__)
@@ -377,17 +403,22 @@ std::size_t MidiOutHost::setDestinations(const std::vector<Dest>& want) {
         }
         outPort_ = port;
     }
-    for (const Dest& w : want) {
+    const ItemCount n = MIDIGetNumberOfDestinations();
+    for (std::size_t w = 0; w < want.size(); ++w) {
+        if (pick[w] < 0) continue;                // débranché : l'appelant re-tentera
+        // pick[] indexe la liste rendue par destinations(), construite dans le MÊME
+        // ordre que MIDIGetDestination — mais en sautant les noms vides. On retrouve
+        // donc le point par son identifiant, seul lien fiable entre les deux listes.
+        const auto& ep = have[std::size_t(pick[w])];
         MIDIEndpointRef found = 0;
-        const ItemCount n = MIDIGetNumberOfDestinations();
         for (ItemCount i = 0; i < n; ++i) {
             const MIDIEndpointRef e = MIDIGetDestination(i);
-            if (displayName(e) == w.name) { found = e; break; }
+            if (uniqueId(e) == ep.uid && displayName(e) == ep.name) { found = e; break; }
         }
-        if (!found) continue;                     // débranché : l'appelant re-tentera
-        dests_.push_back({w.name, w.channels, found});
-        std::fprintf(stderr, "[midi-out] MIDI OUT -> \"%s\" (CoreMIDI) channels $%04X\n",
-                     w.name.c_str(), unsigned(w.channels));
+        if (!found) continue;
+        dests_.push_back({ep.name, want[w].channels, found, ep.uid});
+        std::fprintf(stderr, "[midi-out] MIDI OUT -> \"%s\" (CoreMIDI uid %s) channels $%04X\n",
+                     ep.name.c_str(), ep.uid.c_str(), unsigned(want[w].channels));
     }
 #else
     (void)want;
@@ -412,7 +443,7 @@ void MidiOutHost::closeDestinations() {
 std::vector<MidiOutHost::Dest> MidiOutHost::openDestinations() const {
     std::vector<Dest> out;
     out.reserve(dests_.size());
-    for (const auto& d : dests_) out.push_back({d.name, d.channels});
+    for (const auto& d : dests_) out.push_back({d.name, d.channels, d.uid});
     return out;
 }
 

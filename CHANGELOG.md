@@ -26,6 +26,45 @@ Ripper, DAC Pro Sound) avec page Dongles, `disks/dongles.txt` et oracle de rejeu
 vérifié note à note** en headless, corpus MIDI piano/blues ; port MIDI ALSA sous Linux ;
 save-state v16. Détail dans les chantiers datés ci-dessous.
 
+## MIDI — deux claviers du même modèle cessent d'être le même clavier (2026-08-29)
+
+Limite inscrite au TODO la veille au soir, levée. La config désignait les appareils par
+leur nom d'affichage ; deux machines du MÊME MODÈLE branchées ensemble — deux claviers
+identiques, le cas d'un studio — portent exactement le même nom. On ouvrait donc deux
+fois le premier et le second restait muet, sans que rien ne le dise.
+
+L'index n'était pas la solution : il se renumérote dès qu'on débranche un voisin, et une
+config mémorisée en index se met à piloter la mauvaise machine — c'est le piège inverse,
+et c'est pour l'éviter qu'on était parti du nom.
+
+**La réponse : (nom, identifiant unique).** `kMIDIPropertyUniqueID` sous CoreMIDI, stable
+d'un branchement à l'autre ; ALSA n'a pas d'équivalent (client:port change à chaque fois)
+et laisse l'identifiant vide. L'appariement (`src/audio/MidiEndpoint.hpp`) fait deux
+passes — identifiant d'abord, nom ensuite — et n'attribue **jamais deux fois le même
+point de terminaison**. C'est cette dernière règle qui fait tenir le cas ALSA : deux
+homonymes branchés ensemble reçoivent chacun le sien. L'ordre des passes compte : sans
+lui, une entrée désignée par son nom raflerait le point qu'une autre réclamait par son
+identifiant.
+
+**Apprentissage.** Une config qui ne connaît qu'un nom ne deviendrait jamais sûre toute
+seule : l'identifiant du point réellement ouvert y est noté à la première ouverture
+(trace `learned unique id …`), et persisté. Les configs existantes se réparent donc
+d'elles-mêmes au premier lancement.
+
+**Interface.** Étiquettes suffixées « #1 / #2 » sur les seuls homonymes — sans quoi deux
+lignes seraient rigoureusement identiques à l'écran. Le suffixe n'apparaît jamais sur un
+nom unique.
+
+L'appariement est une fonction PURE, et c'est délibéré : le développeur n'a qu'un seul
+appareil branché, le cas ne pouvait donc être éprouvé QUE hors matériel. `neost-selftest`
+couvre les deux entrées homonymes qui doivent tomber sur deux points distincts, la
+priorité de l'identifiant sur le nom, la survie à une renumérotation, l'absent qui ne
+vole rien, et les étiquettes. Deux mutations vérifiées : supprimer la non-réattribution,
+et ignorer l'identifiant. 297 assertions.
+
+⚠ Reste hors de portée : deux homonymes dont un SEUL est branché, sous ALSA — rien ne
+permet alors de savoir lequel. Inscrit au TODO.
+
 ## Interface — « Memory (hex) » et « CPU 68000 » se ferment enfin (2026-08-29)
 
 Rapporté par l'utilisateur. Ces deux fenêtres d'inspection appelaient `ImGui::Begin`

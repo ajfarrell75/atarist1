@@ -54,6 +54,7 @@
 #include <thread>
 #include <vector>
 
+#include "audio/MidiEndpoint.hpp"
 #include "audio/MidiMessageParser.hpp"
 
 #ifdef __APPLE__
@@ -67,6 +68,10 @@ public:
     struct Want {
         std::string name;
         int forceChannel = 0;
+        // Identifiant unique de l'hôte (CoreMIDI) ; vide = inconnu. Cf. MidiEndpoint.hpp :
+        // deux claviers du même modèle portent le MÊME nom, et seul l'identifiant les
+        // sépare de façon stable.
+        std::string uid;
     };
 
     MidiInHost() = default;
@@ -76,7 +81,7 @@ public:
 
     static bool available();               // un backend d'entrée existe-t-il ici ?
     // Appareils branchés MAINTENANT (à rappeler pour voir un branchement à chaud).
-    static std::vector<std::string> sources();
+    static std::vector<neost::midi::Endpoint> sources();
 
     // Ouvre EXACTEMENT cet ensemble (par NOM : les index se renumérotent au
     // débranchement). Un appareil absent est ignoré SANS BRUIT — l'appelant garde
@@ -87,6 +92,10 @@ public:
     bool isOpen() const { return !devices_.empty(); }
     std::size_t deviceCount() const { return devices_.size(); }
     std::vector<std::string> openNames() const;
+    // Ce qui est réellement ouvert, identifiant compris : permet au frontend
+    // d'APPRENDRE l'identifiant d'un appareil désigné par son seul nom (config
+    // d'avant, ou choisie à la main) et de le mémoriser pour la suite.
+    std::vector<neost::midi::Endpoint> openEndpoints() const;
 
     // Rend le prochain octet du flux FUSIONNÉ, s'il y en a un. Appelé par l'ACIA
     // sur son horloge série (cf. MidiAcia::setRxSource) — jamais par le frontend.
@@ -106,6 +115,7 @@ private:
 
     struct Device {
         std::string name;
+        std::string uid;
         int forceChannel = 0;              // 0 = tel quel, 1-16 = canalisé
         neost::midi::Parser parser;        // décodeur PROPRE à cette source
         MidiInHost* owner = nullptr;       // pour le callback CoreMIDI (srcConnRefCon)

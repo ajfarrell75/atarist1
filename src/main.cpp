@@ -263,6 +263,7 @@ static void saveConfig(const std::string& exeDir, Config& c, Machine* machine = 
 #include "imgui_impl_glfw.h"
 #include "gui/KeyboardWindow.hpp"
 #include "audio/MidiDeviceProfiles.hpp"
+#include "audio/MidiEndpoint.hpp"
 #include "audio/MidiInHost.hpp"
 #include "audio/MidiOutHost.hpp"
 #include "audio/Mt32Synth.hpp"
@@ -1741,7 +1742,7 @@ struct ConfigUi {
     // par la page : énumérer CoreMIDI 60 fois par seconde pour dessiner deux menus
     // déroulants serait absurde, et un appareil branché à chaud n'a pas besoin
     // d'apparaître à la milliseconde (cf. le rafraîchissement 1 Hz de la boucle).
-    std::vector<std::string> midiOutDevs, midiInDevs;   // lecture : ce qui est BRANCHÉ
+    std::vector<neost::midi::Endpoint> midiOutDevs, midiInDevs;   // lecture : ce qui est BRANCHÉ
     std::vector<MidiOutHost::Dest> midiOutOpen;         // lecture : destinations OUVERTES
     std::vector<std::string> midiInOpen;                // lecture : sources OUVERTES
     // Requête : l'ensemble voulu, appliqué et persisté d'un bloc (un clic dans la
@@ -2126,22 +2127,32 @@ void drawConfigWindow(ConfigUi& ui) {
         // Liste des appareils À AFFICHER : ce qui est branché MAINTENANT, PLUS ce que
         // la config mémorise mais qui est absent. Un appareil débranché ne doit pas
         // disparaître de l'écran — sinon son réglage semble s'être évaporé.
-        auto rows = [](const std::vector<std::string>& plugged,
-                       const std::vector<std::string>& configured) {
-            std::vector<std::pair<std::string, bool>> out;   // nom, branché ?
-            for (const auto& n : plugged) out.emplace_back(n, true);
-            for (const auto& n : configured) {
-                bool seen = false;
-                for (const auto& r : out) if (r.first == n) { seen = true; break; }
-                if (!seen) out.emplace_back(n, false);
+        //
+        // `cfgIdx` relie chaque ligne à SON entrée de configuration via l'appariement
+        // (identifiant d'abord, nom ensuite, jamais deux fois le même point) : c'est ce
+        // qui permet à deux appareils du même modèle — donc de même NOM — d'avoir
+        // chacun sa ligne et son réglage.
+        struct DevRow { std::string name, uid, label; bool plugged; int cfgIdx; };
+        auto buildRows = [](const std::vector<neost::midi::Endpoint>& have,
+                            const std::vector<neost::midi::Wanted>& conf) {
+            const std::vector<int> pick = neost::midi::matchEndpoints(conf, have);
+            std::vector<DevRow> rows;
+            for (std::size_t e = 0; e < have.size(); ++e) {
+                int owner = -1;
+                for (std::size_t w = 0; w < conf.size(); ++w)
+                    if (pick[w] == int(e)) { owner = int(w); break; }
+                rows.push_back({have[e].name, have[e].uid,
+                                neost::midi::displayLabel(have, e), true, owner});
             }
-            return out;
+            // Mémorisés mais introuvables : ils gardent leur ligne, marquée.
+            for (std::size_t w = 0; w < conf.size(); ++w)
+                if (pick[w] < 0) rows.push_back({conf[w].name, conf[w].uid, conf[w].name, false, int(w)});
+            return rows;
         };
-        // ⚠ L'identifiant ImGui d'une ligne est son INDEX, jamais son nom. Deux lignes
+
+        // ⚠ L'identifiant ImGui d'une ligne est son INDEX, jamais son nom : deux lignes
         // homonymes partageraient sinon le même ID et leurs cases se piloteraient l'une
-        // l'autre — c'est le symptôme qu'a produit le doublon de config du format à
-        // clés répétables. Deux appareils du même MODÈLE branchés ensemble donnent
-        // aussi des noms identiques : l'index protège des deux cas.
+        // l'autre. Deux appareils du même MODÈLE donnent exactement ce cas.
         int rowId = 0;
 
         // Rangée de 16 canaux. Boutons plutôt que cases à cocher : à cette densité
@@ -2174,26 +2185,23 @@ void drawConfigWindow(ConfigUi& ui) {
         // groovebox », sans toucher au réglage des appareils eux-mêmes.
         if (MidiOutHost::portAvailable()) {
             ImGui::TextDisabled("Hardware devices - which channels go where");
+            std::vector<neost::midi::Wanted> conf;
+            for (const auto& d : cfg.midiOutDevices) conf.push_back({d.name, d.uid});
             std::vector<Config::MidiOutDev> next;      // l'état voulu, reconstruit
             bool changed = false;
-            for (const auto& [name, plugged] : rows(ui.midiOutDevs, [&] {
-                     std::vector<std::string> n;
-                     for (const auto& d : cfg.midiOutDevices) n.push_back(d.name);
-                     return n; }())) {
-                // État courant de CET appareil dans la config.
-                bool on = false; uint16_t mask = 0xFFFF;
-                for (const auto& d : cfg.midiOutDevices)
-                    if (d.name == name) { on = true; mask = d.channels; break; }
+            for (const auto& r : buildRows(ui.midiOutDevs, conf)) {
+                const bool on = r.cfgIdx >= 0;
+                uint16_t mask = on ? cfg.midiOutDevices[std::size_t(r.cfgIdx)].channels : uint16_t(0xFFFF);
                 bool live = false;
-                for (const auto& d : ui.midiOutOpen) if (d.name == name) { live = true; break; }
+                for (const auto& d : ui.midiOutOpen) if (d.name == r.name && d.uid == r.uid) { live = true; break; }
 
                 ImGui::PushID(rowId++);
                 bool want = on;
                 if (ImGui::Checkbox("##on", &want)) changed = true;
                 ImGui::SameLine();
-                if (on && !live && plugged) ImGui::TextDisabled("%s  (opening)", name.c_str());
-                else if (on && !plugged)    ImGui::TextDisabled("%s  (not connected)", name.c_str());
-                else                        ImGui::TextUnformatted(name.c_str());
+                if (on && !live && r.plugged)  ImGui::TextDisabled("%s  (opening)", r.label.c_str());
+                else if (on && !r.plugged)     ImGui::TextDisabled("%s  (not connected)", r.label.c_str());
+                else                           ImGui::TextUnformatted(r.label.c_str());
                 if (want) {
                     ImGui::Indent(24.f);
                     if (channelRow(mask)) changed = true;
@@ -2202,12 +2210,12 @@ void drawConfigWindow(ConfigUi& ui) {
                     // Tracks, savoir que les 4 drums partagent le canal 10 et se
                     // distinguent par la NOTE est ce qui manque au moment de
                     // séquencer, pas au moment de câbler.
-                    if (const auto* prof = neost::midi::profileFor(name)) {
+                    if (const auto* prof = neost::midi::profileFor(r.name)) {
                         if (ImGui::SmallButton(prof->label)) { mask = prof->channels; changed = true; }
                         if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", prof->detail);
                     }
                     ImGui::Unindent(24.f);
-                    next.push_back({name, mask});
+                    next.push_back({r.name, mask, r.uid});
                 }
                 ImGui::PopID();
             }
@@ -2281,25 +2289,23 @@ void drawConfigWindow(ConfigUi& ui) {
         // le canal 1 seraient inséparables pour le séquenceur.
         if (MidiInHost::available()) {
             ImGui::TextDisabled("Hardware devices - merged into the one MIDI IN");
+            std::vector<neost::midi::Wanted> conf;
+            for (const auto& d : cfg.midiInDevices) conf.push_back({d.name, d.uid});
             std::vector<Config::MidiInDev> next;
             bool changed = false;
-            for (const auto& [name, plugged] : rows(ui.midiInDevs, [&] {
-                     std::vector<std::string> n;
-                     for (const auto& d : cfg.midiInDevices) n.push_back(d.name);
-                     return n; }())) {
-                bool on = false; int chan = 0;
-                for (const auto& d : cfg.midiInDevices)
-                    if (d.name == name) { on = true; chan = d.channel; break; }
+            for (const auto& r : buildRows(ui.midiInDevs, conf)) {
+                const bool on = r.cfgIdx >= 0;
+                int chan = on ? cfg.midiInDevices[std::size_t(r.cfgIdx)].channel : 0;
                 bool live = false;
-                for (const auto& n : ui.midiInOpen) if (n == name) { live = true; break; }
+                for (const auto& n : ui.midiInOpen) if (n == r.name) { live = true; break; }
 
                 ImGui::PushID(rowId++);
                 bool want = on;
                 if (ImGui::Checkbox("##on", &want)) changed = true;
                 ImGui::SameLine();
-                if (on && !live && plugged) ImGui::TextDisabled("%s  (opening)", name.c_str());
-                else if (on && !plugged)    ImGui::TextDisabled("%s  (not connected)", name.c_str());
-                else                        ImGui::TextUnformatted(name.c_str());
+                if (on && !live && r.plugged)  ImGui::TextDisabled("%s  (opening)", r.label.c_str());
+                else if (on && !r.plugged)     ImGui::TextDisabled("%s  (not connected)", r.label.c_str());
+                else                           ImGui::TextUnformatted(r.label.c_str());
                 if (want) {
                     ImGui::SameLine();
                     char cur[24];
@@ -2314,7 +2320,7 @@ void drawConfigWindow(ConfigUi& ui) {
                         }
                         ImGui::EndCombo();
                     }
-                    next.push_back({name, chan});
+                    next.push_back({r.name, chan, r.uid});
                 }
                 ImGui::PopID();
             }
@@ -3057,7 +3063,7 @@ int main(int argc, char** argv) {
         {
             std::vector<MidiOutHost::Dest> want;
             want.reserve(cfg.midiOutDevices.size());
-            for (const auto& d : cfg.midiOutDevices) want.push_back({d.name, d.channels});
+            for (const auto& d : cfg.midiOutDevices) want.push_back({d.name, d.channels, d.uid});
             midiOut.setDestinations(want);
         }
         if (cfg.midiOutMt32) {
@@ -3081,7 +3087,7 @@ int main(int argc, char** argv) {
     auto midiInApply = [&]() {
         std::vector<MidiInHost::Want> want;
         want.reserve(cfg.midiInDevices.size());
-        for (const auto& d : cfg.midiInDevices) want.push_back({d.name, d.channel});
+        for (const auto& d : cfg.midiInDevices) want.push_back({d.name, d.channel, d.uid});
         midiIn.setDevices(want);
         // L'ACIA TIRE les octets sur son horloge série (2560 cycles/octet), au lieu
         // d'une rafale par trame qui plafonnait l'entrée à ~143 o/s. Cf. MidiAcia::
@@ -3090,6 +3096,34 @@ int main(int argc, char** argv) {
         else                 machine.midi.setRxSource({});
     };
     midiInApply();
+    // APPRENTISSAGE des identifiants. Une config qui ne connaît qu'un nom (celle
+    // d'avant les identifiants, ou une ligne écrite à la main) ne deviendrait jamais
+    // sûre toute seule : on note l'identifiant du point réellement ouvert. Deux
+    // appareils du même modèle deviennent ainsi stables dès le premier lancement où
+    // ils sont tous les deux branchés.
+    auto midiLearnUids = [&]() {
+        bool learned = false;
+        for (auto& d : cfg.midiOutDevices)
+            if (d.uid.empty())
+                for (const auto& o : midiOut.openDestinations())
+                    if (o.name == d.name && !o.uid.empty()) {
+                        d.uid = o.uid; learned = true;
+                        std::fprintf(stderr, "[midi-out] learned unique id %s for \"%s\"\n",
+                                     o.uid.c_str(), o.name.c_str());
+                        break;
+                    }
+        for (auto& d : cfg.midiInDevices)
+            if (d.uid.empty())
+                for (const auto& o : midiIn.openEndpoints())
+                    if (o.name == d.name && !o.uid.empty()) {
+                        d.uid = o.uid; learned = true;
+                        std::fprintf(stderr, "[midi-in] learned unique id %s for \"%s\"\n",
+                                     o.uid.c_str(), o.name.c_str());
+                        break;
+                    }
+        return learned;
+    };
+    if (midiLearnUids()) saveConfig(exeDir, cfg, &machine);
     machine.mfp.setColorMonitor(!cfg.mono);   // moniteur mémorisé (avant le reset)
     machine.fdc.setFastFdc(cfg.fastfdc);      // FDC rapide mémorisé (accès disque ÷10)
     // Socket MC68881 (Mega STE uniquement, cf. Fpu.hpp) : sonde + trapping.
@@ -4088,6 +4122,9 @@ int main(int argc, char** argv) {
                 // effet visible, et ça évite de suivre appareil par appareil.
                 if (midiOut.destinationCount() != cfg.midiOutDevices.size()) midiOutApply();
                 if (midiIn.deviceCount() != cfg.midiInDevices.size()) midiInApply();
+                // Un appareil qui vient d'être rebranché peut enfin livrer son
+                // identifiant : on le retient, et on ne persiste que si on a appris.
+                if (midiLearnUids()) saveConfig(exeDir, cfg, &machine);
             }
         }
         cfgUi.midiOutOpen   = midiOut.openDestinations();
