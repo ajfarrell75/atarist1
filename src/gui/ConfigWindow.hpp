@@ -96,8 +96,9 @@ struct ConfigUi {
     int  reqPlugPort = -1, reqPlugDev = -1; // page Dongles : brancher reqPlugDev sur reqPlugPort
     bool reqPortButton = false;           // bouton Multiface / Ultimate Ripper (page Dongles)
     std::string mt32Status;               // lecture : modèle chargé ou erreur
+    std::string gmStatus;                 // lecture : SoundFont chargée ou erreur (synthé TSF)
     // Mixeur (page Sound) : édité EN PLACE par la page ; mixDirty = appliquer, mixDone = persister.
-    float mixYm = 1.0f, mixDma = 1.0f, mixDrive = 1.0f, mixMt32 = 1.0f, mixDac = 1.0f;
+    float mixYm = 1.0f, mixDma = 1.0f, mixDrive = 1.0f, mixMt32 = 1.0f, mixDac = 1.0f, mixGm = 1.0f;
     bool  mixInit = false, mixDirty = false, mixDone = false;
     int  reqNetUsbee = -1;                // NetUSBee NE2000 + ISP1160 (0/1)
     int  reqSlirp = -1;                   // NE2000 : Internet réel via SLIRP (0/1)

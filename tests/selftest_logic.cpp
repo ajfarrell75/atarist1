@@ -30,6 +30,7 @@
 #include "core/StateArchive.hpp"
 #include "audio/MidiEndpoint.hpp"
 #include "audio/MidiInHost.hpp"
+#include "audio/GmSynth.hpp"
 #include "io/MidiAcia.hpp"
 #include "io/Ikbd.hpp"
 #include "io/Rtc.hpp"
@@ -1942,6 +1943,63 @@ static void testIkbdProtocol() {
     }
 }
 
+// -----------------------------------------------------------------------------
+//  Synthé GM intégré (GmSynth / TinySoundFont) — le pendant Linux/Windows du
+//  DLSMusicDevice. Table de vérité du chemin complet : ouverture de la banque
+//  livrée (roms/gm/TimGM6mb.sf2), octets ACIA → parseur → événements datés →
+//  rendu découpé au cycle. « La note posée à mi-trame ne sonne QUE la 2ᵉ moitié »
+//  est exactement le genre de dérive qu'aucun étalon pixel n'attraperait.
+// -----------------------------------------------------------------------------
+static void testGmSynth() {
+    std::printf("Synthé GM intégré (TinySoundFont, roms/gm/)\n");
+    checkBool("GmSynth::available()", GmSynth::available(), true);
+
+    GmSynth gm;
+    // run_all.py lance tout depuis la racine du dépôt : roms/gm est la banque LIVRÉE.
+    if (!gm.open("roms/gm", 48000)) {
+        ++g_fail;
+        std::printf("  FAIL open(roms/gm) : %s\n", gm.lastError().c_str());
+        return;
+    }
+    checkBool("une banque est nommée", !gm.soundFont().empty(), true);
+
+    auto energy = [](const float* lr, int from, int to) {
+        double e = 0; for (int i = 2 * from; i < 2 * to; ++i) e += double(lr[i]) * lr[i];
+        return e;
+    };
+    // Une trame de 800 échantillons couvrant [0, 160000) cycles. Note posée au
+    // cycle 80000 (pile à mi-trame) : la première moitié doit rester muette, la
+    // seconde doit sonner — c'est la datation à l'échantillon qu'on éprouve.
+    {
+        std::vector<float> lr(1600, 0.0f);
+        for (uint8_t b : {uint8_t(0x90), uint8_t(0x3C), uint8_t(0x64)}) gm.byteAt(b, 80000);
+        gm.render(lr.data(), 800, 0, 160000);
+        checkBool("1re moitié muette (note à mi-trame)", energy(lr.data(), 0, 390) == 0.0, true);
+        checkBool("2e moitié sonne", energy(lr.data(), 410, 800) > 0.0, true);
+    }
+    // Percussions : canal 10 (0x99) → banque 128. Un .sf2 GM doit y répondre.
+    {
+        std::vector<float> lr(1600, 0.0f);
+        for (uint8_t b : {uint8_t(0x99), uint8_t(0x26), uint8_t(0x64)}) gm.byteAt(b, 0);
+        gm.render(lr.data(), 800, 0, 160000);
+        checkBool("canal 10 percussif sonne", energy(lr.data(), 0, 800) > 0.0, true);
+    }
+    // Note-off par vélocité 0 (running status implicite du 0x90) : pas de crash,
+    // et le silence revient une fois les queues de relâchement éteintes.
+    {
+        for (uint8_t b : {uint8_t(0x90), uint8_t(0x3C), uint8_t(0x00),
+                          uint8_t(0x99), uint8_t(0x26), uint8_t(0x00)}) gm.byteAt(b, 0);
+        std::vector<float> lr(9600, 0.0f);
+        for (int i = 0; i < 40; ++i) {           // ~4 s : au-delà de tout release GM
+            std::fill(lr.begin(), lr.end(), 0.0f);
+            gm.render(lr.data(), 4800, 0, 960000);
+        }
+        checkBool("silence après note off + release", energy(lr.data(), 0, 4800) < 1e-9, true);
+    }
+    gm.close();
+    checkBool("close() : plus ouvert", gm.isOpen(), false);
+}
+
 int main() {
     testDongleTable();
     testCartridgeKey();
@@ -1949,6 +2007,7 @@ int main() {
     testYmEventDomain();
     testMidiTdre();
     testMidiInJitter();
+    testGmSynth();
     testMidiHomonymes();
     testIkbdTdre();
     testIkbdProtocol();

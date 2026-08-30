@@ -45,8 +45,11 @@ struct Config { std::string rom; std::string disk; std::string diskb; std::strin
                 std::string acsi;     // image disque dur ACSI cible 0 (vide = off)
                 bool modem = false;   // modem Hayes sur l'USART (pont AT → TCP)
                 bool midiLoopback = false; // fiche de bouclage MIDI OUT→IN (diagnostics ; OFF = vrai ST)
-                bool midiOutGm = false;    // MIDI OUT → synthé General MIDI intégré (macOS)
-                bool midiOutPort = false;  // MIDI OUT → port CoreMIDI virtuel « NeoST MIDI OUT » (macOS)
+                bool midiOutGm = false;    // MIDI OUT → synthé GM intégré (DLSMusicDevice macOS / TinySoundFont ailleurs)
+                // Banque du synthé GM hors macOS : fichier .sf2 ou dossier à fouiller ;
+                // repli sur les banques système. NeoST livre TimGM6mb dans roms/gm/.
+                std::string gmSoundFont = "roms/gm";
+                bool midiOutPort = false;  // MIDI OUT → port virtuel « NeoST MIDI OUT » (CoreMIDI/ALSA)
                 // Appareils MIDI hôtes, désignés par leur NOM (un index se serait mis à
                 // pointer le mauvais appareil dès qu'on en débranche un autre ; le nom
                 // survit au débranchement ET permet la reconnexion à chaud).
@@ -77,7 +80,7 @@ struct Config { std::string rom; std::string disk; std::string diskb; std::strin
                 std::string mt32Roms = "roms/mt32"; // dossier des ROM Roland (MT32_*/CM32L_*)
                 std::string mt32Model = "auto";     // auto | mt32 | cm32l (page Sound)
                 // Mixeur (page Sound) : gains par source, 0..2, 1 = neutre.
-                float mixYm = 1.0f, mixDma = 1.0f, mixDrive = 1.0f, mixMt32 = 1.0f;
+                float mixYm = 1.0f, mixDma = 1.0f, mixDrive = 1.0f, mixMt32 = 1.0f, mixGm = 1.0f;
                 // Clé Steinberg sur /ROM3 ($FB0000) : "" (aucune), cubase3 (rouge :
                 // Cubase 3.10/Score/Audio), cubase2 (noire : Cubase 2.01), auto.
                 std::string dongle;

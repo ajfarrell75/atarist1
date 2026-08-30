@@ -107,7 +107,7 @@ est continue, les trous sont du travail fait.
   debug, écran ST, callbacks GLFW, ancrage, CRT, manettes), chacun recevant `App&` en
   paramètre : la discipline de requêtes de `MediaPages` est généralisée, une page ne
   fait rien, elle pose une requête que la boucle consomme.
-  **Reste : `appLoop` — 1758 lignes d'un seul tenant** (`src/gui/AppLoop.cpp`). Elle a
+  **Reste : `appLoop` — 1813 lignes d'un seul tenant** (`src/gui/AppLoop.cpp`). Elle a
   été DÉPLACÉE, pas découpée, et c'est délibéré : le garde-fou du plan interdit de
   combiner deux refontes, et celle-ci a deux verrous propres — une vingtaine de
   variables de trame partagées entre les phases (`fbw/fbh`, `cTop/cH/cW`, `menuH`,
@@ -544,7 +544,9 @@ densité HD/ED STX (NeoST plus cohérent) ; RTC en temps émulé (déterminisme 
   canal.
 - **Pas de synchro SMPTE/MTC.** L'horloge MIDI traverse (ce ne sont que des octets), donc
   le ST peut mener un DAW. Le code de temps SMPTE de l'Unitor, non.
-- **Rien sous Windows** : cf. « MIDI OUT Windows » ci-dessous (winmm à écrire).
+- **Windows : le synthé GM intégré marche, le reste non** — `GmSynth` (TinySoundFont,
+  2026-08-30) est portable et mixé dans la sortie audio, donc Windows a du son GM ;
+  port virtuel et destinations matérielles restent à écrire (winmm, ci-dessous).
 
 ### Réseau (extensions NeoST — base livrée 2026-08-12, cf. `docs/EXTENSIONS.md`)
 
@@ -552,7 +554,8 @@ densité HD/ED STX (NeoST plus cohérent) ; RTC en temps émulé (déterminisme 
 > theoldnet.com) → `CHANGELOG.md` (2026-08-27), recettes incluses.
 
 - **MIDI OUT Windows** : `MidiOutHost` couvre CoreMIDI (macOS) et ALSA (Linux) ; winmm
-  reste à écrire — le MT-32 (Munt), lui, est portable.
+  reste à écrire — le MT-32 (Munt) et le synthé GM intégré (`GmSynth`, TinySoundFont,
+  2026-08-30), eux, sont portables.
 - **Périphériques des ports — validation** : `PortDevices` transcrit Steem/WinUAE sans
   logiciel à clé sous la main. À exercer : Leader Board / 10th Frame (dump ST), B.A.T. II,
   Music Master, et l'option « Pro Sound » de Wings of Death / Lethal Xcess (présents en

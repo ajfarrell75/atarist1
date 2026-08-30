@@ -23,6 +23,7 @@ class DriveSound;
 class DmaSound;
 
 class Mt32Synth;
+class GmSynth;
 
 class Audio {
 public:
@@ -62,11 +63,13 @@ public:
 
     // Synthé MT-32/CM-32L (Munt) mixé dans la sortie — nul = absent (cf. audio/Mt32Synth).
     void setMt32(Mt32Synth* s) { mt32_ = s; }
+    // Synthé GM intégré (TinySoundFont) mixé dans la sortie — nul = absent (cf. audio/GmSynth).
+    void setGm(GmSynth* s) { gm_ = s; }
 
     // Mixeur utilisateur (page Sound) : gains par source, 0..2 (1 = neutre). YM et DMA
-    // s'appliquent en amont du LMC1992, lecteur et MT-32 à leur entrée dans le mix.
-    void setMixGains(float ym, float dma, float drive, float mt32) {
-        gainYm_ = ym; gainDma_ = dma; gainDrive_ = drive; gainMt32_ = mt32;
+    // s'appliquent en amont du LMC1992 ; lecteur, MT-32 et GM à leur entrée dans le mix.
+    void setMixGains(float ym, float dma, float drive, float mt32, float gm = 1.0f) {
+        gainYm_ = ym; gainDma_ = dma; gainDrive_ = drive; gainMt32_ = mt32; gainGm_ = gm;
     }
 
     // Volume maître de la SORTIE (0..1) — réglage utilisateur (barre de menu, persisté
@@ -86,7 +89,8 @@ private:
     DriveSound* drive_   = nullptr;
     DmaSound*   dma_     = nullptr;
     Mt32Synth*  mt32_    = nullptr;
-    float gainYm_ = 1.0f, gainDma_ = 1.0f, gainDrive_ = 1.0f, gainMt32_ = 1.0f;   // cf. setMixGains
+    GmSynth*    gm_      = nullptr;
+    float gainYm_ = 1.0f, gainDma_ = 1.0f, gainDrive_ = 1.0f, gainMt32_ = 1.0f, gainGm_ = 1.0f;   // cf. setMixGains
     bool        started_ = false;
     void*       device_  = nullptr;   // ma_device opaque (évite d'inclure miniaudio ici)
 

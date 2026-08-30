@@ -3,10 +3,10 @@
 //  (MidiAcia::setMidiSink) part vers l'extérieur de l'émulateur.
 //
 //  Deux destinations, indépendantes :
-//    (a) SYNTHÉ GM INTÉGRÉ — macOS seulement (DLSMusicDevice d'Apple) : du son sans
-//        rien installer. Aucun équivalent gratuit et embarquable sous Linux/Windows,
-//        d'où synthAvailable() qui dit la vérité à l'interface plutôt que de lui
-//        laisser proposer une case morte.
+//    (a) SYNTHÉ GM INTÉGRÉ — ici, le DLSMusicDevice d'Apple (macOS seulement) : du
+//        son sans rien installer. synthAvailable() ne parle QUE de lui ; ailleurs
+//        la même case du GUI est servie par audio/GmSynth (TinySoundFont vendorisé
+//        + banque roms/gm/), mixé dans la sortie comme le MT-32 — cf. midiOutApply.
 //    (b) PORT MIDI VIRTUEL « NeoST MIDI OUT », que n'importe quel synthé logiciel ou
 //        matériel peut écouter : CoreMIDI sous macOS, séquenceur ALSA sous Linux.
 //        C'est la voie recommandée pour du General MIDI — un FluidSynth ou un Qsynth

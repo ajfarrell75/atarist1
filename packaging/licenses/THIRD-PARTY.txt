@@ -24,6 +24,8 @@ Bundled components
 | GLFW 3.x (in the binary)          | window, input, GL context| zlib/libpng             |
 | libmt32emu 2.8.3 (Munt, in the binary, **static**) | Roland MT-32 / CM-32L on MIDI OUT | **LGPL 2.1 or later** |
 | stb_image v2.30 (in the binary)   | decodes the keyboard photo | MIT **or** public domain (Unlicense) |
+| TinySoundFont v0.9 (`extern/tsf`, in the binary) | built-in General MIDI synth outside macOS | MIT |
+| TimGM6mb (`roms/gm/TimGM6mb.sf2`, data file, by Tim Brechbill) | General MIDI SoundFont for the built-in synth | GPLv2 — `GPL-2.0.txt` |
 | SDL2 2.30.9 (`lib/*/libSDL2.so`, **Android package only**) | window, GLES, audio, life cycle | zlib |
 | DejaVu Sans (`fonts/`)            | UI font                  | DejaVu / Bitstream Vera free licence |
 | Font Awesome Free (`fonts/`)      | UI icons                 | CC BY 4.0 + SIL OFL 1.1 |

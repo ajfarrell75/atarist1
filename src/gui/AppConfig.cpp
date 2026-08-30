@@ -163,6 +163,7 @@ void parseConfigLine(Config& c, std::string line) {
     else if (line.rfind("modem=", 0) == 0) c.modem = (line.substr(6) == "1");
     else if (line.rfind("midi_loopback=", 0) == 0) c.midiLoopback = (line.substr(14) == "1");
     else if (line.rfind("midi_out_gm=", 0) == 0) c.midiOutGm = (line.substr(12) == "1");
+    else if (line.rfind("gm_soundfont=", 0) == 0) c.gmSoundFont = line.substr(13);
     else if (line.rfind("midi_out_port=", 0) == 0) c.midiOutPort = (line.substr(14) == "1");
     else if (line.rfind("midi_out_devices=", 0) == 0) {
         c.midiOutDevices.clear();
@@ -218,6 +219,7 @@ void parseConfigLine(Config& c, std::string line) {
     else if (line.rfind("mix_dma=", 0) == 0) c.mixDma = mixGain(line.substr(8));
     else if (line.rfind("mix_drive=", 0) == 0) c.mixDrive = mixGain(line.substr(10));
     else if (line.rfind("mix_mt32=", 0) == 0) c.mixMt32 = mixGain(line.substr(9));
+    else if (line.rfind("mix_gm=", 0) == 0) c.mixGm = mixGain(line.substr(7));
     else if (line.rfind("dongle=", 0) == 0) c.dongle = line.substr(7);
     else if (line.rfind("joy0=", 0) == 0) c.joy0 = line.substr(5);
     else if (line.rfind("joy1=", 0) == 0) c.joy1 = line.substr(5);
@@ -330,6 +332,7 @@ void writeConfigKeys(std::ostream& f, const Config& w, bool full) {
       << "\nmodem=" << (w.modem ? 1 : 0)
       << "\nmidi_loopback=" << (w.midiLoopback ? 1 : 0)
       << "\nmidi_out_gm=" << (w.midiOutGm ? 1 : 0)
+      << "\ngm_soundfont=" << w.gmSoundFont
       << "\nmidi_out_port=" << (w.midiOutPort ? 1 : 0)
       << "\nmidi_lead_ms=" << w.midiLeadMs
 
@@ -338,6 +341,7 @@ void writeConfigKeys(std::ostream& f, const Config& w, bool full) {
       << "\nmt32_model=" << w.mt32Model
       << "\nmix_ym=" << w.mixYm << "\nmix_dma=" << w.mixDma
       << "\nmix_drive=" << w.mixDrive << "\nmix_mt32=" << w.mixMt32
+      << "\nmix_gm=" << w.mixGm
       << "\ndongle=" << w.dongle
       << "\njoy0=" << w.joy0 << "\njoy1=" << w.joy1 << "\nrs232=" << w.rs232
       << "\nprinter=" << w.printer << "\ncartbutton=" << w.cartbutton

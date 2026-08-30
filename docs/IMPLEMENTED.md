@@ -1340,12 +1340,18 @@ Pour ce qui reste → [`../TODO.md`](../TODO.md).
 - **Port cartouche abstrait** (`core/CartDevice.hpp`) — 2026-08-23 : abonnés aux signaux /ROM3, /ROM4, /UDS, consultés par le `Bus` dans l'ordre ; plusieurs clés possibles. **Oracle de rejeu** : `--key-log` / `--key-replay` (format `R3`/`R4`/`U`), cf. `docs/EXTENSIONS.md`.
 - **Clé C-Lab Notator / Creator** (`CartridgeKey::Model::Notator`, `--dongle notator`, page Dongles) — 2026-08-23, **OFF par défaut**. EP600 : armement `FEEDB1 := STER` sur /ROM4 (`$FA00EA`), 8 bascules D actives bas cadencées par UDS (désarmée) ou par la descente de /ROM3 (armée, lecture après horloge), resets asynchrones D9 (A4·A2) / D8 (A3·A1). Équations TPH (atari-forum t=43078, 10/2025) via le firmware SidecarTridge `md-notator`. Crochet `Bus → rom4Read`. Save-state v15. ⚠ Pas confrontée à un Notator réel.
 - **Clé Steinberg** (`CartridgeKey`, `/ROM3` `$FB0000-$FBFFFF`, `--dongle cubase2|cubase3|auto`, page Dongles, `dongle=`) — 2026-08-23, **OFF par défaut**. Clé **rouge** (Cubase 3.10 / Score / Audio : EPLD 5C060, 16 bascules T, entrée A8, sortie D8, cadencée par /ROM3) et clé **noire** (Cubase 2.01 : PAL16R8, A1-A8 → D8-D15, cadencée par **chaque** front /UDS du CPU — crochet dans `NeostMoira`, « au mieux »). Équations transcrites de MiSTery (`cubase2_dongle.v`, `cubase3_dongle.v`). Invisible du TOS (/ROM4 seul sondé), cohabite avec le HD GEMDOS. ⚠ Pas encore confrontée à un vrai Cubase 3.10 (aucun logiciel à clé dans le dépôt) ; auto-test de transcription dans `neost-selftest`.
-  **Sorties hôte** (GUI macOS, 2026-08-21) : synthé GM intégré, port CoreMIDI virtuel
-  « NeoST MIDI OUT » — livraison **horodatée** (cycle ST → heure réelle de la trame + 30 ms,
-  thread dédié : gigue mesurée ±60 ms → nulle) — et **Roland MT-32/CM-32L** via libmt32emu
-  (Munt 2.8.3, **vendorisé** dans `extern/mt32emu` et lié en statique — plus de paquet système
-  à installer ; ROM Roland à fournir dans `roms/mt32/`), rendu dans la sortie audio avec événements datés à
-  l'échantillon. `audio/MidiOutMac`, `audio/Mt32Synth`.
+  **Sorties hôte** (GUI, 2026-08-21) : synthé GM intégré, port virtuel « NeoST MIDI OUT »
+  (CoreMIDI sous macOS, séquenceur ALSA sous Linux) — livraison **horodatée** (cycle ST →
+  heure réelle de la trame + 30 ms, thread dédié : gigue mesurée ±60 ms → nulle) — et
+  **Roland MT-32/CM-32L** via libmt32emu (Munt 2.8.3, **vendorisé** dans `extern/mt32emu`
+  et lié en statique — plus de paquet système à installer ; ROM Roland à fournir dans
+  `roms/mt32/`), rendu dans la sortie audio avec événements datés à l'échantillon.
+  **Synthé GM sur toutes les plateformes** depuis le 2026-08-30 : là où macOS a le
+  DLSMusicDevice, Linux/Windows ont `audio/GmSynth` (**TinySoundFont vendorisé** dans
+  `extern/tsf` + banque **TimGM6mb livrée** dans `roms/gm/`, remplaçable par
+  `gm_soundfont=`), rendu daté à l'échantillon comme le MT-32, fader dédié page Sound,
+  garde `neost-selftest` (banque livrée + datation mi-trame).
+  `audio/MidiOutHost`, `audio/Mt32Synth`, `audio/GmSynth`.
 - **Port série RS-232 / USART MFP** : RSR/UDR, IRQ RxFull (12)/TxEmpty (10)/RxErr (11)/
   TxErr (9), lignes RTS→CTS (GPIP2)/DTR→DCD (GPIP1)/RI (GPIP6) via PSG port A.
 - **Config effective de l'USART** (`Mfp::updateSerialConfig`, port de `rs232.c`
