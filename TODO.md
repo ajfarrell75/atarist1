@@ -169,40 +169,22 @@ est continue, les trous sont du travail fait.
   validation entièrement manuelle. ✅ Le volet « statuer sur les deux étalons `snapshot` à
   écart oracle inexpliqué » est **SOLDÉ le 2026-08-29** (détail : `CHANGELOG.md`,
   `docs/HATARI_DIVERGENCES.md` 11ᵉ passe) — `trace_odd` était un **artefact de mesure**
-  (masque LED d'un pixel trop étroit) et est promu `ref_kind: oracle` à 0 px ; il reste de
-  cet item l'**écart réel d'`overscan_top`**, ci-dessous.
-- **A40 ⭘ — `overscan_top` : 144 px d'écart oracle RÉEL, localisé, cause non établie.**
-  Sorti d'A11 le 2026-08-29. Stable sur les 61 trames de la fenêtre (structurel, pas de
-  phase). Les 144 px sont sur les **5 premières lignes de trame**, celles qu'ouvre le
-  retrait de bordure haute ; **au-delà les deux images sont identiques au pixel**, donc le
-  retrait de bordure haute lui-même est CONFORME. Ce qui diverge est la **bordure gauche**
-  sur ces lignes de transition : NeoST garde une fenêtre de 320 px décalée de −4
-  (`glue::LEFT_OFF`, `default: −4` de la table `shEff`, `Shifter.cpp`), Hatari rend une
-  fenêtre de **336 px** dont les 16 px de tête et de queue portent des index ≠ 0/15.
-  ⚠ Ce chemin est calibré à 0 px contre No Cooper et Cuddly : **ne rien régler sur
-  la foi d'un seul étalon** — lire `video.c` d'abord (méthode imposée), et la référence
-  reste une self-capture tant que ce n'est pas compris.
-  ✅ **SECOND EXHIBITEUR le 2026-08-30 : `closure`** — et il élargit le diagnostic.
-  « Calibré à 0 px contre No Cooper, **Closure** et Cuddly » figurait ici : c'était
-  INFONDÉ pour Closure, qui n'était pas un étalon et n'avait donc JAMAIS été comparée à
-  l'oracle. Mesuré le jour de sa pose : l'oracle diverge de **64,15 %**, les palettes
-  sont IDENTIQUES (les 153 couleurs de NeoST sont toutes chez Hatari), et un décalage
-  de **+4 px ST** ramène l'écart à **3,20 %** — ±1 px autour le fait remonter à ~29 %,
-  donc le décalage vaut exactement 4, vérifié en pleine résolution (832×552, dx=+8)
-  pour écarter tout artefact de rééchantillonnage. C'est `glue::LEFT_OFF` = −4.
-  **Ce que ça change** : A40 n'est PAS une singularité d'`overscan_top`. Closure n'a ni
-  retrait de bordure haute ni ligne de transition — c'est une image 153 couleurs pleine,
-  et l'écart y est UNIFORME (aucune des 276 lignes n'est épargnée, contre 5 lignes
-  seulement pour `overscan_top`). Le décalage n'est donc pas un effet de bord des lignes
-  de transition — sur cet écran il vaut pour TOUTE l'image.
-  ⚠ **Mais il n'est PAS universel, et c'est là qu'est le levier** : **10 étalons sont à
-  0 px contre l'oracle**, dont `cuddly_demos` et `nocooper` — deux démos qui ouvrent
-  elles aussi les bordures, sur la même machine ST. Le décalage dépend donc de quelque
-  chose que Closure fait et que Cuddly ne fait pas. **Prochain pas concret : diffé ces
-  deux-là plutôt que de lire `video.c` à froid** — même machine, même ROM, l'un décalé
-  de 4 px et l'autre bit-exact contre Hatari, c'est le couple de diagnostic le plus
-  serré qu'on ait jamais eu sur A40. Ensuite seulement, `video.c` sur le calcul du début
-  de ligne (`LineStartCycle`/`STF_LEFT_BORDER`).
+  (masque LED d'un pixel trop étroit) et est promu `ref_kind: oracle` à 0 px ; **A40**,
+  qui portait le reste (l'écart d'`overscan_top`), est **SOLDÉ le 2026-08-30** — les 4 px
+  de Closure étaient un vrai bug de rendu (corrigé), les 144 px d'`overscan_top` sont un
+  artefact de recopie d'Hatari (expliqué à l'index de palette près, NeoST est fidèle) :
+  récit dans `CHANGELOG.md`, verdicts dans `docs/CASE_STUDIES.md`. Reste A41, ci-dessous.
+- **A41 ⭘ — `closure` : 27 px d'écart oracle, TOUS sur la ligne 0.** Résidu d'A40 après
+  correction du retrait gauche med (2026-08-30) : l'étalon est passé de 64,08 % à
+  **0,02 %** contre l'oracle Hatari, et ce qui reste tient sur **la seule ligne 0** du
+  buffer — la première ligne affichée de la trame (`sl=34`, celle qu'ouvre le retrait de
+  bordure haute). Mesuré sur trois trames voisines : 27 / 43 / 27 px, jamais une autre
+  ligne. Ce n'est PAS géométrique : les pixels fautifs ne sont pas décalés, ils portent
+  une **couleur voisine d'un cran** (p. ex. NeoST $210 là où Hatari donne $310), donc
+  c'est une **phase d'écriture palette** en début de trame, pas le décodage. Piste :
+  l'ancrage des `colorWrites_` sur la première ligne rendue (frontière de trame,
+  `frameStartPalette_` vs premières écritures). Étalon prêt à passer `ref_kind: oracle`
+  le jour où ça tombe à 0 (l'oracle est déjà commis, `tests/reference/closure_oracle.png`).
 - **A12 ⭘ — Aucune cible de livraison validée sur du matériel réel.** Windows jamais lancé
   hors CI, APK Android jamais posé sur un appareil (QEMU seul), aucun budget temps réel
   mesuré sur le Raspberry Pi visé (le perfbench ne garde que des ratios sur le poste de
@@ -397,8 +379,8 @@ décroissant, par priorité d'impact :
    boot). L'étalon `closure` posé sur l'écran 153 couleurs rend une image
    **BIT-IDENTIQUE avec `NEOST_LINELEN_ATTR=1`** (même md5, 0 px) : cet écran ne
    bascule pas la fréquence en cours de trame. Il a en revanche rapporté **A40**
-   (ci-dessus). V3 reste donc SANS exhibiteur mesuré — chercher un AUTRE écran de la
-   démo, ou générer l'étalon.
+   (le décalage de 4 px du retrait gauche med, **corrigé le 2026-08-30**). V3 reste donc
+   SANS exhibiteur mesuré — chercher un AUTRE écran de la démo, ou générer l'étalon.
 2. **[SON]** quantification HBL du refill FIFO à confronter à l'oracle sur un poll serré de
    `$FF8909/0B/0D` — validable par dump WAV + trace.
 3. **[MFP]** `UpdateTimers` avant lecture IPR/ISR/TBDR en mode bloc — retard **mesuré à

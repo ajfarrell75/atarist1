@@ -884,16 +884,52 @@ void Shifter::renderGlueFrame() {
         // VideoOffset −2) : srcOff = VideoOffset + 2. Sans ce port, les lignes
         // X-DISTING de Closure sortaient au shift brut sans permutation de
         // plans → damier à marches (+11 px / ~9 lignes) au lieu du slide lisse.
+        //
+        // A40 (2026-08-30) — LE REPÈRE, établi par le calcul PUIS mesuré. Hatari ne
+        // rend pas ces lignes au faisceau : il RECOPIE des octets dans un tampon de
+        // SCREENBYTES_LINE = 208 o (24 bordure G + 160 fenêtre + 24 bordure D = 416 px),
+        // en partant de `raster + BORDERBYTES_LEFT − SCREENBYTES_LEFT + VideoOffset`
+        // = `raster + 2 + VideoOffset` (video.c:4014-4019), PUIS décale tout le tampon
+        // de STF_PixelScroll (video.c:4273+). Dans le repère du buffer NeoST
+        // (x = cyc − 8, DE d'une ligne left-off à ds = 4), cela donne
+        //     index source Hatari  s_H(x) = x + 4 + 2·VideoOffset − scrollFinal
+        // et notre rendu, source décalée de medSrcBytes octets (1 o = 2 px),
+        //     s_N(x) = x + 4 − shEff + 2·medSrcBytes.
+        // Avec la convention DÉJÀ posée ici (medSrcBytes = VideoOffset + 2), les deux
+        // coïncident si et seulement si **shEff = 4 + scrollFinal**.
+        // Le stab med de Closure (VideoOffset −4, scrollFinal −8, video.c:3990-3993)
+        // vaut donc shEff = −4, et PAS −8 : le −8 recopiait le scroll d'Hatari en
+        // oubliant que son ancrage de recopie est 4 px à droite du faisceau. C'était
+        // A40 : 4 px de décalage sur TOUTE l'image (oracle 64,08 % → 1,81 %, puis
+        // 0,02 % avec la règle de queue ci-dessous). Balayage ±6 px et ±3 o autour :
+        // aucun autre couple ne descend sous 53 %, l'optimum est isolé.
+        // ⚠ Les cas 13/9/5/1 (scroll « hardware » ST Cnx) et le −4 du left-off
+        // standard gardent leurs valeurs : la même algèbre les dit décalés de 4 px
+        // (resp. 8), mais AUCUN étalon ne les exhibe — Closure ne produit ces
+        // masques que sur des lignes BLANK (rendues à l'index 0, cf. lineBlank) et
+        // jamais avec shift 13/9/5/1. Sans exhibiteur mesuré, on ne règle pas.
         int shEff = shift;
+        // Queue de ligne SANS SOURCE. Le tampon d'Hatari fait SCREENBYTES_LINE, soit
+        // exactement la largeur du buffer : décalé de `scrollFinal` pixels vers la
+        // gauche, ses |scrollFinal| DERNIERS pixels n'ont plus de source et restent à
+        // l'index couleur 0 (video.c:4295, « entering pixels to the extreme right
+        // should be set to color 0 »). Exprimé en COLONNES du buffer, la règle vaut
+        // quelle que soit la largeur rendue (bordures ou non). Sans elle il restait
+        // 8 px par ligne, soit 2 083 px sur l'étalon closure.
+        int blankTailFrom = W;
         if (!lineMed && (bm & (glue::LEFT_OFF | glue::LEFT_OFF_MED))) {
             switch (shift) {
                 case 13: medSrcBytes += 4; shEff = 5;  break;
                 case 9:  medSrcBytes += 2; shEff = 1;  break;
                 case 5:  medSrcBytes += 0; shEff = -3; break;
                 case 1:  medSrcBytes -= 2; shEff = -7; break;
-                case 0:  if (bm & glue::LEFT_OFF_MED) { medSrcBytes -= 2; shEff = -8; }
-                         break;                    // stab med (Closure STF)
-                default: break;                    // −4 : left-off standard calibré
+                case 0:  if (bm & glue::LEFT_OFF_MED) {   // stab med (Closure STF)
+                             medSrcBytes -= 2;            // VideoOffset −4 → srcOff −2
+                             shEff = -4;                  // 4 + scrollFinal(−8)
+                             blankTailFrom = W - 8;       // |scrollFinal| = 8
+                         }
+                         break;
+                default: break;                    // −4 : left-off standard, non mesuré
             }
         }
         // Source des pixels : la CAPTURE datée au faisceau de cette scanline si elle
@@ -942,6 +978,10 @@ void Shifter::renderGlueFrame() {
                 // vérifie les DEUX phases med). Le displayPixelShift du retrait
                 // hi (−4) ne s'applique pas au chemin med (Hatari rend ces
                 // lignes via VideoOffset seul, video.c:3932).
+                if (x >= blankTailFrom) {                  // queue sans source (cf. plus haut)
+                    dst[x] = stColorToArgb(pal[0]);
+                    continue;
+                }
                 int s = lineMed ? ((cyc - ds) * 2 + medSrcPx)
                                 : ((cyc - ds) * ppc + (x % ppc) - shEff + lineScroll);
                 if (s < 0) s = 0; else if (s >= nDec) s = nDec - 1;
