@@ -223,7 +223,7 @@
       <li><b>Keyboard</b>: routed to the IKBD (US layout). <b>Keyboard joystick</b>: arrows + <kbd>right Ctrl</kbd> = fire, on the port picked in the Joystick box (port 1 by default).</li>
       <li><b>USB pads</b>: detected automatically — first pad on port 1, second on port 0. The <b>dead zone</b> slider only affects analog sticks, not the D-pad.</li>
       <li><b>Reset</b>: a <b>cold</b> reset (power-cycle) — ST-RAM is wiped and TOS boots from scratch, which is also what mounting a floppy in A: does.</li>
-      <li><b>Game floppies</b>: "Mount A: + Reset" switches to a <b>real TOS</b> when needed (EmuTOS only boots system floppies) — TOS 2.06 on STE/Mega STE, TOS 1.0x on ST. Pick a ROM by hand to lock that choice.</li>
+      <li><b>Game floppies</b>: "Mount A: + Reset" switches to a <b>real TOS</b> when one is available (EmuTOS boots system floppies only) — TOS 2.06 on STE/Mega STE, TOS 1.0x on ST. <b>This build bundles EmuTOS alone</b>, which is free software; original Atari TOS ROMs are not ours to ship. Most commercial games therefore need you to add one to <code>/roms</code> and pick it above. The bundled <b>demos</b> boot fine on EmuTOS.</li>
       <li><b>Drag and drop</b>: drop a <code>.st</code> / <code>.msa</code> / <code>.dim</code> / <code>.stx</code> image straight onto the screen to mount it in A: and reboot.</li>
       <li><b>Machine &amp; RAM</b>: fixed when the machine is built → changing them reloads the page (URL parameters <code>?machine=</code> and <code>?mem=</code>, shareable).</li>
       <li><b>Sound</b>: browsers require a user gesture — click once inside the screen to unlock audio (YM2149 + STE DMA + drive noises).</li>
@@ -682,12 +682,25 @@
     function mountWithAutoTos(path, displayName) {
       var rom = document.getElementById('romSel');
       var note = '';
+      var noRealTos = false;
       if (!romUserChosen && /etos|emutos/i.test(rom.value)) {
         var tos = findRealTos();
         if (tos) { rom.value = tos; callLoadTos(tos); note = ' — ROM: ' + tos.split('/').pop(); }
+        else noRealTos = true;
       }
       callMount(path);
-      setStatusOk('Mounted: ' + displayName + note);
+      // Depuis la purge du 2026-08-30, le bundle public n'embarque QUE de l'EmuTOS :
+      // findRealTos() ne trouve donc plus rien et la bascule ci-dessus est un no-op.
+      // Sans ce message, une disquette de jeu était montée EN SILENCE sous EmuTOS —
+      // qui ne boote que les disquettes système — et l'utilisateur voyait un écran
+      // noir ou un jeu à moitié parti sans savoir pourquoi. Mesuré : Magic Pockets
+      // rend un écran noir sous EmuTOS là où il démarre sous TOS 1.02.
+      if (noRealTos)
+        Module.setStatus('Mounted: ' + displayName +
+                         ' — WARNING: only EmuTOS is bundled, and it boots system floppies only. ' +
+                         'A game floppy usually needs an original Atari TOS: add one to /roms and pick it above.');
+      else
+        setStatusOk('Mounted: ' + displayName + note);
     }
 
     document.getElementById('btnMount').addEventListener('click', function () {
