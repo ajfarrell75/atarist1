@@ -593,7 +593,22 @@ int appInit(App& A, int argc, char** argv) {
         ImGuiIO& io = ImGui::GetIO();
         const std::string fontPath = resolveData("fonts/DejaVuSans.ttf", exeDir);
         if (fileExists(fontPath)) {
-            io.Fonts->AddFontFromFileTTF(fontPath.c_str(), 15.0f);
+            // ⚠ DejaVu Sans occupe une PARTIE de la zone à usage privé (U+F000-F003 =
+            // ses ligatures ff/fi/fl/ffi héritées, plus U+F400+) — la MÊME zone où vit
+            // Font Awesome. Or ImFontBaked_BuildLoadGlyph parcourt les sources DANS
+            // L'ORDRE et retient la PREMIÈRE qui sait fournir le codepoint
+            // (imgui_draw.cpp:4590-4610) : la police de base, chargée en premier,
+            // gagnait donc contre l'icône fusionnée. Une seule collision en pratique,
+            // mais bien visible — **U+F001 = ICON_FA_MUSIC**, la note de la page MIDI,
+            // rendue en ligature « fi » illisible à 15 px, donc « l'icône n'apparaît
+            // pas ». On EXCLUT la plage FA de la police de texte : le champ existe pour
+            // exactement ce cas (« designed to exclude ranges from a font source, when
+            // merging fonts with overlapping glyphs », imgui.h:3728). Statique : ImGui
+            // garde le POINTEUR jusqu'à la construction de l'atlas.
+            static const ImWchar kNoIconRange[] = { 0xF000, 0xF8FF, 0 };
+            ImFontConfig baseCfg;
+            baseCfg.GlyphExcludeRanges = kNoIconRange;
+            io.Fonts->AddFontFromFileTTF(fontPath.c_str(), 15.0f, &baseCfg);
         } else {
             io.Fonts->AddFontDefault();   // base toujours présente (requis avant la fusion FA)
             std::fprintf(stderr, "[main] font %s not found — falling back to the default ImGui font.\n",
