@@ -27,6 +27,18 @@ done
 cp -r "$SRC/roms/drivesound" "$DEST/roms/"
 cp "$SRC/disks/diskA.st" "$DEST/disks/"
 
+# Démos de démonstration — les trois productions demoscene que la purge du
+# 2026-08-30 a délibérément GARDÉES (diffusion libre par usage de la scène,
+# cf. CHANGELOG.md). Elles ne sont pas décoratives : ce sont les étalons qui
+# exercent le plus le Shifter (4 bordures, overscan med-res, rasters fins), et
+# elles donnent au paquet de quoi se montrer sans aucune image sous copyright.
+# ⚠ Liste EXPLICITE, jamais un glob sur disks/etalons/ : ce dossier contient
+# aussi des images de test générées et des disques de travail.
+DEMO_DISKS=(cuddly_demos.msa nocooper.msa closure.msa)
+for d in "${DEMO_DISKS[@]}"; do
+    cp "$SRC/disks/etalons/$d" "$DEST/disks/"
+done
+
 # Polices de l'interface (resolveData cherche exeDir/../fonts) : DejaVu Sans et
 # Font Awesome Free, toutes deux librement redistribuables. SANS elles, le GUI
 # se replie EN SILENCE sur la police bitmap d'ImGui et TOUS les pictogrammes
@@ -68,8 +80,9 @@ fi
 for lic in GPL-3.0.txt GPL-2.0.txt THIRD-PARTY.txt; do
     [ -s "$DEST/licenses/$lic" ] || { echo "ERREUR : licence manquante : $lic" >&2; exit 1; }
 done
+DEMOS_TXT="${DEMO_DISKS[*]}"
 if [ "$NO_ATARI" = "1" ]; then
-    echo "OK : données paquet copiées dans $DEST (EmuTOS SEUL + drivesound + diskA.st + licences)"
+    echo "OK : données paquet copiées dans $DEST (EmuTOS SEUL + drivesound + diskA.st + démos [$DEMOS_TXT] + licences)"
 else
-    echo "OK : données paquet copiées dans $DEST (EmuTOS + tos102uk + tos162uk + drivesound + diskA.st + licences)"
+    echo "OK : données paquet copiées dans $DEST (EmuTOS + tos102uk + tos162uk + drivesound + diskA.st + démos [$DEMOS_TXT] + licences)"
 fi

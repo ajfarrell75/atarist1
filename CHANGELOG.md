@@ -26,6 +26,57 @@ Ripper, DAC Pro Sound) avec page Dongles, `disks/dongles.txt` et oracle de rejeu
 vérifié note à note** en headless, corpus MIDI piano/blues ; port MIDI ALSA sous Linux ;
 save-state v16. Détail dans les chantiers datés ci-dessous.
 
+## Le paquet se montre : trois démos embarquées, et le frontend web reprend la main (2026-08-30)
+
+**Les paquets embarquent enfin de quoi se montrer.** `cuddly_demos.msa`,
+`nocooper.msa` et `closure.msa` — les trois productions demoscene que la purge a
+délibérément gardées — partent désormais dans les paquets bureau
+(`stage_free_data.sh`) ET dans le bundle web, +1,9 Mo (bundle à 10,6 Mo, plafond CI
+40 Mo). Trois pièges traités au passage : elles sont montées **à plat dans `/disks`**
+et non sous `/disks/etalons/`, parce que le sélecteur du shell fait un
+`FS.readdir('/disks')` NON RÉCURSIF — dans un sous-dossier elles auraient été
+embarquées mais invisibles ; les **6 gardes** « rien d'autre que `diskA.st` » de
+`release.yml` les autorisent NOMMÉMENT (jamais un glob : le dépôt contient encore des
+images de test générées) ; et `THIRD-PARTY.txt` les DÉCLARE — auteurs, année, statut
+d'œuvre librement diffusée, plus une procédure de retrait à la demande des ayants
+droit. Rien de tout cela n'était en place : le paquet aurait distribué trois œuvres
+sans les nommer.
+
+⚠ **Closure re-vérifiée sous EmuTOS avant de l'embarquer** : son chantier la donne en
+« ST + tos102uk + 1 Mo », et ce TOS est purgé. Contrôlée trame par trame sous
+`etos192fr` : logo SYNC à 700, grand logo X-DISTING à 1400, 4 couleurs en 640×200 à
+3000, 87 couleurs à 7200, **153 couleurs à 10500** — la « photo fée » de la carte du
+chantier, au bon endroit. Elle se déroule intégralement.
+
+**Le frontend web reprend la main.** Cinq points, dont deux étaient des bugs :
+
+- 🐞 **Une manette USB TUAIT l'émulateur.** `readStickRaw` appelait
+  `glfwGetJoystickHats` sans garde, or le port GLFW d'Emscripten la définit en
+  `abort('glfwGetJoystickHats is not implemented')` — un abort du RUNTIME, pas un code
+  d'erreur. Le navigateur n'expose une manette qu'après la première pression de
+  bouton : le web tournait donc parfaitement jusqu'à ce qu'on TOUCHE une manette.
+  Gardé `#ifndef __EMSCRIPTEN__`, et aucun hat n'est perdu — la Gamepad API n'en
+  rapporte pas, elle donne le D-pad en boutons 12-15 du « standard mapping », déjà lus
+  juste en dessous.
+- 🐞 **Le bouton « Reset » ne faisait pas ce que son infobulle annonçait** : elle disait
+  « Cold reset of the machine », il appelait `neost_reset` (à chaud, RAM conservée) —
+  le TOS gardait son `memvalid` et sautait le boot complet. `Machine::hardReset()`
+  existait et était utilisé par le GUI bureau et par Android ; **le web était le seul
+  frontend à ne pas l'exposer**. Nouveau `neost_hard_reset()`. Le montage en A: passe
+  aussi au boot à froid, comme le montage à chaud du bureau (`reqHardReset`) : une démo
+  chargée par-dessus les restes d'une autre pouvait démarrer de travers.
+- **Réglages joystick** : le port du joystick clavier était **codé en dur à 1** dans le
+  JS alors que le cœur accepte 0, et `neost_set_joy_deadzone` était **exportée mais
+  jamais appelée** — 0.30 était en pratique la seule zone morte possible sur le web.
+  La page a maintenant son sélecteur de port et son curseur de zone morte, calqués sur
+  la page Input du GUI bureau (même plage 0–0.95).
+- **Zoom adaptatif ACTIF PAR DÉFAUT.** `g_fullscreen` portait DEUX rôles — le cadrage
+  sur la zone active, et « qui possède la taille du canvas » (en plein écran, c'est
+  Emscripten). Séparés : `g_autoZoom` (défaut ON, avec son bouton) fait le cadrage,
+  `g_fullscreen` garde la question du canvas.
+- **« Open a file… » retiré** : le glisser-déposer sur l'écran fait la même chose, et
+  `mountLocalFile` reste le chemin commun.
+
 ## Deux rouges de CI : le bundle WASM rattrape la purge, un pin qui ne pouvait que casser (2026-08-30)
 
 **Le bundle web embarquait encore les TOS Atari.** Premier run « Artefacts (release) »
@@ -58,6 +109,19 @@ somme de contrôle côté arm64) — cf. § Conformité annexe du `TODO.md`.
 Ce qui n'a JAMAIS été touché : le job `linux-bionic` de `release.yml`, qui consomme
 l'image déjà poussée, épinglée par digest — d'où un « Build bionic builder image »
 rouge pendant que les AppImage sortaient normalement.
+
+**Et un TROISIÈME canal distribuait du propriétaire : GitHub Pages.** Découvert en
+vérifiant le site après coup, pas par une garde. `habib256.github.io/neost` servait le
+bundle web, et ce bundle embarquait `tos102uk.img` + `tos162uk.img` depuis le
+2026-08-03 (`fab274e`) — avant cela, en `build_type=legacy`, Pages publiait carrément
+le dépôt ENTIER, ROM comprises. La purge de 08:54 ne l'a pas fermé toute seule : elle
+a fait ÉCHOUER le job `wasm`, si bien que le site a continué de servir le dernier
+bundle réussi, celui de 07:54, TOS dedans. C'est le déploiement de **10:03**, celui du
+correctif ci-dessus, qui est le premier bundle Pages réellement libre — vérifié sur le
+site lui-même (l'`index.js` en ligne ne précharge que les 4 EmuTOS + `drivesound` +
+`diskA.st`, `index.data` à l'octet près celui du build local). Le § BLOQUANT du
+`TODO.md`, qui ne recensait que les assets des releases 0.5.2 / 0.5.4, était donc
+incomplet ce matin.
 
 ## La purge : l'historique public ne distribue plus rien de propriétaire (2026-08-30)
 

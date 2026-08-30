@@ -54,6 +54,27 @@ Since 2026-08-30 packages are built WITHOUT them by default (the repository no l
 tracks any Atari TOS). A maintainer can re-include local copies for a personal build
 with `NEOST_PACKAGE_NO_ATARI_TOS=0` (see `packaging/stage_free_data.sh`).
 
+Demoscene productions (`disks/`)
+--------------------------------
+Three Atari ST demos ship with NeoST so that the package can show what the emulator
+does without any copyrighted game. They are **not** part of NeoST and are **not**
+covered by the GPL — each remains the work and the property of its authors:
+
+| File                  | Production          | Authors            | Year |
+|-----------------------|---------------------|--------------------|------|
+| `cuddly_demos.msa`    | The Cuddly Demos    | The Carebears (TCB)| 1989 |
+| `nocooper.msa`        | No Cooper           | 1984               | 1989 |
+| `closure.msa`         | Closure             | Sync               |      |
+
+They are included as freely-distributed demoscene works — productions released to be
+copied and shown, and archived as such (Fujiology, Demozoo, pouet.net). NeoST
+redistributes them unmodified and makes no claim on them. **Rights holders who would
+rather not be in this package only have to say so** — open an issue at
+https://github.com/habib256/neost and they will be removed from the next release.
+
+They double as pixel-exact test material: these three are among the references that
+pin NeoST's Shifter (all four borders open, med-res overscan, fine rasters).
+
 Reference emulators
 -------------------
 Hatari (GPLv2+, https://framagit.org/hatari/hatari) and MAME are used as behavioural
