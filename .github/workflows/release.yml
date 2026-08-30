@@ -628,8 +628,9 @@ jobs:
           if-no-files-found: error
 
   # ------------------------------------------------------------------ WASM --
-  # Même liste autorisée que les paquets bureau (NEOST_WEB_FREE_ONLY=ON :
-  # EmuTOS + tos102uk + tos162uk + diskA), jamais le reste de roms/ ni disks/.
+  # Même liste autorisée que les paquets bureau (NEOST_WEB_FREE_ONLY=ON : EmuTOS
+  # SEUL + drivesound + diskA depuis la purge du 2026-08-30), jamais le reste de
+  # roms/ ni disks/. La liste elle-même vit dans le CMakeLists, pas ici.
   wasm:
     needs: version
     runs-on: ubuntu-latest

@@ -28,7 +28,12 @@ ARG CMAKE_SHA256=72b01478eeb312bf1a0136208957784fe55a7b587f8d9f9142a7fc9b0b9e9a2
 ARG GLFW_VER=3.3.10
 ARG GLFW_SHA256=4ff18a3377da465386374d8127e7b7349b685288cb8e17122f7e1179f73769d5
 ARG APPIMAGETOOL_SHA256=b90f4a8b18967545fda78a445b27680a1642f1ef9488ced28b65398f2be7add2
-ARG LINUXDEPLOY_SHA256=e87ee0815d109282fdda73e34c2361d64d02b0ffaea3674b18f1fd1f6a687dcf
+# linuxdeploy : tag IMMUABLE, pas `continuous`. Épingler un SHA256 contre un tag
+# mouvant ne protège de rien et casse tout seul — l'amont a republié `continuous`
+# le 2026-08-01 et le build de cette image est mort sur « computed checksum did
+# NOT match » le 2026-08-30, sans que rien n'ait changé ici.
+ARG LINUXDEPLOY_TAG=1-alpha-20251107-1
+ARG LINUXDEPLOY_SHA256=c20cd71e3a4e3b80c3483cef793cda3f4e990aca14014d23c544ca3ce1270b4d
 
 # --- outillage de base + en-têtes X11/GL -------------------------------------
 # Les archives apt de bionic oscillent entre archive.ubuntu.com et
@@ -83,8 +88,14 @@ RUN wget -qO /tmp/glfw.tar.gz \
 #     AppImage/appimagetool (et le plugin appimage de linuxdeploy) produisent
 #     un runtime static-pie ET_DYN rejeté en « type -1 ».
 #     make_appimage.sh les trouve via NEOST_APPIMAGE_TOOLS_DIR.
+#     ⚠ appimagetool reste sur `continuous` faute de mieux : AppImageKit est en
+#     fin de vie et l'amont a RENOMMÉ les assets de ses releases numérotées en
+#     `obsolete-appimagetool-*`. Son `continuous` ne bouge plus depuis le
+#     2025-07-26 (SHA ci-dessus re-vérifié le 2026-08-30) ; si l'amont le
+#     republie un jour, ce build cassera de la même façon — et le remplaçant
+#     devra être un appimagetool ET_EXEC, cf. la note ci-dessus.
 RUN mkdir -p /opt/appimage-tools && cd /opt/appimage-tools && \
-    wget -q "https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage" -O linuxdeploy.AppImage && \
+    wget -q "https://github.com/linuxdeploy/linuxdeploy/releases/download/${LINUXDEPLOY_TAG}/linuxdeploy-x86_64.AppImage" -O linuxdeploy.AppImage && \
     echo "${LINUXDEPLOY_SHA256}  linuxdeploy.AppImage" | sha256sum -c - && \
     wget -q "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage" -O appimagetool.AppImage && \
     echo "${APPIMAGETOOL_SHA256}  appimagetool.AppImage" | sha256sum -c - && \

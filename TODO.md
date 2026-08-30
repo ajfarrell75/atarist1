@@ -63,8 +63,12 @@ vérifié).
 
 Conformité annexe (non bloquante) :
 - `packaging/linux/make_appimage.sh` tire `linuxdeploy`/`appimagetool` depuis le tag mouvant
-  `continuous` sans somme de contrôle pour arm64, alors que le `Dockerfile.bionic` épingle
-  par SHA256.
+  `continuous` sans somme de contrôle pour arm64. Le `Dockerfile.bionic`, lui, est passé au
+  tag **immuable** + SHA256 le 2026-08-30, après que son pin SHA-sur-`continuous` eut cassé
+  le build tout seul (l'amont a republié le tag ; cf. `CHANGELOG.md`) — **la leçon vaut
+  ici** : épingler une somme contre une cible mouvante ne protège de rien, et n'en épingler
+  aucune protège encore moins. Reste à trancher pour arm64, où AppImageKit ne propose plus
+  d'asset non `obsolete-*`.
 - `.dmg` macOS ni signé ni notarisé (Gatekeeper : « NeoST est endommagé ») ; `.zip` Windows
   non signé. À traiter maintenant que la purge est faite (A37).
 
