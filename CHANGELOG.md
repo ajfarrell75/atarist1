@@ -58,6 +58,15 @@ l'oracle : y installer l'image d'Hatari aurait figé l'écart au lieu de le sign
 L'étalon garde la non-régression, la mesure vit dans son `ref_note`, et il repassera
 en `oracle` le jour où A40 sera compris.
 
+⚠ **Et un résultat NÉGATIF qu'il serait coûteux de perdre : Closure n'exerce pas V3.**
+C'était pourtant sa raison d'être — `HATARI_DIVERGENCES.md` § V3 la donnait comme
+« seul exhibiteur connu » de l'attribution de ligne. Mesuré le jour même : le même run
+avec `NEOST_LINELEN_ATTR=1` rend une image **bit-identique** (même md5, 0 px). L'écran
+153 couleurs ne bascule donc pas la fréquence en cours de trame ; la phrase du § V3
+datait du chantier CLOSURE (l'écran noir au boot), pas d'une mesure du verrou. Elle est
+corrigée là-bas, et **V3 reste sans exhibiteur mesuré** — il faudra un autre écran de la
+démo, ou l'étalon généré. L'étalon garde sa valeur : il a rapporté A40 à la place.
+
 ⚠ Deux pièges de méthode évités, tous deux déjà consignés dans ce projet. Le scan
 oracle ne contenait que **4 images distinctes sur 801** — signature de l'« AVI figé »
 qui avait produit deux faux verdicts en août. Vérification faite : l'AVI est bel et
