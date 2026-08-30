@@ -247,7 +247,9 @@ jobs:
         run: |
           for d in nocooper.msa cuddly_demos.msa closure.msa; do
             echo "--- $d"
-            ./build/neost-headless roms/tos102uk.img --disk "disks/etalons/$d" --frames 300
+            # etos192fr et pas un TOS Atari : la purge copyright retire roms/tos* du
+            # dépôt ; les trois démos bootent sous EmuTOS (vérifié, exit 0 sur 300 trames).
+            ./build/neost-headless roms/etos192fr.img --disk "disks/etalons/$d" --frames 300
           done
 
       - name: Palier fast sous sanitizers

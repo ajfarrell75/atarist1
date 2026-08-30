@@ -90,3 +90,18 @@ roms/mt32/*.bin
 # Bundle WASM : construit par la CI et servi par Pages, plus commité (2026-08-23).
 # Régénération locale : emcmake cmake -B build-web … --target neost-web
 wasm/
+
+# Contenu non redistribuable, conservé LOCALEMENT seulement (purge 2026-08-30).
+# Restauration : tools/private_assets.sh unpack <tarball> (TOS, jeux, cartouches,
+# Cubase Lite, Spectrum 512) et tools/setup_devkits.sh (GODLIB, AGT).
+# Les tests concernés se ré-arment quand ces fichiers sont présents.
+/roms/tos*
+/roms/TOS*
+/disks/st/
+/disks/stx/
+/carts/
+/disks/midi/CUBLITE/
+/disks/tools/spectrum_512_st_format.msa
+/disks/etalons/spectrum_512_auto_diapo.st
+/dev/agt/
+/dev/reservoir-gods/
