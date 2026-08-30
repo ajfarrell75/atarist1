@@ -1,22 +1,21 @@
 #!/usr/bin/env bash
 # Copie dans $1 les données embarquées dans les paquets NeoST :
 #   - EmuTOS (GPL) US/FR 192+256 Ko
-#   - TOS 1.02 UK (profil 520 ST par défaut) et TOS 1.62 UK (profil 1040 STE)
-#     ⚠ ROM Atari PROPRIÉTAIRES — voir NEOST_PACKAGE_NO_ATARI_TOS ci-dessous
 #   - échantillons de lecteur + disks/diskA.st (générée par tools/make_floppy.py)
 #   - les LICENCES (packaging/licenses/ + LICENSE) : obligatoire, cf. plus bas
-# Les AUTRES TOS propriétaires et les jeux sous copyright du dépôt de travail
-# ne doivent JAMAIS entrer ici — liste explicite, pas de glob sur roms/ ni disks/.
+# Les TOS propriétaires et les jeux sous copyright ne doivent JAMAIS entrer ici —
+# liste explicite, pas de glob sur roms/ ni disks/.
 #
-# NEOST_PACKAGE_NO_ATARI_TOS=1 : construit un paquet 100 % libre (EmuTOS seul).
-# NeoST n'a PAS besoin des TOS Atari — il boote EmuTOS par défaut ; les deux ROM
-# ne servent qu'aux profils « 520 ST » et « 1040 STE ». Les redistribuer est une
-# décision du mainteneur, pas un défaut technique : cet interrupteur existe pour
-# qu'elle se prenne en une variable d'environnement, sans toucher au script.
+# Le paquet est 100 % LIBRE PAR DÉFAUT (EmuTOS seul) depuis la purge du
+# 2026-08-30 : les TOS Atari ne sont plus suivis par git, la CI ne les a plus.
+# NeoST n'en a PAS besoin — il boote EmuTOS ; tos102uk/tos162uk ne servent
+# qu'aux profils « 520 ST » et « 1040 STE ». NEOST_PACKAGE_NO_ATARI_TOS=0 les
+# ré-embarque depuis des copies LOCALES (gitignorées, cf. tools/private_assets.sh)
+# — décision de mainteneur, pour un paquet personnel, jamais pour une release.
 set -euo pipefail
 DEST="${1:?usage: stage_free_data.sh <dossier destination>}"
 SRC="$(cd "$(dirname "$0")/.." && pwd)"
-NO_ATARI="${NEOST_PACKAGE_NO_ATARI_TOS:-0}"
+NO_ATARI="${NEOST_PACKAGE_NO_ATARI_TOS:-1}"
 
 mkdir -p "$DEST/roms" "$DEST/disks"
 FREE_ROMS=(etos192us.img etos192fr.img etos256us.img etos256fr.img)

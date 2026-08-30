@@ -47,19 +47,19 @@ et `tools/setup_devkits.sh` (re-clone GODLIB + AGT aux pins d'avant purge).
 Étalons demoscene (Cuddly, No Cooper, Closure, CURLY) : GARDÉS — décision assumée,
 diffusion libre par usage de la scène.
 
-**Reste du séquencement** (pas 1, 2, 5 faits le 2026-08-28 — détail au
-`CHANGELOG.md`) :
+**Le séquencement en 5 pas est SOLDÉ** (1, 2, 5 le 2026-08-28 ; 3 et 4 le
+2026-08-30). Pas 4 : le paquet est **100 % libre par défaut** — la purge rendait
+la bascule obligatoire (la CI n'a plus les TOS), le défaut est inversé dans
+`stage_free_data.sh` ET dans les 8 gardes de `release.yml`/`pi-borne.yml` ;
+`NEOST_PACKAGE_NO_ATARI_TOS=0` ré-embarque des copies locales pour un paquet
+personnel, jamais pour une release. Testé dans les deux sens.
 
-4. **Basculer le défaut des paquets** : `NEOST_PACKAGE_NO_ATARI_TOS=1`
-   (l'interrupteur existe et la CI l'honore ; les paquets bureau redistribuaient
-   `tos102uk.img` et `tos162uk.img` par défaut).
-   ⚠ **Assets des releases GitHub 0.5.2 / 0.5.4** : leurs paquets bureau publiés
-   contiennent ces deux TOS (vérifié le 2026-08-30 en ouvrant le zip Windows
-   0.5.4) — la purge git n'y touche pas. **Décision du mainteneur (2026-08-30) :
-   assumé tel quel, les deux releases seront SUPPRIMÉES quand la 0.6 sortira** —
-   la 0.6 devra donc partir avec `NEOST_PACKAGE_NO_ATARI_TOS=1`, et sa sortie
-   emporte l'obligation de supprimer 0.5.2 et 0.5.4. Le zip web-wasm 0.5.4 est
-   propre (EmuTOS seul, vérifié).
+**Seul reste, calé sur la 0.6** — ⚠ **assets des releases GitHub 0.5.2 / 0.5.4** :
+leurs paquets bureau publiés contiennent `tos102uk.img` + `tos162uk.img` (vérifié
+le 2026-08-30 en ouvrant le zip Windows 0.5.4) — la purge git n'y touche pas.
+**Décision du mainteneur (2026-08-30) : assumé tel quel, les deux releases seront
+SUPPRIMÉES quand la 0.6 sortira.** Le zip web-wasm 0.5.4 est propre (EmuTOS seul,
+vérifié).
 
 Conformité annexe (non bloquante) :
 - `packaging/linux/make_appimage.sh` tire `linuxdeploy`/`appimagetool` depuis le tag mouvant

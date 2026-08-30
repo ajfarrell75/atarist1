@@ -50,8 +50,9 @@ Atari TOS images
 they remain the property of their rights holders and are included only for the ST /
 STE machine profiles. NeoST does not need them — it boots EmuTOS out of the box.
 
-To build a package without them, set `NEOST_PACKAGE_NO_ATARI_TOS=1` in the environment
-before running `packaging/stage_free_data.sh` (see that script's header).
+Since 2026-08-30 packages are built WITHOUT them by default (the repository no longer
+tracks any Atari TOS). A maintainer can re-include local copies for a personal build
+with `NEOST_PACKAGE_NO_ATARI_TOS=0` (see `packaging/stage_free_data.sh`).
 
 Reference emulators
 -------------------

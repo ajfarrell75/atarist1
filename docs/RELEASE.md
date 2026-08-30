@@ -47,10 +47,13 @@ le reste est ci-dessous.
 
 - ~~Le § BLOQUANT du `TODO.md`~~ **Purgé le 2026-08-30** : l'historique est réécrit
   (`git filter-repo`), le dépôt ne suit plus ni ROM Atari, ni jeux, ni cartouches, ni
-  Cubase Lite. Reste le pas **4** : basculer `NEOST_PACKAGE_NO_ATARI_TOS=1` par défaut.
-  Les **assets des releases 0.5.2/0.5.4** (paquets bureau avec `tos102uk.img` +
-  `tos162uk.img` — vérifié) sont assumés tels quels : **les deux releases seront
-  supprimées à la sortie de la 0.6** (décision du mainteneur, 2026-08-30).
+  Cubase Lite. Le pas **4** est fait le même jour : les paquets sont **100 % libres par
+  défaut** (défaut inversé dans `stage_free_data.sh` et les gardes CI ;
+  `NEOST_PACKAGE_NO_ATARI_TOS=0` ré-embarque des copies locales, usage personnel
+  seulement). Les **assets des releases 0.5.2/0.5.4** (paquets bureau avec
+  `tos102uk.img` + `tos162uk.img` — vérifié) sont assumés tels quels : **les deux
+  releases seront supprimées à la sortie de la 0.6** (décision du mainteneur,
+  2026-08-30).
 - **Signature / notarisation** : le `.dmg` macOS n'est ni signé ni notarisé (Gatekeeper
   affiche « NeoST est endommagé »), le `.zip` Windows n'est pas signé. À traiter **après**
   la purge : signer un paquet qui contient des ROM Atari n'aurait pas de sens.

@@ -94,7 +94,7 @@ jobs:
           # NEOST_PACKAGE_NO_ATARI_TOS=1 produit un paquet 100 % libre (EmuTOS seul), et
           # cette garde le refusait alors comme un paquet incomplet — le nettoyage
           # juridique aurait été bloqué par la CI. Cf. packaging/stage_free_data.sh.
-          if [ "${NEOST_PACKAGE_NO_ATARI_TOS:-0}" != "1" ]; then
+          if [ "${NEOST_PACKAGE_NO_ATARI_TOS:-1}" != "1" ]; then
             for rom in tos102uk.img tos162uk.img; do
               test -s "squashfs-root/usr/roms/$rom" \
                 || { echo "ERREUR : $rom absent de l'AppImage"; exit 1; }
@@ -117,7 +117,7 @@ jobs:
           # NEOST_PACKAGE_NO_ATARI_TOS=1 produit un paquet 100 % libre (EmuTOS seul), et
           # cette garde le refusait alors comme un paquet incomplet — le nettoyage
           # juridique aurait été bloqué par la CI. Cf. packaging/stage_free_data.sh.
-          if [ "${NEOST_PACKAGE_NO_ATARI_TOS:-0}" != "1" ]; then
+          if [ "${NEOST_PACKAGE_NO_ATARI_TOS:-1}" != "1" ]; then
             for rom in tos102uk.img tos162uk.img; do
               printf '%s\n' "$LIST" | grep -q "roms/$rom" \
                 || { echo "ERREUR : $rom absent du tar.gz"; exit 1; }
