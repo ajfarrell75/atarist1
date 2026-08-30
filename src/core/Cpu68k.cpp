@@ -52,6 +52,15 @@ struct CpuState {
     bool        hblPending   = false;     // HBL (niveau 2) en attente d'acquittement
     bool        inBusError   = false;     // garde « double bus fault » (cf. son bandeau)
     int         grp0Vector   = 0;
+    // ---- Dernière faute de GROUPE 0, pour NOMMER un halt (A42, 2026-08-30) -----
+    // Équivalent des `last_*_for_exception_3` d'Hatari (newcpu.c:3086) : sans elles
+    // un halt ne disait QUE son vecteur, et « la machine est gelée » sans dire OÙ
+    // n'aide personne — c'est ce qui transformait un diagnostic d'une minute en
+    // rapport « ça plante ».
+    uint32_t    faultAddr    = 0;         // adresse fautive
+    uint32_t    faultPc      = 0;         // PC de l'instruction fautive (getPC0)
+    bool        faultWrite   = false;     // true = écriture, false = lecture
+    bool        faultValid   = false;     // une faute a été enregistrée
     bool        inReset      = false;
     bool        endSlice     = false;
     bool        bpHit        = false;     // un breakpoint/watchpoint a stoppé le dernier run()
@@ -307,14 +316,51 @@ public:
                 "[cpu] 68000 halted: reset vector fetch failed (SSP/PC unreadable).\n");
             return;
         }
-        std::fprintf(stderr,
-            "[cpu] 68000 halted: double bus/address error while taking exception "
-            "vector %d (SSP=$%08X).\n"
-            "      The emulated machine is frozen until reset.\n",
-            g_cur->grp0Vector, static_cast<unsigned>(getSP()));
+        // A42 : on NOMME la faute quand on l'a. `faultAddr/faultPc` sont ceux du
+        // DERNIER accès fauté — celui qui a provoqué la double faute. Hatari, lui,
+        // journalise la PREMIÈRE (celle dont l'exception a pu être prise) et se tait
+        // sur la seconde, puisque son `cpu_halt` sort avant le Log_Printf
+        // (newcpu.c:3076-3090). Les deux adresses peuvent donc différer : pour voir
+        // toute la chaîne, armer NEOST_FAULT_TRACE.
+        if (g_cur->faultValid)
+            std::fprintf(stderr,
+                "[cpu] 68000 halted: double bus/address error while taking exception "
+                "vector %d (SSP=$%08X).\n"
+                "      Last fault: %s at address $%08X, PC=$%06X.\n"
+                "      The emulated machine is frozen until reset.\n",
+                g_cur->grp0Vector, static_cast<unsigned>(getSP()),
+                g_cur->faultWrite ? "writing" : "reading",
+                static_cast<unsigned>(g_cur->faultAddr),
+                static_cast<unsigned>(g_cur->faultPc & 0xFFFFFFu));
+        else
+            std::fprintf(stderr,
+                "[cpu] 68000 halted: double bus/address error while taking exception "
+                "vector %d (SSP=$%08X).\n"
+                "      The emulated machine is frozen until reset.\n",
+                g_cur->grp0Vector, static_cast<unsigned>(getSP()));
     }
 
     [[noreturn]] void raiseBusError(moira::u32 addr, bool write) const {
+        // A42 : on RETIENT la faute (adresse, PC, sens) — c'est tout ce qui manquait
+        // pour nommer un halt. Port de l'esprit d'Hatari, qui garde ses
+        // `last_fault_for_exception_3` / `last_writeaccess_for_exception_3` et les
+        // affiche à la prise de l'exception (newcpu.c:3086).
+        g_cur->faultAddr  = addr;
+        g_cur->faultPc    = getPC0();
+        g_cur->faultWrite = write;
+        g_cur->faultValid = true;
+        // ⚠ Journal OPT-IN (`NEOST_FAULT_TRACE`), pas par défaut. Hatari, lui, affiche
+        // chaque bus error en WARN et doit filtrer les SONDAGES matériels du TOS par une
+        // liste blanche d'adresses (M68000_IsVerboseBusError, m68000.c:572-621) — la
+        // détection de machine en produit des dizaines par boot. On choisit le silence
+        // par défaut plutôt qu'une liste blanche à maintenir : la faute est de toute
+        // façon nommée là où elle compte, dans le message de halt.
+        static const bool trace = std::getenv("NEOST_FAULT_TRACE") != nullptr;
+        if (trace)
+            std::fprintf(stderr, "[cpu] bus error %s at address $%08X, PC=$%06X\n",
+                         write ? "writing" : "reading",
+                         static_cast<unsigned>(addr),
+                         static_cast<unsigned>(getPC0() & 0xFFFFFFu));
         moira::StackFrame f{};
         const moira::u16 ird = getIRD();
         // code = IR(15..5) | function-code(2..0) | bit4 R/W (1 = lecture sur 68000).
@@ -1135,6 +1181,18 @@ bool Cpu68k::supervisor() const {
 }
 
 bool Cpu68k::halted() const { return state_->moira->isHalted(); }
+
+// A42 — la dernière faute de groupe 0 (cf. Cpu68k.hpp § Fault). Le vecteur vient de
+// `grp0Vector`, latché par willExecute et ENCORE posé quand la faute a doublé.
+Cpu68k::Fault Cpu68k::lastFault() const {
+    Fault f;
+    f.valid  = state_->faultValid;
+    f.addr   = state_->faultAddr;
+    f.pc     = state_->faultPc & 0x00FFFFFFu;
+    f.write  = state_->faultWrite;
+    f.vector = state_->grp0Vector;
+    return f;
+}
 
 void Cpu68k::updateIpl() {
     neostUpdateIpl();

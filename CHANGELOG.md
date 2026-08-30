@@ -26,6 +26,56 @@ Ripper, DAC Pro Sound) avec page Dongles, `disks/dongles.txt` et oracle de rejeu
 vérifié note à note** en headless, corpus MIDI piano/blues ; port MIDI ALSA sous Linux ;
 save-state v16. Détail dans les chantiers datés ci-dessous.
 
+## A42 : un CPU halté le DIT enfin — et la réserve de No Cooper tombe (2026-08-30)
+
+Deux manques, et c'était le même : NeoST ne journalisait pas l'ADRESSE d'une faute de
+bus. Faute de quoi (1) le GUI ne pouvait rien montrer d'un CPU halté, et (2) la
+comparaison à l'oracle sur No Cooper s'arrêtait au « même mécanisme », sans pouvoir dire
+« même instruction ».
+
+**Le cœur retient et nomme la faute.** `CpuState` garde désormais adresse, PC (`getPC0`),
+sens et validité de la dernière faute de groupe 0 — l'équivalent des
+`last_*_for_exception_3` d'Hatari (`newcpu.c:3086`) —, `Cpu68k::lastFault()` les expose,
+et le message de halt les affiche. Journal complet de la CHAÎNE de fautes en opt-in
+(`NEOST_FAULT_TRACE`, classé « trace » dans `tools/env_locks.json` — le palier `fast`
+rougit sinon) : silencieux par
+défaut, parce que la détection de machine du TOS fait fauter des dizaines d'accès par
+boot — Hatari doit d'ailleurs les filtrer par une liste blanche d'adresses
+(`M68000_IsVerboseBusError`, m68000.c:572-621), qu'on préfère ne pas avoir à maintenir.
+
+**La réserve d'hier tombe, et elle tombe à l'instruction près.** Sur No Cooper en
+Mega ST :
+
+```
+NeoST  : reading at address $00FF820F, PC=$000056
+Hatari : Bus Error reading at address $ffff820f, PC=$58 addr_e3=58 op_e3=4228
+```
+
+Même adresse (NeoST la masque en 24 bits, Hatari montre le miroir 32 bits), même sens.
+Le PC ne diffère que par la convention de prefetch : la mémoire en `$56` porte
+`$4228 $FA0F` = `clr.b $FA0F(a0)` (dump `--dump-at`), donc NeoST nomme le DÉBUT de
+l'instruction et Hatari son mot d'extension — son `op_e3=4228` le dit lui-même.
+
+**Et la cause remonte au chipset.** `$FF820F` est l'une des deux adresses que le **Ricoh**
+du ST simple laisse « void » et que l'**IMP** du Mega ST fait FAUTER (Hatari
+`IoMem_FixVoidAccessForST`/`ForMegaST`, ioMem.c:150-195 ; NeoST `Bus.cpp:533-541`, déjà
+porté). La démo lit un registre qui répond sur un ST et faute sur un Mega ST : le verdict
+« FIDÈLE » n'est donc plus une observation, c'est une chaîne complète.
+
+**Côté interface** (A42, soldé) : la fenêtre CPU affiche « CPU HALTED — double bus/address
+error » avec l'adresse fautive et le vecteur, et un **bandeau permanent** au-dessus de
+l'écran dit l'état, la faute et la seule sortie (reset) — en borne aussi, où un visiteur
+devant un écran figé mérite de savoir que la machine est morte et non lente. Les
+registres affichés sous le bandeau sont ceux du GEL, figés.
+
+⚠ **Ce qui n'a PAS été vérifié en image** : le bandeau lui-même. Le pousser jusqu'au halt
+demande d'écrire dans le `neost.cfg` de l'utilisateur (le GUI lit sa config à côté de
+l'exécutable, pas dans le cwd) — on ne touche pas à un fichier d'état vivant pour faire
+une capture. Ce qui est prouvé : l'état halté est atteint et correctement renseigné
+(mesuré en headless), et les deux affichages sont gardés par ce même `cpu.halted()`.
+Contrôlé au passage, puisque le doute existait : le harnais `--run-frames` du GUI ne
+réécrit PAS `neost.cfg` (md5 identique avant/après), conformément à ce que promet A9a.
+
 ## No Cooper « plante » en Mega ST : halt CPU, et Hatari halte pareil (2026-08-30)
 
 Rapport GUI : « No Cooper plante après la page 1, puis la page 2 avec la musique, puis

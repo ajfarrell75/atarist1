@@ -97,6 +97,21 @@ public:
     // (gui-sdl/dlgHalt.c:66-71).
     bool halted() const;
 
+    // A42 (2026-08-30) — CE QUI A GELÉ LA MACHINE. Un halt sans son adresse ne se
+    // diagnostique pas : c'est ce qui a fait passer « No Cooper haltait en Mega ST »
+    // (double faute de bus, FIDÈLE — cf. docs/CASE_STUDIES.md) pour un « ça plante »
+    // pendant des semaines. `valid` est faux tant qu'aucune faute de groupe 0 n'a été
+    // prise ; `addr`/`pc` portent alors la DERNIÈRE (celle qui a doublé la faute).
+    // Équivalent des `last_*_for_exception_3` d'Hatari (newcpu.c:3086).
+    struct Fault {
+        bool     valid = false;
+        uint32_t addr  = 0;      // adresse fautive
+        uint32_t pc    = 0;      // PC de l'instruction fautive
+        bool     write = false;  // true = écriture, false = lecture
+        int      vector = 0;     // 2 = bus error, 3 = address error (0 = inconnu)
+    };
+    Fault lastFault() const;
+
     // Wait states de bus (port LIVE de Hatari M68000_SyncCpuBus) : sur le 68000, les
     // registres couleur ($FF8240-5F), résolution ($FF8260) et scroll fin ($FF8264/65)
     // du Shifter ne s'accèdent que sur une frontière de bus de 4 cycles ; un accès qui

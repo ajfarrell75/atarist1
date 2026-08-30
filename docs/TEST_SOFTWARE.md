@@ -54,9 +54,12 @@ une image fausse, c'est un **halt CPU**. En `machine=megast`, dès que la démo 
 touche qui fait avancer la partie, le 68000 part en **double faute de bus** (exception
 vecteur 2) et la machine gèle. **Hatari HALTE PAREIL** sur la même configuration
 (`Bus Error reading at address $ffff820f, PC=$58` → `Detected double bus/address error
-=> CPU halted!`) : c'est **FIDÈLE**, pas un bug NeoST. Le profil machine seul est en
-cause, pas la ROM — matrice `{megast, st}` × `{tos104fr, etos192fr, tos102uk}` : halt sur
-les trois `megast`, aucun sur les trois `st`. Détail et recette d'injection clavier :
+=> CPU halted!`) : c'est **FIDÈLE**, pas un bug NeoST. **La cause est matérielle** : l'adresse fautive `$FF820F` est l'une des deux que le
+chipset **Ricoh** du ST simple laisse « void » et que le chipset **IMP** du Mega ST fait
+FAUTER (Hatari `IoMem_FixVoidAccessForST`/`ForMegaST`, ioMem.c:150-195 ; NeoST
+`Bus.cpp:533-541`). Le profil machine seul est donc en cause, pas la ROM — matrice
+`{megast, st}` × `{tos104fr, etos192fr, tos102uk}` : halt sur les trois `megast`, aucun
+sur les trois `st`. Détail et recette d'injection clavier :
 [`CASE_STUDIES.md`](CASE_STUDIES.md).
 
 ### ROM libres vs ROM propriétaires (depuis le 2026-08-19)
