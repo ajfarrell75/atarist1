@@ -26,6 +26,39 @@ Ripper, DAC Pro Sound) avec page Dongles, `disks/dongles.txt` et oracle de rejeu
 vérifié note à note** en headless, corpus MIDI piano/blues ; port MIDI ALSA sous Linux ;
 save-state v16. Détail dans les chantiers datés ci-dessous.
 
+## Deux rouges de CI : le bundle WASM rattrape la purge, un pin qui ne pouvait que casser (2026-08-30)
+
+**Le bundle web embarquait encore les TOS Atari.** Premier run « Artefacts (release) »
+mené à son terme après la purge : le job `wasm` meurt sur `file_packager: error:
+roms/tos102uk.img does not exist`. Le pas 4 avait inversé le défaut dans
+`stage_free_data.sh` et dans les 8 gardes de `release.yml`/`pi-borne.yml` — mais la
+liste des `--preload-file` du bundle web vit dans le **CMakeLists**, pas dans le YAML,
+et personne ne l'a suivie jusque-là. Elle applique désormais la même règle, sous le
+même nom et la même polarité que les paquets bureau : `NEOST_PACKAGE_NO_ATARI_TOS`,
+défaut ON, `=0` ré-embarque des copies LOCALES. Testé dans les deux sens ; le bundle
+produit ne contient plus que les 4 EmuTOS + `drivesound` + `diskA.st` (8,6 Mo, plafond
+CI 40 Mo), vérifié sur le manifeste d'`index.js` et pas seulement sur la taille.
+Au passage, une donnée manquante se dit maintenant **au configure** en nommant le
+fichier : laissée au `file_packager`, elle sortait au LIEN, noyée dans la ligne `em++`
+complète — c'est ce qui rendait l'échec illisible.
+
+**Un SHA256 épinglé contre un tag mouvant casse tout seul.** « Build bionic builder
+image » échouait sur `computed checksum did NOT match` pour `linuxdeploy` **sans
+qu'une ligne du dépôt ait changé** : le `Dockerfile.bionic` épinglait par SHA256 un
+binaire téléchargé depuis le tag `continuous`, que l'amont a republié le 2026-08-01.
+Le pin ne protégeait donc de rien — il ne faisait que transformer une mise à jour
+amont silencieuse en panne. `linuxdeploy` passe sur le tag **immuable**
+`1-alpha-20251107-1` (SHA recalculé). `appimagetool` reste sur `continuous` faute de
+mieux, et c'est écrit dans le Dockerfile : AppImageKit est en fin de vie et a RENOMMÉ
+les assets de ses releases numérotées en `obsolete-appimagetool-*` ; son `continuous`
+ne bouge plus depuis le 2025-07-26 et son SHA a été re-vérifié inchangé.
+⚠ `packaging/linux/make_appimage.sh` a le même défaut **en pire** (tag mouvant, aucune
+somme de contrôle côté arm64) — cf. § Conformité annexe du `TODO.md`.
+
+Ce qui n'a JAMAIS été touché : le job `linux-bionic` de `release.yml`, qui consomme
+l'image déjà poussée, épinglée par digest — d'où un « Build bionic builder image »
+rouge pendant que les AppImage sortaient normalement.
+
 ## La purge : l'historique public ne distribue plus rien de propriétaire (2026-08-30)
 
 Le pas 3 du § BLOQUANT est exécuté — la **réécriture d'historique** (`git filter-repo`,

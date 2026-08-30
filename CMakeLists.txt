@@ -453,23 +453,45 @@ if(EMSCRIPTEN)
     # copyright. En local (défaut), on embarque tout roms/ et disks/ pour le confort
     # de test.
     option(NEOST_WEB_FREE_ONLY "WASM : n'embarquer que les ROM/disquettes du paquet" OFF)
+    # Même NOM et même polarité que packaging/stage_free_data.sh, à dessein : le
+    # bundle web est 100 % LIBRE PAR DÉFAUT depuis la purge du 2026-08-30, comme les
+    # paquets bureau. Les TOS Atari ne sont plus suivis par git ; la CI ne les a plus
+    # et le lien mourait ici sur un « file_packager: error: … does not exist » que
+    # rien n'expliquait — le pas 4 avait inversé les gardes de release.yml et de
+    # stage_free_data.sh, mais PAS cette liste-ci, qui vit dans le CMake et non dans
+    # le YAML. NEOST_PACKAGE_NO_ATARI_TOS=0 les ré-embarque depuis des copies LOCALES
+    # (gitignorées, cf. tools/private_assets.sh) — paquet personnel, jamais release.
+    option(NEOST_PACKAGE_NO_ATARI_TOS "Paquet 100 % libre : aucun TOS Atari embarqué" ON)
     if(NEOST_WEB_FREE_ONLY)
-        target_link_options(neost-web PRIVATE
-            "SHELL:--preload-file ${CMAKE_SOURCE_DIR}/roms/etos192us.img@/roms/etos192us.img"
-            "SHELL:--preload-file ${CMAKE_SOURCE_DIR}/roms/etos192fr.img@/roms/etos192fr.img"
+        set(NEOST_WEB_PRELOAD
+            roms/etos192us.img
+            roms/etos192fr.img
             # EmuTOS 256 Ko : GPL lui aussi, et INDISPENSABLE au STE/Mega STE — sans lui
             # le frontend web se rabat sur l'EmuTOS 192 Ko, qui se présente en TOS 1.4 et
             # fait rétrograder la machine en ST (adjustMachineForTos) : le mode STE du
             # paquet public était donc silencieusement inopérant. Les paquets bureau, eux,
             # embarquent bien les 4 (packaging/stage_free_data.sh) — c'est l'incohérence
             # entre les deux listes qui était le bug. Coût : +512 Ko sur 40 Mo de marge.
-            "SHELL:--preload-file ${CMAKE_SOURCE_DIR}/roms/etos256us.img@/roms/etos256us.img"
-            "SHELL:--preload-file ${CMAKE_SOURCE_DIR}/roms/etos256fr.img@/roms/etos256fr.img"
-            # TOS 1.02 UK / 1.62 UK : profils 520 ST et 1040 STE, aussi dans AppImage/DMG.
-            "SHELL:--preload-file ${CMAKE_SOURCE_DIR}/roms/tos102uk.img@/roms/tos102uk.img"
-            "SHELL:--preload-file ${CMAKE_SOURCE_DIR}/roms/tos162uk.img@/roms/tos162uk.img"
-            "SHELL:--preload-file ${CMAKE_SOURCE_DIR}/roms/drivesound@/roms/drivesound"
-            "SHELL:--preload-file ${CMAKE_SOURCE_DIR}/disks/diskA.st@/disks/diskA.st")
+            roms/etos256us.img
+            roms/etos256fr.img
+            roms/drivesound
+            disks/diskA.st)
+        if(NOT NEOST_PACKAGE_NO_ATARI_TOS)
+            # TOS 1.02 UK / 1.62 UK : profils 520 ST et 1040 STE.
+            list(APPEND NEOST_WEB_PRELOAD roms/tos102uk.img roms/tos162uk.img)
+        endif()
+        foreach(item IN LISTS NEOST_WEB_PRELOAD)
+            # Manquer une donnée doit se dire AU CONFIGURE, en nommant le fichier :
+            # laissée au file_packager, l'absence sort au LIEN, noyée dans la ligne de
+            # commande em++ complète.
+            if(NOT EXISTS "${CMAKE_SOURCE_DIR}/${item}")
+                message(FATAL_ERROR
+                    "WASM : donnée à embarquer absente : ${item} "
+                    "(TOS Atari ? ils sont hors dépôt — cf. tools/private_assets.sh)")
+            endif()
+            target_link_options(neost-web PRIVATE
+                "SHELL:--preload-file ${CMAKE_SOURCE_DIR}/${item}@/${item}")
+        endforeach()
     else()
         target_link_options(neost-web PRIVATE
             "SHELL:--preload-file ${CMAKE_SOURCE_DIR}/roms@/roms"
