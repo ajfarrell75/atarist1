@@ -386,6 +386,14 @@ décroissant, par priorité d'impact :
    une NON-RÉGRESSION, pas une preuve : **aucun étalon n'exerce la géométrie mi-trame
    50↔60 Hz que V3 vise**. Prochain pas réel : un étalon (généré ou oracle) qui bascule
    la fréquence EN COURS DE TRAME, sans quoi promouvoir le verrou serait un pari.
+   ⚠ **Closure a été essayée pour ça le 2026-08-30 et ne convient PAS** — résultat
+   négatif à ne pas re-tenter. `docs/HATARI_DIVERGENCES.md` § V3 la donne comme « seul
+   exhibiteur connu », mais cette phrase datait du chantier CLOSURE (écran noir au
+   boot). L'étalon `closure` posé sur l'écran 153 couleurs rend une image
+   **BIT-IDENTIQUE avec `NEOST_LINELEN_ATTR=1`** (même md5, 0 px) : cet écran ne
+   bascule pas la fréquence en cours de trame. Il a en revanche rapporté **A40**
+   (ci-dessus). V3 reste donc SANS exhibiteur mesuré — chercher un AUTRE écran de la
+   démo, ou générer l'étalon.
 2. **[SON]** quantification HBL du refill FIFO à confronter à l'oracle sur un poll serré de
    `$FF8909/0B/0D` — validable par dump WAV + trace.
 3. **[MFP]** `UpdateTimers` avant lecture IPR/ISR/TBDR en mode bloc — retard **mesuré à
