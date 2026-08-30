@@ -185,6 +185,15 @@ est continue, les trous sont du travail fait.
   l'ancrage des `colorWrites_` sur la première ligne rendue (frontière de trame,
   `frameStartPalette_` vs premières écritures). Étalon prêt à passer `ref_kind: oracle`
   le jour où ça tombe à 0 (l'oracle est déjà commis, `tests/reference/closure_oracle.png`).
+- **A42 ⭘ — Le GUI ne dit RIEN quand le CPU halte.** Relevé le 2026-08-30 en diagnostiquant
+  « No Cooper plante » : la machine était en **double faute de bus** (halt, gel définitif
+  jusqu'au reset) et l'interface n'affichait qu'un écran figé. Le drapeau vit dans
+  `Cpu68k.cpp` et **aucun code de `src/gui/` ne le lit** (`grep -rn "halted" src/gui` = 0),
+  là où le headless écrit noir sur blanc « 68000 halted: double bus/address error […] frozen
+  until reset ». C'est ce qui transforme un diagnostic d'une minute en rapport « ça plante ».
+  À faire : remonter l'état dans la fenêtre CPU + un bandeau « machine gelée — Reset », et
+  nommer la cause (vecteur, adresse fautive — qu'on ne journalise pas encore, alors qu'Hatari
+  la donne : `Bus Error reading at address $ffff820f, PC=$58`).
 - **A12 ⭘ — Aucune cible de livraison validée sur du matériel réel.** Windows jamais lancé
   hors CI, APK Android jamais posé sur un appareil (QEMU seul), aucun budget temps réel
   mesuré sur le Raspberry Pi visé (le perfbench ne garde que des ratios sur le poste de

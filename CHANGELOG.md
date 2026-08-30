@@ -26,6 +26,42 @@ Ripper, DAC Pro Sound) avec page Dongles, `disks/dongles.txt` et oracle de rejeu
 vérifié note à note** en headless, corpus MIDI piano/blues ; port MIDI ALSA sous Linux ;
 save-state v16. Détail dans les chantiers datés ci-dessous.
 
+## No Cooper « plante » en Mega ST : halt CPU, et Hatari halte pareil (2026-08-30)
+
+Rapport GUI : « No Cooper plante après la page 1, puis la page 2 avec la musique, puis
+Return Return ». La méthode a payé dans l'ordre exact où elle est écrite — lire
+`neost.cfg` AVANT de soupçonner une régression : `machine=megast`.
+
+Ce n'est pas une image fausse, c'est un **halt** : dès que la démo prend la touche qui
+fait avancer la partie, le 68000 part en **double faute de bus** (exception vecteur 2) et
+la machine gèle — musique comprise. Le profil machine seul est en cause, pas la ROM :
+matrice `{megast, st}` × `{tos104fr, etos192fr, tos102uk}`, halt sur les trois `megast`,
+aucun sur les trois `st`. Sans appui touche, `megast` tient 9 000 trames.
+
+**Oracle** : Hatari en `--machine megast`, même ROM, même disquette, espace injecté par
+`--cmd-fifo` — `Bus Error reading at address $ffff820f, PC=$58` puis
+`Detected double bus/address error => CPU halted!`. **FIDÈLE**, donc : No Cooper ne tourne
+pas sur un Mega ST, chez l'oracle comme chez nous. ⚠ Ce qui est apparié : le MÉCANISME et
+la dépendance à la configuration, PAS l'instruction fautive.
+
+⚠ **Le piège qui a failli produire un faux verdict** : la démo n'accepte l'espace qu'à
+partir de son écran « PRESS SPACE TO GO ON » (~VBL 2800 sous `tos104fr`). La première
+injection, calée sur la trame 900 de l'étalon, tombait pendant le chargement — Hatari
+restait sagement sur son titre et « ne plantait pas ». Conclure là aurait donné
+« divergence NeoST » à l'envers. Recaler l'injection APRÈS l'écran d'attente, puis
+conclure.
+
+Vérifié au passage que le correctif A40 du même jour n'y est pour rien : le binaire
+reconstruit depuis `4c38cc0` halte à l'identique (et le correctif n'écrit que dans le
+tampon de pixels). La note du 2026-08-01 de `docs/TEST_SOFTWARE.md` — « No Cooper,
+Cuddly Demos, Enchanted Land et Lethal Xcess "en panne" tournaient en `machine=megast` »
+— passe donc de constat à **mécanisme prouvé et confronté à l'oracle**.
+
+⚠ **Manque d'ergonomie repéré, NON corrigé** : le GUI ne dit RIEN quand le CPU halte. Le
+drapeau vit dans `Cpu68k.cpp` et aucun code d'interface ne le lit — l'utilisateur voit un
+gel, là où le headless écrit « 68000 halted: double bus/address error ». C'est ce qui
+transforme un diagnostic d'une minute en « ça plante ».
+
 ## A40 est FERMÉ : les 4 px de Closure étaient à nous, les 144 px d'`overscan_top` sont à Hatari (2026-08-30)
 
 Le couple de diagnostic annoncé la veille (« Closure décalée / Cuddly bit-exacte, même
