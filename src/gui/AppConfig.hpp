@@ -19,6 +19,8 @@
 // =============================================================================
 #pragma once
 
+#include <cstdint>
+
 #include <ctime>
 #include <iosfwd>
 #include <string>

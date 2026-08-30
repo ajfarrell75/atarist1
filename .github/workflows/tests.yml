@@ -65,7 +65,7 @@ jobs:
           # le pkg_check_modules du CMakeLists échoue derrière, en erreur fatale puisque
           # NEOST_WITH_SLIRP=ON. C'est exactement ce qui a fait tomber le premier run.
           sudo apt-get install -y --no-install-recommends \
-            cmake g++ libglfw3-dev libgl1-mesa-dev libslirp-dev libglib2.0-dev
+            cmake g++ libglfw3-dev libgl1-mesa-dev libslirp-dev libglib2.0-dev ffmpeg
           pkg-config --modversion slirp
 
       - name: Configurer (NEOST_WITH_SLIRP=ON — échoue si la lib manque)
@@ -224,8 +224,11 @@ jobs:
       - name: Dépendances
         run: |
           sudo apt-get update
+          # ffmpeg : requis depuis que trace_odd est une référence ORACLE (PNG, 2026-08-29)
+          # — compare_screenshot.py s'en sert pour lire les PNG ; sans lui le palier fast
+          # de CE job échouait pendant que le job pixel, qui l'installe, restait vert.
           sudo apt-get install -y --no-install-recommends \
-            cmake g++ libglfw3-dev libgl1-mesa-dev
+            cmake g++ libglfw3-dev libgl1-mesa-dev ffmpeg
 
       - name: Configurer (Debug — les assert() sont ACTIFS ici, et nulle part ailleurs)
         run: |
