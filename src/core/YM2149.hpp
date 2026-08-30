@@ -66,7 +66,7 @@ public:
                 // registres sonores (0-13) au cycle CPU dans la trame, pour la rejouer au
                 // bon instant lors de la synthèse (cf. synthesizeFrame). C'est ce qui capture
                 // les modulations sous-buffer (digidrums, sync-buzzer). Le réarmement R13 est
-                // alors géré par le rejeu, PAS ici. Mode LEGACY (WASM/direct, pas d'horloge) :
+                // alors géré par le rejeu, PAS ici. Mode LEGACY (pas d'horloge câblée) :
                 // on réarme l'enveloppe tout de suite et synthesize lit regs_ en direct.
                 if (cycleClock_) {
                     if (selected_ < 14 || (selected_ == 15 && portBDac_))
@@ -137,8 +137,13 @@ public:
 
     // Branche l'horloge frame-relative (cycles CPU depuis le début de la trame), posée
     // par le frontend qui utilise le modèle « push » (cf. synthesizeFrame). Tant qu'elle
-    // n'est PAS posée (headless, WASM), aucun événement n'est enregistré et la synthèse
-    // reste l'ancienne (synthesize, lecture directe des registres).
+    // n'est PAS posée, aucun événement n'est enregistré et la synthèse reste l'ancienne
+    // (synthesize, lecture directe des registres) — ce qui APLATIT les digidrums.
+    // ⚠ Les QUATRE frontends livrés la posent : GUI (AppInit.cpp), headless
+    // (main_headless.cpp), WASM (main_web.cpp) et Android (main_android.cpp). Le
+    // commentaire disait le contraire pour le headless et le WASM, et c'était FAUX
+    // depuis leur passage au push — de quoi lancer un diagnostic « digidrums aplatis »
+    // droit sur une piste morte. Mode legacy = aucun frontend livré aujourd'hui.
     void setCycleClock(std::function<int64_t()> c) {
         cycleClock_ = std::move(c);
         events_.reserve(8192);            // évite les réallocations dans write8 (chemin chaud)
