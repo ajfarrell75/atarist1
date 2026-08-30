@@ -82,6 +82,13 @@ FAST = [
     # Blitter::stallCpu → billCycles, l'inventaire pointait dans le vide.
     ("Ancres de documentation (les symboles cités existent-ils encore ?)",
      [sys.executable, str(TOOLS / "check_doc_anchors.py")]),
+    # Pictogrammes de l'interface : une icône se perd en SILENCE, de deux façons —
+    # codepoint absent de la police d'icônes, ou revendiqué AUSSI par la police de
+    # texte (DejaVu Sans occupe U+F000-F003, ImGui garde la 1re source qui sait
+    # fournir le glyphe). Vécu le 2026-08-30 sur la note de la page MIDI. Logique
+    # pure, sans machine ni ROM : sa place est ici.
+    ("Pictogrammes de l'interface (présents dans la police, non masqués)",
+     [sys.executable, str(TOOLS / "check_icon_glyphs.py")]),
     # A26 : les ancres gardent les SYMBOLES, ceci garde les CHIFFRES — la dérive
     # constatée par l'audit (huit affirmations périmées corrigées à la main) était
     # précisément là où personne ne recompte.

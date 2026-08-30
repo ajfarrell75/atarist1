@@ -26,6 +26,43 @@ Ripper, DAC Pro Sound) avec page Dongles, `disks/dongles.txt` et oracle de rejeu
 vérifié note à note** en headless, corpus MIDI piano/blues ; port MIDI ALSA sous Linux ;
 save-state v16. Détail dans les chantiers datés ci-dessous.
 
+## La note de la page MIDI manquait : la police de TEXTE lui volait son codepoint (2026-08-30)
+
+Rapport : « l'icône dans la fenêtre config du MIDI devrait être une note, elle n'apparaît
+pas ». Elle était pourtant bien déclarée (`ICON_FA_MUSIC`, U+F001) et bien présente dans
+`fonts/fa-solid-900.ttf` — vérifié en lisant la table `cmap` du fichier.
+
+**La cause est une collision de codepoints.** `fonts/DejaVuSans.ttf`, notre police de
+TEXTE, occupe une partie de la zone à usage privé : **U+F000-F003** (ses ligatures
+ff/fi/fl/ffi héritées) et U+F400+ — exactement là où vit Font Awesome. Or ImGui parcourt
+ses sources **dans l'ordre** et retient la **première** qui sait fournir le codepoint
+(`ImFontBaked_BuildLoadGlyph`, imgui_draw.cpp:4590-4610) : DejaVu, chargée en premier,
+gagnait. La page MIDI affichait donc une ligature « fi » de 15 px là où on attendait une
+note — indiscernable d'une icône absente.
+
+Une SEULE des 35 macros est concernée (comptées : `ICON_FA_MUSIC` est la seule dont le
+codepoint tombe dans le domaine PUA de DejaVu), ce qui explique pourquoi rien d'autre ne
+manquait et pourquoi le bug a tenu si longtemps.
+
+**Correctif** : `GlyphExcludeRanges = { 0xF000, 0xF8FF, 0 }` sur la police de TEXTE —
+le champ existe pour exactement ce cas (« designed to exclude ranges from a font source,
+when merging fonts with overlapping glyphs », imgui.h:3728), et
+`ImFontAtlasBuildAcceptCodepointForSource` refuse alors ces codepoints à DejaVu, si bien
+que la source Font Awesome est consultée. Sans risque collatéral : aucune étiquette de
+l'interface n'utilise la PUA hors des macros d'icônes, et ImGui ne fait pas de
+substitution de ligatures.
+
+**Garde posé** (`tools/check_icon_glyphs.py`, palier `fast`) : une icône se perd en
+silence de deux façons, et le script ferme les deux — (1) codepoint ABSENT de la police
+d'icônes (macro tapée à la main, glyphe qui n'existe qu'en variante Regular/Brands), (2)
+codepoint revendiqué AUSSI par la police de texte sans `GlyphExcludeRanges`. Il lit les
+tables `cmap` des deux `.ttf` et les macros de `UiCommon.hpp`. Vérifié qu'il ROUGIT : en
+retirant l'exclusion, il sort 1 en nommant `ICON_FA_MUSIC (U+F001)`.
+
+⚠ **Non vérifié en image**, comme le bandeau de halt : la capture `--shot` du GUI ne
+contient que le framebuffer ST, pas l'interface ImGui. Ce qui est prouvé tient au niveau
+des polices et du chemin de sélection de glyphe d'ImGui, lu dans son code.
+
 ## A42 : un CPU halté le DIT enfin — et la réserve de No Cooper tombe (2026-08-30)
 
 Deux manques, et c'était le même : NeoST ne journalisait pas l'ADRESSE d'une faute de
