@@ -111,6 +111,17 @@ public:
         ar(control_);
         ar(txEnableInt_);
         ar(tdre_);
+        // L'horloge de réception est un ÉTAT DU CÂBLAGE, pas de la machine : la
+        // source hôte (rxSource_) survit au chargement, mais le Scheduler vient de
+        // restaurer SES échéances — celles de l'état sauvé. Un état sauvé SANS
+        // appareil MIDI IN, rechargé pendant qu'un clavier est branché, laissait donc
+        // MIDI_RX éteint pour toujours : plus rien ne tirait, entrée morte en silence
+        // (et la reconnexion à 1 Hz ne la ranimait pas — l'appareil est toujours
+        // « ouvert » côté hôte). On réarme si la source existe et que l'échéance ne
+        // s'est pas restaurée ; si elle s'est restaurée, on lui laisse sa phase.
+        if (ar.loading() && rxSource_ && sched_
+            && sched_->cyclesUntil(Scheduler::MIDI_RX) < 0)
+            armRxPace();
     }
 
 private:

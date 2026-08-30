@@ -26,6 +26,81 @@ Ripper, DAC Pro Sound) avec page Dongles, `disks/dongles.txt` et oracle de rejeu
 vérifié note à note** en headless, corpus MIDI piano/blues ; port MIDI ALSA sous Linux ;
 save-state v16. Détail dans les chantiers datés ci-dessous.
 
+## Bug hunt sur les travaux du 27-30 août : quatre bugs, quatre correctifs, quatre tests (2026-08-30)
+
+Chasse ciblée sur ce que les trois derniers jours ont produit. Le tri du périmètre :
+les chantiers du 28 (Shifter, CpuState, Pacing, dispatch MMIO) sont gardés par les
+étalons et leurs propres selftests ; A9 (le matin même) a été vérifié par construction.
+Le moins couvert était la **pile MIDI hôte** du 29 — du code qui parle à du matériel
+que la CI n'a pas — et les **points de suture** d'A9. C'est là que tout a été trouvé.
+Quatre bugs, aucun ne pouvait être vu par un étalon : trois ne se manifestent qu'avec
+des appareils MIDI branchés, le quatrième qu'à l'extinction du processus.
+
+**1. La reconnexion à 1 Hz paniquait le studio tant qu'un appareil manquait.**
+La garde de la boucle comparait le nombre d'appareils OUVERTS au nombre CONFIGURÉS —
+or un appareil configuré durablement absent est un état NORMAL et revendiqué (« on
+garde le nom, on re-tente, la page affiche (not connected) »). La garde était donc
+vraie à chaque seconde, et une re-tentative commence par tout fermer :
+`closeDestinations()` **panique** (All Sound Off + Reset Controllers + All Notes Off
+sur 16 canaux) les appareils encore branchés, puis détruit et recrée les ports. Les
+notes tenues du synthé restant tombaient **une fois par seconde** ; côté entrée, la
+purge du tampon jetait les octets en attente au même rythme. La garde compare
+désormais à ce qu'une re-tentative **ouvrirait** (`neost::midi::countMatchable`,
+fonction pure) : un absent durable coûte zéro, un retour ou un débranchement
+re-déclenche exactement une fois.
+
+**2. Deux homonymes apprenaient le même identifiant — le bug dans le correctif de
+l'avant-veille.** `midiLearnUids()` (2026-08-29) devait rendre sûre une config sans
+identifiants ; pour DEUX claviers du même modèle — le cas d'usage même de la
+fonctionnalité — les deux lignes apprenaient l'identifiant du PREMIER point ouvert
+(les deux boucles s'arrêtaient au premier nom correspondant). Le repli par nom
+masquait l'erreur tant que les deux claviers restaient branchés ; on débranchait le
+premier, et le masque de canaux de la seconde ligne pilotait le mauvais appareil.
+La logique est extraite en fonction pure (`neost::midi::learnUids`) avec la règle
+« jamais deux fois le même identifiant » ; une ligne dont l'homonyme ouvert est déjà
+réclamé reste VIDE — ne rien apprendre vaut mieux qu'apprendre faux.
+
+**3. Un save-state d'avant le MIDI tuait l'entrée MIDI au chargement.** L'horloge de
+réception (`Scheduler::MIDI_RX`, l'ACIA tire un octet toutes les 2 560 cycles) est
+une échéance du Scheduler, et le Scheduler restaure SES échéances — celles de l'état
+sauvé. Un état sauvé sans appareil MIDI IN, rechargé (F7) pendant qu'un clavier est
+branché : MIDI_RX restauré éteint, la source hôte toujours là, plus rien ne tire —
+**entrée morte en silence**, et la reconnexion à 1 Hz ne la ranime pas (l'appareil
+est toujours « ouvert » côté hôte). `MidiAcia::serialize` réarme au chargement si une
+source existe et que l'échéance ne s'est pas restaurée ; restaurée, elle garde sa phase.
+
+**4. A9 avait inversé l'ordre de destruction du thread audio.** Dans l'ancien
+`main()`, `Audio` était déclaré APRÈS `DriveSound` et `Mt32Synth`, donc détruit
+AVANT eux — son thread, qui les mixe par pointeur brut et lit `machine.psg/dmasnd`,
+mourait avant ses sources. La `struct App` du matin les avait rangés par thème :
+`audio` en deuxième position, donc détruit APRÈS `drive`, `mt32` et presque tout —
+fenêtre d'usage-après-destruction à chaque extinction. L'ordre des membres est
+rétabli et documenté comme un CONTRAT, pas une présentation.
+
+**Vérification** : chaque correctif de logique porte son test dans
+`tests/selftest_logic.cpp` (301 → **309 assertions**, palier `fast`) — apprentissage
+des homonymes (3 scénarios : les deux branchés, uid déjà réservé, un seul présent),
+garde de reconnexion (absent durable / retour), et le save-state croisé sur le
+harnais `Rig` complet (MidiInHost + MidiAcia + Scheduler, sérialisé dans l'ordre de
+`Machine`). Les trois sont vérifiés par MUTATION — réintroduire chaque bug fait
+rougir son test, et le sien seulement. L'ordre de destruction n'a pas de test (il
+faudrait instrumenter des destructeurs) : il a un commentaire-contrat et un run
+d'extinction propre. `--tier full` vert, exit 0.
+
+**Trouvé et laissé tel quel, consigné ici pour ne pas le re-trouver :**
+- `MIDIPortDisconnectSource` ne garantit pas qu'un callback CoreMIDI en vol soit
+  terminé quand `close()` libère les `Device*` passés en refCon — fenêtre théorique
+  de quelques microsecondes à la fermeture, pattern standard des clients CoreMIDI,
+  aucun crash observé. À revoir si un crash à la fermeture apparaît un jour.
+- L'appariement retombe sur le NOM quand l'identifiant voulu est absent, même si
+  l'homonyme présent porte un identifiant DIFFÉRENT. C'est un choix, pas un oubli :
+  un clavier remplacé par le même modèle doit continuer de marcher sans toucher la
+  config. Le cas limite (deux homonymes, un seul branché, le mauvais) est déjà au
+  TODO.
+- Un SysEx tronqué à la borne (4 096 octets + $F7 = 4 097) dépasse d'un octet le
+  paquet CoreMIDI de sortie et tombe en silence — atteignable uniquement par un dump
+  déjà tronqué, donc déjà corrompu.
+
 ## A9 — `main.cpp` passe de 5 100 lignes à 28 (2026-08-30)
 
 Le fichier le plus gros du dépôt était aussi le seul où rien ne pouvait sortir. Il

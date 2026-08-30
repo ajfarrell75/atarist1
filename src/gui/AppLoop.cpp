@@ -768,11 +768,23 @@ void appLoop(App& A) {
                 lastMidiScan = clock::now();
                 cfgUi.midiOutDevs = MidiOutHost::destinations();
                 cfgUi.midiInDevs  = MidiInHost::sources();
-                // Un appareil manquant à l'appel = il vient d'être rebranché, ou pas
-                // encore. On re-tente l'ENSEMBLE : rouvrir ce qui l'est déjà est sans
-                // effet visible, et ça évite de suivre appareil par appareil.
-                if (midiOut.destinationCount() != cfg.midiOutDevices.size()) A.midiOutApply();
-                if (midiIn.deviceCount() != cfg.midiInDevices.size()) A.midiInApply();
+                // On ne re-tente que si l'énumération FRAÎCHE promet un résultat
+                // différent de ce qui est ouvert. ⚠ Pas « différent du CONFIGURÉ » :
+                // une re-tentative ferme tout d'abord — panique (All Notes Off) des
+                // appareils branchés en sortie, purge du tampon en entrée — et un
+                // appareil configuré durablement absent rendait l'ancienne garde
+                // vraie À CHAQUE SECONDE. Les notes tenues du synthé restant
+                // tombaient au rythme de la re-tentative (cf. countMatchable).
+                const auto wanted = [](const auto& cfgList) {
+                    std::vector<neost::midi::Wanted> w;
+                    w.reserve(cfgList.size());
+                    for (const auto& d : cfgList) w.push_back({d.name, d.uid});
+                    return w;
+                };
+                if (neost::midi::countMatchable(wanted(cfg.midiOutDevices), cfgUi.midiOutDevs)
+                        != midiOut.destinationCount()) A.midiOutApply();
+                if (neost::midi::countMatchable(wanted(cfg.midiInDevices), cfgUi.midiInDevs)
+                        != midiIn.deviceCount()) A.midiInApply();
                 // Un appareil qui vient d'être rebranché peut enfin livrer son
                 // identifiant : on le retient, et on ne persiste que si on a appris.
                 if (A.midiLearnUids()) saveConfig(A, exeDir, cfg, &machine);
