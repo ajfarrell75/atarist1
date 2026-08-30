@@ -62,15 +62,14 @@ def line_count(rel: str) -> int:
 
 # (document, regex à 1 groupe, calcul de la valeur vraie, tolérance relative)
 CLAIMS = [
-    ("TODO.md", r"\*\*(\d+) images TOS Atari propriétaires\*\*",
-     lambda: git_count("roms/tos*", "roms/TOS*"), 0.0),
-    ("TODO.md", r"`disks/st/` \((\d+)\)", lambda: git_count("disks/st"), 0.0),
-    ("TODO.md", r"`disks/stx/` \((\d+)\)", lambda: git_count("disks/stx"), 0.0),
-    ("TODO.md", r"(\d+) images de \*\*jeux commerciaux\*\*",
-     lambda: git_count("disks/st", "disks/stx"), 0.0),
-    ("TODO.md", r"(\d+) cartouches", lambda: git_count("carts"), 0.0),
-    ("TODO.md", r"\*\*(\d+) fichiers de Cubase Lite\*\*",
-     lambda: git_count("disks/midi/CUBLITE"), 0.0),
+    # Purge du 2026-08-30 : les six compteurs du tableau § BLOQUANT (TOS, jeux,
+    # cartouches, Cubase Lite) sont retirés AVEC leur tableau — le contenu n'est
+    # plus suivi par git, il n'y a plus rien à recompter. À la place, un garde
+    # NÉGATIF : si l'un de ces chemins redevient suivi, la purge a fuité.
+    ("TODO.md", r"pack \*\*165 → (\d+) Mio\*\*",
+     lambda: 12 + git_count("roms/tos*", "roms/TOS*", "disks/st", "disks/stx",
+                            "carts", "disks/midi/CUBLITE",
+                            "dev/agt", "dev/reservoir-gods"), 0.0),
     ("TODO.md", r"\*\*(\d+) étalons\s+pixel sur \d+\*\*", free_etalons, 0.0),
     ("TODO.md", r"\*\*\d+ étalons\s+pixel sur (\d+)\*\*",
      lambda: len(machine_etalons()), 0.0),

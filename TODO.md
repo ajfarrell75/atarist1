@@ -26,73 +26,44 @@ conditionne plus l'objectif.
 
 ---
 
-## 🚨 BLOQUANT RELEASE — contenu sous copyright suivi par le dépôt (2026-08-01, recompté 2026-08-27)
+## 🚨 BLOQUANT RELEASE — l'historique est PURGÉ (2026-08-30) ; restent les paquets et les vieilles releases
 
-Le dépôt `habib256/neost` est **public** (GPL-3.0, GitHub Pages actif) et `git ls-files`
-suit :
+**Pas 3 FAIT le 2026-08-30** : l'historique public est réécrit (`git filter-repo`,
+69 motifs, pack **165 → 12 Mio**). Sont sortis du dépôt ET de tout son historique :
+les TOS Atari (`roms/tos*`, l'ancien `rom/`), les jeux commerciaux (`disks/st`,
+`disks/stx` et leurs emplacements d'avant déménagement), les cartouches Field
+Service (`carts/`), Cubase Lite (`disks/midi/CUBLITE`), Spectrum 512, les devkits
+vendorisés sans licence (`dev/agt`, `dev/reservoir-gods`, `gemdos/etalon`), plus
+deux poids morts que seul l'historique portait : `wasm/index.data` (73 Mo, TOS +
+disquettes embarqués dans l'image Emscripten) et `build/` commité par erreur en
+juin. Récit complet, preuves et décisions → `CHANGELOG.md` (2026-08-30).
 
-| Chemin | Contenu | Volume |
-|--------|---------|--------|
-| `roms/` | **37 images TOS Atari propriétaires** (`tos100*` → `tos402`, `TOS v1.02 …[MEGA TOS]`) | ~11 Mo |
-| `disks/st/` (52), `disks/stx/` (16) | 68 images de **jeux commerciaux**, majoritairement CRACKÉS (mentions `[cr Replicants]`, `[cr Elite]`, `[cr Medway Boys]`…) | ~51 Mo |
-| `carts/` | 5 cartouches **Atari Field Service** (`ST_Diagnostic_v4.4`, `MegaSTE_Diagnostic_v1.5`, `STE_Test_v1.9`…) | |
-| `disks/midi/CUBLITE/` | **33 fichiers de Cubase Lite** (Steinberg 1996) — logiciel **commercial**, moteur du seul étalon MIDI | ~0,5 Mo |
-| `dev/` | tiers commis : `dev/agt` (« aucun fichier LICENSE explicite »), `dev/reservoir-gods/` sans licence avec `.exe` précompilés et une `license.txt` UnRAR (non libre) | ~50 Mo |
+**Rien n'est perdu pour le développement** : les chemins purgés sont gitignorés,
+chaque machine les garde LOCALEMENT, et les tests qui en dépendent se ré-arment
+tout seuls quand les fichiers sont présents (vérifié : clone purgé + fichiers
+restaurés = palier `fast` entièrement vert, séquenceur MIDI compris ; sans eux,
+SKIP recensés). Outils : `tools/private_assets.sh` (pack/unpack du tarball privé)
+et `tools/setup_devkits.sh` (re-clone GODLIB + AGT aux pins d'avant purge).
+Étalons demoscene (Cuddly, No Cooper, Closure, CURLY) : GARDÉS — décision assumée,
+diffusion libre par usage de la scène.
 
-Conséquences : cloner le dépôt (ou télécharger le tarball GitHub) livre une archive de
-logiciels sous copyright — et **GitHub Pages sert `main` à la racine**, donc tout est aussi
-téléchargeable depuis le web. Verrous techniques levés (Pages libre-seulement, étalons
-découplés, `rom_is_free()`, licences gardées par 8 jobs) → détail au `CHANGELOG.md`.
-Les chiffres du tableau sont gardés par `tools/check_doc_claims.py`.
+**Reste du séquencement** (pas 1, 2, 5 faits le 2026-08-28 — détail au
+`CHANGELOG.md`) :
 
-**Séquencement de la purge** (l'ordre casse la circularité « purger ampute le filet ») :
-
-1. **A10 d'abord** — convertir les étalons pixel encore adossés à des ROM/disques
-   propriétaires (§ Dette d'architecture). C'est LE verrou qui rend la purge coûteuse.
-   **3 sur 7 migrés le 2026-08-28** ; les 3 spec512 ne migreront pas (réfuté à l'oracle)
-   et deviendront des SKIP recensés le jour de la purge — décision à assumer, ou à
-   racheter par un étalon spec512 GÉNÉRÉ.
-2. ✅ **FAIT le 2026-08-28 — le palier `fast` ne dépend plus d'aucun fichier
-   propriétaire.** `run_selftests.py` (`diag_cart`) et `run_cyclebench.py` sont passés sur
-   `etos192fr` : leurs deux programmes prennent la main **avant le TOS** (cartouche
-   $FA52235F, cartouche bench), la ROM ne sert qu'à construire la machine — vérifié, pas
-   supposé (dump série identique octet pour octet sous `tos102uk` / `etos192fr` /
-   `etos192us` ; golden `cyclebench.json` posé sous `tos102uk` passe tel quel, tolérance
-   0 cycle). `run_midi_sequencer.py` ne peut PAS migrer (auto-lancement `#Z` du
-   DESKTOP.INF non honoré par EmuTOS — mesuré : on reste sur le bureau, 0 octet MIDI ;
-   et Cubase Lite resterait propriétaire de toute façon) : il applique désormais la
-   politique de **SKIP recensé**, comme `run_megaste_diag.py`. Convention posée :
-   **code de sortie 77** = « sauté, recensé », et `run_all.py` liste ces étapes dans son
-   bilan de fin (« TOUS LES PALIERS OK — COUVERTURE AMPUTÉE ») au lieu de les engloutir
-   dans un vert plein.
-3. **La purge elle-même** (décision du mainteneur — réécriture d'historique) :
-   `git rm --cached` sur `roms/tos*`, `disks/st`, `disks/stx`, `carts/`,
-   `dev/reservoir-gods`, `dev/agt`, ajout au `.gitignore`, puis `git filter-repo` — sans
-   quoi le contenu reste téléchargeable dans les commits antérieurs.
-4. **Basculer le défaut des paquets** : `NEOST_PACKAGE_NO_ATARI_TOS=1` (l'interrupteur
-   existe et la CI l'honore ; aujourd'hui les paquets bureau redistribuent `tos102uk.img`
-   et `tos162uk.img` par défaut).
-5. ✅ **FAIT le 2026-08-28 — les composants tiers sont tous nommés, avec leur licence.**
-   README **et** `packaging/licenses/THIRD-PARTY.txt` (celui qui accompagne les paquets)
-   listent désormais libmt32emu (LGPL 2.1+, **lié statiquement** — la note explique
-   pourquoi la GPL 3 du dépôt satisfait la condition de relien), stb_image, SDL2 2.30.9
-   (paquet Android), la mention ⚠ des TOS Atari livrés par défaut, et **GLFW** — qui
-   n'était nommé NULLE PART alors qu'il est statique dans tous les paquets de bureau ;
-   c'est l'omission que le pas 5 n'avait pas vue. `libslirp` est documenté comme
-   dépendance de compilation **optionnelle et non livrée** (les builds de release sont
-   faits sans elle), et sa licence corrigée dans le `CMakeLists.txt` : **BSD-3-Clause**,
-   pas « LGPL 2.1+ » comme l'annonçait le commentaire. Verrou : `tools/check_licenses.py`
-   (palier `fast`) exige que tout composant livré soit nommé, avec une licence, dans les
-   DEUX documents — fil-piège vérifié en le déclenchant. Reste hors de sa portée : les
-   bibliothèques que `linuxdeploy` embarque seule dans l'AppImage.
+4. **Basculer le défaut des paquets** : `NEOST_PACKAGE_NO_ATARI_TOS=1`
+   (l'interrupteur existe et la CI l'honore ; les paquets bureau redistribuaient
+   `tos102uk.img` et `tos162uk.img` par défaut).
+   ⚠ **Et traiter les ASSETS des releases GitHub 0.5.2 / 0.5.4** : leurs paquets
+   bureau publiés contiennent ces deux TOS (vérifié le 2026-08-30 en ouvrant le
+   zip Windows 0.5.4) — la purge git n'y touche pas. Supprimer les assets, ou les
+   re-couper sans TOS. Le zip web-wasm 0.5.4 est propre (EmuTOS seul, vérifié).
 
 Conformité annexe (non bloquante) :
 - `packaging/linux/make_appimage.sh` tire `linuxdeploy`/`appimagetool` depuis le tag mouvant
   `continuous` sans somme de contrôle pour arm64, alors que le `Dockerfile.bionic` épingle
   par SHA256.
 - `.dmg` macOS ni signé ni notarisé (Gatekeeper : « NeoST est endommagé ») ; `.zip` Windows
-  non signé. À traiter **après** la purge (A37) — signer un paquet contenant des ROM Atari
-  n'aurait pas de sens.
+  non signé. À traiter maintenant que la purge est faite (A37).
 
 ---
 
@@ -104,9 +75,11 @@ est continue, les trous sont du travail fait.
 
 ### Reproductibilité & maturité produit (hérités)
 
-- **A3 ◐ — Le corpus de régression n'est pas livrable.** La couverture repose sur les 68
-  jeux crackés et 37 ROM propriétaires du § BLOQUANT. Recompté 2026-08-28 (A10) : **12 étalons
-  pixel sur 16** survivraient au retrait des TOS Atari (`etos_ste_boot`, `overscan_top`,
+- **A3 ◐ — Le corpus de régression n'est pas livrable — et depuis la purge du
+  2026-08-30 il est LOCAL par construction** : jeux et ROM propriétaires ne sont plus
+  suivis par git, chaque machine les restaure via `tools/private_assets.sh unpack`
+  (§ BLOQUANT). Recompté 2026-08-28 (A10) : **12 étalons
+  pixel sur 16** survivent au retrait des TOS Atari (`etos_ste_boot`, `overscan_top`,
   `trace_odd`, `scroll_8264`, `scroll_8265`, `blitter_timer`, `blitter_hog`, `mfp_poll`,
   plus `cuddly_demos`, `nocooper`, `nocooper_greetings` migrés sur EmuTOS, et
   `spec512_bands` — l'étalon GÉNÉRÉ qui rend la couverture « palette en cours de ligne ») ;

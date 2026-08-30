@@ -45,10 +45,11 @@ le reste est ci-dessous.
 
 ## Ce qui BLOQUE encore une release publique
 
-- **Le § BLOQUANT du `TODO.md`** : le dépôt suit des ROM Atari, des jeux crackés, des
-  cartouches Field Service et Cubase Lite. Les pas 1, 2 et 5 du séquencement sont faits ;
-  les pas **3** (purge + réécriture d'historique) et **4** (basculer
-  `NEOST_PACKAGE_NO_ATARI_TOS=1`) sont des **décisions de mainteneur**.
+- ~~Le § BLOQUANT du `TODO.md`~~ **Purgé le 2026-08-30** : l'historique est réécrit
+  (`git filter-repo`), le dépôt ne suit plus ni ROM Atari, ni jeux, ni cartouches, ni
+  Cubase Lite. Reste le pas **4** : basculer `NEOST_PACKAGE_NO_ATARI_TOS=1` par défaut,
+  et supprimer ou re-couper les **assets des releases 0.5.2/0.5.4** (leurs paquets
+  bureau contiennent `tos102uk.img` + `tos162uk.img` — vérifié).
 - **Signature / notarisation** : le `.dmg` macOS n'est ni signé ni notarisé (Gatekeeper
   affiche « NeoST est endommagé »), le `.zip` Windows n'est pas signé. À traiter **après**
   la purge : signer un paquet qui contient des ROM Atari n'aurait pas de sens.

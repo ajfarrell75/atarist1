@@ -26,6 +26,44 @@ Ripper, DAC Pro Sound) avec page Dongles, `disks/dongles.txt` et oracle de rejeu
 vérifié note à note** en headless, corpus MIDI piano/blues ; port MIDI ALSA sous Linux ;
 save-state v16. Détail dans les chantiers datés ci-dessous.
 
+## La purge : l'historique public ne distribue plus rien de propriétaire (2026-08-30)
+
+Le pas 3 du § BLOQUANT est exécuté — la **réécriture d'historique** (`git filter-repo`,
+69 motifs) qui fait passer le pack de **165 à 12 Mio** (−93 %) et sort du dépôt ET de
+tous ses commits : 38 TOS Atari, 68 jeux commerciaux majoritairement crackés,
+5 cartouches Field Service, Cubase Lite, Spectrum 512, `dev/agt` et
+`dev/reservoir-gods` (vendorisés sans licence), `gemdos/etalon` (binaires dérivés de
+GODLIB). L'essai à blanc préalable sur clone jetable a rapporté plus que le plan : le
+tableau du § BLOQUANT ne voyait que HEAD, et l'historique cachait **~60 Mio de plus**
+du même genre — `wasm/index.data` (73 Mo dépaquetés : l'image Emscripten d'avant le
+23/08 embarquait TOS + disquettes), les 35 jeux à leur emplacement d'avant le
+déménagement vers `disks/st/`, l'ancien dossier `rom/`, `build/` commité par erreur en
+juin, `disks/utils`, `disks/midi/MIDI_ST1`. Avec la seule liste du TODO, le pack ne
+descendait qu'à 87 Mio.
+
+Ce que la purge ne coûte PAS : les chemins purgés sont gitignorés et chaque machine
+les garde localement — **prouvé sur le clone purgé** : sans les fichiers, palier
+`fast` vert avec SKIP recensés ; fichiers restaurés (`tools/private_assets.sh
+unpack`), palier `fast` entièrement vert **sans amputation**, séquenceur MIDI
+compris, et git n'y voit rien (`check_doc_claims` compte via `git ls-files`).
+`tools/setup_devkits.sh` re-clone GODLIB×4 + AGT aux pins de leurs notes de
+vendorisation (reprises avant leur départ). Le fil-piège `check_doc_claims` a mordu
+pendant l'essai exactement comme conçu (les compteurs du tableau § BLOQUANT) — les
+six entrées partent avec leur tableau, remplacées par un garde **négatif** : le
+« 12 Mio » du TODO est recompté comme 12 + le nombre de fichiers purgés encore
+suivis, donc toute fuite d'un chemin purgé dans l'index refait mentir le chiffre.
+CI : le job « démos réelles sous sanitizers » passe de `tos102uk` à `etos192fr`
+(les trois démos bootent sous EmuTOS, vérifié). Décision assumée : les œuvres
+demoscene (Cuddly, No Cooper, Closure, CURLY, le corpus MIDI CC BY-NC-SA) restent.
+
+Hors dépôt : archives privées du mainteneur (miroir git complet d'avant purge +
+tarball des fichiers de travail + la liste des 69 motifs), régénérables par
+`tools/private_assets.sh pack`. Reste après la purge (→ TODO) : pas 4
+(`NEOST_PACKAGE_NO_ATARI_TOS=1` par défaut), les **assets des releases 0.5.2/0.5.4**
+(leurs paquets bureau contiennent `tos102uk.img` + `tos162uk.img` — vérifié en
+ouvrant le zip Windows ; le web-wasm 0.5.4 est propre, EmuTOS seul), et A37
+(signature), enfin sensée maintenant qu'un paquet peut être 100 % libre.
+
 ## Les trois « laissé tel quel » du bug hunt ne le sont plus (2026-08-30, même jour)
 
 Le bug hunt ci-dessous s'était arrêté à quatre correctifs et avait consigné trois
