@@ -443,7 +443,7 @@ if(EMSCRIPTEN)
         "-sUSE_GLFW=3"
         "-sALLOW_MEMORY_GROWTH=1"
         "-sEXPORTED_RUNTIME_METHODS=ccall,cwrap,FS,HEAPF32"
-        "-sEXPORTED_FUNCTIONS=_main,_neost_reset,_neost_set_mono,_neost_mount_disk,_neost_mount_disk_b,_neost_load_tos,_neost_set_kbd_joystick,_neost_set_joy_deadzone,_neost_set_fullscreen,_neost_audio_open,_neost_audio_close,_neost_audio_set_queued,_neost_set_volume,_neost_get_volume,_malloc,_free"
+        "-sEXPORTED_FUNCTIONS=_main,_neost_reset,_neost_hard_reset,_neost_set_mono,_neost_mount_disk,_neost_mount_disk_b,_neost_load_tos,_neost_set_kbd_joystick,_neost_set_joy_deadzone,_neost_set_fullscreen,_neost_set_auto_zoom,_neost_audio_open,_neost_audio_close,_neost_audio_set_queued,_neost_set_volume,_neost_get_volume,_malloc,_free"
         "SHELL:--shell-file ${CMAKE_SOURCE_DIR}/web/shell.html")
 
     # Choix des données embarquées dans le FS virtuel (--preload-file). Pour un
@@ -480,17 +480,39 @@ if(EMSCRIPTEN)
             # TOS 1.02 UK / 1.62 UK : profils 520 ST et 1040 STE.
             list(APPEND NEOST_WEB_PRELOAD roms/tos102uk.img roms/tos162uk.img)
         endif()
-        foreach(item IN LISTS NEOST_WEB_PRELOAD)
-            # Manquer une donnée doit se dire AU CONFIGURE, en nommant le fichier :
-            # laissée au file_packager, l'absence sort au LIEN, noyée dans la ligne de
-            # commande em++ complète.
-            if(NOT EXISTS "${CMAKE_SOURCE_DIR}/${item}")
+        # Démos de démonstration : les trois productions demoscene que la purge du
+        # 2026-08-30 a délibérément gardées. MÊME liste que packaging/stage_free_data.sh
+        # pour les paquets bureau — les deux doivent rester d'accord, c'est justement
+        # une divergence entre ces deux listes qui avait rendu le mode STE du paquet
+        # web silencieusement inopérant. +1,9 Mo sur 40 Mo de marge.
+        # ⚠ Montées À PLAT dans /disks, pas sous /disks/etalons/ : le sélecteur de
+        # disquette du shell fait un FS.readdir('/disks') NON RÉCURSIF (web/shell.html,
+        # populateSelect) — dans un sous-dossier elles seraient embarquées mais
+        # INVISIBLES dans le menu.
+        set(NEOST_WEB_DEMOS
+            disks/etalons/cuddly_demos.msa
+            disks/etalons/nocooper.msa
+            disks/etalons/closure.msa)
+
+        # Manquer une donnée doit se dire AU CONFIGURE, en nommant le fichier :
+        # laissée au file_packager, l'absence sort au LIEN, noyée dans la ligne de
+        # commande em++ complète.
+        function(neost_web_preload src dst)
+            if(NOT EXISTS "${CMAKE_SOURCE_DIR}/${src}")
                 message(FATAL_ERROR
-                    "WASM : donnée à embarquer absente : ${item} "
+                    "WASM : donnée à embarquer absente : ${src} "
                     "(TOS Atari ? ils sont hors dépôt — cf. tools/private_assets.sh)")
             endif()
             target_link_options(neost-web PRIVATE
-                "SHELL:--preload-file ${CMAKE_SOURCE_DIR}/${item}@/${item}")
+                "SHELL:--preload-file ${CMAKE_SOURCE_DIR}/${src}@${dst}")
+        endfunction()
+
+        foreach(item IN LISTS NEOST_WEB_PRELOAD)
+            neost_web_preload("${item}" "/${item}")
+        endforeach()
+        foreach(item IN LISTS NEOST_WEB_DEMOS)
+            get_filename_component(demo_name "${item}" NAME)
+            neost_web_preload("${item}" "/disks/${demo_name}")
         endforeach()
     else()
         target_link_options(neost-web PRIVATE

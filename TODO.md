@@ -54,6 +54,12 @@ la bascule obligatoire (la CI n'a plus les TOS), le défaut est inversé dans
 `NEOST_PACKAGE_NO_ATARI_TOS=0` ré-embarque des copies locales pour un paquet
 personnel, jamais pour une release. Testé dans les deux sens.
 
+✅ **GitHub Pages était un TROISIÈME canal, il est fermé** (2026-08-30) : le bundle web
+servi par `habib256.github.io/neost` embarquait les deux TOS Atari depuis le
+2026-08-03, et la purge ne l'avait pas fermé — elle avait seulement fait échouer le
+job `wasm`, le site continuant de servir le dernier bundle réussi. Premier déploiement
+réellement libre : celui de 10:03 ce jour-là, vérifié sur le site (cf. `CHANGELOG.md`).
+
 **Seul reste, calé sur la 0.6** — ⚠ **assets des releases GitHub 0.5.2 / 0.5.4** :
 leurs paquets bureau publiés contiennent `tos102uk.img` + `tos162uk.img` (vérifié
 le 2026-08-30 en ouvrant le zip Windows 0.5.4) — la purge git n'y touche pas.

@@ -108,7 +108,18 @@ inline void readStickRaw(int jid, float thr, uint8_t& analog, uint8_t& digital) 
     int axN = 0, btN = 0, hatN = 0;
     const float*         ax  = glfwGetJoystickAxes(jid, &axN);
     const unsigned char* bt  = glfwGetJoystickButtons(jid, &btN);
-    const unsigned char* hat = glfwGetJoystickHats(jid, &hatN);
+    // ⚠ PAS de glfwGetJoystickHats sous Emscripten : son port GLFW la définit en
+    // `abort('glfwGetJoystickHats is not implemented')` — un abort() DU RUNTIME,
+    // pas un code d'erreur. Le navigateur n'expose une manette qu'après la
+    // première pression de bouton ; jusque-là glfwJoystickPresent est faux et
+    // readStick sort tôt, si bien que le web tournait très bien... jusqu'à ce
+    // qu'on TOUCHE une manette, et là l'émulateur mourait. Aucun hat à perdre :
+    // la Gamepad API ne rapporte pas de hat, elle donne le D-pad en boutons
+    // 12-15 du « standard mapping », lus juste en dessous.
+    const unsigned char* hat = nullptr;
+#ifndef __EMSCRIPTEN__
+    hat = glfwGetJoystickHats(jid, &hatN);
+#endif
     if (ax && axN >= 2) {
         if (ax[0] < -thr) analog |= LEFT;
         if (ax[0] >  thr) analog |= RIGHT;

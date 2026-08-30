@@ -169,7 +169,7 @@
           <option value="4m">4 MB</option>
         </select>
         <select id="romSel" title="ROM / TOS (swap + reset)"></select>
-        <button id="btnReset" title="Cold reset of the machine">Reset</button>
+        <button id="btnReset" title="Cold reset: wipes ST-RAM, so TOS boots from scratch (power-cycle)">Reset</button>
       </div>
     </fieldset>
 
@@ -179,10 +179,7 @@
         <select id="diskSel" title="Bundled floppy image"></select>
         <button id="btnMount" class="primary" title="Mount in A: and reboot">Mount A: + Reset</button>
         <button id="btnMountB" title="Mount the selected floppy in drive B (no reset)">→ B:</button>
-        <label class="file" title="Load a floppy image from your disk (or drop it on the screen)">
-          Open a file…
-          <input type="file" id="diskFile" accept=".st,.msa,.dim,.stx">
-        </label>
+        <span class="badge" title="Drop a .st / .msa / .dim / .stx file anywhere on the screen to mount it in A:">or drop a floppy on the screen</span>
       </div>
     </fieldset>
 
@@ -190,8 +187,8 @@
       <legend>Display &amp; peripherals</legend>
       <div class="row">
         <button id="btnMono" class="toggle" title="Toggle color monitor (low/medium res) ↔ monochrome (high res) — triggers a reset">Screen: Color</button>
-        <button id="btnJoy" class="toggle" title="Arrows + right Ctrl = joystick port 1 (USB pads are always detected)">Keyboard joystick: off</button>
         <button id="btnSound" class="toggle on" title="Mechanical floppy drive noises">Drive sound: on</button>
+        <button id="btnZoom" class="toggle on" title="Crop to the active picture instead of the whole buffer — the frame widens on its own when a demo opens the borders">Auto zoom: on</button>
       </div>
       <div class="row" style="margin-top:0.45rem">
         <label for="volSlider" style="font-size:0.78rem;color:var(--muted)">Volume</label>
@@ -200,13 +197,32 @@
         <span id="volValue" class="badge">80 %</span>
       </div>
     </fieldset>
+
+    <fieldset>
+      <legend>Joystick</legend>
+      <div class="row">
+        <button id="btnJoy" class="toggle" title="Arrows + right Ctrl = joystick (USB pads work too, and are always detected)">Keyboard joystick: off</button>
+        <select id="joyPortSel" title="Which of the ST's two DE-9 ports the keyboard joystick is plugged into">
+          <option value="1">Port 1 (games)</option>
+          <option value="0">Port 0 (mouse port)</option>
+        </select>
+      </div>
+      <div class="row" style="margin-top:0.45rem">
+        <label for="joyDzSlider" style="font-size:0.78rem;color:var(--muted)">Dead zone</label>
+        <input type="range" id="joyDzSlider" min="0" max="95" value="30" style="flex:1;min-width:110px"
+               title="How far a USB pad's analog stick must move before the ST sees a direction. No effect on the D-pad or the keyboard joystick.">
+        <span id="joyDzValue" class="badge">0.30</span>
+      </div>
+    </fieldset>
   </div>
 
   <details>
     <summary>Help &amp; shortcuts</summary>
     <ul>
       <li><b>Mouse</b>: click the middle button (usually the wheel), or press <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>G</kbd>, to <b>capture or release</b> it (GEM cursor). <kbd>Esc</kbd> and <kbd>Del</kbd> are sent to the ST.</li>
-      <li><b>Keyboard</b>: routed to the IKBD (US layout). <b>Keyboard joystick</b>: arrows + <kbd>right Ctrl</kbd> = fire button (port 1).</li>
+      <li><b>Keyboard</b>: routed to the IKBD (US layout). <b>Keyboard joystick</b>: arrows + <kbd>right Ctrl</kbd> = fire, on the port picked in the Joystick box (port 1 by default).</li>
+      <li><b>USB pads</b>: detected automatically — first pad on port 1, second on port 0. The <b>dead zone</b> slider only affects analog sticks, not the D-pad.</li>
+      <li><b>Reset</b>: a <b>cold</b> reset (power-cycle) — ST-RAM is wiped and TOS boots from scratch, which is also what mounting a floppy in A: does.</li>
       <li><b>Game floppies</b>: "Mount A: + Reset" switches to a <b>real TOS</b> when needed (EmuTOS only boots system floppies) — TOS 2.06 on STE/Mega STE, TOS 1.0x on ST. Pick a ROM by hand to lock that choice.</li>
       <li><b>Drag and drop</b>: drop a <code>.st</code> / <code>.msa</code> / <code>.dim</code> / <code>.stx</code> image straight onto the screen to mount it in A: and reboot.</li>
       <li><b>Machine &amp; RAM</b>: fixed when the machine is built → changing them reloads the page (URL parameters <code>?machine=</code> and <code>?mem=</code>, shareable).</li>
@@ -218,6 +234,7 @@
     var statusEl = document.getElementById('status');
     var monoOn = false;
     var joyOn = false;
+    var zoomOn = true;    // doit refléter g_autoZoom de main_web.cpp (ON par défaut)
     var ready = false;
     var romUserChosen = false;   // l'utilisateur a-t-il choisi une ROM à la main ?
 
@@ -273,6 +290,7 @@
       driveLoad();       // crée l'AudioContext + précharge les WAV de bruits de lecteur
       audioStart();      // branche la sortie son de la machine (YM2149 + DMA STE)
       if (window.neostApplyVolume) neostApplyVolume();   // volume initial du curseur
+      if (window.neostApplyJoyDeadzone) neostApplyJoyDeadzone();   // zone morte du curseur
     };
 
     // ===== Sortie son de la machine (YM2149 + DMA STE) ========================
@@ -532,12 +550,18 @@
       } catch (e) { console.warn('FS.readdir ' + dir + ':', e); }
     }
 
-    function callReset()    { if (ready) Module.ccall('neost_reset'); }
+    // Le bouton RESET de la page est un COLD reset (power-cycle) : c'est ce que son
+    // libellé a toujours annoncé, mais il appelait neost_reset (à chaud, RAM
+    // conservée) — le TOS sautait alors le boot complet. « Hard Reset » du GUI
+    // bureau et « Redémarrer » du menu Android font bien un boot à froid.
+    function callReset()    { if (ready) Module.ccall('neost_hard_reset'); }
     function callMono(m)    { if (ready) Module.ccall('neost_set_mono', null, ['number'], [m]); }
     function callMount(p)   { if (ready) Module.ccall('neost_mount_disk', null, ['string'], [p]); }
     function callMountB(p)  { if (ready) Module.ccall('neost_mount_disk_b', null, ['string'], [p]); }
     function callLoadTos(p) { if (ready) Module.ccall('neost_load_tos', null, ['string'], [p]); }
-    function callKbdJoy(on) { if (ready) Module.ccall('neost_set_kbd_joystick', null, ['number', 'number'], [on ? 1 : 0, 1]); }
+    function joyPort()      { return parseInt(document.getElementById('joyPortSel').value, 10) || 0; }
+    function callKbdJoy(on) { if (ready) Module.ccall('neost_set_kbd_joystick', null, ['number', 'number'], [on ? 1 : 0, joyPort()]); }
+    function callJoyDeadzone(dz) { if (ready) Module.ccall('neost_set_joy_deadzone', null, ['number'], [dz]); }
 
     // NeoST n'a plus qu'un seul cœur 68000 : Moira (cycle-exact). Le sélecteur de
     // cœur a été retiré (le paramètre d'URL ?cpu= reste toléré côté C++ pour compat).
@@ -608,6 +632,16 @@
       setStatusOk('Drive B: ' + p.split('/').pop());
     });
 
+    // Zoom adaptatif : ON par défaut côté cœur (g_autoZoom), le bouton ne fait que
+    // le refléter et permettre de revenir au buffer entier.
+    document.getElementById('btnZoom').addEventListener('click', function () {
+      zoomOn = !zoomOn;
+      if (ready) Module.ccall('neost_set_auto_zoom', null, ['number'], [zoomOn ? 1 : 0]);
+      this.textContent = zoomOn ? 'Auto zoom: on' : 'Auto zoom: off';
+      this.classList.toggle('on', zoomOn);
+      document.getElementById('canvas').focus();
+    });
+
     document.getElementById('btnMono').addEventListener('click', function () {
       monoOn = !monoOn;
       callMono(monoOn ? 1 : 0);
@@ -622,6 +656,24 @@
       this.classList.toggle('on', joyOn);
       document.getElementById('canvas').focus();
     });
+
+    // Changer de port ne doit pas allumer l'émulation clavier : on repose l'état
+    // COURANT sur le nouveau port (le cœur ne garde qu'un port à la fois).
+    document.getElementById('joyPortSel').addEventListener('change', function () {
+      callKbdJoy(joyOn);
+      document.getElementById('canvas').focus();
+    });
+
+    // Zone morte des sticks ANALOGIQUES des manettes USB (le D-pad et le joystick
+    // clavier sont numériques, ils n'en dépendent pas). Même plage que le curseur
+    // de la page Input du GUI bureau : 0 à 0.95, défaut 0.30 côté cœur.
+    window.neostApplyJoyDeadzone = function () {
+      var s = document.getElementById('joyDzSlider');
+      var dz = (parseInt(s.value, 10) || 0) / 100;
+      document.getElementById('joyDzValue').textContent = dz.toFixed(2);
+      callJoyDeadzone(dz);
+    };
+    document.getElementById('joyDzSlider').addEventListener('input', window.neostApplyJoyDeadzone);
 
     // Monte une disquette en A: et reboote. Les disquettes de jeu ne bootent pas
     // sous EmuTOS : si on y est encore (et que l'utilisateur n'a pas choisi de
@@ -676,10 +728,9 @@
       reader.readAsArrayBuffer(file);
     }
 
-    document.getElementById('diskFile').addEventListener('change', function (ev) {
-      mountLocalFile(ev.target.files[0]);
-      ev.target.value = '';   // permet de recharger le même fichier
-    });
+    // (Le sélecteur de fichier « Open a file… » a été retiré : le glisser-déposer
+    // ci-dessous fait la même chose et se passe d'un bouton. mountLocalFile reste
+    // le chemin commun — c'est lui que le drop appelle.)
 
     // Glisser-déposer d'une image disquette directement sur l'écran.
     (function () {

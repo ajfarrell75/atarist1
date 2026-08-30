@@ -69,10 +69,17 @@ uint32_t g_audioUnderruns = 0;     // signalés par la page (diagnostic)
 
 // Plein écran (posé par le shell sur fullscreenchange) : l'image passe alors en
 // ZOOM ADAPTATIF — cadrée sur la région de contenu (règle du kiosk, calcul
-// partagé core/Framing), buffer entier dès qu'une démo ouvre les bordures. En
-// fenêtré on garde le cadre complet : le « moniteur » de la page montre les
-// bordures, c'est son charme.
+// partagé core/Framing), buffer entier dès qu'une démo ouvre les bordures.
 bool   g_fullscreen = false;
+
+// Zoom adaptatif : cadrer sur la ZONE ACTIVE plutôt que sur le buffer entier.
+// ACTIF PAR DÉFAUT, y compris en fenêtré — sans lui la page s'ouvre sur un cadre
+// bordé de noir, alors que la région de contenu est calculée à chaque trame de
+// toute façon (cf. stContentRegion plus bas) et qu'une démo qui ouvre les
+// bordures élargit le cadre toute seule. C'était auparavant lié au plein écran :
+// une seule variable portait DEUX rôles — le cadrage, et « qui possède la taille
+// du canvas » (en plein écran c'est Emscripten). Les deux sont maintenant séparés.
+bool   g_autoZoom = true;
 
 // --- État souris -------------------------------------------------------------
 bool   g_mouseCaptured = false;
@@ -437,7 +444,7 @@ void mainLoop() {
 
     float u0 = 0.f, v0 = 0.f, u1 = 1.f, v1 = 1.f;
     int viewW = w, viewH = h;
-    if (g_fullscreen) {
+    if (g_fullscreen || g_autoZoom) {
         // Bornage défensif, comme le bureau : la région vient du Glue LIVE, une
         // trame de transition (changement de résolution) peut la donner hors du
         // buffer courant.
@@ -466,8 +473,20 @@ void mainLoop() {
 // =============================================================================
 extern "C" {
 
+// Reset À CHAUD (bouton RESET de la machine) : les puces repartent aux valeurs de
+// reset, la RAM est CONSERVÉE — le TOS voit son « memvalid » intact et refait un
+// boot court.
 EMSCRIPTEN_KEEPALIVE void neost_reset() {
     if (g_machine) g_machine->reset();
+}
+
+// Reset À FROID (power-cycle) : efface la ST-RAM, donc le TOS refait un boot
+// COMPLET (re-détection mémoire, re-init OS). C'est ce que fait « Hard Reset »
+// dans le GUI bureau (AppLoop.cpp) et « Redémarrer » dans le menu Android — le
+// web était le seul frontend à ne pas l'exposer, alors même que son bouton
+// s'annonçait « Cold reset of the machine ».
+EMSCRIPTEN_KEEPALIVE void neost_hard_reset() {
+    if (g_machine) g_machine->hardReset();
 }
 
 // Charge une autre ROM TOS (déjà présente dans le FS virtuel) et reset, comme un
@@ -501,7 +520,11 @@ EMSCRIPTEN_KEEPALIVE void neost_set_mono(int mono) {
 EMSCRIPTEN_KEEPALIVE void neost_mount_disk(const char* path) {
     if (!g_machine || !path) return;
     g_machine->fdc.loadImage(path, 0);
-    g_machine->reset();
+    // Boot à FROID, comme le montage à chaud du GUI bureau (AppLoop.cpp pose
+    // reqHardReset). Un reset à chaud laisse la RAM de la session précédente et
+    // son « memvalid » : le TOS saute le boot complet, et une démo chargée par
+    // dessus les restes d'une autre peut démarrer de travers.
+    g_machine->hardReset();
 }
 
 // Monte une image dans le lecteur B (secondaire) — pas de reset (B ne boote pas).
@@ -532,6 +555,10 @@ EMSCRIPTEN_KEEPALIVE void neost_set_joy_deadzone(float dz) {
 // Le shell nous signale l'état plein écran (fullscreenchange) : c'est LUI qui
 // sait, le port GLFW d'Emscripten ne voit pas un requestFullscreen fait en JS.
 EMSCRIPTEN_KEEPALIVE void neost_set_fullscreen(int on) { g_fullscreen = (on != 0); }
+
+// Zoom adaptatif (cadrage sur la zone active) — actif par défaut, cf. g_autoZoom.
+// Le couper redonne le buffer entier, bordures noires comprises.
+EMSCRIPTEN_KEEPALIVE void neost_set_auto_zoom(int on) { g_autoZoom = (on != 0); }
 
 EMSCRIPTEN_KEEPALIVE void neost_audio_open(int rate, int cushionMs) {
     if (rate <= 0) return;
