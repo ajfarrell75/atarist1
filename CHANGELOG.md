@@ -47,8 +47,11 @@ la signature d'**A40**.
 **Ce que ça change pour A40** : ce n'est pas une singularité d'`overscan_top`.
 Closure n'a ni retrait de bordure haute ni ligne de transition, et l'écart y est
 UNIFORME — aucune des 276 lignes n'est épargnée, là où `overscan_top` ne montrait que
-5 lignes. Le décalage de la fenêtre gauche est donc **permanent**, et `overscan_top`
-n'en laissait voir que la part que ses 5 lignes de transition exposaient. Au passage,
+5 lignes. ⚠ Il n'est pour autant PAS universel : **10 étalons restent à 0 px contre
+l'oracle**, dont `cuddly_demos` et `nocooper`, deux démos qui ouvrent aussi les bordures
+sur la même machine. Le décalage dépend donc de ce que Closure fait et que Cuddly ne
+fait pas — et ce couple (même machine, même ROM, l'un décalé de 4 px, l'autre bit-exact
+contre Hatari) est le meilleur levier de diagnostic qu'A40 ait jamais eu. Au passage,
 le TODO affirmait ce chemin « calibré à 0 px contre No Cooper, **Closure** et Cuddly » :
 c'était infondé pour Closure, qui n'étant pas un étalon n'avait jamais été comparée à
 l'oracle. Une affirmation de calibration ne vaut que pour ce qui est MESURÉ.

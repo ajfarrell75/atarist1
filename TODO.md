@@ -193,11 +193,16 @@ est continue, les trous sont du travail fait.
   **Ce que ça change** : A40 n'est PAS une singularité d'`overscan_top`. Closure n'a ni
   retrait de bordure haute ni ligne de transition — c'est une image 153 couleurs pleine,
   et l'écart y est UNIFORME (aucune des 276 lignes n'est épargnée, contre 5 lignes
-  seulement pour `overscan_top`). Le décalage de la fenêtre gauche n'est donc pas un
-  effet de bord des lignes de transition : il est **permanent**, et `overscan_top` n'en
-  montrait que la part que ses 5 lignes laissaient voir. Prochain pas : lire `video.c`
-  sur le calcul du début de ligne (`LineStartCycle`/`STF_LEFT_BORDER`) plutôt que la
-  machine à états des bordures.
+  seulement pour `overscan_top`). Le décalage n'est donc pas un effet de bord des lignes
+  de transition — sur cet écran il vaut pour TOUTE l'image.
+  ⚠ **Mais il n'est PAS universel, et c'est là qu'est le levier** : **10 étalons sont à
+  0 px contre l'oracle**, dont `cuddly_demos` et `nocooper` — deux démos qui ouvrent
+  elles aussi les bordures, sur la même machine ST. Le décalage dépend donc de quelque
+  chose que Closure fait et que Cuddly ne fait pas. **Prochain pas concret : diffé ces
+  deux-là plutôt que de lire `video.c` à froid** — même machine, même ROM, l'un décalé
+  de 4 px et l'autre bit-exact contre Hatari, c'est le couple de diagnostic le plus
+  serré qu'on ait jamais eu sur A40. Ensuite seulement, `video.c` sur le calcul du début
+  de ligne (`LineStartCycle`/`STF_LEFT_BORDER`).
 - **A12 ⭘ — Aucune cible de livraison validée sur du matériel réel.** Windows jamais lancé
   hors CI, APK Android jamais posé sur un appareil (QEMU seul), aucun budget temps réel
   mesuré sur le Raspberry Pi visé (le perfbench ne garde que des ratios sur le poste de
