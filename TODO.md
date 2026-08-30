@@ -53,10 +53,13 @@ diffusion libre par usage de la scène.
 4. **Basculer le défaut des paquets** : `NEOST_PACKAGE_NO_ATARI_TOS=1`
    (l'interrupteur existe et la CI l'honore ; les paquets bureau redistribuaient
    `tos102uk.img` et `tos162uk.img` par défaut).
-   ⚠ **Et traiter les ASSETS des releases GitHub 0.5.2 / 0.5.4** : leurs paquets
-   bureau publiés contiennent ces deux TOS (vérifié le 2026-08-30 en ouvrant le
-   zip Windows 0.5.4) — la purge git n'y touche pas. Supprimer les assets, ou les
-   re-couper sans TOS. Le zip web-wasm 0.5.4 est propre (EmuTOS seul, vérifié).
+   ⚠ **Assets des releases GitHub 0.5.2 / 0.5.4** : leurs paquets bureau publiés
+   contiennent ces deux TOS (vérifié le 2026-08-30 en ouvrant le zip Windows
+   0.5.4) — la purge git n'y touche pas. **Décision du mainteneur (2026-08-30) :
+   assumé tel quel, les deux releases seront SUPPRIMÉES quand la 0.6 sortira** —
+   la 0.6 devra donc partir avec `NEOST_PACKAGE_NO_ATARI_TOS=1`, et sa sortie
+   emporte l'obligation de supprimer 0.5.2 et 0.5.4. Le zip web-wasm 0.5.4 est
+   propre (EmuTOS seul, vérifié).
 
 Conformité annexe (non bloquante) :
 - `packaging/linux/make_appimage.sh` tire `linuxdeploy`/`appimagetool` depuis le tag mouvant

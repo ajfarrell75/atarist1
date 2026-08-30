@@ -39,6 +39,12 @@ DEVKITS=(
 for entry in "${DEVKITS[@]}"; do
   url="${entry%%|*}"; rest="${entry#*|}"
   dir="$ROOT/${rest%%|*}"; pin="${rest#*|}"
+  if [[ -d "$dir" && ! -d "$dir/.git" && -n "$(ls -A "$dir" 2>/dev/null)" ]]; then
+    # Copie vendorisée restaurée d'un tarball d'archives (pas de .git) : on la
+    # laisse telle quelle — c'est le contenu au pin, sous une autre forme.
+    echo "OK       ${dir#$ROOT/} (copie vendorisée présente — laissée telle quelle)"
+    continue
+  fi
   if [[ -d "$dir/.git" ]]; then
     have=$(git -C "$dir" rev-parse HEAD)
     if [[ "$have" == "$pin" ]]; then
