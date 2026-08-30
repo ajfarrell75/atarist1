@@ -69,9 +69,11 @@ public:
     void    mixStereo(float* st, const float* ym, uint32_t frames, uint32_t sampleRate, int64_t frameCycles, float dmaGain = 1.0f);
 
     // Branche l'horloge frame-relative (cycles CPU depuis le début de la trame), posée
-    // par le frontend audio « push » (cf. main.cpp, comme YM2149::setCycleClock). Tant
-    // qu'elle n'est pas posée (headless/WASM), AUCUN événement n'est enregistré (pas de
-    // fuite mémoire) et mixStereo retombe sur le rendu live (état CPU courant).
+    // par le frontend audio « push » (comme YM2149::setCycleClock). Tant qu'elle n'est
+    // pas posée, AUCUN événement n'est enregistré (pas de fuite mémoire) et mixStereo
+    // retombe sur le rendu live (état CPU courant).
+    // ⚠ Les QUATRE frontends livrés la posent (GUI, headless, WASM, Android) — le
+    // « (headless/WASM) » d'avant était faux, cf. la même note sur YM2149::setCycleClock.
     void    setCycleClock(std::function<int64_t()> c) { cycleClock_ = std::move(c); events_.reserve(256); }
 
     // Jette les événements de la trame sans rendre (frontend audio non démarré / trame

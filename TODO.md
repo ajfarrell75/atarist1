@@ -91,12 +91,12 @@ est continue, les trous sont du travail fait.
 - **A3 ◐ — Le corpus de régression n'est pas livrable — et depuis la purge du
   2026-08-30 il est LOCAL par construction** : jeux et ROM propriétaires ne sont plus
   suivis par git, chaque machine les restaure via `tools/private_assets.sh unpack`
-  (§ BLOQUANT). Recompté 2026-08-28 (A10) : **12 étalons
-  pixel sur 16** survivent au retrait des TOS Atari (`etos_ste_boot`, `overscan_top`,
+  (§ BLOQUANT). Recompté 2026-08-30 (pose de `closure`) : **13 étalons
+  pixel sur 17** survivent au retrait des TOS Atari (`etos_ste_boot`, `overscan_top`,
   `trace_odd`, `scroll_8264`, `scroll_8265`, `blitter_timer`, `blitter_hog`, `mfp_poll`,
-  plus `cuddly_demos`, `nocooper`, `nocooper_greetings` migrés sur EmuTOS, et
-  `spec512_bands` — l'étalon GÉNÉRÉ qui rend la couverture « palette en cours de ligne ») ;
-  les 4 restants sont le reliquat d'**A10**.
+  plus `cuddly_demos`, `nocooper`, `nocooper_greetings` et `closure` migrés/posés sur
+  EmuTOS, et `spec512_bands` — l'étalon GÉNÉRÉ qui rend la couverture « palette en cours
+  de ligne ») ; les 4 restants sont le reliquat d'**A10**.
 - **A9 ◐ — `main.cpp` : 5 100 → 28 lignes ; reste LA BOUCLE.** Fait le 2026-08-30
   (détail au `CHANGELOG.md`). `main()` tient en **10 lignes** — `appInit` → `appLoop`
   → `appShutdown` — et les **84 globaux `g_*` n'existent plus** : ils sont les membres
@@ -179,9 +179,25 @@ est continue, les trous sont du travail fait.
   sur ces lignes de transition : NeoST garde une fenêtre de 320 px décalée de −4
   (`glue::LEFT_OFF`, `default: −4` de la table `shEff`, `Shifter.cpp`), Hatari rend une
   fenêtre de **336 px** dont les 16 px de tête et de queue portent des index ≠ 0/15.
-  ⚠ Ce chemin est calibré à 0 px contre No Cooper, Closure et Cuddly : **ne rien régler sur
-  la foi de ce seul étalon** — lire `video.c` d'abord (méthode imposée), et la référence
+  ⚠ Ce chemin est calibré à 0 px contre No Cooper et Cuddly : **ne rien régler sur
+  la foi d'un seul étalon** — lire `video.c` d'abord (méthode imposée), et la référence
   reste une self-capture tant que ce n'est pas compris.
+  ✅ **SECOND EXHIBITEUR le 2026-08-30 : `closure`** — et il élargit le diagnostic.
+  « Calibré à 0 px contre No Cooper, **Closure** et Cuddly » figurait ici : c'était
+  INFONDÉ pour Closure, qui n'était pas un étalon et n'avait donc JAMAIS été comparée à
+  l'oracle. Mesuré le jour de sa pose : l'oracle diverge de **64,15 %**, les palettes
+  sont IDENTIQUES (les 153 couleurs de NeoST sont toutes chez Hatari), et un décalage
+  de **+4 px ST** ramène l'écart à **3,20 %** — ±1 px autour le fait remonter à ~29 %,
+  donc le décalage vaut exactement 4, vérifié en pleine résolution (832×552, dx=+8)
+  pour écarter tout artefact de rééchantillonnage. C'est `glue::LEFT_OFF` = −4.
+  **Ce que ça change** : A40 n'est PAS une singularité d'`overscan_top`. Closure n'a ni
+  retrait de bordure haute ni ligne de transition — c'est une image 153 couleurs pleine,
+  et l'écart y est UNIFORME (aucune des 276 lignes n'est épargnée, contre 5 lignes
+  seulement pour `overscan_top`). Le décalage de la fenêtre gauche n'est donc pas un
+  effet de bord des lignes de transition : il est **permanent**, et `overscan_top` n'en
+  montrait que la part que ses 5 lignes laissaient voir. Prochain pas : lire `video.c`
+  sur le calcul du début de ligne (`LineStartCycle`/`STF_LEFT_BORDER`) plutôt que la
+  machine à états des bordures.
 - **A12 ⭘ — Aucune cible de livraison validée sur du matériel réel.** Windows jamais lancé
   hors CI, APK Android jamais posé sur un appareil (QEMU seul), aucun budget temps réel
   mesuré sur le Raspberry Pi visé (le perfbench ne garde que des ratios sur le poste de

@@ -26,6 +26,46 @@ Ripper, DAC Pro Sound) avec page Dongles, `disks/dongles.txt` et oracle de rejeu
 vérifié note à note** en headless, corpus MIDI piano/blues ; port MIDI ALSA sous Linux ;
 save-state v16. Détail dans les chantiers datés ci-dessous.
 
+## Closure devient un étalon, et A40 change de taille (2026-08-30)
+
+`closure` entre dans `tools/etalons.json` (Sync, écran 153 couleurs, ST 1 Mo,
+`etos192fr`, `--frames 10500`). Motif : `docs/HATARI_DIVERGENCES.md` § V3 la donne
+comme **seul exhibiteur connu** de l'attribution de ligne, le verrou
+`NEOST_LINELEN_ATTR` que le TODO disait impromouvable faute d'étalon l'exerçant.
+Déterminisme vérifié AVANT la pose (deux runs à 10500, captures md5-identiques).
+
+**Elle a rapporté quelque chose dès le premier run — mais pas ce qu'on cherchait.**
+L'oracle Hatari diverge de **64,15 %**. Trois mesures ont écarté les fausses pistes :
+(1) les **palettes sont identiques** — les 153 couleurs de NeoST sont TOUTES chez
+Hatari, les 4 exclusives de l'oracle étant sa LED disquette ; (2) un décalage
+horizontal de **+4 px ST** ramène l'écart à **3,20 %**, et ±1 px autour le fait
+remonter à ~29 % — le décalage vaut donc EXACTEMENT 4 ; (3) refait en **pleine
+résolution** (832×552, dx=+8, mêmes 3,20 %) pour écarter tout artefact de
+rééchantillonnage. C'est `glue::LEFT_OFF`, le `default: −4` de la table `shEff` —
+la signature d'**A40**.
+
+**Ce que ça change pour A40** : ce n'est pas une singularité d'`overscan_top`.
+Closure n'a ni retrait de bordure haute ni ligne de transition, et l'écart y est
+UNIFORME — aucune des 276 lignes n'est épargnée, là où `overscan_top` ne montrait que
+5 lignes. Le décalage de la fenêtre gauche est donc **permanent**, et `overscan_top`
+n'en laissait voir que la part que ses 5 lignes de transition exposaient. Au passage,
+le TODO affirmait ce chemin « calibré à 0 px contre No Cooper, **Closure** et Cuddly » :
+c'était infondé pour Closure, qui n'étant pas un étalon n'avait jamais été comparée à
+l'oracle. Une affirmation de calibration ne vaut que pour ce qui est MESURÉ.
+
+La référence commise est donc une **self-capture** (`ref_kind: snapshot`), pas
+l'oracle : y installer l'image d'Hatari aurait figé l'écart au lieu de le signaler.
+L'étalon garde la non-régression, la mesure vit dans son `ref_note`, et il repassera
+en `oracle` le jour où A40 sera compris.
+
+⚠ Deux pièges de méthode évités, tous deux déjà consignés dans ce projet. Le scan
+oracle ne contenait que **4 images distinctes sur 801** — signature de l'« AVI figé »
+qui avait produit deux faux verdicts en août. Vérification faite : l'AVI est bel et
+bien VALIDE, l'écran « photo » est simplement statique pendant des centaines de trames.
+Conclure « AVI figé » aurait été un faux verdict symétrique du premier. Et le coût :
+cet étalon prend **~20 s**, ce qui en fait le 2ᵉ mur du palier pixel derrière
+`nocooper_greetings` (~45 s) — mesuré et dit, comme A38 le demande.
+
 ## Le paquet se montre : trois démos embarquées, et le frontend web reprend la main (2026-08-30)
 
 **Les paquets embarquent enfin de quoi se montrer.** `cuddly_demos.msa`,
