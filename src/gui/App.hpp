@@ -261,15 +261,22 @@ struct App {
     std::string exeDir;                    // dossier de l'exécutable (résolu, jamais argv[0] nu)
     std::string disksDir, cartsDir, hdDir, gemdosDir, romsDir;
     neost::appconfig::Config cfg;          // la config de TRAVAIL (cf. cfgPristine)
+    // ⚠ L'ORDRE de ces membres est un CONTRAT, pas une présentation : c'est l'ordre
+    // de construction de l'ancien main(), et la destruction le déroule À L'ENVERS.
+    // `audio` doit mourir AVANT `drive`, `mt32` et `machine` — son thread mixe
+    // DriveSound et le MT-32 par pointeur brut et lit machine.psg/dmasnd ; détruit
+    // en dernier, il jouerait une trame sur des objets déjà morts (bug attrapé par
+    // le bug hunt du 2026-08-30 : la première version de cette structure avait mis
+    // `audio` en deuxième). `hayesModem` référence machine.mfp : avant `machine`.
     std::unique_ptr<Machine>        machine;
-    std::unique_ptr<Audio>          audio;
-    std::unique_ptr<DriveSound>     drive;
+    std::unique_ptr<HayesModem>     hayesModem;   // nul tant que le modem est OFF
+    std::unique_ptr<NetBackendNull> etherNull;
+    std::unique_ptr<SlirpBackend>   slirpNet;
     std::unique_ptr<MidiOutHost>    midiOut;
     std::unique_ptr<MidiInHost>     midiIn;
     std::unique_ptr<Mt32Synth>      mt32;
-    std::unique_ptr<NetBackendNull> etherNull;
-    std::unique_ptr<SlirpBackend>   slirpNet;
-    std::unique_ptr<HayesModem>     hayesModem;   // nul tant que le modem est OFF
+    std::unique_ptr<DriveSound>     drive;
+    std::unique_ptr<Audio>          audio;        // DERNIER des consommateurs : détruit en premier
     std::unique_ptr<GlScreen>       screen;
     // Fréquence de sortie RÉELLE (le périphérique en négocie une — cf. Audio::rate()).
     uint32_t audioRate = 48000;

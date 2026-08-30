@@ -20,6 +20,7 @@
 //  (c) 2026 VERHILLE Arnaud — projet NeoST.
 // =============================================================================
 #pragma once
+#include <algorithm>
 #include <cstddef>
 #include <string>
 #include <vector>
@@ -62,6 +63,49 @@ inline std::vector<int> matchEndpoints(const std::vector<Wanted>& want,
             if (!taken[e] && have[e].name == want[w].name) { out[w] = int(e); taken[e] = true; break; }
     }
     return out;
+}
+
+// Combien d'appareils voulus un setDevices/setDestinations OUVRIRAIT maintenant.
+// C'est la garde de la boucle de reconnexion à 1 Hz : elle ne doit rappeler
+// l'ouverture que si ce nombre DIFFÈRE de ce qui est ouvert. L'ancienne garde
+// comparait au nombre d'appareils CONFIGURÉS : un appareil durablement absent la
+// rendait vraie à chaque seconde, et chaque re-tentative ferme tout d'abord —
+// donc paniquait (All Notes Off) les appareils encore branchés une fois par
+// seconde en sortie, et jetait les octets en attente une fois par seconde en
+// entrée. Un appareil absent doit coûter zéro tant que rien ne change.
+inline std::size_t countMatchable(const std::vector<Wanted>& want,
+                                  const std::vector<Endpoint>& have) {
+    std::size_t n = 0;
+    for (int idx : matchEndpoints(want, have)) if (idx >= 0) ++n;
+    return n;
+}
+
+// Apprentissage des identifiants manquants. `want` = les entrées de config (uid
+// vide = à apprendre) ; `open` = les points réellement OUVERTS, dans l'ordre de la
+// config. Renvoie true si au moins un identifiant a été appris.
+//
+// JAMAIS deux fois le même identifiant — c'est le pendant de matchEndpoints, et
+// l'oubli qui rendait l'apprentissage FAUX pour son cas d'usage même : deux
+// homonymes branchés, config sans uid → les deux lignes apprenaient l'identifiant
+// du PREMIER point ouvert. Tant que les deux claviers restaient branchés, le repli
+// par nom masquait l'erreur ; on débranchait le premier, et le masque de canaux de
+// la seconde ligne pilotait le mauvais appareil. Une ligne dont l'homonyme ouvert
+// est déjà réclamé reste donc VIDE : ne rien apprendre vaut mieux qu'apprendre faux.
+inline bool learnUids(std::vector<Wanted>& want, const std::vector<Endpoint>& open) {
+    std::vector<std::string> used;
+    for (const Wanted& w : want) if (!w.uid.empty()) used.push_back(w.uid);
+    const auto taken = [&used](const std::string& u) {
+        return std::find(used.begin(), used.end(), u) != used.end();
+    };
+    bool learned = false;
+    for (Wanted& w : want) {
+        if (!w.uid.empty()) continue;
+        for (const Endpoint& o : open)
+            if (o.name == w.name && !o.uid.empty() && !taken(o.uid)) {
+                w.uid = o.uid; used.push_back(o.uid); learned = true; break;
+            }
+    }
+    return learned;
 }
 
 // Étiquette d'affichage : le nom seul quand il est unique, suffixé « #n » quand

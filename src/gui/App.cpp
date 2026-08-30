@@ -385,28 +385,30 @@ void App::midiInApply() {
 bool App::midiLearnUids() {
     App& A = *this;
     Config& cfg = A.cfg;
-    MidiOutHost& midiOut = *A.midiOut;
-    MidiInHost& midiIn = *A.midiIn;
-    bool learned = false;
-    for (auto& d : cfg.midiOutDevices)
-        if (d.uid.empty())
-            for (const auto& o : midiOut.openDestinations())
-                if (o.name == d.name && !o.uid.empty()) {
-                    d.uid = o.uid; learned = true;
-                    std::fprintf(stderr, "[midi-out] learned unique id %s for \"%s\"\n",
-                                 o.uid.c_str(), o.name.c_str());
-                    break;
-                }
-    for (auto& d : cfg.midiInDevices)
-        if (d.uid.empty())
-            for (const auto& o : midiIn.openEndpoints())
-                if (o.name == d.name && !o.uid.empty()) {
-                    d.uid = o.uid; learned = true;
-                    std::fprintf(stderr, "[midi-in] learned unique id %s for \"%s\"\n",
-                                 o.uid.c_str(), o.name.c_str());
-                    break;
-                }
-    return learned;
+    // Toute la logique vit dans neost::midi::learnUids (fonction PURE, testée) —
+    // notamment la règle « jamais deux fois le même identifiant », sans laquelle
+    // deux homonymes branchés apprenaient tous deux l'identifiant du premier
+    // (bug corrigé le 2026-08-30, cf. MidiEndpoint.hpp). Ici : conversion
+    // config ↔ Wanted, et le journal de ce qui a été appris.
+    const auto learn = [](auto& cfgList, const std::vector<neost::midi::Endpoint>& open,
+                          const char* tag) {
+        std::vector<neost::midi::Wanted> want;
+        want.reserve(cfgList.size());
+        for (const auto& d : cfgList) want.push_back({d.name, d.uid});
+        if (!neost::midi::learnUids(want, open)) return false;
+        for (std::size_t i = 0; i < cfgList.size(); ++i)
+            if (cfgList[i].uid.empty() && !want[i].uid.empty()) {
+                cfgList[i].uid = want[i].uid;
+                std::fprintf(stderr, "[%s] learned unique id %s for \"%s\"\n",
+                             tag, want[i].uid.c_str(), want[i].name.c_str());
+            }
+        return true;
+    };
+    std::vector<neost::midi::Endpoint> outOpen;
+    for (const auto& d : A.midiOut->openDestinations()) outOpen.push_back({d.name, d.uid});
+    const bool out = learn(cfg.midiOutDevices, outOpen,                   "midi-out");
+    const bool in  = learn(cfg.midiInDevices,  A.midiIn->openEndpoints(), "midi-in");
+    return out || in;
 }
 
 // Applique la config courante (modèle / RAM / cœur / ROM) À CHAUD : reconfigure

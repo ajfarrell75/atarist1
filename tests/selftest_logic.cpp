@@ -778,6 +778,63 @@ static void testMidiHomonymes() {
     checkBool("homonymes : étiquette suffixée #2", displayLabel(have, 1) == "Piano 88 #2", true);
     checkBool("homonymes : nom unique laissé nu",
               displayLabel(have, 2) == "Circuit Tracks MIDI", true);
+
+    // (6) APPRENTISSAGE des identifiants — le scénario même de la fonctionnalité :
+    //     deux homonymes branchés, config d'avant (uid vides). Chaque ligne doit
+    //     apprendre l'identifiant de SON point, jamais deux fois le même. Le bug
+    //     chassé le 2026-08-30 : les deux lignes apprenaient « 111 », et au
+    //     débranchement du premier clavier le masque de canaux de la seconde
+    //     pilotait le mauvais appareil (le repli par nom masquait l'erreur tant
+    //     que les deux restaient branchés).
+    {
+        using neost::midi::learnUids;
+        // openEndpoints() rend les points OUVERTS dans l'ordre de la config :
+        // l'entrée 0 a été appariée au point « 111 », la 1 au point « 222 ».
+        const std::vector<Endpoint> open = {{"Piano 88", "111"}, {"Piano 88", "222"}};
+        std::vector<Wanted> cfgw = {{"Piano 88", ""}, {"Piano 88", ""}};
+        checkBool("apprentissage : il a bien appris", learnUids(cfgw, open), true);
+        checkBool("apprentissage : la 1re ligne prend le 1er point", cfgw[0].uid == "111", true);
+        checkBool("apprentissage : la 2e ligne prend le 2e — jamais deux fois le même",
+                  cfgw[1].uid == "222", true);
+    }
+    // (6b) Un uid DÉJÀ connu est réservé : la ligne vide apprend l'AUTRE point,
+    //      même si le point connu vient en premier dans la liste ouverte.
+    {
+        using neost::midi::learnUids;
+        const std::vector<Endpoint> open = {{"Piano 88", "111"}, {"Piano 88", "222"}};
+        std::vector<Wanted> cfgw = {{"Piano 88", "111"}, {"Piano 88", ""}};
+        learnUids(cfgw, open);
+        checkBool("apprentissage : l'uid déjà connu est réservé", cfgw[1].uid == "222", true);
+    }
+    // (6c) UN seul homonyme branché pour DEUX lignes vides : la seconde reste vide —
+    //      on ne sait pas lequel des deux claviers c'est, et apprendre faux est pire
+    //      que ne rien apprendre.
+    {
+        using neost::midi::learnUids;
+        const std::vector<Endpoint> open = {{"Piano 88", "111"}};
+        std::vector<Wanted> cfgw = {{"Piano 88", ""}, {"Piano 88", ""}};
+        learnUids(cfgw, open);
+        checkBool("apprentissage : un seul point, une seule ligne servie",
+                  cfgw[0].uid == "111" && cfgw[1].uid.empty(), true);
+    }
+
+    // (7) GARDE de la reconnexion à 1 Hz : countMatchable dit ce qu'une re-tentative
+    //     OUVRIRAIT. Le bug chassé le 2026-08-30 : la garde comparait au CONFIGURÉ,
+    //     donc un appareil durablement absent déclenchait la re-tentative à chaque
+    //     seconde — or re-tenter ferme tout d'abord, ce qui paniquait (All Notes
+    //     Off) le synthé encore branché une fois par seconde.
+    {
+        using neost::midi::countMatchable;
+        // Config : deux appareils. Branché : UN seul. Ouvert : ce seul-là (1).
+        const std::vector<Wanted> cfgw = {{"Piano 88", "111"}, {"Fantôme", "999"}};
+        const std::vector<Endpoint> plugged = {{"Piano 88", "111"}};
+        checkBool("garde 1 Hz : l'absent durable ne re-déclenche pas (1 ouvrable = 1 ouvert)",
+                  countMatchable(cfgw, plugged) == 1, true);
+        // Le Fantôme revient : 2 ouvrables ≠ 1 ouvert → la re-tentative se justifie.
+        const std::vector<Endpoint> back = {{"Piano 88", "111"}, {"Fantôme", "999"}};
+        checkBool("garde 1 Hz : le retour de l'appareil re-déclenche (2 ouvrables)",
+                  countMatchable(cfgw, back) == 2, true);
+    }
 }
 
 // -----------------------------------------------------------------------------
@@ -879,6 +936,34 @@ static void testMidiInJitter() {
         const uint8_t o1 = r.midi.read8(kData), o2 = r.midi.read8(kData);
         checkBool("overrun 6850 : le premier octet survit", o1 == 0x90, true);
         checkBool("overrun 6850 : puis le deuxième",        o2 == 0x3C, true);
+    }
+
+    // (3b) SAVE-STATE CROISÉ : un état sauvé SANS appareil MIDI IN, rechargé (F7)
+    //      pendant qu'un clavier est branché. Le Scheduler restaure ses échéances —
+    //      celles de l'état sauvé, où MIDI_RX est éteint — mais la source hôte, elle,
+    //      est toujours là : sans réarmement au chargement, plus rien ne tire et
+    //      l'entrée MIDI meurt en silence (bug chassé le 2026-08-30).
+    {
+        // L'état « d'avant » : une machine sans appareil (source jamais branchée).
+        std::vector<uint8_t> etat;
+        {
+            Mfp mfp0; Scheduler sched0; MidiAcia midi0{mfp0};
+            midi0.setScheduler(&sched0);
+            StateArchive sv = StateArchive::saver(etat);
+            sched0.serialize(sv); midi0.serialize(sv);     // même ordre que Machine
+        }
+        // La machine « d'aujourd'hui » : un clavier branché, un octet en attente.
+        Rig r;
+        const uint8_t note[3] = {0x90, 0x3C, 0x40};
+        r.in.pushForTest(0, note, 3);
+        StateArchive ld = StateArchive::loader(etat.data(), etat.size());
+        r.sched.serialize(ld); r.midi.serialize(ld);       // F7 : sched puis midi
+        std::size_t lus = 0;
+        for (int i = 0; i < 5 * 4; ++i) {
+            r.sched.runTo(r.sched.now() + kByte / 4);
+            while (r.rdrf()) { r.midi.read8(kData); ++lus; }
+        }
+        checkBool("save-state croisé : l'entrée MIDI survit au chargement", lus == 3, true);
     }
 
     // (4) TAMPON HÔTE PLEIN : au-delà de kMaxJitter, c'est le MESSAGE NEUF ENTIER
