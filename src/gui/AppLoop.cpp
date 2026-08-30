@@ -1515,6 +1515,34 @@ void appLoop(App& A) {
             }
         }
 
+        // A42 (2026-08-30) — BANDEAU PERMANENT « machine gelée ». Un CPU halté ne se
+        // VOIT pas : l'écran garde sa dernière image, le son se tait, et plus rien ne
+        // bouge — indiscernable d'un émulateur qui rame ou d'une démo qui attend une
+        // touche. Sans ce bandeau, l'utilisateur ne peut que rapporter « ça plante »,
+        // ce qui s'est produit sur No Cooper en Mega ST : double faute de bus, et
+        // FIDÈLE (Hatari halte sur la MÊME instruction, cf. docs/CASE_STUDIES.md).
+        // On dit donc les trois choses utiles : l'état, l'adresse fautive, et la seule
+        // sortie possible (reset). Affiché AUSSI en borne — un visiteur devant un écran
+        // figé mérite au moins de savoir que la machine est morte, pas lente.
+        if (machine.cpu.halted()) {
+            const Cpu68k::Fault f = machine.cpu.lastFault();
+            const ImGuiIO& io = ImGui::GetIO();
+            ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, 8.0f), ImGuiCond_Always, ImVec2(0.5f, 0.0f));
+            ImGui::SetNextWindowBgAlpha(0.85f);
+            ImGui::Begin("##haltmsg", nullptr,
+                         ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs |
+                         ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoSavedSettings |
+                         ImGuiWindowFlags_AlwaysAutoResize);
+            ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.30f, 1.0f),
+                               ICON_FA_WARNING " Machine frozen - 68000 halted (double bus/address error)");
+            if (f.valid)
+                ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.35f, 1.0f),
+                                   "last fault: %s at $%08X, PC=$%06X",
+                                   f.write ? "writing" : "reading", f.addr, f.pc);
+            ImGui::TextDisabled("Reset to restart. If a demo does this, check the machine profile first.");
+            ImGui::End();
+        }
+
         // Overlay transitoire du save-state rapide (F5/F7) — coin bas-gauche, ~2,4 s.
         if (A.stateMsgFrames > 0) {
             --A.stateMsgFrames;

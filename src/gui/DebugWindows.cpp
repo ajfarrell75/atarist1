@@ -57,6 +57,24 @@ void drawCpuState(App& A, Cpu68k& cpu, bool& reqReset) {
     ImGui::Begin("CPU 68000", &A.showCpu);   // croix de fermeture, cf. drawHexViewer
     if (IconButton(ICON_FA_POWER_OFF, "Reset (hardware RESET)")) reqReset = true;
     ImGui::Separator();
+    // A42 (2026-08-30) — un CPU HALTÉ se dit. Le 68000 assère /HALT sur une double
+    // faute de bus/adresse et ne redémarre QUE sur un reset : plus une instruction,
+    // écran figé, son coupé. Le headless l'écrivait déjà ; l'interface, elle, ne
+    // montrait qu'un gel — d'où des rapports « ça plante » sans diagnostic, alors que
+    // la cause est souvent une config (No Cooper en Mega ST : double faute FIDÈLE,
+    // cf. docs/CASE_STUDIES.md). Les registres qui suivent sont ceux du GEL, figés.
+    if (cpu.halted()) {
+        const Cpu68k::Fault f = cpu.lastFault();
+        ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.30f, 1.0f),
+                           ICON_FA_WARNING " CPU HALTED - double bus/address error");
+        if (f.valid)
+            ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.35f, 1.0f),
+                               "last fault: %s at $%08X, PC=$%06X (vector %d)",
+                               f.write ? "writing" : "reading", f.addr, f.pc, f.vector);
+        ImGui::TextDisabled("Frozen until reset. Check the machine profile first"
+                            " (some demos halt on Mega ST/STE - faithfully).");
+        ImGui::Separator();
+    }
     ImGui::Text("PC = %08X    SR = %04X", cpu.pc(), cpu.sr());
     ImGui::Separator();
     for (int i = 0; i < 8; ++i)
