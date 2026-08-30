@@ -111,14 +111,31 @@ est continue, les trous sont du travail fait.
   plus `cuddly_demos`, `nocooper`, `nocooper_greetings` migrés sur EmuTOS, et
   `spec512_bands` — l'étalon GÉNÉRÉ qui rend la couverture « palette en cours de ligne ») ;
   les 4 restants sont le reliquat d'**A10**.
-- **A9 ⭘ — Découper `main()`** (`src/main.cpp`, mesuré 2026-08-29 : **5 013 lignes**, dont
-  `main()` ≈ 2 490 avec une boucle de ~1 530 lignes et **84 globaux `g_*`** — chiffre gardé
-  par `check_doc_claims.py`). ⚠ +199 lignes depuis le 2026-08-27, dont l'essentiel est la
-  page MIDI (matrice d'aiguillage, liste de fusion) : chaque fonctionnalité d'interface
-  atterrit ici faute de découpage, ce qui rend ce chantier un peu plus cher à chaque fois. Le filet préalable existe (boot GUI dans `run_all.py`, mode
-  harnais sans trace — cf. `CHANGELOG.md`) ; reste le découpage : une `struct App`
-  absorbant les globaux, `main()` sous 300 lignes, en généralisant le pattern de requêtes
-  de `MediaPages`. Ne PAS refondre la boucle en même temps qu'autre chose.
+- **A9 ◐ — `main.cpp` : 5 100 → 28 lignes ; reste LA BOUCLE.** Fait le 2026-08-30
+  (détail au `CHANGELOG.md`). `main()` tient en **10 lignes** — `appInit` → `appLoop`
+  → `appShutdown` — et les **84 globaux `g_*` n'existent plus** : ils sont les membres
+  d'une `struct App` (`src/gui/App.hpp`) qui possède aussi la SESSION (Machine, Audio,
+  MIDI, réseau, écran) et les treize services que les menus déclenchent (ex-lambdas de
+  `main()` : `applyConfig`, `midiOutApply`, `switchKioskMode`…). Le frontend vit
+  désormais en **onze modules** de `src/gui/` (Configuration, menu borne, fenêtres de
+  debug, écran ST, callbacks GLFW, ancrage, CRT, manettes), chacun recevant `App&` en
+  paramètre : la discipline de requêtes de `MediaPages` est généralisée, une page ne
+  fait rien, elle pose une requête que la boucle consomme.
+  **Reste : `appLoop` — 1758 lignes d'un seul tenant** (`src/gui/AppLoop.cpp`). Elle a
+  été DÉPLACÉE, pas découpée, et c'est délibéré : le garde-fou du plan interdit de
+  combiner deux refontes, et celle-ci a deux verrous propres — une vingtaine de
+  variables de trame partagées entre les phases (`fbw/fbh`, `cTop/cH/cW`, `menuH`,
+  `reqMount*`, `cfgUi`…) et un corps qui traverse des blocs `#if defined(NEOST_WITH_IMGUI)`
+  de plusieurs centaines de lignes, `#else` compris. Prochain pas concret : nommer ces
+  variables de trame dans une `struct Frame` (le même geste qu'`App`, à l'échelle du
+  tour), PUIS couper aux frontières déjà commentées (entrées / trames dues / dessin /
+  requêtes / présentation).
+  ⚠ Ce qui a rendu le chantier faisable sans filet de test neuf : chaque déplacement
+  était MÉCANIQUE (aucun corps réécrit — les fonctions extraites reçoivent un paramètre
+  nommé `A`, et chacune ouvre sur des alias `Machine& machine = *A.machine;` qui rendent
+  le corps déplacé identique au caractère près). Le compilateur a donc attrapé ce qu'un
+  test n'aurait pas vu, et les paliers `fast` puis `full` ont gardé le reste.
+
 - **A10 ◐ — Étalons adossés à des ROM propriétaires : 3 migrés, 4 restants.**
   Migrés sur `etos192fr` le 2026-08-28, référence commise INCHANGÉE (0 px / 114816,
   crop `buffer_noled`) : `cuddly_demos` (--frames 3500 → 3655), `nocooper` (6802 → 6932),

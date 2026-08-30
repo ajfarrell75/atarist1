@@ -26,9 +26,14 @@ Le départ absolu est libre (Play a été pressé « quand on a pu ») : on alig
 première note.
 """
 import argparse
+import re
 import struct
 import sys
 
+# Horloge CPU du ST. Le dump headless l'ANNONCE dans son en-tête (« cpu_hz=… ») et
+# read_log la lit de là : cette valeur n'est qu'un repli pour un fichier sans en-tête.
+# Elle ne doit donc jamais diverger de neost::pacing::kCpuHzInt (src/core/Pacing.hpp),
+# mais elle ne peut pas non plus l'inclure — c'est du Python.
 CPU_HZ = 8021248.0
 
 
@@ -39,12 +44,19 @@ def read_log(path: str):
     """[(secondes, octets du message)] — canal, SysEx complets, temps réel."""
     msgs, status, pending, t0, sysex = [], 0, bytearray(), 0.0, None
     need = 0
+    hz = CPU_HZ
     with open(path, encoding='utf-8', errors='replace') as fh:
         for ln in fh:
             if not ln.strip() or ln[0] == '#':
+                # Le producteur date ses octets en CYCLES : c'est son horloge qui
+                # convertit, pas la nôtre. Sans ça, changer kCpuHzInt d'un côté
+                # décalait silencieusement toutes les mesures de tempo de l'autre.
+                m = re.search(r"cpu_hz=(\d+)", ln)
+                if m:
+                    hz = float(m.group(1))
                 continue
             cyc, hx = ln.split()
-            t, b = int(cyc) / CPU_HZ, int(hx, 16)
+            t, b = int(cyc) / hz, int(hx, 16)
             if b >= 0xF8:                                   # temps réel : hors-bande
                 msgs.append((t, bytes([b])))
                 continue

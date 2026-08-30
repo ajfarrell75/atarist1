@@ -27,7 +27,12 @@ namespace neost::pacing {
 inline constexpr double kCpuHz = 8021248.0;
 // Même horloge, en ENTIER : les puces qui comptent des cycles émulés (RTC,
 // son DMA, UltraSatan) travaillent en int64 et n'ont que faire d'un double.
-// C'est le SEUL littéral 8021248 de l'arbre — tout le reste pointe ici.
+// RÈGLE : c'est le seul littéral 8021248 du code C++ — tout le reste pointe ici.
+// Elle a déjà cédé une fois sans que personne ne le voie (Mfp.cpp calculait son
+// débit série sur un `int64_t(8021248)` recopié, et l'en-tête du dump MIDI du
+// headless ANNONÇAIT une horloge en dur — recomptés et corrigés le 2026-08-30).
+// Une seule exception assumée : tools/midi_compare.py, qui est du Python et ne
+// peut pas inclure ceci — il LIT donc « cpu_hz= » dans l'en-tête du dump.
 inline constexpr int64_t kCpuHzInt = 8021248;
 
 // Durée RÉELLE d'une trame émulée. La cadence suit la GÉOMÉTRIE, jamais un 20 ms

@@ -22,8 +22,7 @@ read8/write8 vers les composants), et **le cœur ne dépend pas du GUI**.
 
 ```
 src/
-  main.cpp                  Frontend GUI : GLFW + OpenGL (texture Shifter) + ImGui,
-                            clavier/souris → IKBD, barre résolution, débogueur, kiosk.
+  main.cpp                  Point d'entrée, 28 lignes : appInit → appLoop → appShutdown.
   core/
     Bus.{hpp,cpp}           Memory map + dispatch MMIO + bus errors (busFault/buildIoFault).
     Cpu68k.{hpp,cpp}        Wrapper Moira (cycle-exact) : accès mémoire, int-ack vectorisé,
@@ -65,10 +64,28 @@ src/
                             ISP1160 du NetUSBee (port cartouche, avec Ne2000). Cf. docs/EXTENSIONS.md.
   net/                      Couche réseau hôte (neost_net) : Socket (TCP/UDP partagé),
                             HayesModem, MidiRing, NetBackend/SlirpBackend.
-  gui/                      Extraits de main.cpp : AppConfig (neost.cfg + profils
-                            profiles/*.cfg — parseConfigLine / writeConfigKeys /
-                            writeConfigAtomic), MediaPages (pages supports), UiCommon
-                            (pictogrammes), CrtEffectStack + OpenGLShader (passe CRT).
+  gui/                      LE frontend fenêtré (A9, 2026-08-30 : main.cpp est passé de
+                            5 100 à 28 lignes, ses 84 globaux `g_*` ont un propriétaire).
+    App.{hpp,cpp}           `struct App` : TOUT l'état du frontend (ex-`g_*`) + la session
+                            (Machine, Audio, MIDI, réseau, écran) + les services que les
+                            menus déclenchent (applyConfig, midiOutApply, switchKioskMode…).
+                            `app()` = l'instance unique, pour les seuls callbacks GLFW.
+    AppInit.cpp             Avant la 1re trame : ligne de commande (parseCommandLine),
+                            chemins, fenêtre, Machine, montages, hôtes audio/MIDI/réseau,
+                            ImGui. Renvoie < 0 pour « boucler », sinon un code de sortie.
+    AppLoop.cpp             La boucle (entrées → trames dues → dessin → requêtes → swap)
+                            et l'arrêt. ⚠ Encore d'un seul tenant — déplacée, pas découpée.
+    ConfigWindow.{hpp,cpp}  Fenêtre « Configuration » (14 pages) + fenêtre Disquettes.
+                            `ConfigUi` porte les requêtes ; la fenêtre ne monte rien.
+    KioskMenu.{hpp,cpp}     Menu plein écran de la borne + scrutations (jeux, dossiers).
+    DebugWindows.{hpp,cpp}  Hexa, CPU, joystick, débogueur.
+    StScreenView.{hpp,cpp}  `GlScreen` (texture ARGB du Shifter) + passe CRT + les deux
+                            cadrages (viewport borne / fenêtre bureau), même zoom adaptatif.
+    InputCallbacks.{hpp,cpp} Callbacks GLFW clavier/souris (signature imposée → `app()`).
+    DockLayout / CrtUi / JoyMap / GlHeaders / MediaPages / UiCommon / KeyboardWindow
+    AppConfig.{hpp,cpp}     neost.cfg + profils profiles/*.cfg (parseConfigLine /
+                            writeConfigKeys / writeConfigAtomic) — logique pure, testée.
+    CrtEffectStack + OpenGLShader : la passe CRT elle-même.
   util/HostPath.{hpp,cpp}   UNE définition des chemins hôte (sémantiques POSIX ET Windows).
   audio/                    Backend miniaudio (Audio, DriveSound).
   headless/                 Runner déterministe + traces.
@@ -80,24 +97,24 @@ extern/  imgui/ miniaudio/ (sous-modules) · moira/ (VENDORISÉ, cf. NEOST_VENDO
 extern/hatari/src           SOURCE DE VÉRITÉ matérielle (lue, pas compilée)
 ```
 
-## Mode kiosk — invariants d'implémentation (`main.cpp`)
+## Mode kiosk — invariants d'implémentation (`gui/AppInit.cpp`, `gui/AppLoop.cpp`, `gui/KioskMenu.cpp`)
 
 Usage, menu manette et réglages → [`docs/KIOSK.md`](docs/KIOSK.md). Ici, seulement ce
 qu'il ne faut pas casser en touchant au code :
 
 - **Parsing** : les drapeaux `--*` sont filtrés ; les arguments POSITIONNELS restants
   donnent ROM (0) et disquette (1). Ne pas remettre d'accès `argv[1/2]` en dur.
-- **Config figée** : `saveConfig()` sort immédiatement si `g_kiosk` **ou**
-  `g_kioskLaunched` (invariant de DÉPLOIEMENT : une session lancée en `--kiosk` reste
+- **Config figée** : `saveConfig()` sort immédiatement si `App::kiosk` **ou**
+  `App::kioskLaunched` (invariant de DÉPLOIEMENT : une session lancée en `--kiosk` reste
   figée même après un retour au bureau par F8), **sauf** `force=true` — réservé aux deux
   réglages que la borne doit mémoriser depuis son menu, `kiosk_romdir=` et `joymap=`.
-  Un `force=true` repart de `g_cfgPristine` et n'y reporte QUE ces champs : la structure
+  Un `force=true` repart de `App::cfgPristine` et n'y reporte QUE ces champs : la structure
   en mémoire est salie en séance, la réécrire entière ferait fuir les réglages du dernier
   visiteur. Un `--kiosk` de test n'écrase donc jamais rom/disk/machine. **Les profils
   nommés obéissent au même gel** : `profiles/*.cfg` reste lisible et chargeable, mais
   enregistrer/écraser/supprimer est grisé ET refusé côté boucle (double garde — c'est le
   seul autre chemin du frontend qui écrit sur le disque).
-- **Chrome masqué** : tout le bloc ImGui est sous `if (!g_kiosk)` ; la trame ImGui reste
+- **Chrome masqué** : tout le bloc ImGui est sous `if (!A.kiosk)` ; la trame ImGui reste
   créée/rendue à vide. Le dockspace est gardé VIVANT (`KeepAliveOnly`) sinon l'aller-retour
   bureau→borne→bureau désancre toutes les fenêtres.
 - **Bascule à chaud (F8)** : instantané `saveState` → changement de moniteur GLFW →
@@ -106,7 +123,7 @@ qu'il ne faut pas casser en touchant au code :
   la HAUTEUR, ratio gardé. La passe CRT est demandée à la taille du cadre entier À CE
   ZOOM, pas à celle de l'écran — sinon masque et scanlines sont magnifiés par le viewport
   et moirent.
-- **Entrées** : souris capturée + curseur masqué d'emblée ; `g_kbdJoy` forcé ON ; DEL ne
+- **Entrées** : souris capturée + curseur masqué d'emblée ; `App::kbdJoy` forcé ON ; DEL ne
   libère PAS la souris. Sortie : **Alt+F4** (géré explicitement — l'exclusif ne relaie pas
   toujours le « close » du WM) ou chord **Ctrl+Shift+Q** ~0,7 s. On ne bloque jamais
   `glfwWindowShouldClose`.

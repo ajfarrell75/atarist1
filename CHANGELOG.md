@@ -26,6 +26,139 @@ Ripper, DAC Pro Sound) avec page Dongles, `disks/dongles.txt` et oracle de rejeu
 vérifié note à note** en headless, corpus MIDI piano/blues ; port MIDI ALSA sous Linux ;
 save-state v16. Détail dans les chantiers datés ci-dessous.
 
+## A9 — `main.cpp` passe de 5 100 lignes à 28 (2026-08-30)
+
+Le fichier le plus gros du dépôt était aussi le seul où rien ne pouvait sortir. Il
+portait **84 variables `g_*`** à liaison interne et un `main()` de **2 505 lignes**, dont
+une boucle de 1 600. Chacun des 84 globaux se justifiait pris isolément — un callback
+GLFW n'a pas de paramètre où passer un contexte, une requête posée par un menu se
+consomme en fin de trame — mais leur SOMME verrouillait le fichier : aucune fonction ne
+pouvait déménager sans emporter la moitié du tas avec elle, donc toute nouvelle page
+d'interface atterrissait là. Mesure du coût de l'attente : **+286 lignes en deux jours**
+(4 814 le 27, 5 013 le 29, 5 100 le 30), l'essentiel étant la page MIDI.
+
+**L'état a un propriétaire.** `src/gui/App.hpp` — une `struct App` qui contient les 84
+ex-globaux (mêmes valeurs initiales, mêmes commentaires, regroupés par thème), puis la
+SESSION que `main()` tenait en variables locales : `Machine`, `Audio`, `DriveSound`,
+`MidiOutHost`/`MidiInHost`/`Mt32Synth`, les deux backends réseau, le modem, l'écran GL,
+les chemins de données et la config de travail. Possédés par `unique_ptr` sur types
+incomplets : un fichier d'interface inclut `App.hpp` sans traîner tout le cœur derrière.
+`app()` rend l'instance unique — et c'est réservé aux **callbacks GLFW et aux
+gestionnaires de réglages ImGui**, dont la signature est imposée ; tout le reste reçoit
+`App&` en paramètre.
+
+**Les treize lambdas de `main()` sont devenues des méthodes** : `applyConfig`,
+`midiOutApply`, `midiInApply`, `midiLearnUids`, `usatanApply`, `slirpApply`,
+`etherApply`, `netUsbeeApply`, `modemApply`, `neBackend`, `resolvePath`,
+`loadDongleTable`, `switchKioskMode`. Elles capturaient `[&]` la moitié de `main()` ;
+elles agissent maintenant sur une session nommée.
+
+**Onze modules dans `src/gui/`**, chacun prenant `App&` : `ConfigWindow` (la fenêtre de
+14 pages, 810 l.), `KioskMenu` (le menu borne, 421 l.), `DebugWindows` (hexa, CPU,
+joystick, débogueur, 344 l.), `StScreenView` (`GlScreen` + passe CRT + les deux
+cadrages, 197 l.), `InputCallbacks`, `DockLayout`, `CrtUi`, `JoyMap`, `GlHeaders`,
+`AppInit` (l'avant-première-trame, 435 l. + un `parseCommandLine` séparé de 105 l.),
+`AppLoop` (la boucle + l'arrêt). La discipline de requêtes de `MediaPages` est
+généralisée : **une page ne fait rien**, elle lit un état et pose une requête que la
+boucle consomme à une frontière de trame — c'est précisément ce qui permet à 810 lignes
+de fenêtre de vivre ailleurs que dans la boucle qui les exécute.
+
+`main()` tient en **10 lignes** : `appInit` → `appLoop` → `appShutdown`.
+
+**Ce qui N'A PAS été fait, et pourquoi.** `appLoop` fait toujours **1 758 lignes d'un
+seul tenant**. Elle a été DÉPLACÉE, pas découpée. Deux raisons, l'une de méthode et
+l'autre technique : le garde-fou du plan interdit de combiner deux refontes (« ne pas
+refondre la boucle en même temps qu'autre chose ») ; et la boucle a ses propres verrous
+— une vingtaine de variables de trame partagées entre les phases (`fbw/fbh`,
+`cTop/cH/cW`, `menuH`, `reqMount*`, `cfgUi`…) et un corps qui traverse des blocs
+`#if defined(NEOST_WITH_IMGUI)` de plusieurs centaines de lignes, `#else` compris. Le
+prochain pas est écrit au TODO : nommer ces variables dans une `struct Frame` — le même
+geste qu'`App`, à l'échelle du tour — PUIS couper aux frontières déjà commentées.
+
+**Ce qui a rendu le chantier sûr sans filet de test neuf : aucun corps n'a été
+réécrit.** Deux conventions rendent chaque déplacement textuellement nul :
+1. la fonction extraite **s'appelle son paramètre `A`**, comme s'appelait la référence
+   au niveau fichier ;
+2. elle **ouvre sur des alias** — `Machine& machine = *A.machine;`, `Config& cfg =
+   A.cfg;` — si bien que le corps déplacé est identique au caractère près.
+Le compilateur a donc attrapé ce qu'un test n'aurait pas vu (une lambda sans capture qui
+lisait un global, un `const` de signature, une inclusion manquante), et les paliers ont
+gardé le reste : **`--tier full` est vert, doc-claims compris** — tous les étalons pixel,
+le diagnostic MegaSTE 12/12, le boot GUI, à l'octet près.
+
+Deux effets de bord réparés au passage :
+- **les modules extraits gardent la sévérité de `main.cpp`.** Sans une ligne ajoutée à
+  `set_source_files_properties`, sortir du code de `main.cpp` aurait silencieusement
+  désarmé `-Wall -Wextra -Wpedantic` sur les 2 400 lignes déplacées. Vérifié : zéro
+  avertissement, strict armé.
+- **l'inclusion GL a un seul endroit** (`gui/GlHeaders.hpp`) : la danse
+  macOS/`glext.h`-hors-macOS était recopiée, elle l'aurait été une fois de plus.
+
+Garde-fou déplacé : `tools/check_doc_claims.py` ne surveille plus la taille de
+`main.cpp` (28 lignes, plus rien à surveiller) mais celle d'`AppLoop.cpp` — le RESTE.
+Fil-piège vérifié en le déclenchant.
+
+Références de fichier corrigées dans la foulée : `DEV.md` (arborescence `src/`,
+invariants du mode borne), `docs/HATARI_MAPPING.md` (`main.cpp:531-547` → `keymap` vit
+dans `gui/InputCallbacks.cpp` + `gui/StKeys` ; `main.cpp:1063` → `core/Pacing.hpp:27`).
+
+### Et une affirmation fausse trouvée en corrigeant ces renvois
+
+`core/Pacing.hpp` écrivait : « C'est le SEUL littéral 8021248 de l'arbre — tout le reste
+pointe ici. » **C'était faux**, et depuis assez longtemps pour que personne ne le
+recompte : `io/Mfp.cpp:119` calculait la durée d'un octet série sur un
+`int64_t(8021248)` recopié, et `headless/main_headless.cpp` écrivait `cpu_hz=8021248`
+**en dur dans l'en-tête du dump MIDI** — le fichier même dont `tools/midi_compare.py`
+se sert pour convertir des cycles en secondes. Les deux pointent maintenant sur
+`neost::pacing::kCpuHzInt` (substitution à valeur ET type identiques : `int64_t`,
+8021248 — l'en-tête du dump ressort octet pour octet).
+
+Et `midi_compare.py` **lit désormais `cpu_hz=` dans l'en-tête** au lieu de porter sa
+propre copie de la constante : le producteur date ses octets en cycles, c'est donc son
+horloge qui doit convertir. Vérifié sur trois dumps forgés — en-tête présent (1,0 s au
+cycle 8021248), en-tête absent (repli sur la constante, même résultat), en-tête
+annonçant la moitié de l'horloge (le temps double, l'outil SUIT le producteur). Sans
+ça, changer `kCpuHzInt` d'un côté décalait silencieusement toutes les mesures de tempo
+de l'autre — l'outil aurait mesuré une dérive qui n'existait pas.
+
+Le commentaire de `Pacing.hpp` ne se contente plus d'affirmer : il énonce la règle,
+**dit qu'elle a déjà cédé une fois**, et nomme la seule exception assumée (le script
+Python, qui ne peut pas inclure un `.hpp`).
+
+### Et les trois avertissements que personne ne voyait plus
+
+En recompilant TOUT (`touch` sur chaque `.cpp`, pas seulement les cibles reconstruites
+au fil du chantier), il restait **trois avertissements permanents**, tous de la même
+famille et tous nés du travail sur les identifiants MIDI du 2026-08-29 :
+`missing field 'uid' initializer` — `gui/AppConfig.cpp` ×2 et `headless/main_headless.cpp`.
+Anodins pris un par un ; ensemble, c'est ce qui apprend à ne plus lire les
+avertissements, et `-Wall -Wextra -Wpedantic` cesse alors d'être un garde-fou. **Zéro
+avertissement sur une reconstruction complète, toutes cibles.**
+
+Le correctif ne se contente pas de faire taire : les trois sites construisent
+maintenant l'entrée champ par champ, avec la raison écrite — `uid` vide n'est pas un
+oubli, c'est l'état exact d'un format qui est ANTÉRIEUR aux identifiants (et que
+`App::midiLearnUids()` renseignera à la première ouverture réussie). Bénéfice de
+forme : un champ ajouté demain gardera son défaut au lieu d'être recopié à la main.
+
+**Et ce chemin-là n'était couvert nulle part.** Le format hérité (`midi_out_device=`,
+`midi_in_device=`, clés répétables) n'existe que pour qu'un `neost.cfg` d'avant ne perde
+pas son studio en silence — son seul symptôme de panne serait une liste d'appareils vide
+au démarrage suivant, sans message. Toucher à un tel chemin sans le border n'était pas
+tenable : `tests/selftest_logic.cpp` gagne **4 assertions** (nom relu des deux côtés,
+masque de canaux `1,2,10` → `$0203`, canal d'entrée, et l'invariant « uid vide »),
+palier `fast`. 297 → **301 assertions**. Vérifiées par MUTATION : un `substr(16)` changé
+en `substr(17)` fait rougir la première — le test mord.
+
+La ligne d'inventaire correspondante de `docs/HATARI_MAPPING.md` a été **recomptée** :
+son verdict « 8021248 en dur à 5-6 endroits, non centralisé » était périmé depuis A28,
+et ses cinq `fichier:ligne` désignaient tous du code sans rapport (`Audio.cpp:74`,
+`DmaSound.cpp:27`, `Rtc.hpp:52`, `Mfp.cpp:226` — non revérifiés depuis). Ce qui reste
+vrai de cette divergence, et seul : **une seule fréquence pour toutes les machines**,
+pas de variantes NTSC/MegaSTE. Leçon, la même qu'A38 : un chiffre posé dans un document
+et jamais recompté finit par mentir, et un `fichier:ligne` non revérifié ment plus vite
+encore que le chiffre.
+
 ## MIDI — deux claviers du même modèle cessent d'être le même clavier (2026-08-29)
 
 Limite inscrite au TODO la veille au soir, levée. La config désignait les appareils par

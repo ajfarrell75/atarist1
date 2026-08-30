@@ -260,6 +260,33 @@ static void testConfigParser() {
         std::string l2;
         while (std::getline(iv, l2)) parseConfigLine(relu, l2);
         checkBool("cfg MIDI : et elle efface bien", relu.midiOutDevices.empty(), true);
+
+        // FORMAT HÉRITÉ (clés répétables du 2026-08-29 au matin) : encore LU pour qu'un
+        // neost.cfg d'avant ne perde pas son studio en silence. Ce chemin n'était couvert
+        // NULLE PART — et c'est justement celui qu'on ne remarque pas quand il casse,
+        // puisque son seul symptôme est une liste d'appareils vide au démarrage suivant.
+        // Il porte aussi l'invariant « uid vide » : l'ancien format n'en a pas, et c'est
+        // App::midiLearnUids() qui le renseignera à la première ouverture réussie.
+        {
+            Config anc;
+            for (const char* l : { "midi_out_device=Circuit Tracks",
+                                   "midi_out_channels=1,2,10",
+                                   "midi_in_device=Keystation 49",
+                                   "midi_in_channel=3" })
+                parseConfigLine(anc, l);
+            checkBool("cfg MIDI hérité : la sortie est relue",
+                      anc.midiOutDevices.size() == 1 &&
+                      anc.midiOutDevices[0].name == "Circuit Tracks", true);
+            checkBool("cfg MIDI hérité : son masque de canaux suit",
+                      anc.midiOutDevices.size() == 1 &&
+                      anc.midiOutDevices[0].channels == 0x0203, true);
+            checkBool("cfg MIDI hérité : l'entrée est relue, avec son canal",
+                      anc.midiInDevices.size() == 1 &&
+                      anc.midiInDevices[0].name == "Keystation 49" &&
+                      anc.midiInDevices[0].channel == 3, true);
+            checkBool("cfg MIDI hérité : uid VIDE des deux côtés (l'ancien format n'en a pas)",
+                      anc.midiOutDevices[0].uid.empty() && anc.midiInDevices[0].uid.empty(), true);
+        }
     }
 
     // CRLF : un fichier passé par Windows, un éditeur ou un partage réseau. Le '\r'

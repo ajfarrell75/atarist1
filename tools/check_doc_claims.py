@@ -74,10 +74,12 @@ CLAIMS = [
     ("TODO.md", r"\*\*(\d+) étalons\s+pixel sur \d+\*\*", free_etalons, 0.0),
     ("TODO.md", r"\*\*\d+ étalons\s+pixel sur (\d+)\*\*",
      lambda: len(machine_etalons()), 0.0),
-    # Grandeur qui bouge à chaque édition légitime → marge 3 %. Au-delà, la doc
-    # raconte un autre fichier que celui du dépôt.
-    ("TODO.md", r"mesuré 2026-08-\d+ : \*\*(\d[\d\s ]*\d) lignes\*\*",
-     lambda: line_count("src/main.cpp"), 0.03),
+    # A9 (2026-08-30) : main.cpp est retombé à un point d'entrée de 28 lignes. Le
+    # chiffre à garder est désormais celui du RESTE — la boucle, seule pièce du
+    # frontend encore d'un seul tenant. Marge 3 % : elle bouge à chaque édition
+    # légitime ; au-delà, la doc raconte un autre fichier que celui du dépôt.
+    ("TODO.md", r"`appLoop` — (\d+) lignes d'un seul tenant",
+     lambda: line_count("src/gui/AppLoop.cpp"), 0.03),
     ("tools/etalons.json", r"COUVERTURE \((\d+) étalons machine",
      lambda: len(machine_etalons()), 0.0),
 ]
