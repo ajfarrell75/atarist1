@@ -180,6 +180,8 @@ Bundled third-party components, with thanks:
 | [GLFW](https://www.glfw.org/) 3.x (built in, statically on macOS/Windows) | window, input, GL context | zlib/libpng |
 | [libmt32emu](https://github.com/munt/munt) 2.8.3 (Munt, vendored, **statically linked**) | Roland MT-32 / CM-32L on MIDI OUT | **LGPL 2.1+** — see note below |
 | [stb_image](https://github.com/nothings/stb) v2.30 | decodes the keyboard photo in the GUI | MIT **or** public domain (Unlicense) |
+| [TinySoundFont](https://github.com/schellingb/TinySoundFont) v0.9 (`extern/tsf`, vendored) | built-in General MIDI synth outside macOS | MIT |
+| TimGM6mb (`roms/gm/TimGM6mb.sf2`, by Tim Brechbill) | General MIDI SoundFont for the built-in synth | GPLv2 (data, aggregated) |
 | [SDL2](https://libsdl.org/) 2.30.9 (**Android package only**) | window, GLES, audio, life cycle | zlib |
 | [EmuTOS](https://emutos.sourceforge.io/) (`roms/etos*`) | free TOS, the default | GPLv2 |
 | DejaVu / Font Awesome | UI fonts | respective free licences |

@@ -17,6 +17,7 @@
 #include "audio/MidiDeviceProfiles.hpp"
 #include "audio/MidiInHost.hpp"
 #include "audio/Mt32Synth.hpp"
+#include "audio/GmSynth.hpp"
 #include "core/Machine.hpp"
 #include "gui/App.hpp"
 #include "gui/CrtUi.hpp"
@@ -353,9 +354,13 @@ void drawConfigWindow(App& A, ConfigUi& ui) {
             fader("DMA sound (STE)", ui.mixDma, isSte, "(ST: no DMA sound)");
             fader("Floppy drive", ui.mixDrive, ui.driveSoundAvail, "(no samples)");
             fader("Roland MT-32 / CM-32L", ui.mixMt32, Mt32Synth::available(), "(no libmt32emu)");
+            // Le DLSMusicDevice macOS sort HORS mixeur (AUGraph → sortie système) :
+            // le fader ne vaut que pour le chemin TinySoundFont, mixé ici.
+            if (!MidiOutHost::synthAvailable())
+                fader("Built-in GM synth", ui.mixGm, GmSynth::available(), "(no SoundFont)");
             fader("Pro Sound DAC (printer port)", ui.mixDac, ui.machine && ui.machine->ports.usesPortBDac(), "(none plugged - Dongles page)");
             if (ImGui::SmallButton("Reset mixer")) {
-                ui.mixYm = ui.mixDma = ui.mixDrive = ui.mixMt32 = ui.mixDac = 1.0f; ui.mixDirty = ui.mixDone = true;
+                ui.mixYm = ui.mixDma = ui.mixDrive = ui.mixMt32 = ui.mixDac = ui.mixGm = 1.0f; ui.mixDirty = ui.mixDone = true;
             }
         }
         ImGui::Separator();
@@ -474,17 +479,16 @@ void drawConfigWindow(App& A, ConfigUi& ui) {
         }
         ImGui::Separator();
 
-        // (b) Synthé GM intégré : macOS uniquement, et on le DIT au lieu d'une case morte.
-        if (MidiOutHost::synthAvailable()) {
+        // (b) Synthé GM intégré : DLSMusicDevice sous macOS, TinySoundFont ailleurs
+        // (banque .sf2 — TimGM6mb livrée dans roms/gm/, ou une banque système).
+        {
             bool gm = cfg.midiOutGm;
             if (ImGui::Checkbox("Built-in General MIDI synth", &gm)) ui.reqMidiOutGm = gm ? 1 : 0;
-            ImGui::TextDisabled("  Apple DLSMusicDevice, nothing to install.");
-        } else {
-            ImGui::BeginDisabled(true);
-            bool no = false; ImGui::Checkbox("Built-in General MIDI synth", &no);
-            ImGui::EndDisabled();
-            ImGui::TextDisabled("  macOS only. Elsewhere: use the port above");
-            ImGui::TextDisabled("  with FluidSynth.");
+            if (MidiOutHost::synthAvailable())
+                ImGui::TextDisabled("  Apple DLSMusicDevice, nothing to install.");
+            else
+                ImGui::TextDisabled("  SoundFont: %s  -  %s", cfg.gmSoundFont.c_str(),
+                                    ui.gmStatus.empty() ? "(off)" : ui.gmStatus.c_str());
         }
         ImGui::Separator();
 

@@ -23,6 +23,7 @@
 #include "audio/MidiInHost.hpp"
 #include "audio/MidiOutHost.hpp"
 #include "audio/Mt32Synth.hpp"
+#include "audio/GmSynth.hpp"
 #include "core/Machine.hpp"
 #include "gui/KeyboardWindow.hpp"
 #include "gui/StKeys.hpp"
@@ -325,8 +326,18 @@ void App::midiOutApply() {
     const std::string& exeDir = A.exeDir;
     MidiOutHost& midiOut = *A.midiOut;
     Mt32Synth& mt32 = *A.mt32;
+    GmSynth& gm = *A.gm;
     uint32_t& audioRate = A.audioRate;
-    if (cfg.midiOutGm)   { if (!midiOut.openSynth()) cfg.midiOutGm = false; } else midiOut.closeSynth();
+    // Synthé GM intégré : DLSMusicDevice quand l'OS en a un (macOS), sinon le
+    // TinySoundFont vendorisé, mixé dans la sortie comme le MT-32 (cf. GmSynth.hpp).
+    if (cfg.midiOutGm) {
+        if (MidiOutHost::synthAvailable()) { if (!midiOut.openSynth()) cfg.midiOutGm = false; }
+        else if (!gm.isOpen() && !gm.open(resolveData(cfg.gmSoundFont, exeDir), audioRate)) {
+            A.stateMsg = "GM synth: " + gm.lastError(); A.stateMsgFrames = 300;
+            std::fprintf(stderr, "[gm] %s\n", gm.lastError().c_str());
+            cfg.midiOutGm = false;
+        }
+    } else { midiOut.closeSynth(); gm.close(); }
     if (cfg.midiOutPort) {
         if (!midiOut.openVirtualPort()) {
             cfg.midiOutPort = false;
@@ -351,10 +362,11 @@ void App::midiOutApply() {
             cfg.midiOutMt32 = false;
         }
     } else mt32.close();
-    if (midiOut.anyOpen() || mt32.isOpen())
-        machine.midi.setMidiSinkTimed([&midiOut, &mt32](uint8_t b, int64_t c) {
+    if (midiOut.anyOpen() || mt32.isOpen() || gm.isOpen())
+        machine.midi.setMidiSinkTimed([&midiOut, &mt32, &gm](uint8_t b, int64_t c) {
             if (midiOut.anyOpen()) midiOut.byteAt(b, c);
             mt32.byteAt(b, c);
+            gm.byteAt(b, c);
         });
     else machine.midi.setMidiSinkTimed({});
 }

@@ -306,9 +306,13 @@ set_source_files_properties(src/headless/main_headless.cpp
 # que ce que le 6850 accepte, perdre le NEUF en saturation) est de la logique pure,
 # testable sans le moindre appareil branché — et c'est précisément la partie qui
 # casse silencieusement, un débordement de 6850 mangeant le statut d'un message.
-add_executable(neost-selftest tests/selftest_logic.cpp src/audio/MidiInHost.cpp)
+# GmSynth y entre pour sa TABLE DE VÉRITÉ (banque livrée roms/gm + datation au
+# cycle du rendu) : c'est le garde du synthé GM intégré des plateformes non-macOS.
+add_executable(neost-selftest tests/selftest_logic.cpp src/audio/MidiInHost.cpp
+    src/audio/GmSynth.cpp)
 target_link_libraries(neost-selftest PRIVATE neost_core)
-target_include_directories(neost-selftest PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_include_directories(neost-selftest PRIVATE "${CMAKE_SOURCE_DIR}/src"
+    "${CMAKE_SOURCE_DIR}/extern/tsf")
 if(APPLE)
     # Le backend CoreMIDI est compilé dans le fichier, donc ses symboles doivent se
     # résoudre. Pas d'ALSA ici À DESSEIN : le test ne vise que le tampon de gigue, qui
@@ -578,9 +582,13 @@ add_executable(neost
     src/gui/StbImage.cpp
     src/audio/MidiOutHost.cpp
     src/audio/MidiInHost.cpp
-    src/audio/Mt32Synth.cpp)
+    src/audio/Mt32Synth.cpp
+    src/audio/GmSynth.cpp)
 # stb_image (extern/stb, domaine public) : décodage de la photo du clavier (pic/).
 target_include_directories(neost PRIVATE "${CMAKE_SOURCE_DIR}/extern/stb")
+# TinySoundFont (extern/tsf, MIT, un seul header) : le synthé GM intégré des
+# plateformes sans DLSMusicDevice — cf. audio/GmSynth et extern/tsf/NEOST_VENDOR.md.
+target_include_directories(neost PRIVATE "${CMAKE_SOURCE_DIR}/extern/tsf")
 # Plus de branche « absent » : la bibliothèque est dans l'arbre, donc toujours là.
 target_compile_definitions(neost PRIVATE NEOST_WITH_MT32=1)
 if(ALSA_FOUND)

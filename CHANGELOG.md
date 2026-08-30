@@ -26,6 +26,41 @@ Ripper, DAC Pro Sound) avec page Dongles, `disks/dongles.txt` et oracle de rejeu
 vérifié note à note** en headless, corpus MIDI piano/blues ; port MIDI ALSA sous Linux ;
 save-state v16. Détail dans les chantiers datés ci-dessous.
 
+## Le synthé GM intégré cesse d'être un privilège macOS (2026-08-30)
+
+Objectif : **le support MIDI doit être aussi complet sous Linux que sous macOS.**
+L'inventaire donnait un seul manque : la case « Built-in General MIDI synth » était
+morte hors macOS — le commentaire de `MidiOutHost.hpp` affirmait « aucun équivalent
+gratuit et embarquable sous Linux/Windows » et renvoyait l'utilisateur vers un
+FluidSynth à installer et câbler lui-même. Tout le reste (port virtuel ALSA,
+destinations et sources matérielles par nom, MT-32/Munt, profils, panique, avance
+réglable) était déjà à parité.
+
+**Livré** : `audio/GmSynth` — TinySoundFont (**vendorisé** dans `extern/tsf`, MIT, un
+seul header, même politique que Moira/Munt) + banque **TimGM6mb livrée** dans
+`roms/gm/` (5,7 Mo, GPL-2, archive Debian `timgm6mb-soundfont` — l'équivalent de la
+banque GS qu'Apple embarque dans l'OS). `gm_soundfont=` accepte un `.sf2` ou un
+dossier, avec repli sur `/usr/share/soundfonts` et `/usr/share/sounds/sf2`.
+
+Le rendu suit le schéma Mt32Synth, PAS le chemin temps réel du DLSMusicDevice :
+octets datés du cycle 68000 → messages (parseur partagé `MidiMessageParser`) →
+découpe du bloc de la trame aux dates des messages → mix dans `Audio::produceFrame`.
+Précision à l'échantillon, zéro gigue d'hôte — sur ce point Linux sort MIEUX loti que
+macOS. Fader « Built-in GM synth » sur la page Sound (`mix_gm=`), statut de banque sur
+la page MIDI, panique câblée, fermeture/réouverture sur changement de fréquence du
+périphérique et chargement de profil.
+
+Au passage : le libellé du menu Machine disait « CoreMIDI port » même sous Linux —
+il suit désormais `portKindName()` (ALSA). Et Windows, sans rien lui écrire de
+spécifique, gagne le même synthé (TSF est portable ; winmm reste le manque pour le
+port virtuel et les appareils, cf. `TODO.md`).
+
+**Garde** (`neost-selftest`, palier `fast`) : ouverture de la banque LIVRÉE, « la note
+posée à mi-trame ne sonne que la seconde moitié » (datation à l'échantillon), canal 10
+percussif, silence après note-off + release, close idempotent. Vérifié sur machine
+réelle : le Circuit Tracks branché est énuméré (`--midi-list`) et visible en
+destination comme en source.
+
 ## La note de la page MIDI manquait : la police de TEXTE lui volait son codepoint (2026-08-30)
 
 Rapport : « l'icône dans la fenêtre config du MIDI devrait être une note, elle n'apparaît

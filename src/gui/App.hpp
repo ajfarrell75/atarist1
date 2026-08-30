@@ -52,6 +52,7 @@ class Machine;
 class MidiInHost;
 class MidiOutHost;
 class Mt32Synth;
+class GmSynth;
 class NetBackend;
 class NetBackendNull;
 class SlirpBackend;
@@ -275,6 +276,7 @@ struct App {
     std::unique_ptr<MidiOutHost>    midiOut;
     std::unique_ptr<MidiInHost>     midiIn;
     std::unique_ptr<Mt32Synth>      mt32;
+    std::unique_ptr<GmSynth>        gm;           // synthé GM intégré (TSF) — mixé comme le MT-32
     std::unique_ptr<DriveSound>     drive;
     std::unique_ptr<Audio>          audio;        // DERNIER des consommateurs : détruit en premier
     std::unique_ptr<GlScreen>       screen;

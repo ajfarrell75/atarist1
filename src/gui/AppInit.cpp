@@ -82,6 +82,7 @@ using namespace neost::appconfig;
 #include "audio/MidiInHost.hpp"
 #include "audio/MidiOutHost.hpp"
 #include "audio/Mt32Synth.hpp"
+#include "audio/GmSynth.hpp"
 #include "imgui_impl_opengl2.h"
 #include "gui/UiCommon.hpp"    // pictogrammes Font Awesome + IconButton
 #include "gui/MediaPages.hpp"  // pages Disquettes / Cartouche / Disque dur / Réseau
@@ -452,8 +453,9 @@ int appInit(App& A, int argc, char** argv) {
             else if (machine.ports.at(r.port) == r.dev) A.autoPortDev[int(r.port)] = r.dev;
         }
     }
-    // Sortie MIDI hôte (macOS) : synthé GM intégré et/ou port CoreMIDI virtuel. Dès
-    // qu'une sortie est ouverte, l'ACIA y envoie MIDI OUT (au lieu du bouclage).
+    // Sortie MIDI hôte : synthé GM intégré (DLSMusicDevice macOS) et/ou port virtuel
+    // (CoreMIDI/ALSA) et/ou appareils matériels. Dès qu'une sortie est ouverte,
+    // l'ACIA y envoie MIDI OUT (au lieu du bouclage).
     A.midiOut = std::make_unique<MidiOutHost>();
     MidiOutHost& midiOut = *A.midiOut;
     // Entrée MIDI hôte : un appareil branché (clavier maître, groovebox) entre dans
@@ -462,6 +464,10 @@ int appInit(App& A, int argc, char** argv) {
     // Roland MT-32/CM-32L (Munt) : rendu DANS la sortie audio, daté au cycle (pas de gigue).
     A.mt32 = std::make_unique<Mt32Synth>();
     Mt32Synth& mt32 = *A.mt32;
+    // Synthé GM intégré (TinySoundFont) : même chemin de rendu que le MT-32 — c'est lui
+    // qui sert la case « Built-in General MIDI synth » là où macOS a le DLSMusicDevice.
+    A.gm = std::make_unique<GmSynth>();
+    GmSynth& gm = *A.gm;
     // Fréquence de sortie visée. Ce n'est PAS forcément celle qu'on obtiendra : le
     // périphérique en négocie une (cf. Audio::rate()), et cette lambda s'exécute AVANT
     // que l'objet Audio n'existe. On la corrige juste après audio.start().
@@ -498,7 +504,8 @@ int appInit(App& A, int argc, char** argv) {
     A.audio = std::make_unique<Audio>(machine.psg, driveSoundAvail ? &drive : nullptr, &machine.dmasnd);
     Audio& audio = *A.audio;
     audio.setMt32(&mt32);                // Roland MT-32/CM-32L (Munt) mixé dans la sortie
-    audio.setMixGains(cfg.mixYm, cfg.mixDma, cfg.mixDrive, cfg.mixMt32);   // mixeur (page Sound)
+    audio.setGm(&gm);                    // synthé GM intégré (TSF) mixé dans la sortie
+    audio.setMixGains(cfg.mixYm, cfg.mixDma, cfg.mixDrive, cfg.mixMt32, cfg.mixGm);   // mixeur (page Sound)
     audio.setLatencyMs(uint32_t(cfg.audioLatencyMs < 0 ? 0 : cfg.audioLatencyMs));  // AVANT start (borné dans Audio)
     audio.start();   // échec silencieux possible (CI / pas de carte son)
     // Le périphérique peut rendre une AUTRE fréquence que les 48 kHz demandés (44,1 kHz
@@ -511,7 +518,7 @@ int appInit(App& A, int argc, char** argv) {
                              "and drive sounds\n", audio.rate(), audioRate);
         audioRate = audio.rate();
         if (driveSoundAvail) drive.init(resolveData("roms/drivesound/epson_smd480l", exeDir), audioRate);
-        if (mt32.isOpen()) { mt32.close(); A.midiOutApply(); }
+        if (mt32.isOpen() || gm.isOpen()) { mt32.close(); gm.close(); A.midiOutApply(); }
     }
     // Sink FdcSound armé SEULEMENT si la sortie audio existe : sans elle, produceFrame ne
     // draine jamais DriveSound et chaque Step/Seek/Index allouait un son miniaudio jamais

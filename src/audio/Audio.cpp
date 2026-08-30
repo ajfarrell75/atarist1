@@ -12,6 +12,7 @@
 #include "audio/Audio.hpp"
 #include "audio/DriveSound.hpp"
 #include "audio/Mt32Synth.hpp"
+#include "audio/GmSynth.hpp"
 #include "core/AudioMix.hpp"
 #include "core/YM2149.hpp"
 #include "core/DmaSound.hpp"
@@ -78,6 +79,7 @@ void Audio::produceFrame(int64_t frameCycles, int64_t frameEndCycle) {
         // partait d'un coup dans une seule trame. Devenu atteignable par tous depuis
         // que le MT-32 est actif par défaut.
         if (mt32_) mt32_->clearEvents();
+        if (gm_) gm_->clearEvents();               // même file, même dérive sinon
         return;
     }
     // Périphérique hôte PERDU (débranché, suspend/resume, backend brut) : le thread audio
@@ -136,6 +138,11 @@ void Audio::produceFrame(int64_t frameCycles, int64_t frameEndCycle) {
     if (mt32_ && mt32_->isOpen()) {
         mt32_->setGain(0.9f * gainMt32_);
         mt32_->render(st, n, frameEndCycle >= 0 ? frameEndCycle - frameCycles : 0, frameCycles);
+    }
+    // (7) Synthé GM intégré (TinySoundFont) : même contrat que le MT-32.
+    if (gm_ && gm_->isOpen()) {
+        gm_->setGain(0.9f * gainGm_);
+        gm_->render(st, n, frameEndCycle >= 0 ? frameEndCycle - frameCycles : 0, frameCycles);
     }
     // Volume maître utilisateur (menu), appliqué en RAMPE linéaire sur le bloc depuis la
     // valeur effective du bloc précédent : un saut instantané (mute 1→0 en plein signal,

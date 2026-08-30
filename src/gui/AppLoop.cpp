@@ -83,6 +83,7 @@ using namespace neost::appconfig;
 #include "audio/MidiInHost.hpp"
 #include "audio/MidiOutHost.hpp"
 #include "audio/Mt32Synth.hpp"
+#include "audio/GmSynth.hpp"
 #include "imgui_impl_opengl2.h"
 #include "gui/UiCommon.hpp"    // pictogrammes Font Awesome + IconButton
 #include "gui/MediaPages.hpp"  // pages Disquettes / Cartouche / Disque dur / Réseau
@@ -117,6 +118,7 @@ void appLoop(App& A) {
     MidiOutHost& midiOut = *A.midiOut;
     MidiInHost& midiIn = *A.midiIn;
     Mt32Synth& mt32 = *A.mt32;
+    GmSynth& gm = *A.gm;
     Audio& audio = *A.audio;
     GlScreen& screen = *A.screen;
     DriveSound& drive = *A.drive;
@@ -509,11 +511,18 @@ void appLoop(App& A) {
                     machine.midi.setLoopback(cfg.midiLoopback);
                     saveConfig(A, exeDir, cfg, &machine);
                 }
-                if (MidiOutHost::available()) {
+                // Synthé GM : DLSMusicDevice (macOS) ou TinySoundFont (partout) — la case
+                // vit donc sur toutes les plateformes ; le port virtuel suit son backend.
+                if (MidiOutHost::synthAvailable() || GmSynth::available()) {
                     if (ImGui::MenuItem("MIDI OUT " "\xe2\x86\x92" " built-in General MIDI synth", nullptr, &cfg.midiOutGm)) {
                         A.midiOutApply(); saveConfig(A, exeDir, cfg, &machine);
                     }
-                    if (ImGui::MenuItem("MIDI OUT " "\xe2\x86\x92" " CoreMIDI port \"NeoST MIDI OUT\"", nullptr, &cfg.midiOutPort)) {
+                }
+                if (MidiOutHost::portAvailable()) {
+                    // « CoreMIDI » ou « ALSA » selon l'hôte — le libellé en dur mentait sous Linux.
+                    const std::string portLabel = std::string("MIDI OUT " "\xe2\x86\x92" " ")
+                        + MidiOutHost::portKindName() + " port \"NeoST MIDI OUT\"";
+                    if (ImGui::MenuItem(portLabel.c_str(), nullptr, &cfg.midiOutPort)) {
                         A.midiOutApply(); saveConfig(A, exeDir, cfg, &machine);
                     }
                 }
@@ -759,6 +768,7 @@ void appLoop(App& A) {
         cfgUi.curAcsi   = cfg.acsi.empty()   ? std::string() : A.resolvePath(cfg.acsi);
         cfgUi.curSd2    = cfg.sd2.empty()    ? std::string() : A.resolvePath(cfg.sd2);
         cfgUi.mt32Status = mt32.isOpen() ? (mt32.model() + " running") : mt32.lastError();
+        cfgUi.gmStatus = gm.isOpen() ? (gm.soundFont() + " running") : gm.lastError();
         // Appareils MIDI hôtes : énumération et RECONNEXION à 1 Hz. Le débranchement
         // d'un câble USB ne doit pas demander de rouvrir la configuration, et 60
         // énumérations CoreMIDI par seconde pour deux menus seraient du gaspillage.
@@ -796,7 +806,8 @@ void appLoop(App& A) {
         cfgUi.midiLateBytes = midiOut.lateBytes();
         if (!cfgUi.mixInit) {            // sème les faders depuis la config (une fois)
             cfgUi.mixYm = cfg.mixYm; cfgUi.mixDma = cfg.mixDma; cfgUi.mixDac = cfg.mixDac;
-            cfgUi.mixDrive = cfg.mixDrive; cfgUi.mixMt32 = cfg.mixMt32; cfgUi.mixInit = true;
+            cfgUi.mixDrive = cfg.mixDrive; cfgUi.mixMt32 = cfg.mixMt32; cfgUi.mixGm = cfg.mixGm;
+            cfgUi.mixInit = true;
         }
 
         if (A.showFloppy) drawFloppyWindow(A, cfgUi);
@@ -879,8 +890,8 @@ void appLoop(App& A) {
             }
             if (cfgUi.mixDirty) {
                 cfg.mixYm = cfgUi.mixYm; cfg.mixDma = cfgUi.mixDma; cfg.mixDac = cfgUi.mixDac;
-                cfg.mixDrive = cfgUi.mixDrive; cfg.mixMt32 = cfgUi.mixMt32;
-                audio.setMixGains(cfg.mixYm, cfg.mixDma, cfg.mixDrive, cfg.mixMt32);
+                cfg.mixDrive = cfgUi.mixDrive; cfg.mixMt32 = cfgUi.mixMt32; cfg.mixGm = cfgUi.mixGm;
+                audio.setMixGains(cfg.mixYm, cfg.mixDma, cfg.mixDrive, cfg.mixMt32, cfg.mixGm);
                 machine.psg.setPortBDacGain(cfg.mixDac);
                 cfgUi.mixDirty = false;
             }
@@ -925,9 +936,9 @@ void appLoop(App& A) {
                     A.stateMsgFrames = 150;
                 }
             }
-            // Panique : on la passe AUX DEUX destinations. Le MT-32 est un synthé à part
-            // (il ne voit pas le flux de MidiOutHost), donc lui envoyer les mêmes
-            // contrôleurs est le seul moyen de le faire taire.
+            // Panique : on la passe À TOUTES les destinations. Le MT-32 et le synthé GM
+            // intégré sont des synthés à part (ils ne voient pas le flux de MidiOutHost),
+            // donc leur envoyer les mêmes contrôleurs est le seul moyen de les faire taire.
             if (cfgUi.reqMidiPanic) {
                 cfgUi.reqMidiPanic = false;
                 midiOut.panic();
@@ -935,6 +946,7 @@ void appLoop(App& A) {
                     const uint8_t st = uint8_t(0xB0 | ch);
                     for (uint8_t cc : {uint8_t(120), uint8_t(121), uint8_t(123)}) {
                         mt32.byteAt(st, 0); mt32.byteAt(cc, 0); mt32.byteAt(0, 0);
+                        gm.byteAt(st, 0);   gm.byteAt(cc, 0);   gm.byteAt(0, 0);
                     }
                 }
                 A.stateMsg = "MIDI panic: all notes off"; A.stateMsgFrames = 120;
@@ -1076,9 +1088,10 @@ void appLoop(App& A) {
                     // Son/MIDI du profil : sorties (GM/CoreMIDI/MT-32 + modèle), câble de
                     // bouclage, faders — rejoués ici, et la page Sound ressème ses faders.
                     mt32.close();
+                    gm.close();
                     A.midiOutApply();
                     machine.midi.setLoopback(cfg.midiLoopback);
-                    audio.setMixGains(cfg.mixYm, cfg.mixDma, cfg.mixDrive, cfg.mixMt32);
+                    audio.setMixGains(cfg.mixYm, cfg.mixDma, cfg.mixDrive, cfg.mixMt32, cfg.mixGm);
                     machine.psg.setPortBDacGain(cfg.mixDac);
                     cfgUi.mixInit = false;
                     saveConfig(A, exeDir, cfg, &machine);
@@ -1789,10 +1802,12 @@ void appShutdown(App& A) {
     ImGui_ImplGlfw_Shutdown();
     ImGui::DestroyContext();
 #endif
-    // Arrêt : plus aucun octet MIDI vers des objets en cours de destruction (sink → midiOut/mt32).
+    // Arrêt : plus aucun octet MIDI vers des objets en cours de destruction (sink → midiOut/mt32/gm).
     machine.midi.setMidiSinkTimed({});
     audio.setMt32(nullptr);
+    audio.setGm(nullptr);
     mt32.close();
+    A.gm->close();
     glfwDestroyWindow(window);
     glfwTerminate();
 }
