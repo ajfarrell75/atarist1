@@ -26,6 +26,76 @@ Ripper, DAC Pro Sound) avec page Dongles, `disks/dongles.txt` et oracle de rejeu
 vérifié note à note** en headless, corpus MIDI piano/blues ; port MIDI ALSA sous Linux ;
 save-state v16. Détail dans les chantiers datés ci-dessous.
 
+## A40 est FERMÉ : les 4 px de Closure étaient à nous, les 144 px d'`overscan_top` sont à Hatari (2026-08-30)
+
+Le couple de diagnostic annoncé la veille (« Closure décalée / Cuddly bit-exacte, même
+machine, même ROM ») a été ouvert — et **il a d'abord démoli sa propre prémisse**. Le
+masque de bordure PAR LIGNE des deux étalons, relevé à la trame de référence
+(`NEOST_RENDER_TRACE`/`NEOST_RENDER_ALL` sur un `--load-state` d'une trame) :
+
+| étalon | lignes de la trame comparée |
+|---|---|
+| `cuddly_demos` | **200 lignes `bm=000`** — aucune bordure retirée, écran 320×200 standard |
+| `overscan_top` | 224 normales + **4 `bm=00a`** (LEFT_PLUS_2\|RIGHT_MINUS_2) + 1 `bm=002` |
+| `closure` | **274 lignes `bm=200110`** = LEFT_OFF_MED \| RIGHT_OFF, `sh=0`, 458 px |
+
+`cuddly_demos` **n'ouvre aucune bordure sur l'image mesurée** : elle ne calibrait donc
+rien du chemin de retrait gauche, et « calibré à 0 px contre No Cooper et Cuddly »
+était infondé une seconde fois, pour un autre étalon que la veille. Le vrai levier
+n'était pas le couple, c'était le masque : Closure passe par
+`BORDERMASK_LEFT_OFF_MED`, le « remove left + med stab » qu'Hatari nomme
+explicitement d'après cette démo (`video.c:3974-3995`).
+
+**La cause, par le calcul PUIS par la mesure.** Hatari ne rend pas ces lignes au
+faisceau : il RECOPIE des octets dans un tampon de `SCREENBYTES_LINE` = 208 o
+(24 + 160 + 24 = 416 px) en partant de `raster + 2 + VideoOffset` (`video.c:4014`),
+PUIS décale tout le tampon de `STF_PixelScroll` (`video.c:4273`). Dans le repère du
+buffer NeoST cela donne `s_H(x) = x + 4 + 2·VideoOffset − scrollFinal`, contre
+`s_N(x) = x + 4 − shEff + 2·medSrcBytes` chez nous : avec la convention déjà posée
+(`medSrcBytes = VideoOffset + 2`), les deux coïncident **si et seulement si
+`shEff = 4 + scrollFinal`**. Le stab med vaut donc **−4**, pas −8 : le −8 recopiait le
+`STF_PixelScroll` d'Hatari en oubliant que son ancrage de recopie est déjà 4 px à
+droite du faisceau. Balayage de contrôle ±6 px × ±3 o autour de l'optimum : **aucun
+autre couple ne descend sous 53 %**, l'optimum est isolé.
+
+**Et une seconde maille**, qui restait après le décalage : 8 px par ligne (2 083 px).
+Le décalage à gauche fait « entrer » par la droite des pixels sans source, qu'Hatari
+laisse à l'index couleur 0 (`video.c:4295`, « entering pixels to the extreme right
+should be set to color 0 »). En repère faisceau, cela revient à laisser **les
+|scrollFinal| DERNIÈRES COLONNES du buffer** à l'index 0 (`blankTailFrom = W − 8`) —
+règle exprimée en colonnes, donc valable que les bordures soient rendues ou non.
+
+**Résultat mesuré, étalon `closure` contre l'oracle Hatari** : **64,08 % → 1,81 %
+(shEff) → 0,02 %**, soit **27 px sur 114 816**, et **tous sur la ligne 0** — vérifié
+sur trois trames voisines (27 / 43 / 27 px, toutes ligne 0 seule). **Tous les autres
+étalons du palier `full` restent à 0 px** — aucune régression —, et la référence de
+`closure` est reposée.
+
+**Les 144 px d'`overscan_top` ne sont PAS le même bug — ni un bug de NeoST.** Trace
+`--trace video_border_h` d'Hatari sur ce disque : il détecte `left+2 / right-2 60Hz
+53<->373` sur ces lignes, **exactement le masque de NeoST**. L'écart est entièrement
+dans la RECOPIE d'Hatari : ses 2 octets « left+2 » vont dans les 2 derniers octets de
+la bordure gauche du tampon, le reste étant mis à 0 — or 2 octets en basse résolution
+ne sont pas 4 pixels, c'est **un mot de plan sur 16 pixels**. Le groupe de 16 px
+à cheval sur la limite sort donc avec des plans mixtes. Prédiction faite avant de
+regarder : tête = plans 0-2 à zéro + plan 3 à $FFFF → **index 8**, queue (memset
+`right-2`) = plans 0-2 à $FFFF + plan 3 à zéro → **index 7**. Palette relevée sur le
+run (`--dump-at 380 FF8240 32`) : `palette[8] = $333`, `palette[7] = $555` — et
+l'oracle montre bien 16 px de $333 en x=32..47 et 16 px de $555 en x=352..367. Le
+compte tombe juste au pixel près : 4 lignes `bm=00a` × 32 px (tête + queue) + 1 ligne
+`bm=002` × 16 px (tête seule, pas de `right-2`) = **144**. NeoST, lui, rend les
+160 octets décalés de 4 px — ce que fait une ligne dont le DE part 4 cycles plus tôt.
+`overscan_top` garde donc `ref_kind: snapshot` **pour de bon** : l'écart est expliqué
+à l'index de palette près, il ne se refermera pas, et le figer sur l'oracle
+installerait l'artefact d'Hatari comme référence.
+
+⚠ **Ce qui n'a PAS été touché, faute d'exhibiteur mesuré.** La même algèbre dit les
+cas de scroll « hardware » 13/9/5/1 décalés de 4 px, et le −4 du retrait gauche
+standard décalé de 8. Balayage des masques sur les **10 500 trames** de Closure :
+`sh` ne vaut jamais que 0 ou −4, et les masques `LEFT_OFF` n'y apparaissent que
+combinés à `BLANK` (lignes rendues à l'index 0, donc aveugles au décalage). Aucun
+étalon ne les exerce : on les laisse en l'état, avec l'algèbre écrite dans le code.
+
 ## Closure devient un étalon, et A40 change de taille (2026-08-30)
 
 `closure` entre dans `tools/etalons.json` (Sync, écran 153 couleurs, ST 1 Mo,
