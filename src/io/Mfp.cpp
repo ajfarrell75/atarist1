@@ -4,6 +4,7 @@
 //  (c) 2026 VERHILLE Arnaud — projet NeoST.
 // =============================================================================
 #include "io/Mfp.hpp"
+#include "core/Pacing.hpp"   // kCpuHzInt — UNE horloge CPU pour tout l'arbre
 #include <cstdio>
 #include <cstdlib>
 
@@ -116,7 +117,7 @@ void Mfp::scheduleSerialRx() {
     // 10 périodes bit (start + 8 données + stop) au débit courant. USART jamais
     // configurée → 9600 bauds (défaut TOS). Plancher anti-débit absurde.
     const int baud = serialBaud_ > 0 ? serialBaud_ : 9600;
-    int64_t cyc = int64_t(8021248) * 10 / baud;
+    int64_t cyc = neost::pacing::kCpuHzInt * 10 / baud;
     if (cyc < 640) cyc = 640;
     sched_->schedule(Scheduler::SERIAL_RX, sched_->liveNow() + cyc);
     serialRxArmed_ = true;

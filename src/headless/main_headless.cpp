@@ -1245,7 +1245,13 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(a, "--sd1"))             { ultrasatan = true; sd1Img = next(a); }
         else if (!std::strcmp(a, "--sd2"))             { ultrasatan = true; sd2Img = next(a); }
         else if (!std::strcmp(a, "--midi-dump")) midiDumpPath = next(a);
-        else if (!std::strcmp(a, "--midi-in-device")) midiInDevices.push_back({next(a), 0});
+        else if (!std::strcmp(a, "--midi-in-device")) {
+            // uid vide : la ligne de commande désigne un appareil par son NOM.
+            // forceChannel garde son défaut — --midi-in-channel le pose ensuite.
+            MidiInHost::Want w;
+            w.name = next(a);
+            midiInDevices.push_back(std::move(w));
+        }
         // Le canal s'applique au dernier appareil déclaré : un séparateur DANS la
         // valeur aurait buté sur les noms ALSA, qui contiennent déjà « : ».
         else if (!std::strcmp(a, "--midi-in-channel")) {
@@ -2143,7 +2149,11 @@ int main(int argc, char** argv) {
                      serialOut.size(), serialOut.c_str());
     if (!midiDumpPath.empty()) {
         if (FILE* mf = std::fopen(midiDumpPath.c_str(), "w")) {
-            std::fprintf(mf, "# NeoST MIDI OUT dump — cpu_hz=8021248 — '<cycle> <byte hex>'\n");
+            // L'horloge vient de Pacing (A28) : cet en-tête est LU par
+            // tools/midi_compare.py, qui convertit les cycles en secondes avec.
+            // Un littéral ici aurait pu mentir sur les cycles du fichier lui-même.
+            std::fprintf(mf, "# NeoST MIDI OUT dump — cpu_hz=%lld — '<cycle> <byte hex>'\n",
+                         (long long)neost::pacing::kCpuHzInt);
             for (const auto& [cyc, b] : midiDump)
                 std::fprintf(mf, "%lld %02X\n", (long long)cyc, b);
             std::fclose(mf);

@@ -514,6 +514,17 @@ add_executable(neost
     src/main.cpp
     src/audio/Audio.cpp
     src/audio/DriveSound.cpp
+    src/gui/App.cpp
+    src/gui/AppInit.cpp
+    src/gui/AppLoop.cpp
+    src/gui/ConfigWindow.cpp
+    src/gui/CrtUi.cpp
+    src/gui/DebugWindows.cpp
+    src/gui/DockLayout.cpp
+    src/gui/InputCallbacks.cpp
+    src/gui/JoyMap.cpp
+    src/gui/KioskMenu.cpp
+    src/gui/StScreenView.cpp
     src/gui/OpenGLShader.cpp
     src/gui/UiCommon.cpp
     src/gui/MediaPages.cpp
@@ -560,7 +571,14 @@ if(WIN32)
     target_link_libraries(neost PRIVATE ole32 oleaut32 uuid winmm)
 endif()
 target_compile_definitions(neost PRIVATE NEOST_VERSION="${NEOST_VERSION_STR}")
+# Les modules d'interface sortis de main.cpp (A9) gardent la MÊME sévérité que lui :
+# sans cette ligne, extraire du code aurait silencieusement désarmé -Wall/-Wextra
+# sur les 2 400 lignes déplacées.
 set_source_files_properties(src/main.cpp src/audio/DriveSound.cpp
+    src/gui/App.cpp src/gui/AppInit.cpp src/gui/AppLoop.cpp
+    src/gui/ConfigWindow.cpp src/gui/CrtUi.cpp
+    src/gui/DebugWindows.cpp src/gui/DockLayout.cpp src/gui/InputCallbacks.cpp
+    src/gui/JoyMap.cpp src/gui/KioskMenu.cpp src/gui/StScreenView.cpp
     PROPERTIES COMPILE_OPTIONS "${NEOST_STRICT_OPTS}")
 
 # miniaudio (header-only, implémentation dans Audio.cpp).

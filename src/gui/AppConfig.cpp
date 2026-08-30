@@ -182,7 +182,17 @@ void parseConfigLine(Config& c, std::string line) {
     // neost.cfg d'avant ne perde pas son studio en silence, jamais ÉCRIT — la
     // première sauvegarde le convertit. Ces clés portent le défaut décrit plus haut ;
     // c'est sans conséquence sur un neost.cfg, lu dans une Config NEUVE.
-    else if (line.rfind("midi_out_device=", 0) == 0) c.midiOutDevices.push_back({line.substr(16), 0xFFFF});
+    else if (line.rfind("midi_out_device=", 0) == 0) {
+            // uid VIDE à dessein : ce format est d'ANTÉRIEUR aux identifiants uniques,
+            // il ne peut donc pas en porter. App::midiLearnUids() le renseigne à la
+            // première ouverture réussie de l'appareil, et la sauvegarde suivante
+            // convertit la ligne au format courant. Les autres champs gardent leur
+            // défaut de structure (cf. Config::MidiOutDev) — les nommer ici les
+            // recopierait, et un champ ajouté demain serait oublié en silence.
+        Config::MidiOutDev d;
+        d.name = line.substr(16);
+        c.midiOutDevices.push_back(std::move(d));
+    }
     else if (line.rfind("midi_out_channels=", 0) == 0) {
         if (!c.midiOutDevices.empty()) c.midiOutDevices.back().channels = parseChannelMask(line.substr(18));
     }
@@ -190,7 +200,11 @@ void parseConfigLine(Config& c, std::string line) {
         const int v = std::atoi(line.substr(13).c_str());
         c.midiLeadMs = (v < 0) ? 0 : (v > 200 ? 200 : v);
     }
-    else if (line.rfind("midi_in_device=", 0) == 0) c.midiInDevices.push_back({line.substr(15), 0});
+    else if (line.rfind("midi_in_device=", 0) == 0) {
+        Config::MidiInDev d;      // uid vide : même raison qu'en sortie, ci-dessus
+        d.name = line.substr(15);
+        c.midiInDevices.push_back(std::move(d));
+    }
     else if (line.rfind("midi_in_channel=", 0) == 0) {
         if (!c.midiInDevices.empty()) {
             const int ch = std::atoi(line.substr(16).c_str());

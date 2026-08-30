@@ -277,7 +277,7 @@ précision proposés, **43 confirmés** (36 uniques après déduplication), **8 
 | ikbd.c:1118+ + 1065-1091 (horloge BCD 6301) | Ikbd.cpp:854-886, 59-69 | porté | Année 99→00 (Captain Blood). |
 | ikbd.c:386+, 3012+ (code 6301 custom, CRC) | Ikbd.cpp:982-1141, 30-45 | porté | 6 programmes au CRC ; seul le délai 7000 cyc du $83 Froggies manque (→ couvert par candidat n°16). |
 | ikbd.c:1736-1757 (PressSTKey) | Ikbd.cpp:720-730 | porté | ScanCodeState, filtrage monitoring. |
-| keymap.c | main.cpp:531-547 | volontaire | Plomberie frontend (GLFW vs SDL). |
+| keymap.c | gui/InputCallbacks.cpp (onKey) + gui/StKeys | volontaire | Plomberie frontend (GLFW vs SDL). |
 | midi.c:143-184 (MIDI_UpdateIRQ + Control_Read) | MidiAcia.cpp:21-40, 81-89 | porté | Wire-OR GPIP4. |
 | midi.c:245-288 (TDR/TSR : vide après 1 bit=256 cyc) | MidiAcia.cpp:42-79 | **partiel ⚠** | CONFIRMÉ : TDRE tombe seulement sous TIE et revient à 2560 cyc (octet plein) vs 256 cyc TSR libre — le timing du fix « Notator ». → candidat n°29. |
 | midi.c:294-331 (RX hôte cadencé) | MidiAcia.cpp:69-71 (bouclage instantané) | volontaire | Fixture diagnostic --loopback, pas d'hôte MIDI. |
@@ -332,7 +332,7 @@ commentaire Blitter.hpp:27-28 documente un écart vs le VRAI matériel, pas vs l
 | cycles.c:120-157, 282-289 (OnReadAccess CE) | Cpu68k.cpp:698-701 + read −6 | porté | Table non-CE volontairement non portée. Paire read −6 / write +2 indissociable. |
 | cycles.c:167-244, 297-304 (OnWriteAccess) | Cpu68k.hpp:118-124 + write +2 | porté | Même modèle CE. |
 | cycles.c:74-111 (compteur vidéo par trame) | Machine.cpp:79-82 (liveFrameClock) | porté | frameStart_ = ancre théorique. |
-| clocks_timings.c:181-371 (fréquences exactes par machine) | Audio.cpp:74, DmaSound.cpp:27, Rtc.hpp:52, main.cpp:1063, Mfp.cpp:226 | **partiel ⚠** | CONFIRMÉ : 8021248 en dur à 5-6 endroits, non centralisé, pas de variantes NTSC/MegaSTE. Impact limité à la synchro audio long terme (acté P3). |
+| clocks_timings.c:181-371 (fréquences exactes par machine) | `core/Pacing.hpp:27-36` (`kCpuHz` / `kCpuHzInt`) | **partiel ⚠** | RECOMPTÉ le 2026-08-30 : la moitié « non centralisé » de ce constat est PÉRIMÉE depuis A28 — l'horloge a UN site de définition, et les deux littéraux qui avaient survécu (`Mfp.cpp` débit série, en-tête du dump MIDI headless) y pointent désormais. Ce qui RESTE vrai, et seul : **une seule fréquence pour toutes les machines**, pas de variantes NTSC/MegaSTE. Impact limité à la synchro audio long terme (acté P3). ⚠ Les `fichier:ligne` précédents (Audio.cpp:74, DmaSound.cpp:27, Rtc.hpp:52, Mfp.cpp:226) désignaient du code sans rapport : ils n'avaient pas été revérifiés depuis A28. |
 | clocks_timings.c:373-410 (nCpuFreqShift 16 MHz) | Cpu68k.cpp:53-54, 149-154, 706-717 | porté | Même invariant, horloge continue à la bascule $FF8E21. |
 | clocks_timings.c:498-530 (durée VBL µs → IKBD) | Machine.cpp:405-409 | porté | 8 MHz nominal, écart ~0,27 % négligeable. |
 | hatari-glue.c:85-99 (intlev) | Cpu68k.cpp:475-500 + Scu.hpp:59-73 | porté | Y compris soft IRQ1 SCU ; commit à frontière (RAISE_COMMIT=3). |
