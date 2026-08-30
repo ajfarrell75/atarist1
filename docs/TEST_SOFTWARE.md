@@ -49,6 +49,16 @@ configurations : devant un rapport « ça plante dans le GUI », commencer par l
 régression. Vérifié le 2026-08-01 : No Cooper, Cuddly Demos, Enchanted Land et
 Lethal Xcess « en panne » tournaient en `machine=megast` — tous corrects en `st`.
 
+⚠ **Ce que « en panne » veut dire, mesuré le 2026-08-30 sur No Cooper** : ce n'est pas
+une image fausse, c'est un **halt CPU**. En `machine=megast`, dès que la démo prend la
+touche qui fait avancer la partie, le 68000 part en **double faute de bus** (exception
+vecteur 2) et la machine gèle. **Hatari HALTE PAREIL** sur la même configuration
+(`Bus Error reading at address $ffff820f, PC=$58` → `Detected double bus/address error
+=> CPU halted!`) : c'est **FIDÈLE**, pas un bug NeoST. Le profil machine seul est en
+cause, pas la ROM — matrice `{megast, st}` × `{tos104fr, etos192fr, tos102uk}` : halt sur
+les trois `megast`, aucun sur les trois `st`. Détail et recette d'injection clavier :
+[`CASE_STUDIES.md`](CASE_STUDIES.md).
+
 ### ROM libres vs ROM propriétaires (depuis le 2026-08-19)
 
 Un étalon dont la ROM est **absente** ne se comporte plus de la même façon selon la ROM
