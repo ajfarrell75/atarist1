@@ -135,6 +135,16 @@ private:
 
     mutable std::mutex mtx_;
     std::deque<uint8_t> jitter_;           // flux FUSIONNÉ, prêt pour l'ACIA
+    // Garde du CYCLE DE VIE des Device (CoreMIDI seulement, de fait) : rien ne
+    // documente que MIDIPortDisconnectSource attende un callback EN VOL sur le
+    // thread du MIDIServer, or son srcConnRefCon pointe sur NOTRE Device. Le
+    // callback vérifie donc l'appartenance sous ce verrou avant de déréférencer,
+    // et close() le prend avant de libérer : un callback commencé se termine
+    // AVANT la libération, un callback tardif échoue au test et repart. Ordre des
+    // verrous : devMtx_ PUIS mtx_ (feed → emitMessage), jamais l'inverse.
+    // (Sous ALSA la discipline est ailleurs : le thread lecteur est JOINT avant
+    // toute mutation de devices_.)
+    mutable std::mutex devMtx_;
     // Compte atomique du tampon : l'ACIA interroge tryPop() 3125 fois par seconde et
     // repart presque toujours les mains vides. Lui éviter le verrou pour ça.
     std::atomic<std::size_t> pending_{0};

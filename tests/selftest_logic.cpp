@@ -1031,6 +1031,32 @@ static void testMidiInJitter() {
         checkBool("temps réel : l'horloge passe sans casser le running status",
                   flux == attendu, true);
     }
+
+    // (8) SYSEX À LA BORNE : la troncature vaut pour le MESSAGE ENTIER, $F0 et $F7
+    //     compris — jamais kMaxSysex + 1. L'invariant n'est pas décoratif :
+    //     l'encodeur ALSA de sortie est dimensionné à cette taille EXACTE
+    //     (snd_midi_event_new(4096)), et un message d'un octet de plus y échouait à
+    //     l'encodage, donc tombait en silence sous Linux (bug hunt du 2026-08-30 —
+    //     le contenu était borné AVANT l'ajout du $F7 final : 4 097 octets).
+    //     Testé sur le Parser nu : c'est lui qui porte l'invariant.
+    {
+        neost::midi::Parser prs;
+        std::vector<uint8_t> msg;
+        const auto emit = [&msg](const uint8_t* m, int len) { msg.assign(m, m + len); };
+        prs.byte(0xF0, emit);
+        for (int i = 0; i < 6000; ++i) prs.byte(uint8_t(i & 0x7F), emit);
+        prs.byte(0xF7, emit);
+        checkBool("sysex borné : le message tronqué ne dépasse JAMAIS kMaxSysex",
+                  !msg.empty() && msg.size() <= neost::midi::Parser::kMaxSysex, true);
+        checkBool("sysex borné : et il reste un SysEx bien formé ($F0 … $F7)",
+                  !msg.empty() && msg.front() == 0xF0 && msg.back() == 0xF7, true);
+        // Un SysEx COURT traverse intact — la borne ne doit toucher que l'excès.
+        msg.clear();
+        const uint8_t court[5] = {0xF0, 0x43, 0x12, 0x00, 0xF7};
+        for (uint8_t b2 : court) prs.byte(b2, emit);
+        checkBool("sysex borné : un dump court passe intact",
+                  msg == std::vector<uint8_t>(court, court + 5), true);
+    }
 }
 
 static void testIkbdTdre() {

@@ -419,6 +419,13 @@ std::size_t MidiOutHost::setDestinations(const std::vector<Dest>& want) {
         dests_.push_back({ep.name, want[w].channels, found, ep.uid});
         std::fprintf(stderr, "[midi-out] MIDI OUT -> \"%s\" (CoreMIDI uid %s) channels $%04X\n",
                      ep.name.c_str(), ep.uid.c_str(), unsigned(want[w].channels));
+        // Repli par NOM assumé, mais plus en silence (cf. le même avis côté entrée) :
+        // le masque de canaux de cette ligne pilote un appareil qui n'est PAS celui
+        // que la config désigne par son identifiant.
+        if (!want[w].uid.empty() && !ep.uid.empty() && ep.uid != want[w].uid)
+            std::fprintf(stderr, "[midi-out] note: \"%s\" opened by NAME — its unique id "
+                         "differs (configured %s, found %s): same-model replacement?\n",
+                         ep.name.c_str(), want[w].uid.c_str(), ep.uid.c_str());
     }
 #else
     (void)want;

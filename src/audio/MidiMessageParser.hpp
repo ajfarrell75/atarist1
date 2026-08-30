@@ -48,7 +48,12 @@ class Parser {
 public:
     // kMaxSysex : un dump de patch tient largement dedans ; au-delà on tronque
     // plutôt que de laisser un émetteur muet (ou malveillant) faire grossir un
-    // tampon sans fin.
+    // tampon sans fin. La borne vaut pour le MESSAGE ENTIER, $F0 et $F7 compris —
+    // c'est un INVARIANT dont les consommateurs dépendent : l'encodeur ALSA de
+    // sortie est dimensionné à cette taille exacte (snd_midi_event_new(4096),
+    // MidiOutHost), et un message d'un octet de plus y échouait à l'encodage,
+    // donc tombait en silence (bug hunt du 2026-08-30 : le contenu était borné à
+    // kMaxSysex AVANT l'ajout du $F7 final — le message tronqué faisait 4 097).
     static constexpr std::size_t kMaxSysex = 4096;
 
     template <typename Emit>
@@ -62,7 +67,7 @@ public:
             } else if (b & 0x80) {                   // statut : SysEx INTERROMPU
                 sysex_.clear(); inSysex_ = false;
                 byte(b, emit);                       // l'octet vaut pour lui-même
-            } else if (sysex_.size() < kMaxSysex) {
+            } else if (sysex_.size() < kMaxSysex - 1) {   // -1 : place du $F7 final
                 sysex_.push_back(b);
             }
             return;

@@ -190,6 +190,15 @@ void MidiInHost::coreMidiRead(const ::MIDIPacketList* pkts, void* refCon, void* 
     auto* self = static_cast<MidiInHost*>(refCon);
     auto* dev  = static_cast<Device*>(srcRef);
     if (!self || !dev || !pkts) return;
+    // srcConnRefCon n'est déréférencé qu'APRÈS vérification d'appartenance, sous
+    // devMtx_ (cf. sa déclaration : rien ne garantit qu'un callback en vol soit
+    // terminé quand la connexion est coupée). Le verrou reste pris pendant feed :
+    // c'est lui qui fait attendre close() jusqu'à la fin du paquet en cours.
+    std::lock_guard<std::mutex> lk(self->devMtx_);
+    bool ours = false;
+    for (const auto& d : self->devices_)
+        if (d.get() == dev) { ours = true; break; }
+    if (!ours) return;                       // callback tardif : le Device est parti
     const MIDIPacket* p = &pkts->packet[0];
     for (UInt32 i = 0; i < pkts->numPackets; ++i) {
         self->feed(*dev, p->data, p->length);
@@ -309,16 +318,31 @@ std::size_t MidiInHost::setDevices(const std::vector<Want>& want) {
         auto d = std::make_unique<Device>();
         d->owner = this; d->name = ep.name; d->uid = ep.uid;
         d->forceChannel = w.forceChannel; d->src = found;
+        Device* dp = d.get();
+        // Dans la liste AVANT la connexion : le callback valide l'appartenance
+        // sous devMtx_, et un premier paquet peut arriver dès ConnectSource.
+        {
+            std::lock_guard<std::mutex> lk(devMtx_);
+            devices_.push_back(std::move(d));
+        }
         // refCon de la CONNEXION = l'appareil : le callback saura de qui vient
         // chaque paquet, donc quel décodeur alimenter.
-        if (MIDIPortConnectSource(port, found, d.get()) != noErr) {
+        if (MIDIPortConnectSource(port, found, dp) != noErr) {
+            std::lock_guard<std::mutex> lk(devMtx_);
+            devices_.pop_back();
             std::fprintf(stderr, "[midi-in] cannot connect \"%s\"\n", w.name.c_str());
             continue;
         }
         std::fprintf(stderr, "[midi-in] \"%s\" -> MIDI IN (CoreMIDI uid %s)%s\n",
                      ep.name.c_str(), ep.uid.c_str(),
                      w.forceChannel ? " channelized" : "");
-        devices_.push_back(std::move(d));
+        // Repli par NOM assumé (un clavier remplacé par le même modèle doit marcher
+        // sans toucher la config) — mais plus en silence : l'identifiant dit que ce
+        // n'est PAS la machine configurée, l'utilisateur doit pouvoir le lire.
+        if (!w.uid.empty() && !ep.uid.empty() && ep.uid != w.uid)
+            std::fprintf(stderr, "[midi-in] note: \"%s\" opened by NAME — its unique id "
+                         "differs (configured %s, found %s): same-model replacement?\n",
+                         ep.name.c_str(), w.uid.c_str(), ep.uid.c_str());
     }
     if (devices_.empty()) { closeBackend(); return 0; }
     return devices_.size();
@@ -354,7 +378,12 @@ void MidiInHost::closeBackend() {
 
 void MidiInHost::close() {
     closeBackend();
-    devices_.clear();
+    {
+        // Sous le verrou du callback : un paquet en cours de livraison finit
+        // d'être décodé AVANT que ses Device ne soient libérés.
+        std::lock_guard<std::mutex> lk(devMtx_);
+        devices_.clear();
+    }
     std::lock_guard<std::mutex> lk(mtx_);
     jitter_.clear();     // un appareil débranché ne doit pas rejouer son passé
     lastStatus_ = 0;

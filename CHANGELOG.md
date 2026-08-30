@@ -26,6 +26,47 @@ Ripper, DAC Pro Sound) avec page Dongles, `disks/dongles.txt` et oracle de rejeu
 vérifié note à note** en headless, corpus MIDI piano/blues ; port MIDI ALSA sous Linux ;
 save-state v16. Détail dans les chantiers datés ci-dessous.
 
+## Les trois « laissé tel quel » du bug hunt ne le sont plus (2026-08-30, même jour)
+
+Le bug hunt ci-dessous s'était arrêté à quatre correctifs et avait consigné trois
+trouvailles « telles quelles ». Décision revue le jour même : les trois sont traitées —
+deux correctifs, et un silence levé.
+
+**1. Le refCon CoreMIDI ne peut plus pointer sur un Device libéré.** Rien ne documente
+que `MIDIPortDisconnectSource` attende la fin d'un callback EN VOL sur le thread du
+MIDIServer, or le `srcConnRefCon` de chaque connexion pointe sur NOTRE `Device`. Le
+callback ne déréférence plus qu'après avoir vérifié, sous un verrou dédié (`devMtx_`),
+que ce Device appartient encore à `devices_` — et il GARDE le verrou pendant la
+livraison du paquet ; `close()` prend le même verrou avant de libérer. Un callback
+commencé se termine donc AVANT la libération, un callback tardif échoue au test
+d'appartenance et repart sans toucher à rien. Corollaire d'ordre : le Device entre dans
+la liste AVANT `MIDIPortConnectSource` (un premier paquet peut arriver dès la
+connexion ; il aurait échoué au test et été perdu). Ordre des verrous documenté :
+`devMtx_` puis `mtx_`, jamais l'inverse. Pas de test possible sans un MIDIServer réel —
+correction par construction, invariant écrit à la déclaration du verrou.
+
+**2. Le SysEx tronqué respecte enfin sa propre borne — et le mécanisme consigné la
+veille était FAUX.** L'entrée du bug hunt disait « dépasse d'un octet le paquet CoreMIDI
+de sortie » : recompté, c'est inexact — 4 097 octets TIENNENT dans le tampon CoreMIDI
+(4 160 − ~14 d'en-tête). La vraie victime est l'**encodeur ALSA de sortie**,
+dimensionné à 4 096 exactement (`snd_midi_event_new(4096)`) : le message d'un octet de
+trop échouait à l'encodage et tombait en silence — sous Linux, pas sous macOS. Le
+correctif pose l'invariant à la SOURCE : la troncature du Parser vaut pour le message
+ENTIER, `$F0` et `$F7` compris (le contenu était borné AVANT l'ajout du `$F7` final).
+Trois assertions au palier `fast` (309 → **312**) : jamais plus de `kMaxSysex`, le
+tronqué reste un SysEx bien formé, un dump court passe intact — vérifiées par MUTATION
+(la borne fautive réintroduite fait rougir la première).
+
+**3. Le repli par nom cesse d'être silencieux quand l'identité diffère.** Le
+comportement reste (choix assumé : un clavier remplacé par le même modèle doit marcher
+sans toucher la config), mais quand l'identifiant unique de l'appareil ouvert diffère
+de celui que la config désigne, l'ouverture le DIT désormais — entrée comme sortie :
+`opened by NAME — its unique id differs (configured X, found Y): same-model
+replacement?`. La config n'est PAS réécrite : réapprendre l'identifiant d'office
+recréerait le bug des homonymes que le hunt venait de fermer.
+
+`--tier full` vert, exit 0 ; extinction GUI propre vérifiée.
+
 ## Bug hunt sur les travaux du 27-30 août : quatre bugs, quatre correctifs, quatre tests (2026-08-30)
 
 Chasse ciblée sur ce que les trois derniers jours ont produit. Le tri du périmètre :
