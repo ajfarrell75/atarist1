@@ -89,7 +89,7 @@ for lic in GPL-3.0.txt GPL-2.0.txt THIRD-PARTY.txt; do
 done
 DEMOS_TXT="${DEMO_DISKS[*]}"
 if [ "$NO_ATARI" = "1" ]; then
-    echo "OK : données paquet copiées dans $DEST (EmuTOS SEUL + drivesound + diskA.st + démos [$DEMOS_TXT] + licences)"
+    echo "OK : données paquet copiées dans $DEST (EmuTOS SEUL + drivesound + banque GM + diskA.st + démos [$DEMOS_TXT] + licences)"
 else
-    echo "OK : données paquet copiées dans $DEST (EmuTOS + tos102uk + tos162uk + drivesound + diskA.st + démos [$DEMOS_TXT] + licences)"
+    echo "OK : données paquet copiées dans $DEST (EmuTOS + tos102uk + tos162uk + drivesound + banque GM + diskA.st + démos [$DEMOS_TXT] + licences)"
 fi
