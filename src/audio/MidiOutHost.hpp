@@ -11,6 +11,10 @@
 //        matériel peut écouter : CoreMIDI sous macOS, séquenceur ALSA sous Linux.
 //        C'est la voie recommandée pour du General MIDI — un FluidSynth ou un Qsynth
 //        branché dessus rendra ces fichiers bien mieux qu'un MT-32.
+//        ⚠ PAS SOUS WINDOWS : ni winmm ni WinRT MIDI 1.0 ne savent créer un port que
+//        les autres applications voient — il y faut un PILOTE (loopMIDI, LoopBe1).
+//        Le port ainsi installé apparaît alors dans (c) comme n'importe quel appareil,
+//        en destination ET en source : le câblage vers un DAW est complet sans nous.
 //    (c) DESTINATIONS MATÉRIELLES choisies par leur nom (setDestinations), CHACUNE
 //        avec le masque des canaux qu'elle reçoit : le MIDI OUT du ST entre
 //        DIRECTEMENT dans l'expandeur, la boîte à rythmes ou le clavier branché sur
@@ -50,7 +54,15 @@ public:
     static bool available();            // au moins une destination utilisable ici
     static bool synthAvailable();       // synthé GM intégré : macOS UNIQUEMENT
     static bool portAvailable();        // port virtuel : CoreMIDI (macOS) / ALSA (Linux)
+    // Appareils MATÉRIELS (c) : CoreMIDI, ALSA **et winmm**. À NE PAS confondre avec
+    // portAvailable() — Windows n'a aucune API de port virtuel (il faut un pilote
+    // tiers, loopMIDI) mais pilote parfaitement les appareils branchés. L'interface
+    // gardait l'aiguillage matériel derrière portAvailable() : sous Windows elle
+    // aurait caché la seule moitié qui marche.
+    static bool destinationsAvailable();
     static const char* portKindName();  // « CoreMIDI » / « ALSA » / « — », pour l'interface
+    // Nom du backend d'appareils, pour l'interface et les journaux.
+    static const char* backendName();   // « CoreMIDI » / « ALSA » / « winmm » / « — »
 
     // Panique MIDI : All Sound Off (CC 120), Reset All Controllers (CC 121) et All
     // Notes Off (CC 123) sur les 16 canaux. Indispensable dès qu'on coupe une sortie
@@ -137,11 +149,33 @@ private:
     // (pas d'abonnement : un abonné recevrait tout, ce qui interdirait le filtrage
     // par canal). D'où ensurePort_(), qui crée le port source même quand la case
     // « port virtuel » est décochée — sans port, rien d'où émettre.
+    // winmm : ep = HMIDIOUT, ouvert PAR APPAREIL (pas de port partagé — sous Windows
+    // un port MIDI est EXCLUSIF, ce qui est aussi pourquoi une ouverture peut échouer
+    // en MMSYSERR_ALLOCATED là où ALSA et CoreMIDI multiplexent sans rien dire).
     uint32_t outPort_ = 0;
-    struct OpenDest { std::string name; uint16_t channels; uint32_t ep; std::string uid; };
+    // uintptr_t et non uint32_t : un HMIDIOUT fait 64 bits. CoreMIDI (MIDIEndpointRef,
+    // 32 bits) et ALSA (client<<8|port) y tiennent sans changer de sens.
+    struct OpenDest { std::string name; uint16_t channels; uintptr_t ep; std::string uid; };
     std::vector<OpenDest> dests_;
+    // winmm : les SysEx EN VOL (std::vector<SysExJob>*, cf. le .cpp). midiOutLongMsg
+    // rend la main aussitôt mais le tampon appartient au pilote jusqu'à MHDR_DONE, et
+    // un dump de patch de 4 Ko met plus d'une seconde à passer à 31250 bauds : on ne
+    // peut ni attendre (le thread de livraison porte tout le MIDI), ni libérer.
+    void* sysex_ = nullptr;
+    // Windows : résolution du minuteur système portée à 1 ms tant qu'une sortie est
+    // ouverte (cf. raiseTimerRes_). Sans elle, le cadencement de la livraison
+    // horodatée serait quantifié à ~15,6 ms — tout le mécanisme de lead/gigue
+    // ci-dessus deviendrait décoratif.
+    bool timerRaised_ = false;
+    void updateTimerRes_();             // (verrou outMtx_ DÉJÀ pris)
     bool userPort_ = false;             // le port virtuel a-t-il été demandé POUR LUI-MÊME ?
     void sendTo(const OpenDest& d, const uint8_t* msg, int len);   // (verrou DÉJÀ pris)
+    // winmm : un SysEx passe par midiOutLongMsg, donc par un tampon qui doit survivre
+    // à l'appel. `reapSysEx_(false)` récolte au passage ce que le pilote a fini de
+    // transmettre ; `reapSysEx_(true)` vide tout (après midiOutReset, qui marque
+    // d'office les tampons comme terminés). Sans backend, les deux ne font rien.
+    void sendSysEx_(uintptr_t handle, const uint8_t* msg, int len);
+    void reapSysEx_(bool all);
     bool ensurePort_();                 // crée client/port si besoin (partagé b + c)
     void releasePort_();                // détruit ce que plus personne n'utilise
 

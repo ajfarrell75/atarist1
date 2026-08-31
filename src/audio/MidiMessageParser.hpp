@@ -42,6 +42,19 @@ inline int dataBytesFor(uint8_t status) {
     }
 }
 
+// Longueur TOTALE (statut compris) d'un message court, ou 0 si l'octet n'est pas un
+// statut. C'est le contrat de winmm sous Windows : MM_MIM_DATA livre un message
+// complet EMPAQUETÉ dans un mot de 32 bits (statut, donnée 1, donnée 2), sans dire
+// combien d'octets comptent — pousser les trois aveuglément ajouterait un octet
+// fantôme après un Program Change, que le décodeur lirait comme une donnée orpheline.
+// Écrit ICI, en fonction pure, pour être éprouvé sur n'importe quelle plateforme :
+// la classe de bug ne se voit pas à l'oreille (un octet de trop se perd dans le
+// running status) et le CI n'a pas de clavier branché.
+inline int shortMessageLength(uint8_t status) {
+    if (status < 0x80) return 0;                     // donnée : pas un message
+    return 1 + dataBytesFor(status);
+}
+
 // Décodeur d'UN flux (une source, ou la sortie de l'ACIA). `emit(msg, len)` reçoit
 // chaque message complet, statut inclus — jamais un fragment.
 class Parser {

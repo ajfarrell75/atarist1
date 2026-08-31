@@ -18,6 +18,23 @@
 #include <CoreMIDI/CoreMIDI.h>
 #endif
 
+#if defined(NEOST_MIDI_WINMM)
+#include "audio/MidiWinmm.hpp"      // tire windows.h + mmsystem.h
+#include <memory>
+
+namespace {
+// Un SysEx confié au pilote : le tampon ET l'en-tête doivent survivre jusqu'à
+// MHDR_DONE (cf. sysex_ dans le .hpp). Alloués un par un et jamais déplacés — le
+// pilote garde l'adresse de l'en-tête, qu'un vector qui réalloue rendrait pendante.
+struct SysExJob {
+    HMIDIOUT h = nullptr;
+    MIDIHDR  hdr{};
+    std::vector<uint8_t> buf;
+};
+using SysExJobs = std::vector<std::unique_ptr<SysExJob>>;
+} // namespace
+#endif
+
 MidiOutHost::MidiOutHost() {
     worker_ = std::thread([this] { workerLoop(); });
 }
@@ -90,7 +107,18 @@ bool MidiOutHost::synthAvailable() {
 }
 
 bool MidiOutHost::portAvailable() {
+    // winmm est ABSENT de cette liste À DESSEIN : Windows ne sait pas créer un port
+    // MIDI virtuel (il y faut un pilote tiers, cf. MidiOutHost.hpp). Les appareils
+    // matériels, eux, marchent — c'est destinationsAvailable() qui le dit.
 #if defined(__APPLE__) || defined(NEOST_MIDI_ALSA)
+    return true;
+#else
+    return false;
+#endif
+}
+
+bool MidiOutHost::destinationsAvailable() {
+#if defined(__APPLE__) || defined(NEOST_MIDI_ALSA) || defined(NEOST_MIDI_WINMM)
     return true;
 #else
     return false;
@@ -107,7 +135,42 @@ const char* MidiOutHost::portKindName() {
 #endif
 }
 
-bool MidiOutHost::available() { return synthAvailable() || portAvailable(); }
+const char* MidiOutHost::backendName() {
+#if defined(__APPLE__)
+    return "CoreMIDI";
+#elif defined(NEOST_MIDI_ALSA)
+    return "ALSA";
+#elif defined(NEOST_MIDI_WINMM)
+    return "winmm";
+#else
+    return "—";
+#endif
+}
+
+bool MidiOutHost::available() {
+    return synthAvailable() || portAvailable() || destinationsAvailable();
+}
+
+// -----------------------------------------------------------------------------
+//  Résolution du minuteur système (Windows)
+// -----------------------------------------------------------------------------
+// Par défaut Windows réveille un thread endormi par tranches de ~15,6 ms. Le
+// cadencement de la livraison horodatée (anchor + cycle/CPU_HZ + lead) serait alors
+// arrondi à cette tranche : la gigue que tout le mécanisme ci-dessus existe pour
+// tuer reviendrait par la fenêtre, à un niveau AUDIBLE (±8 ms sur une note). On
+// demande donc 1 ms — mesuré possible ici (timeGetDevCaps : wPeriodMin = 1).
+//
+// Seulement TANT QU'UNE SORTIE EST OUVERTE : depuis Windows 10 2004 la demande est
+// par processus, mais elle coûte quand même de la consommation, et un NeoST qui ne
+// fait pas de MIDI n'a aucune raison de la payer.
+void MidiOutHost::updateTimerRes_() {
+#if defined(NEOST_MIDI_WINMM)
+    const bool want = synth_ != nullptr || src_ != 0 || !dests_.empty();
+    if (want == timerRaised_) return;
+    if (want) { if (::timeBeginPeriod(1) == TIMERR_NOERROR) timerRaised_ = true; }
+    else      { ::timeEndPeriod(1); timerRaised_ = false; }
+#endif
+}
 
 // -----------------------------------------------------------------------------
 //  Synthé GM intégré : DLSMusicDevice → DefaultOutput, via un AUGraph.
@@ -214,6 +277,10 @@ bool MidiOutHost::ensurePort_() {
         return false;
     }
     client_ = client;
+    return true;
+#elif defined(NEOST_MIDI_WINMM)
+    // Rien à partager sous winmm : chaque appareil s'ouvre pour lui-même
+    // (midiOutOpen), et il n'y a pas de port virtuel dont il faudrait se soucier.
     return true;
 #else
     return false;
@@ -339,6 +406,11 @@ std::vector<neost::midi::Endpoint> MidiOutHost::destinations() {
         std::string nm = displayName(e);
         if (!nm.empty()) out.push_back({std::move(nm), uniqueId(e)});
     }
+#elif defined(NEOST_MIDI_WINMM)
+    // Tout ce que winmm expose, y compris « Microsoft GS Wavetable Synth » (le
+    // General MIDI de Windows, présent partout) et le port d'un pilote loopMIDI —
+    // qui est, sous Windows, la seule façon d'avoir l'équivalent du port virtuel.
+    for (const auto& d : neost::midi::winmm::outputs()) out.push_back(d.ep);
 #endif
     return out;
 }
@@ -427,10 +499,45 @@ std::size_t MidiOutHost::setDestinations(const std::vector<Dest>& want) {
                          "differs (configured %s, found %s): same-model replacement?\n",
                          ep.name.c_str(), want[w].uid.c_str(), ep.uid.c_str());
     }
+#elif defined(NEOST_MIDI_WINMM)
+    // Ré-énumération : `have` a servi à l'appariement, mais un appareil a pu partir
+    // depuis (branchement à chaud), et l'identifiant winmm n'est pas l'index de la
+    // liste. reFind vérifie (identifiant, nom) avant d'ouvrir quoi que ce soit.
+    const auto devs = neost::midi::winmm::outputs();
+    for (std::size_t w = 0; w < want.size(); ++w) {
+        if (pick[w] < 0) continue;                // absent : l'appelant re-tentera
+        const auto& ep = have[std::size_t(pick[w])];
+        const int idx = neost::midi::winmm::reFind(devs, ep, pick[w]);
+        if (idx < 0) continue;
+        HMIDIOUT h = nullptr;
+        const MMRESULT r = ::midiOutOpen(&h, devs[std::size_t(idx)].id, 0, 0, CALLBACK_NULL);
+        if (r != MMSYSERR_NOERROR || !h) {
+            // Jamais en silence : sous Windows le port est EXCLUSIF, et l'échec le
+            // plus fréquent (« un DAW le tient déjà ») est invisible autrement — la
+            // case reste cochée dans l'interface et rien ne sort.
+            std::fprintf(stderr, "[midi-out] cannot open \"%s\": %s\n",
+                         ep.name.c_str(), neost::midi::winmm::errorText(r));
+            continue;
+        }
+        dests_.push_back({ep.name, want[w].channels, reinterpret_cast<uintptr_t>(h), ep.uid});
+        std::fprintf(stderr, "[midi-out] MIDI OUT -> \"%s\" (winmm #%u%s%s) channels $%04X\n",
+                     ep.name.c_str(), unsigned(devs[std::size_t(idx)].id),
+                     ep.uid.empty() ? "" : ", uid ", ep.uid.c_str(), unsigned(want[w].channels));
+        // Même avis qu'ailleurs : le masque de canaux de cette ligne pilote un
+        // appareil qui n'est pas celui que la config désigne. Sous Windows ce cas
+        // arrive aussi quand on a simplement changé de prise USB (l'identifiant
+        // porte le chemin physique, cf. MidiWinmm.hpp) — d'où le « ? ».
+        if (!want[w].uid.empty() && !ep.uid.empty() && ep.uid != want[w].uid)
+            std::fprintf(stderr, "[midi-out] note: \"%s\" opened by NAME — its unique id "
+                         "differs (configured %s, found %s): other USB port, or "
+                         "same-model replacement?\n",
+                         ep.name.c_str(), want[w].uid.c_str(), ep.uid.c_str());
+    }
 #else
     (void)want;
 #endif
     if (dests_.empty()) releasePort_();
+    updateTimerRes_();
     return dests_.size();
 }
 
@@ -440,11 +547,23 @@ void MidiOutHost::closeDestinations() {
     // hors verrou, panic() passant par emit() qui le prend.
     if (!dests_.empty()) panic();
     std::lock_guard<std::mutex> lk(outMtx_);
+#if defined(NEOST_MIDI_WINMM)
+    // Ordre imposé par winmm : reset (coupe les notes tenues ET rend les tampons SysEx
+    // en vol, marqués MHDR_DONE) → unprepare → close. Désarmer APRÈS la fermeture
+    // échouerait sur un handle mort, et fermer AVANT le désarmement rendrait
+    // MIDIERR_STILLPLAYING. D'où les deux boucles.
+    for (const auto& d : dests_)
+        if (HMIDIOUT h = reinterpret_cast<HMIDIOUT>(d.ep)) ::midiOutReset(h);
+    reapSysEx_(true);
+    for (const auto& d : dests_)
+        if (HMIDIOUT h = reinterpret_cast<HMIDIOUT>(d.ep)) ::midiOutClose(h);
+#endif
     dests_.clear();
 #if defined(__APPLE__) && !defined(NEOST_MIDI_ALSA)
     if (outPort_) { MIDIPortDispose(outPort_); outPort_ = 0; }
 #endif
     releasePort_();
+    updateTimerRes_();
 }
 
 std::vector<MidiOutHost::Dest> MidiOutHost::openDestinations() const {
@@ -495,6 +614,55 @@ void MidiOutHost::panic() {
     parser_.reset();
 }
 
+// -----------------------------------------------------------------------------
+//  SysEx sous winmm : confié au pilote, récolté plus tard
+// -----------------------------------------------------------------------------
+void MidiOutHost::sendSysEx_(uintptr_t handle, const uint8_t* msg, int len) {
+#if defined(NEOST_MIDI_WINMM)
+    if (!sysex_) sysex_ = new SysExJobs();
+    auto* jobs = static_cast<SysExJobs*>(sysex_);
+    reapSysEx_(false);
+    // Garde-fou : un flux ST déréglé (ou un programme qui inonde de dumps) ne doit
+    // pas faire grossir cette file sans fin. 32 messages en vol, c'est déjà bien
+    // au-delà de ce qu'un câble MIDI peut porter — au-delà on jette, comme le
+    // tampon d'entrée jette un message neuf quand il sature.
+    if (jobs->size() >= 32) return;
+    auto job = std::make_unique<SysExJob>();
+    job->h = reinterpret_cast<HMIDIOUT>(handle);
+    job->buf.assign(msg, msg + len);
+    job->hdr.lpData = reinterpret_cast<LPSTR>(job->buf.data());
+    job->hdr.dwBufferLength = DWORD(job->buf.size());
+    job->hdr.dwBytesRecorded = DWORD(job->buf.size());
+    if (::midiOutPrepareHeader(job->h, &job->hdr, sizeof(MIDIHDR)) != MMSYSERR_NOERROR) return;
+    if (::midiOutLongMsg(job->h, &job->hdr, sizeof(MIDIHDR)) != MMSYSERR_NOERROR) {
+        ::midiOutUnprepareHeader(job->h, &job->hdr, sizeof(MIDIHDR));
+        return;
+    }
+    jobs->push_back(std::move(job));
+#else
+    (void)handle; (void)msg; (void)len;
+#endif
+}
+
+void MidiOutHost::reapSysEx_(bool all) {
+#if defined(NEOST_MIDI_WINMM)
+    if (!sysex_) return;
+    auto* jobs = static_cast<SysExJobs*>(sysex_);
+    for (std::size_t i = 0; i < jobs->size();) {
+        SysExJob& j = *(*jobs)[i];
+        // MHDR_DONE : le pilote a fini d'émettre, l'en-tête et le tampon nous
+        // reviennent. `all` sert la fermeture, où midiOutReset l'a déjà posé.
+        if (all || (j.hdr.dwFlags & MHDR_DONE)) {
+            ::midiOutUnprepareHeader(j.h, &j.hdr, sizeof(MIDIHDR));
+            jobs->erase(jobs->begin() + std::ptrdiff_t(i));
+        } else ++i;
+    }
+    if (all) { delete jobs; sysex_ = nullptr; }
+#else
+    (void)all;
+#endif
+}
+
 void MidiOutHost::sendTo(const OpenDest& d, const uint8_t* msg, int len) {
 #if defined(NEOST_MIDI_ALSA)
     if (!seq_ || !enc_ || !src_) return;
@@ -515,6 +683,17 @@ void MidiOutHost::sendTo(const OpenDest& d, const uint8_t* msg, int len) {
     MIDIPacket* pkt = MIDIPacketListInit(list);
     pkt = MIDIPacketListAdd(list, sizeof buf, pkt, 0, ByteCount(len), msg);
     if (pkt) MIDISend(outPort_, d.ep, list);
+#elif defined(NEOST_MIDI_WINMM)
+    HMIDIOUT h = reinterpret_cast<HMIDIOUT>(d.ep);
+    if (!h) return;
+    // Un message COURT part empaqueté dans un mot : statut en octet de poids faible,
+    // puis les données. Tout le reste ($F0…$F7, et par prudence ce qui dépasse trois
+    // octets) passe par le chemin long.
+    if (msg[0] == 0xF0 || len > 3) { sendSysEx_(d.ep, msg, len); return; }
+    DWORD packed = DWORD(msg[0]);
+    if (len > 1) packed |= DWORD(msg[1]) << 8;
+    if (len > 2) packed |= DWORD(msg[2]) << 16;
+    ::midiOutShortMsg(h, packed);
 #else
     (void)d; (void)msg; (void)len;
 #endif
@@ -523,6 +702,9 @@ void MidiOutHost::sendTo(const OpenDest& d, const uint8_t* msg, int len) {
 void MidiOutHost::emit(const uint8_t* msg, int len) {
     if (len <= 0) return;
     std::lock_guard<std::mutex> lk(outMtx_);
+    // winmm : rendre au passage les tampons SysEx que le pilote a fini d'émettre —
+    // un simple test de pointeur quand il n'y en a jamais eu.
+    if (sysex_) reapSysEx_(false);
 
     // AIGUILLAGE. Un message de VOIE ($80-$EF) porte son canal dans le quartet bas et
     // ne part que vers les destinations qui l'écoutent. Les messages SYSTÈME

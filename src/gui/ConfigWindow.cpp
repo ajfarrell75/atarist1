@@ -435,7 +435,11 @@ void drawConfigWindow(App& A, ConfigUi& ui) {
         // s'abonne à rien. Ici, chaque appareil reçoit les canaux qu'on lui donne :
         // « instrument 1 de Cubase vers le piano logiciel, instrument 2 vers la
         // groovebox », sans toucher au réglage des appareils eux-mêmes.
-        if (MidiOutHost::portAvailable()) {
+        // ⚠ Gardé par destinationsAvailable(), PAS par portAvailable() : Windows n'a
+        // pas de port virtuel (il y faut un pilote tiers) mais pilote parfaitement
+        // les appareils branchés. L'ancienne garde cachait, sous Windows, la seule
+        // moitié qui marche — la page MIDI y était vide de bout en bout.
+        if (MidiOutHost::destinationsAvailable()) {
             ImGui::TextDisabled("Hardware devices - which channels go where");
             std::vector<neost::midi::Wanted> conf;
             for (const auto& d : cfg.midiOutDevices) conf.push_back({d.name, d.uid});
@@ -476,6 +480,14 @@ void drawConfigWindow(App& A, ConfigUi& ui) {
                 ImGui::TextDisabled("  Nothing plugged in right now.");
             else
                 ImGui::TextDisabled("  System messages (clock, SysEx) always go to all.");
+            // Windows n'a AUCUNE API pour créer un port MIDI que les autres
+            // applications voient : ni winmm, ni WinRT MIDI 1.0. Le dire, et dire
+            // quoi installer, vaut mieux qu'une case grisée sans explication — le
+            // port d'un pilote loopMIDI apparaît ensuite dans la liste ci-dessus
+            // comme n'importe quel appareil, et en source côté MIDI IN.
+            if (!MidiOutHost::portAvailable())
+                ImGui::TextDisabled("  No virtual port on Windows: install loopMIDI,\n"
+                                    "  its port then shows up in this list (and in MIDI IN).");
         }
         ImGui::Separator();
 

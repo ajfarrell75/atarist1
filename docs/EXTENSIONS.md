@@ -116,6 +116,41 @@ passive** : un FluidSynth ou un DAW s'y abonne, mais un expandeur, une groovebox
 clavier maître ne s'abonne à rien. Il fallait donc un patchbay tiers pour relier NeoST à
 du matériel. NeoST **choisit désormais lui-même** ses deux extrémités :
 
+Trois backends, un seul comportement visible — `src/audio/MidiWinmm.hpp` porte les
+particularités de Windows :
+
+| | macOS | Linux | Windows |
+|---|---|---|---|
+| Backend | CoreMIDI | séquenceur ALSA | **winmm** |
+| Destinations matérielles | ✅ | ✅ | ✅ |
+| Sources matérielles | ✅ | ✅ | ✅ |
+| Identifiant unique | `kMIDIPropertyUniqueID` | ❌ (nom seul) | **chemin d'interface USB** |
+| Port virtuel « NeoST MIDI OUT » | ✅ | ✅ | ❌ — **pilote tiers** (loopMIDI) |
+| Ouverture concurrente d'un port | multiplexée | multiplexée | **EXCLUSIVE** |
+
+Deux différences de Windows méritent d'être connues avant de câbler un studio :
+
+- **Aucun port virtuel n'est possible en natif.** Ni winmm ni WinRT MIDI 1.0 ne savent
+  créer un port que les autres applications voient — il y faut un **pilote** (loopMIDI,
+  LoopBe1). Une fois installé, son port apparaît dans les listes ci-dessous comme
+  n'importe quel appareil, **en destination et en source** : le câblage vers un DAW est
+  alors complet, sans que NeoST ait à s'en mêler. (Windows MIDI Services, la pile MIDI
+  2.0 de Windows 11, sait le faire nativement mais s'installe à part et exigerait une
+  pile WinRT/COM que le zip autonome ne peut pas emporter.)
+- **Un port MIDI est exclusif.** Là où ALSA et CoreMIDI multiplexent, un DAW ouvert sur
+  le clavier empêche NeoST de l'ouvrir : `MMSYSERR_ALLOCATED`, journalisé en clair
+  (`device busy - another application holds it`).
+
+L'**identifiant unique**, lui, est meilleur que sous Linux : `DRV_QUERYDEVICEINTERFACE`
+rend le chemin d'interface du périphérique
+(`\\?\usb#vid_1235&pid_0139&mi_00#6&33d600c&0&0000#{...}`), dont la partie médiane est
+le chemin **physique** — hub et prise. Deux appareils du même modèle branchés ensemble
+sont donc discernables, comme sous CoreMIDI. ⚠ Corollaire : **changer de prise USB change
+l'identifiant** ; le repli par nom rattrape le cas, avec son avertissement au journal.
+Les synthés logiciels du système (« Microsoft GS Wavetable Synth ») ne sont pas des
+périphériques et rendent une chaîne vide : identifiant vide, repli par nom — le régime
+dans lequel ALSA vit tout entier.
+
 | Réglage | `neost.cfg` (UNE ligne, comme toute autre clé) | Effet |
 |---|---|---|
 | Destinations | `midi_out_devices=nom\|1,2,10-12;autre\|3` | chaque appareil reçoit les canaux nommés |
@@ -237,6 +272,25 @@ appareil qu'on ne touche pas), et le SysEx de démarrage de MROS reçu par une d
 matérielle **port virtuel coupé** — donc portée par la destination seule. Le backend
 ALSA est écrit mais n'a **pas** été exécuté (pas de machine Linux dans la boucle).
 `src/audio/MidiInHost.cpp`, `src/audio/MidiOutHost.cpp`.
+
+Vérifié le 2026-08-31 (**Windows 11, matériel réel, Novation Circuit Tracks en USB**) :
+`neost-headless --midi-list` énumère l'appareil avec son identifiant d'interface ;
+`--midi-in-device "Circuit Tracks"` fait entrer **35 octets d'horloge MIDI dans l'ACIA
+en 1,3 s** (0 perdu) — l'appareil émet son horloge en continu, ce qui donne une source
+de test déterministe, sans les mains ; le GUI ouvre les deux extrémités d'un coup
+(destination + source canalisée), **apprend l'identifiant** et livre **0 octet en
+retard**. Gamme, SysEx, running status et panique éprouvés sur l'appareil réel par un
+harnais pilotant `MidiOutHost` directement.
+
+**Résolution du minuteur système** (`timeBeginPeriod(1)`, posée tant qu'une sortie est
+ouverte) : sans elle Windows réveille le thread de livraison par tranches de ~15,6 ms, et
+tout le mécanisme d'horodatage (ancre + `midi_lead_ms`) serait arrondi à cette tranche.
+Mesuré A/B sur 40 échéances de 50 ms vers le Circuit Tracks :
+
+| | intervalle moyen | σ | écart max |
+|---|---|---|---|
+| minuteur 1 ms **posé** | 50,00 ms | **0,30 ms** | 0,90 ms |
+| minuteur 1 ms absent | 50,09 ms | 5,34 ms | 13,10 ms |
 
 ## Anneau MIDI réseau — MIDIMaze en ligne (`--midi-net H:P[:L]`)
 

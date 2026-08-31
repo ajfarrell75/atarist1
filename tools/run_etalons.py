@@ -28,10 +28,14 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+# Suffixe .exe sous Windows : sans lui, le binaire est cherché sous un nom qui
+# n'existe pas et la suite se déclare « non bâtie » — la seule plateforme livrée
+# où les tests ne pouvaient pas tourner du tout.
+_EXE = ".exe" if sys.platform == "win32" else ""
 MANIFEST = Path(__file__).resolve().parent / "etalons.json"
 OUT_DIR = ROOT / "tests" / "out"
 REF_DIR = ROOT / "tests" / "reference"
-HEADLESS = ROOT / "build" / "neost-headless"
+HEADLESS = ROOT / "build" / ("neost-headless" + _EXE)
 COMPARE = ROOT / "tools" / "compare_screenshot.py"
 HATARI_ORACLE = ROOT / "tools" / "hatari_oracle.sh"
 

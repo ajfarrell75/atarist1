@@ -28,7 +28,11 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-HEADLESS = ROOT / "build" / "neost-headless"
+# Suffixe .exe sous Windows : sans lui, le binaire est cherché sous un nom qui
+# n'existe pas et la suite se déclare « non bâtie » — la seule plateforme livrée
+# où les tests ne pouvaient pas tourner du tout.
+_EXE = ".exe" if sys.platform == "win32" else ""
+HEADLESS = ROOT / "build" / ("neost-headless" + _EXE)
 ROM = ROOT / "roms" / "etos192fr.img"          # ROM LIBRE : ces tests survivent au
                                                # retrait des TOS Atari propriétaires.
 
@@ -119,7 +123,7 @@ def main() -> int:
     # est atteignable : `--help`, `--version` et le rejet d'options sortent AVANT
     # toute création de fenêtre. C'est peu, mais c'est la première couverture
     # automatisée de ce binaire.
-    gui = ROOT / "build" / "neost"
+    gui = ROOT / "build" / ("neost" + _EXE)
     if not gui.exists():
         print("  ·    GUI non bâti — tests d'arguments du GUI sautés (cible « neost »)")
     else:

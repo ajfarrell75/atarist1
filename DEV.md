@@ -87,7 +87,10 @@ src/
                             writeConfigKeys / writeConfigAtomic) — logique pure, testée.
     CrtEffectStack + OpenGLShader : la passe CRT elle-même.
   util/HostPath.{hpp,cpp}   UNE définition des chemins hôte (sémantiques POSIX ET Windows).
-  audio/                    Backend miniaudio (Audio, DriveSound).
+  audio/                    Backend miniaudio (Audio, DriveSound) + ponts MIDI hôtes :
+                            MidiOutHost / MidiInHost, un fichier pour TROIS backends
+                            (CoreMIDI, ALSA, winmm — cf. MidiWinmm.hpp pour Windows) ;
+                            Mt32Synth (Munt), GmSynth (TinySoundFont).
   headless/                 Runner déterministe + traces.
   web/main_web.cpp          Frontend WebAssembly (Emscripten + WebGL).
   android/                  Frontend Android (SDL2 + GLES2) — démarre, pas d'interface.
