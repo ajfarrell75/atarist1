@@ -22,8 +22,12 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+# Suffixe .exe sous Windows : sans lui, le binaire est cherché sous un nom qui
+# n'existe pas et la suite se déclare « non bâtie » — la seule plateforme livrée
+# où les tests ne pouvaient pas tourner du tout.
+_EXE = ".exe" if sys.platform == "win32" else ""
 TOOLS = Path(__file__).resolve().parent
-HEADLESS = ROOT / "build" / "neost-headless"
+HEADLESS = ROOT / "build" / ("neost-headless" + _EXE)
 # ROM LIBRE (EmuTOS 192 Ko) depuis le 2026-08-28 — purge § BLOQUANT RELEASE, pas 2 :
 # ce gate vit dans le palier `fast`, il ne doit dépendre d'aucun fichier propriétaire.
 # La bascule est SANS effet sur ce qu'il mesure — la cartouche bench prend la main

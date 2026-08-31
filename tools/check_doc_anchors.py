@@ -35,7 +35,6 @@
 #  (c) 2026 VERHILLE Arnaud — projet NeoST. Outil de test (domaine public).
 # =============================================================================
 import re
-import subprocess
 import sys
 from pathlib import Path
 
@@ -67,13 +66,27 @@ ANCHOR_RE = re.compile(
 SKIP_SCOPES = {"std", "moira", "ImGui", "SDL", "MFP", "FDC", "PSG"}
 
 
+_IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
 def lexemes(*globs) -> set:
-    """Tous les identifiants présents dans les sources (grep, pas de compilation)."""
-    args = ["grep", "-rhoE", "[A-Za-z_][A-Za-z0-9_]*"]
-    args += [f"--include={g}" for g in globs[0]]
-    args += list(globs[1])
-    out = subprocess.run(args, cwd=ROOT, capture_output=True, text=True).stdout
-    return set(out.split())
+    """Tous les identifiants présents dans les sources (lecture directe, pas de compilation).
+
+    Lu en Python et non par `grep -rhoE` : sous Windows (git-bash/MSYS), grep.exe
+    RE-DÉCOUPE la ligne de commande que Python lui passe et prend le motif
+    `[A-Za-z_][A-Za-z0-9_]*` pour un GLOB — classes de caractères et `*` — qu'il
+    expanse contre le répertoire courant. Le motif n'atteignait donc jamais grep :
+    la vérification rendait « 197 ancres mortes » sur des symboles bien vivants
+    (`Machine::runFrame`…), ce qui la rendait inutilisable — et donc ignorée — sur
+    la seule plateforme où elle échouait. En prime, plus aucune dépendance à grep.
+    """
+    out: set = set()
+    for root in globs[1]:
+        base = ROOT / root
+        for pattern in globs[0]:
+            for path in base.rglob(pattern):
+                out.update(_IDENT.findall(path.read_text(encoding="utf-8", errors="ignore")))
+    return out
 
 
 def main() -> int:

@@ -25,10 +25,14 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+# Suffixe .exe sous Windows : sans lui, le binaire est cherché sous un nom qui
+# n'existe pas et la suite se déclare « non bâtie » — la seule plateforme livrée
+# où les tests ne pouvaient pas tourner du tout.
+_EXE = ".exe" if sys.platform == "win32" else ""
 TOOLS = ROOT / "tools"
-HEADLESS = ROOT / "build" / "neost-headless"
-SELFTEST = ROOT / "build" / "neost-selftest"
-GUI = ROOT / "build" / "neost"
+HEADLESS = ROOT / "build" / ("neost-headless" + _EXE)
+SELFTEST = ROOT / "build" / ("neost-selftest" + _EXE)
+GUI = ROOT / "build" / ("neost" + _EXE)
 
 
 def selftest_ids() -> str:
@@ -61,12 +65,12 @@ FAST = [
     # 20 000 itérations déterministes (graine fixe) — le verdict est reproductible,
     # et le job `sanitizers` de la CI rend le harnais MORDANT (ASan/UBSan).
     ("Fuzzing des parseurs d'images disquette (.msa / .dim / .stx)",
-     [str(ROOT / "build" / "neost-fuzz-disk")]),
+     [str(ROOT / "build" / ("neost-fuzz-disk" + _EXE))]),
     # A20 : WRITE TRACK STX (reinterpretSaveTrack + round-trip .wd1772) sur une image
     # FORGÉE en mémoire — le seul test du parseur Pasti, resté EXCLUDE_FROM_ALL et
     # jamais lancé jusqu'à l'audit du 2026-08-27.
     ("P0 STX WRITE TRACK (image forgée, ré-interprétation + round-trip .wd1772)",
-     [str(ROOT / "build" / "neost-stx-test")]),
+     [str(ROOT / "build" / ("neost-stx-test" + _EXE))]),
     # A27 : la boucle rapide était AVEUGLE au rendu — « avant de conclure, --tier
     # full » n'était qu'une discipline humaine, et des commits ont déjà sur-promis
     # sur cette base. Quatre étalons pixel COURTS (250-400 trames, ~2 s en parallèle),
@@ -157,7 +161,11 @@ def gui_available() -> str | None:
     """None si le boot GUI peut tourner, sinon la raison du SKIP (recensée)."""
     if not GUI.exists():
         return "cible GUI non bâtie (cmake --build build)"
-    if sys.platform != "darwin" and not os.environ.get("DISPLAY") \
+    # DISPLAY/WAYLAND_DISPLAY ne veulent rien dire hors X11/Wayland : macOS a Quartz,
+    # Windows a toujours un bureau dans une session interactive. Sans cette exclusion,
+    # le boot GUI était sauté sur DEUX des trois plateformes livrées — donc la cible
+    # `neost` n'y était jamais lancée par la suite de tests.
+    if sys.platform not in ("darwin", "win32") and not os.environ.get("DISPLAY") \
             and not os.environ.get("WAYLAND_DISPLAY"):
         return "pas d'affichage (DISPLAY/WAYLAND_DISPLAY absents — xvfb-run pour forcer)"
     return None

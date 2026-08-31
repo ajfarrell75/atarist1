@@ -23,8 +23,12 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+# Suffixe .exe sous Windows : sans lui, le binaire est cherché sous un nom qui
+# n'existe pas et la suite se déclare « non bâtie » — la seule plateforme livrée
+# où les tests ne pouvaient pas tourner du tout.
+_EXE = ".exe" if sys.platform == "win32" else ""
 MANIFEST = Path(__file__).resolve().parent / "selftests.json"
-HEADLESS = ROOT / "build" / "neost-headless"
+HEADLESS = ROOT / "build" / ("neost-headless" + _EXE)
 
 # Garde-fou A18 (audit 2026-08-27) : AUCUN appel à l'émulateur n'avait de timeout —
 # un 68000 qui boucle (la régression même que ces tests cherchent) consommait les

@@ -12,6 +12,7 @@
 #  (c) 2026 VERHILLE Arnaud — projet NeoST.
 # =============================================================================
 import argparse
+import os
 import subprocess
 import sys
 import tempfile
@@ -67,7 +68,14 @@ def _load_image(path: Path) -> tuple[int, int, bytes]:
     if path.suffix.lower() == ".ppm":
         return _read_ppm(path)
     if path.suffix.lower() in (".png", ".jpg", ".jpeg"):
-        tmp = Path(tempfile.mkstemp(suffix=".ppm")[1])
+        # mkstemp rend un descripteur OUVERT : le refermer avant de laisser ffmpeg
+        # écrire dans le fichier. Sous POSIX l'oubli ne se voyait pas (une simple
+        # fuite de descripteur, une par comparaison) ; sous Windows le fichier est
+        # VERROUILLÉ tant qu'il est ouvert, et ffmpeg échouait — donc toute référence
+        # PNG (les captures d'oracle Hatari) était incomparable sur cette plateforme.
+        _fd, _name = tempfile.mkstemp(suffix=".ppm")
+        os.close(_fd)
+        tmp = Path(_name)
         try:
             try:
                 subprocess.run(

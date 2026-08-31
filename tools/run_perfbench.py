@@ -42,7 +42,11 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-HEADLESS = ROOT / "build" / "neost-headless"
+# Suffixe .exe sous Windows : sans lui, le binaire est cherché sous un nom qui
+# n'existe pas et la suite se déclare « non bâtie » — la seule plateforme livrée
+# où les tests ne pouvaient pas tourner du tout.
+_EXE = ".exe" if sys.platform == "win32" else ""
+HEADLESS = ROOT / "build" / ("neost-headless" + _EXE)
 RATIOS = Path(__file__).resolve().parent / "perfbench_ratios.json"
 
 FRAMES = 600
