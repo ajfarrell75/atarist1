@@ -1351,7 +1351,18 @@ Pour ce qui reste → [`../TODO.md`](../TODO.md).
   `extern/tsf` + banque **TimGM6mb livrée** dans `roms/gm/`, remplaçable par
   `gm_soundfont=`), rendu daté à l'échantillon comme le MT-32, fader dédié page Sound,
   garde `neost-selftest` (banque livrée + datation mi-trame).
-  `audio/MidiOutHost`, `audio/Mt32Synth`, `audio/GmSynth`.
+  **Appareils MIDI hôtes sur les TROIS plateformes** depuis le 2026-08-31 : le backend
+  **winmm** (`audio/MidiWinmm.hpp`) donne à Windows les destinations matérielles ET les
+  sources qu'avaient déjà CoreMIDI et ALSA — énumération, aiguillage par canal, fusion,
+  canalisation, panique, apprentissage d'identifiant. Windows y gagne même un
+  **identifiant unique** (chemin d'interface `DRV_QUERYDEVICEINTERFACE`, hub et prise
+  compris) là où ALSA n'en a aucun, et `timeBeginPeriod(1)` tant qu'une sortie est
+  ouverte ramène la gigue de livraison de σ 5,34 ms à **σ 0,30 ms** (mesuré sur
+  matériel réel). Seul manque, **irréductible sans pilote tiers** : le port virtuel
+  « NeoST MIDI OUT » — Windows n'a aucune API pour en créer un (loopMIDI le fournit, et
+  son port apparaît alors comme un appareil ordinaire).
+  `audio/MidiOutHost`, `audio/MidiInHost`, `audio/MidiWinmm.hpp`, `audio/Mt32Synth`,
+  `audio/GmSynth`.
 - **Port série RS-232 / USART MFP** : RSR/UDR, IRQ RxFull (12)/TxEmpty (10)/RxErr (11)/
   TxErr (9), lignes RTS→CTS (GPIP2)/DTR→DCD (GPIP1)/RI (GPIP6) via PSG port A.
 - **Config effective de l'USART** (`Mfp::updateSerialConfig`, port de `rs232.c`

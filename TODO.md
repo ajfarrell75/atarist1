@@ -544,18 +544,25 @@ densité HD/ED STX (NeoST plus cohérent) ; RTC en temps émulé (déterminisme 
   canal.
 - **Pas de synchro SMPTE/MTC.** L'horloge MIDI traverse (ce ne sont que des octets), donc
   le ST peut mener un DAW. Le code de temps SMPTE de l'Unitor, non.
-- **Windows : le synthé GM intégré marche, le reste non** — `GmSynth` (TinySoundFont,
-  2026-08-30) est portable et mixé dans la sortie audio, donc Windows a du son GM ;
-  port virtuel et destinations matérielles restent à écrire (winmm, ci-dessous).
+- ~~**Windows : le synthé GM intégré marche, le reste non.**~~ **LIVRÉ le 2026-08-31**
+  (backend winmm, `src/audio/MidiWinmm.hpp`) : destinations matérielles et sources
+  hôtes marchent sous Windows comme sous macOS/Linux, identifiant unique compris
+  (chemin d'interface USB — mieux qu'ALSA, qui n'en a aucun). Vérifié sur matériel
+  réel (Novation Circuit Tracks). **Reste hors de portée : le port virtuel**
+  « NeoST MIDI OUT » — Windows n'a aucune API pour créer un port que les autres
+  applications voient (ni winmm, ni WinRT MIDI 1.0). Le contournement est un pilote
+  tiers (loopMIDI), dont le port apparaît ensuite comme un appareil ordinaire ; la
+  page MIDI le dit. Windows MIDI Services (MIDI 2.0, Win11) le ferait nativement mais
+  s'installe à part et exigerait une pile WinRT/COM incompatible avec le zip autonome.
 
 ### Réseau (extensions NeoST — base livrée 2026-08-12, cf. `docs/EXTENSIONS.md`)
 
 > Les chantiers **clos** de ce front (Slirp 5/5, fenêtres EtherNEC ROM3/ROM4, CAB affiche
 > theoldnet.com) → `CHANGELOG.md` (2026-08-27), recettes incluses.
 
-- **MIDI OUT Windows** : `MidiOutHost` couvre CoreMIDI (macOS) et ALSA (Linux) ; winmm
-  reste à écrire — le MT-32 (Munt) et le synthé GM intégré (`GmSynth`, TinySoundFont,
-  2026-08-30), eux, sont portables.
+- ~~**MIDI OUT Windows**~~ : **LIVRÉ le 2026-08-31** — `MidiOutHost` et `MidiInHost`
+  couvrent désormais CoreMIDI (macOS), ALSA (Linux) et **winmm** (Windows). Cf. la
+  section *Station MIDI* ci-dessus pour la seule case qui reste vide (port virtuel).
 - **Périphériques des ports — validation** : `PortDevices` transcrit Steem/WinUAE sans
   logiciel à clé sous la main. À exercer : Leader Board / 10th Frame (dump ST), B.A.T. II,
   Music Master, et l'option « Pro Sound » de Wings of Death / Lethal Xcess (présents en

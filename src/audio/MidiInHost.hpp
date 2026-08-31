@@ -4,7 +4,8 @@
 //
 //  C'est le pendant de MidiOutHost : là où celui-ci fait sortir l'ACIA 6850 vers le
 //  monde, celui-ci fait ENTRER le monde dans l'ACIA (MidiAcia::receiveExternal).
-//  Backends : CoreMIDI (macOS), séquenceur ALSA (Linux). Ailleurs, coquille vide.
+//  Backends : CoreMIDI (macOS), séquenceur ALSA (Linux), winmm (Windows). Ailleurs,
+//  coquille vide.
 //
 //  ── C'est un BOÎTIER DE FUSION, pas un simple aiguillage ──────────────────────
 //  Le ST n'a qu'UNE prise MIDI IN. Réunir plusieurs appareils dessus est le rôle
@@ -46,6 +47,7 @@
 // =============================================================================
 #pragma once
 #include <atomic>
+#include <condition_variable>
 #include <cstdint>
 #include <deque>
 #include <memory>
@@ -119,7 +121,13 @@ private:
         int forceChannel = 0;              // 0 = tel quel, 1-16 = canalisé
         neost::midi::Parser parser;        // décodeur PROPRE à cette source
         MidiInHost* owner = nullptr;       // pour le callback CoreMIDI (srcConnRefCon)
-        uint32_t src = 0;                  // MIDIEndpointRef / (client<<8|port)+1
+        // uintptr_t : un HMIDIIN fait 64 bits. CoreMIDI (MIDIEndpointRef) et ALSA
+        // ((client<<8|port)+1) y tiennent sans changer de sens.
+        uintptr_t src = 0;                 // MIDIEndpointRef / adresse ALSA+1 / HMIDIIN
+        // winmm : les tampons de RÉCEPTION SysEx de cet appareil (cf. le .cpp).
+        // MM_MIM_DATA ne porte que les messages courts ; sans ces tampons armés, un
+        // dump de patch entrant serait purement et simplement perdu.
+        void* hdrs = nullptr;
     };
 
     void feed(Device& d, const uint8_t* data, std::size_t n);   // octets → décodeur
@@ -159,7 +167,18 @@ private:
     uint32_t port_   = 0;        // MIDIPortRef     (macOS) / port ALSA + 1
     void* seq_ = nullptr;        // snd_seq_t*        (Linux)
     void* dec_ = nullptr;        // snd_midi_event_t* (Linux)
-    std::thread reader_;         // boucle de lecture ALSA (CoreMIDI a son callback)
+    std::thread reader_;         // boucle ALSA / file de messages winmm (CoreMIDI, lui,
+                                 // appelle notre callback : rien à faire tourner)
     std::atomic<bool> stop_{false};
+    // winmm : identifiant du thread qui PORTE LA FILE DE MESSAGES des appareils.
+    // midiInOpen est appelé en CALLBACK_THREAD et non CALLBACK_FUNCTION : la
+    // documentation winmm interdit d'appeler quoi que ce soit hors d'une courte liste
+    // blanche depuis un callback, or il faut y ré-armer les tampons SysEx
+    // (midiInAddBuffer), qui n'en fait pas partie. Une file de messages rend
+    // l'opération légale, garde feed() mono-thread et réutilise le thread déjà là
+    // pour ALSA. 0 = file pas encore créée.
+    std::atomic<uint32_t> readerTid_{0};
+    std::mutex startMtx_;                  // attente de readerTid_ à l'ouverture
+    std::condition_variable startCv_;
     void readerLoop();
 };

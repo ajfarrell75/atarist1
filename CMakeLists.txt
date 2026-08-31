@@ -286,6 +286,12 @@ if(ALSA_FOUND)
     target_include_directories(neost-headless PRIVATE ${ALSA_INCLUDE_DIRS})
     target_link_libraries(neost-headless PRIVATE ${ALSA_LINK_LIBRARIES})
 endif()
+# winmm (Windows) : appareils MIDI hôtes réels, donc --midi-list et --midi-in-device
+# vivants. Rien à détecter — winmm fait partie de Windows depuis toujours.
+if(WIN32)
+    target_compile_definitions(neost-headless PRIVATE NEOST_MIDI_WINMM=1)
+    target_link_libraries(neost-headless PRIVATE winmm)
+endif()
 target_compile_definitions(neost-headless PRIVATE NEOST_VERSION="${NEOST_VERSION_STR}")
 set_source_files_properties(src/headless/main_headless.cpp
     PROPERTIES COMPILE_OPTIONS "${NEOST_STRICT_OPTS}")
@@ -318,6 +324,13 @@ if(APPLE)
     # résoudre. Pas d'ALSA ici À DESSEIN : le test ne vise que le tampon de gigue, qui
     # vit hors des #if de backend — l'y lier n'ajouterait aucune couverture.
     target_link_libraries(neost-selftest PRIVATE "-framework CoreFoundation" "-framework CoreMIDI")
+endif()
+# Même raison sous Windows : le backend winmm est compilé DANS MidiInHost.cpp, ses
+# symboles doivent donc se résoudre. Le test, lui, ne vise que le tampon de gigue et
+# les fonctions pures (dont shortMessageLength, la table de vérité de winmm).
+if(WIN32)
+    target_compile_definitions(neost-selftest PRIVATE NEOST_MIDI_WINMM=1)
+    target_link_libraries(neost-selftest PRIVATE winmm)
 endif()
 set_source_files_properties(tests/selftest_logic.cpp
     PROPERTIES COMPILE_OPTIONS "${NEOST_STRICT_OPTS}")
@@ -621,6 +634,11 @@ if(WIN32)
     # comment), jamais sous MinGW : sans elles, l'édition de liens échoue sur
     # CoInitializeEx / les IID. Inoffensif si déjà tirées par pkg-config.
     target_link_libraries(neost PRIVATE ole32 oleaut32 uuid winmm)
+    # winmm sert ici DEUX fois : miniaudio ci-dessus, et le pont MIDI hôte
+    # (destinations matérielles + sources, cf. audio/MidiWinmm.hpp) — plus la
+    # résolution de minuteur à 1 ms sans laquelle la livraison horodatée du MIDI
+    # serait quantifiée à ~15,6 ms.
+    target_compile_definitions(neost PRIVATE NEOST_MIDI_WINMM=1)
 endif()
 target_compile_definitions(neost PRIVATE NEOST_VERSION="${NEOST_VERSION_STR}")
 # Les modules d'interface sortis de main.cpp (A9) gardent la MÊME sévérité que lui :

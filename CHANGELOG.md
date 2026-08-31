@@ -26,6 +26,96 @@ Ripper, DAC Pro Sound) avec page Dongles, `disks/dongles.txt` et oracle de rejeu
 vérifié note à note** en headless, corpus MIDI piano/blues ; port MIDI ALSA sous Linux ;
 save-state v16. Détail dans les chantiers datés ci-dessous.
 
+## Le MIDI Windows rejoint macOS et Linux — backend winmm (2026-08-31)
+
+Suite directe du chantier ci-dessous, sur la dernière plateforme en retard. L'inventaire
+d'entrée était net : sous Windows, `MidiOutHost::destinations()` et
+`MidiInHost::sources()` rendaient des listes **vides**, `available()` disait faux, et la
+page MIDI cachait sa moitié « appareils matériels » — gardée, à tort, par
+`portAvailable()` (le port *virtuel*) plutôt que par la disponibilité des
+**destinations**. Un Windows avec un clavier maître branché voyait donc une page vide.
+
+**Livré** : backend **winmm** dans les deux ponts existants (une troisième branche `#if`,
+pas un fichier parallèle — la logique partagée reste partagée) et
+`audio/MidiWinmm.hpp` pour ce qui est propre à Windows.
+
+- **Destinations** : `midiOutOpen` par appareil, `midiOutShortMsg` pour les messages
+  courts, `midiOutLongMsg` pour le SysEx avec récolte différée des tampons (un dump de
+  4 Ko met plus d'une seconde à sortir à 31 250 bauds : ni attendre, ni libérer).
+- **Sources** : `midiInOpen` en **`CALLBACK_THREAD`**, pas `CALLBACK_FUNCTION`. La
+  documentation winmm interdit d'appeler autre chose qu'une courte liste blanche depuis
+  un callback, et `midiInAddBuffer` — indispensable pour ré-armer les tampons SysEx —
+  n'en fait pas partie. Une file de messages sur notre thread rend l'opération légale et
+  réutilise le thread déjà présent pour ALSA.
+- **Identifiant unique, que Windows était censé ne pas avoir** : `MIDIOUTCAPS` ne donne
+  qu'un nom tronqué à 31 caractères et, pour le Circuit Tracks testé, `mid=65535
+  pid=65535` — rien. `midiOutMessage(DRV_QUERYDEVICEINTERFACE)` rend en revanche le
+  chemin d'interface (`\\?\usb#vid_1235&pid_0139&mi_00#6&33d600c&0&0000#{...}`), dont la
+  partie médiane est le chemin **physique** : deux appareils du même modèle sont donc
+  discernables. Windows rejoint CoreMIDI ; ALSA reste la seule plateforme sans
+  identifiant stable. Corollaire assumé : changer de prise USB change l'identifiant, et
+  le repli par nom le signale au journal.
+- **`timeBeginPeriod(1)` tant qu'une sortie est ouverte.** Sans lui, Windows réveille le
+  thread de livraison par tranches de ~15,6 ms et tout l'horodatage (ancre + `lead`)
+  serait arrondi à cette tranche. Mesuré A/B, 40 échéances de 50 ms vers le Circuit
+  Tracks : **σ 0,30 ms / écart max 0,90 ms** avec, contre **σ 5,34 ms / 13,10 ms** sans.
+- **`shortMessageLength()`** (`MidiMessageParser.hpp`) : `MM_MIM_DATA` empaquette un
+  message dans un mot sans dire combien d'octets comptent. Pousser les trois aveuglément
+  ajouterait une donnée fantôme après un Program Change, que le running status avale en
+  silence. Fonction PURE, donc 14 cas dans `neost-selftest` — exécutés aussi sur macOS et
+  Linux, où aucun clavier n'est branché en CI.
+- **La banque GM entre dans les paquets.** `packaging/stage_free_data.sh` n'embarquait
+  pas `roms/gm/` : la case « Built-in General MIDI synth » du chantier précédent était
+  donc morte dans **tous** les binaires livrés (TinySoundFont ne joue rien sans banque,
+  et aucun Windows ne fournit de `.sf2`). `packaging/licenses/THIRD-PARTY.txt` annonçait
+  pourtant le fichier — l'annonce est redevenue vraie.
+
+**Ce qui reste hors de portée** : le port virtuel « NeoST MIDI OUT ». Windows n'a aucune
+API pour créer un port que les autres applications voient (ni winmm, ni WinRT MIDI 1.0) ;
+il y faut un pilote tiers (loopMIDI), dont le port apparaît ensuite comme un appareil
+ordinaire, en destination **et** en source. La page MIDI le dit au lieu de laisser une
+case grisée sans explication. Windows MIDI Services (MIDI 2.0, Win11) le ferait
+nativement, mais s'installe à part et exigerait une pile WinRT/COM que le zip autonome
+ne peut pas emporter.
+
+**Vérifié sur matériel réel** (Windows 11, Novation Circuit Tracks en USB, llvm-mingw) :
+`--midi-list` énumère l'appareil avec son identifiant ; `--midi-in-device` fait entrer
+35 octets d'horloge dans l'ACIA en 1,3 s (0 perdu) ; le GUI ouvre destination + source
+canalisée d'un coup, apprend l'identifiant et livre 0 octet en retard ; gamme, SysEx,
+running status et panique éprouvés sur l'appareil. Paliers `fast` **et `full` verts sous
+Windows** — une première, qui a demandé quatre correctifs d'outillage sans rapport avec
+le MIDI (voir ci-dessous).
+
+### Quatre bugs d'outillage que Windows a mis au jour
+
+Aucun n'est lié au MIDI ; tous empêchaient de valider quoi que ce soit sur cette
+plateforme, ce qui explique qu'ils aient survécu — la suite de tests n'y avait jamais
+tourné, et personne ne pouvait le voir depuis un Mac ou une CI Linux.
+
+- **`tools/compare_screenshot.py`** : `mkstemp` rend un descripteur **ouvert**, laissé
+  tel quel avant de faire écrire ffmpeg dans le fichier. Sous POSIX, simple fuite de
+  descripteur (une par comparaison) ; sous Windows le fichier est verrouillé, ffmpeg
+  échoue — et le `unlink` du `finally` échouait à son tour, **masquant** le vrai
+  message (« ffmpeg est requis »). Toute référence PNG (les captures d'oracle Hatari)
+  était incomparable.
+- **`tools/check_doc_anchors.py`** : le motif `[A-Za-z_][A-Za-z0-9_]*` était passé à
+  `grep` en argument. Sous git-bash/MSYS, `grep.exe` re-découpe la ligne de commande et
+  prend ce motif pour un **glob** qu'il expanse. Résultat : « 197 ancres mortes » sur des
+  symboles bien vivants (`Machine::runFrame`…). Le scan des lexèmes se fait désormais en
+  Python — plus de dépendance à grep, et 0 ancre morte.
+- **Le suffixe `.exe`** : les huit outils qui lancent un binaire le cherchaient sous son
+  nom POSIX, donc la suite se déclarait « non bâtie » alors que tout était compilé. Le
+  contournement évident (copier `neost.exe` en `neost`) est un PIÈGE — la copie ne suit
+  pas les rebuilds et on teste alors un binaire périmé, sans rien qui le dise.
+- **`gui_available()`** sautait le boot GUI dès que `DISPLAY`/`WAYLAND_DISPLAY`
+  manquaient — ce qui ne veut rien dire hors X11/Wayland. macOS était déjà excepté,
+  Windows non : la cible `neost` n'était donc lancée par la suite sur **aucune** des
+  deux plateformes non-Linux.
+
+Reste connu, non corrigé (hors sujet de ce chantier) : les outils lisent leurs fichiers
+sans `encoding="utf-8"`, or le cp1252 de Windows échoue sur `etalons.json` — d'où le
+`PYTHONUTF8=1` nécessaire devant `run_all.py` sur cette plateforme.
+
 ## Le synthé GM intégré cesse d'être un privilège macOS (2026-08-30)
 
 Objectif : **le support MIDI doit être aussi complet sous Linux que sous macOS.**

@@ -836,6 +836,34 @@ static void testMidiHomonymes() {
         checkBool("garde 1 Hz : le retour de l'appareil re-déclenche (2 ouvrables)",
                   countMatchable(cfgw, back) == 2, true);
     }
+
+    // (8) LONGUEUR D'UN MESSAGE COURT — la table de vérité de winmm.
+    //     MM_MIM_DATA livre un message empaqueté dans un mot de 32 bits SANS dire
+    //     combien d'octets comptent. Pousser les trois aveuglément ajoute une donnée
+    //     fantôme derrière tout message à un seul paramètre, et le running status
+    //     l'avale en silence : la note suivante part sur la mauvaise hauteur, sans
+    //     rien dans les journaux. Éprouvé ici, donc sur macOS et Linux aussi, où
+    //     aucun clavier n'est branché en CI.
+    {
+        using neost::midi::shortMessageLength;
+        checkBool("winmm : Note On = 3 octets",         shortMessageLength(0x90) == 3, true);
+        checkBool("winmm : Note Off = 3 octets",        shortMessageLength(0x85) == 3, true);
+        checkBool("winmm : Control Change = 3 octets",  shortMessageLength(0xB0) == 3, true);
+        checkBool("winmm : Pitch Bend = 3 octets",      shortMessageLength(0xEF) == 3, true);
+        checkBool("winmm : Program Change = 2 octets",  shortMessageLength(0xC3) == 2, true);
+        checkBool("winmm : Channel Pressure = 2 octets", shortMessageLength(0xD0) == 2, true);
+        checkBool("winmm : Song Position = 3 octets",   shortMessageLength(0xF2) == 3, true);
+        checkBool("winmm : Song Select = 2 octets",     shortMessageLength(0xF3) == 2, true);
+        checkBool("winmm : Tune Request = 1 octet",     shortMessageLength(0xF6) == 1, true);
+        // Temps réel : un octet, et c'est ce qui porte l'horloge d'un séquenceur.
+        checkBool("winmm : horloge $F8 = 1 octet",      shortMessageLength(0xF8) == 1, true);
+        checkBool("winmm : Start $FA = 1 octet",        shortMessageLength(0xFA) == 1, true);
+        checkBool("winmm : Active Sensing $FE = 1 octet", shortMessageLength(0xFE) == 1, true);
+        // Une DONNÉE n'est pas un message : 0 dit « ne rien pousser ». Sans ce cas,
+        // un mot mal formé ferait entrer un octet orphelin dans le flux fusionné.
+        checkBool("winmm : une donnée n'est pas un message", shortMessageLength(0x40) == 0, true);
+        checkBool("winmm : $00 n'est pas un message",   shortMessageLength(0x00) == 0, true);
+    }
 }
 
 // -----------------------------------------------------------------------------

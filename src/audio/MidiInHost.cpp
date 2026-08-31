@@ -16,10 +16,29 @@
 #include <CoreMIDI/CoreMIDI.h>
 #endif
 
+#if defined(NEOST_MIDI_WINMM)
+#include "audio/MidiWinmm.hpp"      // tire windows.h + mmsystem.h
+#include <memory>
+
+namespace {
+// Tampons de réception SysEx d'UN appareil. Quatre suffisent : le pilote les remplit
+// à tour de rôle et on les ré-arme aussitôt lus, à 31250 bauds il n'y a pas de course
+// à gagner. 1 Ko chacun, et un SysEx plus long arrive simplement en plusieurs
+// morceaux — le décodeur de la source le recolle (c'est tout son travail).
+constexpr int  kSysExBuffers = 4;
+constexpr int  kSysExBufSize = 1024;
+struct InBuffer {
+    MIDIHDR hdr{};
+    std::vector<char> data = std::vector<char>(kSysExBufSize, 0);
+};
+using InBuffers = std::vector<std::unique_ptr<InBuffer>>;
+} // namespace
+#endif
+
 MidiInHost::~MidiInHost() { close(); }
 
 bool MidiInHost::available() {
-#if defined(__APPLE__) || defined(NEOST_MIDI_ALSA)
+#if defined(__APPLE__) || defined(NEOST_MIDI_ALSA) || defined(NEOST_MIDI_WINMM)
     return true;
 #else
     return false;
@@ -175,6 +194,8 @@ std::vector<neost::midi::Endpoint> MidiInHost::sources() {
         // débranchée par défaut cherche précisément à éviter.
         if (!nm.empty() && nm.rfind("NeoST", 0) != 0) out.push_back({std::move(nm), uniqueId(e)});
     }
+#elif defined(NEOST_MIDI_WINMM)
+    for (const auto& d : neost::midi::winmm::inputs()) out.push_back(d.ep);
 #endif
     return out;
 }
@@ -346,6 +367,70 @@ std::size_t MidiInHost::setDevices(const std::vector<Want>& want) {
     }
     if (devices_.empty()) { closeBackend(); return 0; }
     return devices_.size();
+#elif defined(NEOST_MIDI_WINMM)
+    // Le thread PORTE la file de messages, et midiInOpen en prend l'identifiant : il
+    // doit donc exister, file créée, AVANT la première ouverture. On l'attend.
+    stop_.store(false);
+    reader_ = std::thread([this] { readerLoop(); });
+    {
+        std::unique_lock<std::mutex> lk(startMtx_);
+        startCv_.wait(lk, [this] { return readerTid_.load() != 0; });
+    }
+    const auto devs = neost::midi::winmm::inputs();
+    for (std::size_t wi = 0; wi < want.size(); ++wi) {
+        if (pick[wi] < 0) continue;            // débranché : l'appelant re-tentera
+        const Want& w = want[wi];
+        const auto& ep = have[std::size_t(pick[wi])];
+        const int idx = neost::midi::winmm::reFind(devs, ep, pick[wi]);
+        if (idx < 0) continue;
+        HMIDIIN h = nullptr;
+        const MMRESULT r = ::midiInOpen(&h, devs[std::size_t(idx)].id,
+                                        DWORD_PTR(readerTid_.load()), 0, CALLBACK_THREAD);
+        if (r != MMSYSERR_NOERROR || !h) {
+            std::fprintf(stderr, "[midi-in] cannot open \"%s\": %s\n",
+                         ep.name.c_str(), neost::midi::winmm::errorText(r));
+            continue;
+        }
+        auto d = std::make_unique<Device>();
+        d->owner = this; d->name = ep.name; d->uid = ep.uid;
+        d->forceChannel = w.forceChannel; d->src = reinterpret_cast<uintptr_t>(h);
+        // Tampons SysEx armés AVANT le démarrage : un dump de patch envoyé dans la
+        // seconde qui suit ne doit pas tomber faute de tampon libre.
+        auto* bufs = new InBuffers();
+        for (int b = 0; b < kSysExBuffers; ++b) {
+            auto ib = std::make_unique<InBuffer>();
+            ib->hdr.lpData = ib->data.data();
+            ib->hdr.dwBufferLength = DWORD(ib->data.size());
+            if (::midiInPrepareHeader(h, &ib->hdr, sizeof(MIDIHDR)) != MMSYSERR_NOERROR) break;
+            if (::midiInAddBuffer(h, &ib->hdr, sizeof(MIDIHDR)) != MMSYSERR_NOERROR) {
+                ::midiInUnprepareHeader(h, &ib->hdr, sizeof(MIDIHDR));
+                break;
+            }
+            bufs->push_back(std::move(ib));
+        }
+        d->hdrs = bufs;
+        {
+            std::lock_guard<std::mutex> lk(devMtx_);
+            devices_.push_back(std::move(d));
+        }
+        std::fprintf(stderr, "[midi-in] \"%s\" -> MIDI IN (winmm #%u%s%s)%s\n",
+                     ep.name.c_str(), unsigned(devs[std::size_t(idx)].id),
+                     ep.uid.empty() ? "" : ", uid ", ep.uid.c_str(),
+                     w.forceChannel ? " channelized" : "");
+        // Repli par NOM : sous Windows l'identifiant porte le CHEMIN USB, donc un
+        // simple changement de prise le fait varier — d'où le « ? » du message.
+        if (!w.uid.empty() && !ep.uid.empty() && ep.uid != w.uid)
+            std::fprintf(stderr, "[midi-in] note: \"%s\" opened by NAME — its unique id "
+                         "differs (configured %s, found %s): other USB port, or "
+                         "same-model replacement?\n",
+                         ep.name.c_str(), w.uid.c_str(), ep.uid.c_str());
+    }
+    if (devices_.empty()) { closeBackend(); return 0; }
+    // Démarrage EN DERNIER : aucun MM_MIM_DATA ne peut donc arriver avant que la
+    // liste des appareils soit complète, et le thread ne cherchera jamais un
+    // appareil qui n'y est pas encore.
+    for (const auto& d : devices_) ::midiInStart(reinterpret_cast<HMIDIIN>(d->src));
+    return devices_.size();
 #else
     (void)want;
     return 0;
@@ -372,6 +457,38 @@ void MidiInHost::closeBackend() {
         MIDIPortDispose(port_);
     }
     if (client_) MIDIClientDispose(client_);
+#elif defined(NEOST_MIDI_WINMM)
+    {
+        // Sous devMtx_ : le thread lecteur peut être EN TRAIN de lire le tampon d'un
+        // MIDIHDR (feed) ; le libérer sous ses pieds serait un usage après libération.
+        // Le verrou est relâché AVANT la jonction — un thread qui l'attend doit
+        // pouvoir l'obtenir pour atteindre son GetMessage suivant, sans quoi le join
+        // ci-dessous ne rendrait jamais la main.
+        std::lock_guard<std::mutex> lk(devMtx_);
+        stop_.store(true);          // interdit le ré-armement des tampons rendus
+        for (const auto& d : devices_) {
+            HMIDIIN h = reinterpret_cast<HMIDIIN>(d->src);
+            if (h) {
+                ::midiInStop(h);
+                ::midiInReset(h);   // rend TOUS les tampons, marqués MHDR_DONE
+            }
+            if (d->hdrs) {
+                auto* bufs = static_cast<InBuffers*>(d->hdrs);
+                for (auto& b : *bufs)
+                    if (h) ::midiInUnprepareHeader(h, &b->hdr, sizeof(MIDIHDR));
+                delete bufs;
+                d->hdrs = nullptr;
+            }
+            if (h) ::midiInClose(h);
+            // Le thread ne retrouvera plus cet appareil : les MM_MIM_LONGDATA que
+            // midiInReset vient de poster tomberont dans le vide, ce qui est
+            // exactement ce qu'on veut (leurs tampons n'existent plus).
+            d->src = 0;
+        }
+    }
+    if (const uint32_t tid = readerTid_.load()) ::PostThreadMessageW(tid, WM_QUIT, 0, 0);
+    if (reader_.joinable()) reader_.join();
+    readerTid_.store(0);
 #endif
     client_ = port_ = 0;
 }
@@ -417,6 +534,52 @@ void MidiInHost::readerLoop() {
                 if (n > 0) feed(*dev, buf, std::size_t(n));
             }
             if (snd_seq_event_input_pending(seq, 0) <= 0) break;
+        }
+    }
+#elif defined(NEOST_MIDI_WINMM)
+    MSG msg;
+    // Force la création de la file AVANT de publier l'identifiant du thread : winmm
+    // POSTE ses messages (CALLBACK_THREAD), et poster vers un thread sans file échoue
+    // — silencieusement, ce qui donnerait un appareil ouvert mais définitivement muet.
+    ::PeekMessageW(&msg, nullptr, WM_USER, WM_USER, PM_NOREMOVE);
+    {
+        std::lock_guard<std::mutex> lk(startMtx_);
+        readerTid_.store(::GetCurrentThreadId());
+    }
+    startCv_.notify_all();
+
+    while (!stop_.load()) {
+        const BOOL got = ::GetMessageW(&msg, nullptr, 0, 0);
+        if (got <= 0) break;                       // WM_QUIT (0) ou erreur (-1)
+        if (msg.message != MM_MIM_DATA && msg.message != MM_MIM_LONGDATA) continue;
+        // wParam = le HMIDIIN de l'appareil : c'est lui qui dit de QUI vient le
+        // message, donc quel décodeur alimenter (la fusion se fait aux frontières
+        // de messages, cf. l'en-tête).
+        std::lock_guard<std::mutex> lk(devMtx_);
+        Device* dev = nullptr;
+        for (const auto& d : devices_)
+            if (d->src && d->src == uintptr_t(msg.wParam)) { dev = d.get(); break; }
+        if (!dev) continue;                        // appareil déjà fermé
+        if (msg.message == MM_MIM_DATA) {
+            // UN message court EMPAQUETÉ dans un mot. Sa longueur se déduit du
+            // statut : pousser les trois octets aveuglément ajouterait une donnée
+            // fantôme après un Program Change (cf. shortMessageLength).
+            const DWORD packed = DWORD(msg.lParam);
+            const uint8_t b[3] = {uint8_t(packed), uint8_t(packed >> 8), uint8_t(packed >> 16)};
+            const int len = neost::midi::shortMessageLength(b[0]);
+            if (len > 0) feed(*dev, b, std::size_t(len));
+        } else {
+            auto* hdr = reinterpret_cast<MIDIHDR*>(msg.lParam);
+            if (!hdr) continue;
+            if (hdr->dwBytesRecorded > 0)
+                feed(*dev, reinterpret_cast<const uint8_t*>(hdr->lpData),
+                     std::size_t(hdr->dwBytesRecorded));
+            // Ré-armement : LÉGAL ICI (thread ordinaire), interdit dans un callback
+            // winmm — c'est toute la raison du CALLBACK_THREAD. Jamais pendant la
+            // fermeture : midiInReset rend les tampons pour qu'on les libère, les
+            // remettre en file les reprendrait au pilote.
+            if (!stop_.load())
+                ::midiInAddBuffer(reinterpret_cast<HMIDIIN>(dev->src), hdr, sizeof(MIDIHDR));
         }
     }
 #endif

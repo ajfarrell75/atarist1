@@ -25,6 +25,13 @@ for rom in "${FREE_ROMS[@]}" ${ATARI_ROMS[@]+"${ATARI_ROMS[@]}"}; do
     cp "$SRC/roms/$rom" "$DEST/roms/"
 done
 cp -r "$SRC/roms/drivesound" "$DEST/roms/"
+# Banque General MIDI (TimGM6mb, GPL-2 — cf. roms/gm/README.md et packaging/licenses).
+# SANS ELLE, la case « Built-in General MIDI synth » est MORTE dans tous les paquets
+# livrés : le synthé intégré des plateformes sans DLSMusicDevice est TinySoundFont,
+# qui ne joue rien sans banque, et aucun système Windows ne fournit de .sf2. Le
+# dossier est petit (6 Mo) au regard de ce qu'il débloque.
+mkdir -p "$DEST/roms/gm"
+cp "$SRC/roms/gm/TimGM6mb.sf2" "$SRC/roms/gm/README.md" "$DEST/roms/gm/"
 cp "$SRC/disks/diskA.st" "$DEST/disks/"
 
 # Démos de démonstration — les trois productions demoscene que la purge du
