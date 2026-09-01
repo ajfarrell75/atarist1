@@ -300,7 +300,7 @@ python3 tools/compare_screenshot.py tests/out/foo_neost.ppm tests/reference/foo.
 Soit **26 entrées** dans `tools/etalons.json` — 10 auto-tests + **16 étalons machine**, dont
 le `_comment` du fichier rappelle la couverture réelle (ni MegaST, ni TOS 1.00/1.04/1.06).
 Le 10ᵉ auto-test est `glue_selftest_attr` (A16b, 2026-08-28) : le MÊME auto-test Glue
-rejoué avec le verrou expérimental `NEOST_LINELEN_ATTR=1` armé. Un chemin opt-in que
+rejoué avec le verrou `NEOST_LINELEN_ATTR=0` (grille fixe, l'A/B depuis que V3 est le défaut, 2026-09-01). Un chemin que
 personne n'exécute pourrit — celui-là segfautait depuis des semaines sans qu'aucun palier
 ne puisse le voir. Un champ `env` du manifeste sert à ça : rejouer un auto-test sous un
 verrou d'émulation, pour ~0,1 s.

@@ -79,7 +79,7 @@ public:
 
     // NEOST_LINELEN : l'UNIQUE lecteur du verrou « longueurs de ligne par-ligne »
     // côté Machine (défaut ON, =0 pour l'A/B). L'attribution expérimentale côté
-    // Shifter vit sur SON verrou (NEOST_LINELEN_ATTR, OFF) — l'historique du défaut
+    // Shifter vit sur SON verrou (NEOST_LINELEN_ATTR, ON depuis le 2026-09-01) — l'historique du défaut
     // divergent et le segfault qui ont motivé la séparation : définition (A16).
     static bool lineLenEnv();
 

@@ -81,6 +81,19 @@ int Shifter::timerBPosForLine(int line, bool startOfLine) {
     return timerBLinePos(startOfLine);
 }
 
+// Longueur de ligne IMPLIQUÉE par l'état freq/res au début d'une ligne — ce que
+// Video_StartHBL pose dans nCyclesPerLine chez Hatari, ligne après ligne, écriture
+// ou pas. Chantier V3 (2026-09-01) : jusqu'ici, sous NEOST_LINELEN_ATTR, la longueur
+// retombait à cpl à CHAQUE ligne et n'était corrigée que par un « Freq_match » tombant
+// SUR la ligne ; 140 lignes de 60 Hz sans écriture restaient donc à 512 et la grille
+// réelle ne dérivait jamais — le verrou ne pouvait pas produire l'effet pour lequel
+// il existe (mesuré sur l'exhibiteur make_freqswitch_test.py : le cycle bougeait de
+// 4, la ligne jamais, alors qu'Hatari attribuait 1 à 2 lignes plus loin).
+static inline int glueLineLenFor(int freqHz) {
+    return (freqHz == 71) ? glue::CyclesLine_Hi
+         : (freqHz == 60) ? glue::CyclesLine_60 : glue::CyclesLine_50;
+}
+
 void Shifter::liveGlueCatchUp(int targetLine) {
     if (frameMode_ == Mode::High || glueLines_.size() < 2) return;
     const int maxLine = static_cast<int>(glueLines_.size()) - 2;
@@ -154,7 +167,8 @@ void Shifter::liveGlueCatchUp(int targetLine) {
         if (lineLen) {
             if (static_cast<std::size_t>(liveGlueLine_) < glueLineStart_.size())
                 glueLineStart_[liveGlueLine_] = (liveGlueLine_ == 0) ? 0 : prevStart + liveGlueLen_;
-            liveGlueLen_ = cpl;
+            liveGlueLen_ = glueLineLenFor(((liveGlueRes_ & 0x03) == 0x02) ? 71
+                                         : (liveGlueFreq50_ ? 50 : 60));
         }
         // ⚠ Décode de Video_StartHBL : hi SEULEMENT si (res & 3) == 2 — res 3 suit
         // le bit freq de $FF820A (video.c:3541-3581). Le décode « bit 1 = 71 Hz »
@@ -787,7 +801,7 @@ void Shifter::replayGlue() {
         // cf. le feeder live : décode Video_StartHBL, hi si (res & 3) == 2 seulement.
         int freqHz = ((curRes & 0x03) == 0x02) ? 71 : (curFreq50 ? 50 : 60);
         startHBL(line, curRes, freqHz);
-        int len = cpl;
+        int len = lineLen ? glueLineLenFor(freqHz) : cpl;
         if (v2 && !lineLen) {                            // ligne raccourcie ? (heuristique V2)
             for (std::size_t k = wi; k < nw && syncWrites_[k].frameCycle < lineCyc + 57; ++k)
                 if (syncWrites_[k].isRes && (syncWrites_[k].val & 3) == 2) { len = 224; break; }
@@ -813,6 +827,16 @@ void Shifter::replayGlue() {
             // d'Hatari se comparent avant le latch res −1, video.c:1622-1634).
             if (w.isRes) updateGlueRes(line, lc, prevRes, curRes);
             if (lineLen && glueCyclesLine_ > 0) len = glueCyclesLine_;
+            // Chantier V3 : dire à quelle ligne l'écriture a RÉELLEMENT été
+            // attribuée dans CE replay, et avec quelle longueur de ligne
+            // courante. Le trace `[varline]` voisin compare deux modèles en
+            // théorie ; celui-ci dit lequel a tourné — sans quoi on lit un
+            // écart annoncé sans savoir s'il a le moindre effet.
+            static const bool attrTrace = std::getenv("NEOST_VARLINE_TRACE") != nullptr;
+            if (attrTrace)
+                std::fprintf(stderr, "[attr] lineLen=%d %s=%02x fc=%d -> L%d/c%d len=%d\n",
+                             lineLen ? 1 : 0, w.isRes ? "res" : "frq", w.val,
+                             static_cast<int>(w.frameCycle), line, lc, len);
         }
         lineCyc += len;
     }

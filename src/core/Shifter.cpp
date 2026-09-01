@@ -54,9 +54,10 @@ static constexpr int kSpec512AlignCyc = -25;
 //  · NEOST_LINELEN (défaut ON, =0 pour l'A/B) — le canal HBL_Pos/nCyclesPerLine
 //    côté Machine, validé WS3. Lecteur unique : lineLenEnv(), partagé avec
 //    Machine.cpp (lineLenOn_).
-//  · NEOST_LINELEN_ATTR (défaut OFF, opt-in) — l'ATTRIBUTION à la grille réelle
-//    des débuts de ligne (glueLineStart_) côté Shifter : le chantier V3, resté
-//    expérimental.
+//  · NEOST_LINELEN_ATTR (défaut ON depuis le 2026-09-01) — l'ATTRIBUTION à la
+//    grille réelle des débuts de ligne (glueLineStart_) côté Shifter : le chantier
+//    V3, CLOS à l'oracle (cf. la fin de ce bandeau). =0 rétablit la grille fixe
+//    frameCycle/512 pour un A/B — et fait rougir l'étalon freq_switch.
 // Séparer les variables ferme le piège : poser NEOST_LINELEN=1 pour un A/B
 // n'arme plus silencieusement un chemin expérimental non validé.
 //
@@ -75,9 +76,19 @@ static constexpr int kSpec512AlignCyc = -25;
 // dont lpf change en cours de route — cas que le commentaire de Shifter::serialize
 // admet explicitement. Le correctif tient l'invariant dans replayGlue (cf. la note
 // A16b là-bas) ; l'auto-test `glue_selftest_attr` du manifeste le garde armé.
-// Depuis : le palier `full` est vert AVEC NEOST_LINELEN_ATTR=1 (23 étalons, tous à
-// 0 px) — c'est une NON-RÉGRESSION du canal, pas une preuve qu'il améliore quoi que
-// ce soit : aucun étalon n'exerce la géométrie mi-trame 50↔60 Hz qu'il vise.
+// V3 CLOS le 2026-09-01. Le « vert avec le verrou armé » ne prouvait rien, et pour
+// une raison qu'on ne soupçonnait pas : le verrou NE FAISAIT RIEN. Sous
+// NEOST_LINELEN_ATTR la longueur de ligne retombait à cpl à chaque ligne et n'était
+// corrigée que par un Freq_match tombant SUR la ligne — 140 lignes de 60 Hz sans
+// écriture restaient à 512, la grille réelle ne dérivait jamais. Exhibiteur construit
+// exprès (tools/make_freqswitch_test.py, étalon `freq_switch`) : plage de 140 lignes
+// 60 Hz (dérive 560 cyc) puis bascules alternées. Trace `video_sync` d'Hatari contre
+// `[attr]` (NEOST_VARLINE_TRACE) : avec la longueur de base posée par l'état freq/res
+// au début de ligne (glueLineLenFor, ≙ Video_StartHBL → nCyclesPerLine), NeoST
+// attribue les 18 écritures de la trame à la MÊME ligne et au MÊME cycle qu'Hatari
+// (169/336 174/268 … 242/508 247/468) ; la grille fixe en manque 17 sur 18, d'une à
+// deux lignes. Palier pixel entier à 0 px avec le canal armé : rien d'existant ne
+// bouge, seul l'exhibiteur le voit — c'est ce qu'il fallait prouver.
 bool Shifter::lineLenEnv() {
     static const bool on = envFlag("NEOST_LINELEN", true);
     return on;

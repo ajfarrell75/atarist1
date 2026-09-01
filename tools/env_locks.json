@@ -5,7 +5,7 @@
   "_comment": "CHANGENT L'ÉMULATION. Chacune est un A/B validé ou un chantier en cours ; aucune n'est censée être posée en production. Les étalons sont mesurés avec les DÉFAUTS — armer l'une d'elles invalide toute comparaison au corpus.",
   "NEOST_WS": "wakeup state STF (1..4, défaut 3=WS3, tranché). Décale les positions horizontales de la Glue, l'IRQ HBL et la VBL.",
   "NEOST_LINELEN": "canal HBL_Pos/nCyclesPerLine côté Machine (défaut ON, validé WS3). =0 pour l'A/B.",
-  "NEOST_LINELEN_ATTR": "chantier V3 : attribution des écritures à la grille réelle des débuts de ligne (défaut OFF). Cf. A16b.",
+  "NEOST_LINELEN_ATTR": "V3 (clos le 2026-09-01) : attribution des écritures freq/res à la grille RÉELLE des débuts de ligne, longueur de ligne persistante comme nCyclesPerLine d Hatari. Défaut ON ; =0 = A/B vers l ancienne grille fixe frameCycle/512 (gardé par l étalon freq_switch, qui doit ROUGIR à 0). Cf. A16b pour le segfault historique.",
   "NEOST_V2": "tricks par changement de résolution (med-res overscan, scrolls hardware).",
   "NEOST_RAM_SLOT": "créneau bus RAM (défaut ON) — convergence cycle d'instruction Moira/WinUAE.",
   "NEOST_RAM_SLOT_PHASE": "phase de la grille du créneau RAM (calibration oracle).",

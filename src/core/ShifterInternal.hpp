@@ -28,7 +28,7 @@ inline bool envFlag(const char* name, bool dflt) {
 
 // Cf. le bandeau A16/A16b de Shifter.cpp pour l'histoire de ces deux verrous.
 inline bool lineLenAttrEnv() {
-    static const bool on = envFlag("NEOST_LINELEN_ATTR", false);
+    static const bool on = envFlag("NEOST_LINELEN_ATTR", true);   // défaut ON depuis le 2026-09-01 (V3 clos)
     return on;
 }
 
