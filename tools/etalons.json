@@ -1,5 +1,5 @@
 {
- "_comment": "Logiciels étalons NeoST — freeware / domaine public uniquement. Voir docs/TEST_SOFTWARE.md. ⚠ COUVERTURE (17 étalons machine, recompté 2026-08-30 — chiffres gardés par tools/check_doc_claims.py) : st ×11 / ste ×6 ; 512k ×14 / 1m ×3. ROM : etos256us ×5 + etos192fr ×8 (LIBRES — tournent partout) ; tos102uk ×3 + tos162us ×1 (PROPRIÉTAIRES — run_etalons.py les SAUTE et les recense si la ROM est absente, cf. rom_is_free()). MegaST, TOS 1.00/1.04/1.06 ne sont couverts par AUCUN étalon — une suite verte ne prouve RIEN sur ces configs. Le MegaSTE, lui, est gardé DEPUIS le 2026-08-27 par tools/run_megaste_diag.py (suite Q du diagnostic Field Service, palier full), hors de ce manifeste. Les 4 étalons à disque généré (overscan_top, trace_odd, scroll_8264/65) ont été migrés sur EmuTOS le 2026-08-19 : leur secteur de boot est autonome, l'image ne dépend pas du TOS — vérifié à 0 px des deux côtés, oracle Hatari inclus. A10, 2026-08-28 : 3 DÉMOS de plus migrées (cuddly_demos, nocooper, nocooper_greetings) — elles bootent depuis le disque, seule la durée du boot change, et la référence commise est INCHANGÉE (0 px). Les 3 étalons spec512 NE migrent PAS (leur diapo est lancée par un dossier AUTO qu'EmuTOS n'exécute pas jusqu'au bout — réfuté à l'oracle, cf. leur rom_note) : leur couverture est RENDUE par spec512_bands, étalon GÉNÉRÉ (tools/make_spec512_test.py, secteur de boot autonome, 0 px contre l'oracle Hatari). La ROM fixe la fréquence de balayage (suffixe us = 60 Hz, uk/fr/de/es = 50 Hz) et cela CHANGE l'image des démos : les images Spectrum 512 sont calculées pour le 50 Hz et sortent déchirées en NTSC, sur ST comme sur STE, identiquement sous Hatari (fidèle, pas un bug) 2026-08-30 : closure POSÉE (Sync, écran 153 couleurs, ST 1 Mo, etos192fr) — ref_kind SNAPSHOT et non oracle, à dessein : l'oracle Hatari diverge de 64,15 %, mais la cause est GÉOMÉTRIQUE et mesurée (palettes identiques ; un décalage de +4 px ST ramène l'écart à 3,20 %, ±1 px le fait remonter à ~29 %) — c'est la signature d'A40 (glue::LEFT_OFF). Poser l'oracle aurait figé l'écart ; cf. son ref_note. 2026-08-30, A40 SOLDÉ : le décalage de 4 px de closure était le retrait gauche MED (LEFT_OFF_MED) — corrigé, oracle 64,08 % -> 0,02 % (27 px ligne 0, suivi en A41), référence reposée et oracle Hatari commis à côté (tests/reference/closure_oracle.png). Les 144 px d'overscan_top, eux, sont un ARTEFACT DE RECOPIE D'HATARI (masque Glue identique des deux côtés) : cet étalon reste snapshot définitivement, cf. son ref_note.",
+ "_comment": "Logiciels étalons NeoST — freeware / domaine public uniquement. Voir docs/TEST_SOFTWARE.md. ⚠ COUVERTURE (18 étalons machine, recompté 2026-08-30 — chiffres gardés par tools/check_doc_claims.py) : st ×11 / ste ×6 ; 512k ×14 / 1m ×3. ROM : etos256us ×5 + etos192fr ×8 (LIBRES — tournent partout) ; tos102uk ×3 + tos162us ×1 (PROPRIÉTAIRES — run_etalons.py les SAUTE et les recense si la ROM est absente, cf. rom_is_free()). MegaST, TOS 1.00/1.04/1.06 ne sont couverts par AUCUN étalon — une suite verte ne prouve RIEN sur ces configs. Le MegaSTE, lui, est gardé DEPUIS le 2026-08-27 par tools/run_megaste_diag.py (suite Q du diagnostic Field Service, palier full), hors de ce manifeste. Les 4 étalons à disque généré (overscan_top, trace_odd, scroll_8264/65) ont été migrés sur EmuTOS le 2026-08-19 : leur secteur de boot est autonome, l'image ne dépend pas du TOS — vérifié à 0 px des deux côtés, oracle Hatari inclus. A10, 2026-08-28 : 3 DÉMOS de plus migrées (cuddly_demos, nocooper, nocooper_greetings) — elles bootent depuis le disque, seule la durée du boot change, et la référence commise est INCHANGÉE (0 px). Les 3 étalons spec512 NE migrent PAS (leur diapo est lancée par un dossier AUTO qu'EmuTOS n'exécute pas jusqu'au bout — réfuté à l'oracle, cf. leur rom_note) : leur couverture est RENDUE par spec512_bands, étalon GÉNÉRÉ (tools/make_spec512_test.py, secteur de boot autonome, 0 px contre l'oracle Hatari). La ROM fixe la fréquence de balayage (suffixe us = 60 Hz, uk/fr/de/es = 50 Hz) et cela CHANGE l'image des démos : les images Spectrum 512 sont calculées pour le 50 Hz et sortent déchirées en NTSC, sur ST comme sur STE, identiquement sous Hatari (fidèle, pas un bug) 2026-08-30 : closure POSÉE (Sync, écran 153 couleurs, ST 1 Mo, etos192fr) — ref_kind SNAPSHOT et non oracle, à dessein : l'oracle Hatari diverge de 64,15 %, mais la cause est GÉOMÉTRIQUE et mesurée (palettes identiques ; un décalage de +4 px ST ramène l'écart à 3,20 %, ±1 px le fait remonter à ~29 %) — c'est la signature d'A40 (glue::LEFT_OFF). Poser l'oracle aurait figé l'écart ; cf. son ref_note. 2026-08-30, A40 SOLDÉ : le décalage de 4 px de closure était le retrait gauche MED (LEFT_OFF_MED) — corrigé, oracle 64,08 % -> 0,02 % (27 px ligne 0, suivi en A41), référence reposée et oracle Hatari commis à côté (tests/reference/closure_oracle.png). Les 144 px d'overscan_top, eux, sont un ARTEFACT DE RECOPIE D'HATARI (masque Glue identique des deux côtés) : cet étalon reste snapshot définitivement, cf. son ref_note.",
  "etalons": [
   {
    "id": "glue_selftest",
@@ -10,13 +10,13 @@
   },
   {
    "id": "glue_selftest_attr",
-   "name": "Glue bordures — MÊME auto-test, verrou V3 NEOST_LINELEN_ATTR ARMÉ",
+   "name": "Glue bordures — MÊME auto-test, verrou V3 NEOST_LINELEN_ATTR DÉSARMÉ (A/B)",
    "subsystem": "shifter/glue",
    "type": "glue_selftest",
    "env": {
-    "NEOST_LINELEN_ATTR": "1"
+    "NEOST_LINELEN_ATTR": "0"
    },
-   "note": "A16b (2026-08-28). Le canal V3 « attribution à la grille réelle des débuts de ligne » est OFF par défaut et n'était donc exécuté par AUCUN palier : il SEGFAULTAIT depuis des semaines (glueLineStart_ vide → data() == nullptr, confirmé à la ligne par ASan+UBSan : liveGlueCatchUp Shifter.cpp:537 ← liveLineDisplayed ← glueSelfTest) sans que rien ne puisse le signaler. Le correctif tient l'invariant glueLineStart_.size() == glueLines_.size() dans replayGlue ; cette entrée rejoue les 39 assertions du même auto-test avec le verrou ARMÉ, pour que le chemin opt-in cesse d'être un angle mort. Coût : ~0,1 s. ⚠ Vert ici = NON-RÉGRESSION du canal, PAS une preuve qu'il améliore le rendu : aucun étalon n'exerce la géométrie mi-trame 50↔60 Hz qu'il vise.",
+   "note": "A16b (2026-08-28) puis V3 (2026-09-01). Cette entrée rejoue les 39 assertions de l auto-test Glue dans l AUTRE position du verrou NEOST_LINELEN_ATTR. Jusqu au 2026-09-01 le canal était OFF par défaut et cette entrée l ARMAIT (il segfaultait — glueLineStart_ vide, confirmé ASan — sans que rien ne le voie). Depuis V3 le canal est ON par défaut, validé à l oracle (cf. étalon freq_switch) : l entrée garde désormais la position DÉSARMÉE (=0, grille fixe frameCycle/512), pour que l A/B reste exécutable et ne redevienne pas un angle mort. Coût : ~0,1 s.",
    "max_diff_px": 0
   },
   {
@@ -182,6 +182,25 @@
    "oracle_scan": 90,
    "scan_note": "90 et non 40 : au PREMIER essai de pose, une fenêtre de 40 a MANQUÉ la trame (Hatari sème son RNG sur l'horloge hôte et tire la position angulaire initiale de la disquette — la durée du boot change d'un run à l'autre). Le second essai l'a trouvée à la trame 359. Même largeur que les autres étalons qui bootent un disque.",
    "note": "CE QU'IL MESURE : l'écran entier porte l'index 1, et le programme martèle palette[1] ($FF8242) avec rouge/vert/bleu séparés d'un délai fixe. La position HORIZONTALE de chaque bascule de couleur dépend donc du cycle exact auquel l'écriture prend effet — c'est le seul endroit du rendu où un cycle de CPU se voit à l'œil. Exerce recordColorWrite (datation), spec512Active_ (bascule en re-rendu par ligne) et l'alignement bus des écritures palette. ⚠ L'image n'est PAS statique : la boucle et la trame ne sont pas commensurables, le motif a une période de 4 TRAMES (mesuré). C'est sans conséquence — NeoST est déterministe, la trame 399 est toujours la même — mais l'oracle a besoin de sa fenêtre : --oracle retient la trame identique, et une sur quatre l'est. VÉRIFIÉ le 2026-08-28 : 0 px / 114816 contre l'oracle Hatari (trames 360, 364, 368… toutes identiques à la capture NeoST) — NeoST et Hatari s'accordent au pixel sur ce motif pourtant sensible au cycle."
+  },
+  {
+   "id": "freq_switch",
+   "name": "Bascules 50↔60 Hz EN COURS DE TRAME — attribution de ligne (V3, étalon généré)",
+   "subsystem": "shifter/glue",
+   "rom": "roms/etos192fr.img",
+   "rom_note": "ROM LIBRE (EmuTOS 192 Ko, PAL 50 Hz). Étalon GÉNÉRÉ par tools/make_freqswitch_test.py — aucune dépendance propriétaire.",
+   "disk": "disks/etalons/freq_switch.st",
+   "machine": "st",
+   "mem": "512k",
+   "cpu": "moira",
+   "fastfdc": true,
+   "frames": 400,
+   "crop": "buffer",
+   "max_diff_px": 0,
+   "ref_kind": "snapshot",
+   "uniform_ok": false,
+   "note": "Posé le 2026-09-01, chantier V3. CE QU'IL EXERCE, et que rien d'autre n'exerçait : l'attribution d'une écriture freq/res à sa LIGNE quand la grille réelle a dérivé — une ligne 60 Hz fait 508 cycles, pas 512, et il faut cumuler plus d'une ligne entière (≥128 lignes 60 Hz) pour que grille fixe (frameCycle/512) et grille réelle désignent des lignes différentes ; c'est pourquoi AUCUNE démo du dépôt ne l'exhibait (Closure réfutée le 2026-08-30). Structure : plage de 140 lignes 60 Hz (dérive 560 cyc) puis 8 bascules 50/60 alternées, écran rempli d'index 1 pour que la largeur affichée de chaque ligne se lise à l'écran. ANCRÉ SUR LA VBL (handler niveau 4, MFP coupé) : la première version se resynchronisait sur le compteur vidéo, qui dépend de la fréquence — donc de ce qu'on mesure — et l'image changeait d'une trame à l'autre dès 2 lignes de 60 Hz. Déterminisme vérifié des DEUX côtés : 12 trames NeoST et 17 trames Hatari md5-identiques.",
+   "ref_note": "SNAPSHOT, ET POURQUOI PAS ORACLE : la validation à Hatari a été faite AU NIVEAU DE LA GLUE, pas du pixel. Trace `--trace video_sync` d'Hatari contre `[attr]` (NEOST_VARLINE_TRACE=1) côté NeoST : les 18 écritures de la trame sont attribuées à la MÊME ligne et au MÊME cycle (169/336 174/268 179/224 184/156 189/112 194/44 199/4 203/444 208/400 213/332 218/288 223/220 228/176 233/108 238/64 242/508 247/468) — et la grille fixe en manque 17 sur 18, d'une à deux lignes. Le pixel, lui, n'est pas juge ici : les lignes 60 Hz dans une trame 50 Hz sont rendues par Hatari avec l'artefact de recopie « left+2 » tranché en A40 (toute la ligne décode à l'index 8, décalée) — 56 % d'écart image qui ne dit rien de l'attribution. Les frontières de blocs visibles, elles, coïncident (135,136,140,141,145,146,150,151,155,156). GARDE : cet étalon doit ROUGIR avec NEOST_LINELEN_ATTR=0 (vérifié à la pose) — sinon il ne garde rien."
   },
   {
    "id": "overscan_top",
@@ -367,8 +386,9 @@
   },
   {
    "id": "nocooper",
-   "oracle_check": false,
-    "oracle_check_note": "L oracle de cet etalon exige une TOUCHE TENUE (espace, vbl ~900 — cf. note) que hatari_oracle.sh ne sait pas injecter : il faut --cmd-fifo + keydown/keyup (recette dans docs/HATARI_AUTOMATION.md). La reference a donc ete posee a la main et ne peut pas etre regeneree par le script ; --oracle-check la saute plutot que de rendre un faux echec. Second obstacle du meme ordre : le run NeoST utilise --fastfdc alors que oracle_fastfdc est absent, donc les deux timelines ne sont meme pas alignees. Rouvrir le jour ou hatari_oracle.sh saura tenir une touche.",
+   "oracle_keys": [[900, 960, 57]],
+    "oracle_fastfdc": true,
+    "oracle_keys_note": "Espace (scancode 57) ENFONCÉE à la VBL 900 et RELÂCHÉE à 960 — même trame que le --keys-at 900 du run NeoST ; tenue 60 VBL comme les recettes headless (le keypress make+break instantané est ignoré par le poll clavier de la démo, cf. docs/HATARI_AUTOMATION.md). Pilotage précis à la VBL par hatari_oracle.sh (point d arrêt VBL + fifo de contrôle + stdin), ajouté le 2026-09-01 (A11) : cet oracle, posé à la main jusque-là, est RE-DÉRIVABLE. oracle_fastfdc aligne la timeline sur le --fastfdc du run NeoST, qui manquait ; oracle_scan 400 absorbe le reste (RNG de boot d Hatari).",
    "name": "No Cooper (1984) — écran principal (overscan med-res, étalon V2)",
    "subsystem": "shifter/res-tricks",
    "rom": "roms/etos192fr.img",

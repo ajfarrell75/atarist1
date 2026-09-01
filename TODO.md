@@ -98,12 +98,12 @@ est continue, les trous sont du travail fait.
 - **A3 ◐ — Le corpus de régression n'est pas livrable — et depuis la purge du
   2026-08-30 il est LOCAL par construction** : jeux et ROM propriétaires ne sont plus
   suivis par git, chaque machine les restaure via `tools/private_assets.sh unpack`
-  (§ BLOQUANT). Recompté 2026-08-30 (pose de `closure`) : **13 étalons
-  pixel sur 17** survivent au retrait des TOS Atari (`etos_ste_boot`, `overscan_top`,
+  (§ BLOQUANT). Recompté 2026-08-30 (pose de `closure`) : **14 étalons
+  pixel sur 18** survivent au retrait des TOS Atari (`etos_ste_boot`, `overscan_top`,
   `trace_odd`, `scroll_8264`, `scroll_8265`, `blitter_timer`, `blitter_hog`, `mfp_poll`,
   plus `cuddly_demos`, `nocooper`, `nocooper_greetings` et `closure` migrés/posés sur
-  EmuTOS, et `spec512_bands` — l'étalon GÉNÉRÉ qui rend la couverture « palette en cours
-  de ligne ») ; les 4 restants sont le reliquat d'**A10**.
+  EmuTOS, `spec512_bands` — l'étalon GÉNÉRÉ qui rend la couverture « palette en cours
+  de ligne » — et `freq_switch`, l'exhibiteur généré de V3) ; les 4 restants sont le reliquat d'**A10**.
 - **A9 ◐ — `main.cpp` : 5 100 → 28 lignes ; reste LA BOUCLE.** Fait le 2026-08-30
   (détail au `CHANGELOG.md`). `main()` tient en **10 lignes** — `appInit` → `appLoop`
   → `appShutdown` — et les **84 globaux `g_*` n'existent plus** : ils sont les membres
@@ -188,14 +188,20 @@ est continue, les trous sont du travail fait.
   bouge. Garde vérifiée par mutation : **1 pixel** modifié dans une référence commise
   → échec. Mesuré au repos : **5 min 31** pour les 8 étalons re-dérivables.
   **Ce que la première exécution a trouvé, et qui n'était écrit nulle part** — deux
-  références oracle ne sont pas RE-DÉRIVABLES, chacune pour une raison propre. Le manifeste
-  les déclare désormais (`oracle_check: false` + `oracle_check_note`, la raison est
-  OBLIGATOIRE — sans elle le script refuse de tourner) et le journal les NOMME :
-  - **`nocooper`** : son oracle exige une touche **TENUE** (espace, vbl ~900) que
-    `hatari_oracle.sh` ne sait pas injecter — il faut `--cmd-fifo` + `keydown`/`keyup`. La
-    référence a été posée à la main. Second obstacle du même ordre : le run NeoST utilise
-    `--fastfdc` alors qu'`oracle_fastfdc` est absent, donc les deux timelines ne sont même
-    pas alignées. À rouvrir le jour où le script saura tenir une touche.
+  références oracle n'étaient pas RE-DÉRIVABLES, chacune pour une raison propre. Le manifeste
+  le déclare (`oracle_check: false` + `oracle_check_note`, la raison est OBLIGATOIRE — sans
+  elle le script refuse de tourner) et le journal les NOMME :
+  - ✅ **`nocooper` — RÉGLÉ le même jour.** Son oracle exige une touche **TENUE** (espace,
+    vbl ~900), et `hatari_oracle.sh` sait désormais la tenir **à la VBL près** :
+    `oracle_keys: [[900, 960, 57]]` → point d'arrêt `VBL = N` du débogueur (Hatari se gèle
+    sur stdin) + `hatari-event keydown/keyup` par la fifo de contrôle + `c`. Sans attente
+    horloge, et **le fast-forward survit** (562,9 VBL/s avec fifo, 565,0 sans — la doc
+    disait l'inverse). `oracle_fastfdc` ajouté (il manquait, timelines désalignées).
+    Re-dérivé et confronté : trame 6929 retenue (décalage +139), **identique à la capture
+    NeoST et à la référence commise**. Deux pièges d'outillage réglés en chemin, qui
+    menaçaient TOUS les oracles : la LED disquette incrustée (`--drive-led off`, zone noire
+    vérifiée) et le compteur `n` de `select` que ffmpeg **remet à zéro** à chaque changement
+    de format `pal8↔rgb24` de l'AVI (`-reinit_filter 0` sur les deux extractions).
   - **`spec512_bands`** : **Hatari ne se reproduit pas lui-même** dessus. Deux runs de la
     même ligne de commande → deux jeux de phases **disjoints**. C'est la rançon de ce que
     l'étalon mesure — la position horizontale des bascules de palette dépend du cycle exact
@@ -206,7 +212,7 @@ est continue, les trous sont du travail fait.
     bande = 4 cycles). Sa référence reste un VRAI oracle (elle porte la LED disquette
     d'Hatari) et prouve ce qu'elle prouve : un jour, NeoST a rendu cette image AU PIXEL
     comme Hatari. Elle n'est simplement pas re-dérivable.
-  **Périmètre réel en CI : 5 étalons** (blitter_hog, cuddly_demos, scroll_8264,
+  **Périmètre réel en CI : 6 étalons** (blitter_hog, cuddly_demos, nocooper, scroll_8264,
   scroll_8265, trace_odd) — les 3 `spectrum512_diapo*` dépendent d'une ROM Atari que le
   dépôt ne porte plus. Le décompte et les noms sont imprimés à chaque exécution.
 - ✅ **A41 — SOLDÉ le 2026-09-01 : les 27 px de `closure` sont à HATARI, NeoST est fidèle.**
@@ -418,22 +424,25 @@ convergence instruction Moira↔WinUAE est complète et le beam-sync joueur est 
 (→ « ÉTAT COURANT » de `docs/MOIRA_WINUAE_CONVERGENCE.md`). Le restant, à rendement
 décroissant, par priorité d'impact :
 
-1. **[VIDÉO]** V3 géométrie mid-trame (50↔60 Hz) : le restart du compteur est porté
-   (`VC_RESTART`), reste l'**attribution de ligne** — verrou dédié `NEOST_LINELEN_ATTR`
-   (toujours OFF par défaut). **A16b est soldé le 2026-08-28** : le segfault qui bloquait
-   le chantier est corrigé (invariant `glueLineStart_.size() == glueLines_.size()` rompu
-   par `replayGlue`), et le palier `full` est vert **avec le verrou armé** — mais c'est
-   une NON-RÉGRESSION, pas une preuve : **aucun étalon n'exerce la géométrie mi-trame
-   50↔60 Hz que V3 vise**. Prochain pas réel : un étalon (généré ou oracle) qui bascule
-   la fréquence EN COURS DE TRAME, sans quoi promouvoir le verrou serait un pari.
-   ⚠ **Closure a été essayée pour ça le 2026-08-30 et ne convient PAS** — résultat
-   négatif à ne pas re-tenter. `docs/HATARI_DIVERGENCES.md` § V3 la donne comme « seul
-   exhibiteur connu », mais cette phrase datait du chantier CLOSURE (écran noir au
-   boot). L'étalon `closure` posé sur l'écran 153 couleurs rend une image
-   **BIT-IDENTIQUE avec `NEOST_LINELEN_ATTR=1`** (même md5, 0 px) : cet écran ne
-   bascule pas la fréquence en cours de trame. Il a en revanche rapporté **A40**
-   (le décalage de 4 px du retrait gauche med, **corrigé le 2026-08-30**). V3 reste donc
-   SANS exhibiteur mesuré — chercher un AUTRE écran de la démo, ou générer l'étalon.
+1. ✅ **[VIDÉO] V3 — CLOS le 2026-09-01 : l'attribution de ligne à la grille RÉELLE est le
+   défaut, prouvée à l'oracle.** Le « vert avec le verrou armé » ne prouvait rien, et pour une
+   raison qu'on ne soupçonnait pas : **le verrou ne faisait rien** — sous `NEOST_LINELEN_ATTR`
+   la longueur de ligne retombait à 512 à chaque ligne et n'était corrigée que par un
+   `Freq_match` tombant SUR la ligne ; 140 lignes de 60 Hz sans écriture restaient à 512, la
+   grille réelle ne dérivait jamais. Exhibiteur construit exprès (`tools/make_freqswitch_test.py`
+   → étalon **`freq_switch`**, généré, ROM libre, ancré sur la VBL) : plage de 140 lignes 60 Hz
+   (dérive 560 cyc) puis 8 bascules alternées. Correctif : longueur de base posée par l'état
+   freq/res au début de ligne (`glueLineLenFor`, ≙ `Video_StartHBL` → `nCyclesPerLine`), les
+   `Freq_match` la raffinent. **Mesure décisive au niveau de la Glue** — trace `video_sync`
+   d'Hatari contre `[attr]` (`NEOST_VARLINE_TRACE`) : les **18 écritures** de la trame
+   attribuées à la même ligne ET au même cycle (`169/336 174/268 … 242/508 247/468`), là où
+   la grille fixe en manque 17 sur 18, d'une à deux lignes. Palier pixel entier à **0 px** avec
+   le canal armé (rien d'existant ne bouge — seul l'exhibiteur le voit, c'est ce qu'il fallait) ;
+   `NEOST_LINELEN_ATTR=0` fait rougir `freq_switch` à 16 408 px (garde vérifiée par mutation) ;
+   `glue_selftest_attr` garde désormais la position DÉSARMÉE pour que l'A/B reste exécutable.
+   ⚠ Le pixel n'était PAS juge ici : les lignes 60 Hz d'une trame 50 Hz sortent chez Hatari
+   avec l'artefact « left+2 » tranché en A40 (toute la ligne à l'index 8) — 56 % d'écart image
+   qui ne dit rien de l'attribution ; d'où `ref_kind: snapshot`, preuve consignée au `ref_note`.
 2. **[SON]** quantification HBL du refill FIFO à confronter à l'oracle sur un poll serré de
    `$FF8909/0B/0D` — validable par dump WAV + trace.
 3. **[MFP]** `UpdateTimers` avant lecture IPR/ISR/TBDR en mode bloc — retard **mesuré à

@@ -130,6 +130,18 @@ def run_headless_capture(entry: dict, out_ppm: Path) -> int:
     return r.returncode
 
 
+def oracle_env(entry: dict, **extra) -> dict:
+    """Environnement d'un run hatari_oracle.sh : `oracle_keys` du manifeste devient
+    HATARI_ORACLE_KEYS (« down:up:scancode … », touche ENFONCÉE à la VBL down et
+    RELÂCHÉE à up — cf. le bandeau PILOTAGE CLAVIER du script). C'est ce qui rend
+    re-dérivable un oracle qui exige un appui touche (nocooper)."""
+    env = dict(os.environ, **{k: str(v) for k, v in extra.items()})
+    keys = entry.get("oracle_keys")
+    if keys:
+        env["HATARI_ORACLE_KEYS"] = " ".join(f"{d}:{u}:{sc}" for d, u, sc in keys)
+    return env
+
+
 def run_hatari_oracle(entry: dict, out_png: Path) -> int:
     if not HATARI_ORACLE.exists():
         print("  [oracle] hatari_oracle.sh introuvable", file=sys.stderr)
@@ -155,7 +167,7 @@ def run_hatari_oracle(entry: dict, out_png: Path) -> int:
     cmd.append("fastfdc" if entry.get("oracle_fastfdc") else "-")   # 7e arg positionnel
     cmd.append(memArg)                                             # 8e : taille RAM
     print("  $", " ".join(cmd))
-    return run_timed(cmd, 1800, cwd=ROOT).returncode
+    return run_timed(cmd, 1800, cwd=ROOT, env=oracle_env(entry)).returncode
 
 
 def oracle_scan_pick(entry: dict, out_png: Path, neost_ppm: Path, scan: int) -> bool:
@@ -171,7 +183,7 @@ def oracle_scan_pick(entry: dict, out_png: Path, neost_ppm: Path, scan: int) -> 
     EXACTE, jamais à la « moins pire » : installer une image simplement proche
     figerait un écart au lieu de le signaler.
     """
-    env = dict(os.environ, HATARI_ORACLE_SCAN=str(scan))
+    env = oracle_env(entry, HATARI_ORACLE_SCAN=scan)
     rom = str(ROOT / entry.get("rom", "roms/etos192us.img"))
     disk = str(ROOT / entry["disk"])
     frames = int(entry.get("frames", 400))
@@ -602,12 +614,13 @@ def main() -> int:
             if e.get("ref_kind") != "oracle" or not e.get("disk"):
                 continue                       # rien à re-dériver : hors sujet, pas un manque
             # `oracle_check: false` = référence NON RE-DÉRIVABLE par le script, pour une
-            # raison écrite et obligatoire. Deux cas mesurés le 2026-09-01 (A11) :
-            # `nocooper` (l'oracle exige une touche TENUE, hors de portée de
-            # hatari_oracle.sh) et `spec512_bands` (Hatari ne se reproduit pas lui-même :
-            # l'étalon rend UN cycle CPU visible, et le RNG du boot le décale). Les
-            # exclure en silence serait exactement le vert creux que ce fichier combat —
-            # on les nomme, avec leur raison, à chaque exécution.
+            # raison écrite et obligatoire. Un cas mesuré le 2026-09-01 (A11) :
+            # `spec512_bands` — Hatari ne se reproduit pas lui-même dessus (l'étalon rend
+            # UN cycle CPU visible, et le RNG du boot le décale). `nocooper` en faisait
+            # partie le même jour (touche tenue hors de portée du script) jusqu'à ce que
+            # hatari_oracle.sh apprenne à piloter le clavier (`oracle_keys`). Exclure en
+            # silence serait exactement le vert creux que ce fichier combat — on les
+            # nomme, avec leur raison, à chaque exécution.
             if e.get("oracle_check") is False:
                 why = e.get("oracle_check_note", "").strip()
                 if not why:

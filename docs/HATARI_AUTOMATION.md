@@ -175,12 +175,14 @@ après un changement de pin ou une repose de références.
 export SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy   # aucune fenêtre / audio (CI, headless)
 HATARI=extern/hatari/build/src/hatari                # cf. ci-dessus : PAS sur le PATH
 "$HATARI" --machine megaste --tos roms/etos256us.img --monitor rgb \
-       --sound off --fast-forward on --confirm-quit off --statusbar off \
+       --sound off --fast-forward on --confirm-quit off --statusbar off --drive-led off \
        --alert-level fatal \
        --run-vbls 400 \
        --avirecord --avi-vcodec png --avi-file /tmp/h.avi
 # Extraire une frame (ffmpeg dispo via Homebrew). N = n° de frame ; ~60 fps dans l'AVI.
-ffmpeg -y -i /tmp/h.avi -vf "select=eq(n\,300)" -frames:v 1 -update 1 /tmp/h.png
+# ⚠ -reinit_filter 0 : sans lui le n de select REPART DE ZÉRO à chaque changement de
+# format pal8↔rgb24 de l'AVI (cf. Pièges vérifiés). --drive-led off : pas de LED incrustée.
+ffmpeg -y -reinit_filter 0 -i /tmp/h.avi -vf "select=eq(n\,300)" -frames:v 1 -update 1 -pix_fmt rgb24 /tmp/h.png
 ```
 
 - **`--avirecord` capture l'écran ÉMULÉ** (pas la fenêtre hôte) → marche avec
@@ -204,31 +206,44 @@ ffmpeg -y -i /tmp/h.avi -vf "select=eq(n\,300)" -frames:v 1 -update 1 /tmp/h.png
   mémoire/registres après N cycles) → introspection scriptée.
 - `--log-file FILE`, `--log-level info|warn|...`.
 
-### Injection d'entrée headless (`--cmd-fifo`) — oracle des MENUS / IN-GAME
+### Injection d'entrée headless — l'oracle appuie sur les touches TOUT SEUL (A11, 2026-09-01)
 
-Le build local (v2.6.1) supporte `--cmd-fifo <path>` : Hatari **crée** la fifo et lit des
-commandes runtime, dont **`hatari-event keypress <scancode>`** (SPACE=57, ENTER=28). Ça
-débloque l'oracle des scènes qui exigent une touche (menu Cuddly, démos) — jadis noté
-« impossible » dans le TODO. Pièges vérifiés :
-- Hatari **bloque** à l'ouverture de la fifo en lecture jusqu'à ce qu'un writer s'y connecte
-  → ouvrir le writer (`exec 3>fifo`) AVANT que Hatari ne tourne.
-- `--cmd-fifo` **désactive le fast-forward** → Hatari tourne en TEMPS RÉEL (~50 vbl/s). Donc
-  une touche au « titre » (vbl ~1500) s'envoie à **~30 s** réelles, pas après quelques sleeps.
-- Joystick : pas d'event direct ; passer par `--joystick <port>` (touches curseur) + une
-  touche de tir, ou injecter les scancodes.
-- ⚠ **`keypress` (make+break instantanés) peut être IGNORÉ** par un poll clavier de démo
-  (vérifié : menu Cuddly insensible au `keypress 57`). Recette fiable = appui TENU :
-  `keydown 57`, sleep 0.5, `keyup 57`. Tester la livraison de la fifo avec une commande
-  invalide (`keypress zz`) → l'ERROR dans le log prouve la réception.
+`tools/hatari_oracle.sh` sait tenir une touche **à la VBL près**, sans aucune attente
+horloge :
 
 ```sh
-FIFO=/tmp/h.fifo; rm -f "$FIFO"
-hatari ... --cmd-fifo "$FIFO" --run-vbls 3200 --avirecord --avi-file out.avi &
-while [ ! -p "$FIFO" ]; do sleep 0.05; done
-exec 3>"$FIFO"                                  # débloque Hatari
-sleep 30; for k in $(seq 12); do echo "hatari-event keypress 57" >&3; sleep 0.3; done
-exec 3>&- ; wait
+HATARI_ORACLE_KEYS="900:960:57" bash tools/hatari_oracle.sh <tos> <disk> <vbls> <frame> out.png st fastfdc 1
+#                    down:up:scancode  (répétable, séparés par des espaces ; espace = 57, entrée = 28)
 ```
+
+Dans le manifeste, c'est `"oracle_keys": [[900, 960, 57]]` — `run_etalons.py` le traduit
+en `HATARI_ORACLE_KEYS` pour `--oracle` comme pour `--oracle-check`. C'est ce qui a rendu
+**re-dérivable l'oracle de `nocooper`** (espace tenue vers la VBL 900), posé à la main
+jusque-là.
+
+**Le mécanisme, mesuré sur le build épinglé** :
+- `--parse` pose un point d'arrêt `b VBL = N :once` par événement ; Hatari s'y GÈLE et
+  attend une commande du débogueur sur **stdin** — une fifo que le script tient ;
+- le script pousse alors `hatari-event keydown|keyup <scancode>` dans la fifo de contrôle
+  (`--cmd-fifo`), puis `c` sur stdin. L'événement est lu par la boucle SDL au tour suivant
+  (`sdl/gui_event.c:133` → `Control_CheckUpdates`) : appliqué à la VBL **N+1**, déterministe ;
+- tout prompt du débogueur reçoit un `c`, même inattendu (vu : ré-entrée après un `:file`) ;
+  la boucle ne se fie qu'au `VBL=N` imprimé par le prompt pour décider ce qui est dû.
+
+**Deux affirmations de l'ancienne recette étaient FAUSSES**, et leur coût était réel :
+- ~~« `--cmd-fifo` désactive le fast-forward → temps réel ~50 vbl/s »~~ — **non** :
+  562,9 VBL/s avec la fifo, 565,0 sans (blitter_hog, 3 000 VBL). Toute la chorégraphie
+  « attendre 30 s réelles » n'avait pas lieu d'être ;
+- ~~« Hatari bloque à l'ouverture de la fifo jusqu'à ce qu'un writer s'y connecte »~~ —
+  la fifo est ouverte `O_RDONLY | O_NONBLOCK` (`control.c:553`), ça ne bloque pas. En
+  revanche un writer laissé connecté fait rendre `EAGAIN` à chaque lecture, que Hatari
+  journalise à chaque trame (« command FIFO read error ») : le script n'ouvre le writer
+  que le temps d'un message.
+
+Ce qui reste vrai : un `keypress` (make + break instantanés) peut être **ignoré** par le
+poll clavier d'une démo — tenir la touche (`down:up` distants de quelques dizaines de
+VBL). Les scancodes sont ceux de l'ST (57 = espace, 28 = entrée). Joystick : pas
+d'événement direct ; `--joystick <port>` (touches curseur) ou scancodes.
 
 ## Options machine utiles
 
@@ -243,6 +258,17 @@ exec 3>&- ; wait
 
 ## Pièges vérifiés
 
+- **ffmpeg renumérote les trames en cours d'AVI si on le laisse faire.** Hatari encode chaque
+  image PNG en `pal8` dès qu'elle tient en 256 couleurs, en `rgb24` sinon : le format change
+  sans arrêt le long de l'AVI (nocooper : 0-2 pal8, 3 rgb24, 4-408 pal8, 409 rgb24…). À
+  chaque changement ffmpeg RECONSTRUIT son graphe de filtres et le `n` de `select` **repart
+  de zéro** — « frame 1000 hors de l'AVI » alors que `ffprobe` compte 1 100 images, ou pire,
+  une fenêtre de scan silencieusement décalée. `hatari_oracle.sh` passe `-reinit_filter 0`
+  (+ `-pix_fmt rgb24`) sur ses deux extractions depuis le 2026-09-01 ; ne pas l'oublier
+  dans une commande à la main.
+- **La LED disquette n'est pas une fatalité** : `--drive-led off` la supprime des captures
+  (zone vérifiée entièrement noire). Le masque `buffer_noled` de `compare_screenshot.py`
+  reste nécessaire tant que des références COMMISES la portent encore.
 - **TOS ≤ 1.4 → forcé en mode ST.** Hatari lit la version dans l'en-tête TOS ; un EmuTOS
   **192 Ko** (`etos192*.img`) se présente en **« TOS 1.4 / Atari ST »** et Hatari **refuse**
   de le lancer en MegaSTE/TT (« TOS versions <= 1.4 work only in ST mode », bascule auto en

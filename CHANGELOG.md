@@ -53,6 +53,93 @@ Ripper, DAC Pro Sound) avec page Dongles, `disks/dongles.txt` et oracle de rejeu
 vérifié note à note** en headless, corpus MIDI piano/blues ; port MIDI ALSA sous Linux ;
 save-state v16. Détail dans les chantiers datés ci-dessous.
 
+## V3 est CLOS : l'attribution de ligne à la grille réelle devient le défaut — et le verrou ne faisait rien (2026-09-01)
+
+Dernier reste du front « précision cycle » à valeur élevée. Le verrou `NEOST_LINELEN_ATTR`
+(attribution des écritures freq/res à la grille RÉELLE des débuts de ligne, contre la grille
+fixe `frameCycle/512`) était OFF depuis toujours, faute d'étalon qui bascule la fréquence en
+cours de trame — Closure avait été essayée et réfutée le 2026-08-30. « Le palier `full` est
+vert avec le verrou armé » se lisait comme une non-régression ; c'était pire que ça.
+
+**L'exhibiteur.** `tools/make_freqswitch_test.py` → étalon **`freq_switch`** (généré, ROM
+libre). Le levier est l'accumulation : une ligne 60 Hz fait 508 cycles, pas 512, donc la
+grille réelle dérive de 4 cycles par ligne — et il faut **plus d'une ligne entière** de
+dérive (≥ 128 lignes 60 Hz) pour que les deux modèles désignent des lignes différentes. C'est
+exactement pourquoi aucune démo du dépôt ne l'exhibait : leurs bascules sont ponctuelles.
+Structure : plage de 140 lignes 60 Hz (560 cycles de dérive) puis 8 bascules 50/60
+alternées, écran rempli d'index 1 pour que la largeur affichée de chaque ligne se lise.
+⚠ **Ancré sur la VBL**, et c'est la leçon de la première version : se resynchroniser sur le
+compteur vidéo — le bon choix de `make_spec512_test.py` — est faux ici, le compteur dépendant
+de la fréquence, donc de ce qu'on mesure ; dès 2 lignes de 60 Hz l'image changeait d'une
+trame à l'autre. Dans le handler de VBL (MFP coupé, IPL 3), 12 trames NeoST et 17 trames
+Hatari sortent md5-identiques.
+
+**Ce que l'exhibiteur a montré d'abord : le verrou n'avait aucun effet.** Image bit-identique
+dans les deux positions. L'instrumentation `[varline]` annonçait pourtant 17 écritures sur 18
+mal attribuées, jusqu'à 2 lignes d'écart. Un second diagnostic (`[attr]`, gardé) a dit lequel
+des deux modèles tournait vraiment : sous le verrou, seul le **cycle** bougeait (+4), jamais
+la **ligne**. Cause : dans le replay la longueur de ligne retombait à `cpl` à CHAQUE ligne et
+n'était corrigée que par un `Freq_match` tombant SUR la ligne ; 140 lignes de 60 Hz sans
+écriture restaient à 512, la grille réelle ne dérivait jamais. Le verrou ne pouvait pas
+produire l'effet pour lequel il existe.
+
+**Le correctif**, une ligne de principe : la longueur de base de chaque ligne est celle
+qu'implique l'état freq/res au début de ligne (`glueLineLenFor`, ≙ `Video_StartHBL` →
+`nCyclesPerLine` chez Hatari), les `Freq_match` la raffinent ensuite comme avant — dans le
+replay comme sur le chemin live.
+
+**La preuve, au niveau de la Glue.** Trace `--trace video_sync` d'Hatari contre `[attr]` :
+même cycle-trame des deux côtés (`video_cyc_w` = `fc` exactement), et avec le correctif
+**les 18 écritures de la trame sont attribuées à la même ligne ET au même cycle** —
+`169/336 174/268 179/224 184/156 189/112 194/44 199/4 203/444 208/400 213/332 218/288
+223/220 228/176 233/108 238/64 242/508 247/468`. La grille fixe en manque 17 sur 18, d'une
+à deux lignes. Les frontières de blocs visibles suivent (`135,136,140,141,145,146,150,151,
+155,156`, identiques).
+
+⚠ **Le pixel n'était pas juge.** 56 % d'écart image contre l'oracle — parce qu'Hatari rend
+les lignes 60 Hz d'une trame 50 Hz avec l'artefact de recopie « left+2 » tranché en A40 :
+toute la ligne décode à l'index 8 ($333), décalée. Mesuré ligne à ligne : y=50 (plage 60 Hz)
+NeoST `44..363` index 1, Hatari `32..351` index 8 ; y=137 (ligne 50 Hz) **identiques**. D'où
+`ref_kind: snapshot`, la preuve oracle consignée au `ref_note`.
+
+**Promotion.** Défaut ON ; le palier pixel entier reste à **0 px** avec le canal armé — rien
+d'existant ne bouge, seul l'exhibiteur le voit, c'est ce qu'il fallait. `NEOST_LINELEN_ATTR=0`
+fait rougir `freq_switch` à **16 408 px** (garde vérifiée par mutation) ; `glue_selftest_attr`
+garde désormais la position DÉSARMÉE pour que l'A/B reste exécutable. `env_locks.json`,
+bandeaux de `Shifter.cpp`/`.hpp`, `docs/HATARI_DIVERGENCES.md`, `docs/CYCLE_ACCURACY.md` à jour.
+
+## L'oracle se pilote au clavier à la VBL près, perd sa LED, et ffmpeg cesse de renuméroter ses trames (2026-09-01)
+
+Trois verrous d'outillage réglés à la source, après la première exécution d'A11 qui avait
+laissé `nocooper` « non re-dérivable » faute de pouvoir tenir la touche espace.
+
+- **Appui touche, précis à la VBL.** `HATARI_ORACLE_KEYS="down:up:scancode …"` (manifeste :
+  `oracle_keys: [[900, 960, 57]]`) : `--parse` pose un point d'arrêt `b VBL = N :once` par
+  événement, Hatari s'y GÈLE sur son prompt (stdin = une fifo tenue par le script), on pousse
+  `hatari-event keydown|keyup` dans la fifo de contrôle puis `c` — appliqué à la VBL N+1,
+  déterministe, sans aucune attente horloge. Tout prompt reçoit un `c`, même inattendu.
+  **Deux affirmations de la doc étaient fausses** et coûtaient cher : `--cmd-fifo` ne
+  désactive PAS le fast-forward (562,9 VBL/s avec, 565,0 sans) — la chorégraphie « temps réel
+  + sleep 30 s » n'avait pas lieu d'être — et la fifo ne bloque pas à l'ouverture
+  (`O_RDONLY|O_NONBLOCK`, `control.c:553`) ; en revanche un writer laissé connecté fait
+  rendre `EAGAIN` à chaque trame, que Hatari journalise : le writer n'est ouvert que le temps
+  d'un message. Vérifié sur No Cooper : trame 6929 retenue (+139), **identique à la capture
+  NeoST et à la référence commise** — l'oracle posé à la main est re-dérivable.
+- **La LED disquette n'est pas une fatalité** : `--drive-led off`. Zone vérifiée entièrement
+  noire. Le masque `buffer_noled` reste tant que des références commises la portent.
+- **ffmpeg renumérotait les trames.** Hatari encode chaque image PNG en `pal8` dès qu'elle
+  tient en 256 couleurs, en `rgb24` sinon — le format change sans arrêt (nocooper : 0-2 pal8,
+  3 rgb24, 4-408 pal8, 409 rgb24…). À chaque changement ffmpeg reconstruit son graphe et le
+  `n` de `select` **repart de zéro** : « frame 1000 hors de l'AVI » alors que `ffprobe` en
+  compte 1 100 — et une fenêtre de scan silencieusement décalée. `-reinit_filter 0`
+  (+ `-pix_fmt rgb24`) sur les deux extractions de `hatari_oracle.sh`.
+- Bonus : `HATARI_ORACLE_KEEP=1` conserve AVI et journal d'un run (c'est ce qui a permis de
+  voir les deux points précédents), et le script est écrit pour le bash 3.2 de macOS (pas de
+  `mapfile`), celui que `run_etalons.py` invoque.
+
+Périmètre du job hebdomadaire : **6 étalons** confrontés en CI (nocooper compris) ; seul
+`spec512_bands` reste déclaré non re-dérivable, pour sa raison propre.
+
 ## A11 — l'oracle Hatari entre en CI, et sa première exécution trouve deux références non re-dérivables (2026-09-01)
 
 Dernière boucle de validation entièrement manuelle du projet. `tests.yml` compare depuis

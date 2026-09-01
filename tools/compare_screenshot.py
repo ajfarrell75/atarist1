@@ -33,6 +33,9 @@ BUFFER = (0, 0, 416, 276)
 # 72 pixels concernés portent des teintes que le Shifter ne PEUT PAS produire
 # (octets à nibbles inégaux ou impairs, cf. stColorToArgb), donc aucune n'est du rendu.
 # D'où le rectangle élargi d'un pixel sur chaque bord.
+# Depuis le 2026-09-01 hatari_oracle.sh passe --drive-led off : les captures NEUVES n'ont
+# plus de LED. Le masque reste tant qu'une référence commise la porte ; le jour où elles
+# sont toutes régénérées, `buffer_noled` peut redevenir `buffer`.
 HATARI_LED = (402, 2, 12, 6)   # x, y, w, h
 
 
