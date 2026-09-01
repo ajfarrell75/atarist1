@@ -20,10 +20,20 @@ bool Tracer::open(const std::string& path) {
     return f_ != nullptr;
 }
 
-void Tracer::close() {
-    if (f_ && ownsFile_) std::fclose(f_);
+// Rend true si TOUT est parti sur le disque. Un `fclose` peut échouer alors qu'aucun
+// `fprintf` n'avait rien signalé : la libc bufferise, et un disque plein n'échoue
+// souvent qu'au flush final. Sans ce retour, une trace TRONQUÉE se présentait comme
+// une trace complète — et un diff contre l'oracle rapporte alors une « divergence »
+// qui commence pile à l'octet de troncature.
+bool Tracer::close() {
+    bool ok = true;
+    if (f_) {
+        if (std::ferror(f_)) ok = false;               // erreur survenue en cours d'écriture
+        if (ownsFile_ && std::fclose(f_) != 0) ok = false;
+    }
     f_ = nullptr;
     ownsFile_ = false;
+    return ok;
 }
 
 void Tracer::onInstruction(uint32_t pc) {

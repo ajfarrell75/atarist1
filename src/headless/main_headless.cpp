@@ -1921,13 +1921,23 @@ int main(int argc, char** argv) {
             dumpDone = true;
             std::FILE* df = std::fopen(dumpPath.c_str(), "wb");
             if (df) {
+                // Écriture VÉRIFIÉE, comme writePpm : un disque plein n'échoue souvent
+                // qu'au flush final, et un dump tronqué porte le même nom qu'un dump
+                // complet — il se diffe ensuite comme si c'était la mémoire.
+                uint32_t written = 0;
                 for (uint32_t k = 0; k < dumpLen; ++k) {
                     const uint8_t b = machine.bus.read8((dumpAddr + k) & 0xFFFFFFu);
-                    std::fwrite(&b, 1, 1, df);
+                    written += uint32_t(std::fwrite(&b, 1, 1, df));
                 }
-                std::fclose(df);
-                std::fprintf(stderr, "[headless] RAM dump frame %d: $%06X+%u → %s\n",
-                             frame, dumpAddr, dumpLen, dumpPath.c_str());
+                const bool dumpOk = (written == dumpLen) && (std::fclose(df) == 0);
+                if (dumpOk) {
+                    std::fprintf(stderr, "[headless] RAM dump frame %d: $%06X+%u → %s\n",
+                                 frame, dumpAddr, dumpLen, dumpPath.c_str());
+                } else {
+                    std::fprintf(stderr, "[headless] FAILED RAM dump %s — %u/%u bytes "
+                                 "written (disk full?)\n", dumpPath.c_str(), written, dumpLen);
+                    outFail = true;
+                }
             } else {
                 std::fprintf(stderr, "[headless] FAILED to open RAM dump %s\n", dumpPath.c_str());
                 outFail = true;
@@ -2053,10 +2063,19 @@ int main(int argc, char** argv) {
             std::fwrite("fmt ", 4, 1, wf); w32(16); w16(1); w16(2);
             w32(kDumpRate); w32(kDumpRate * 4); w16(4); w16(16);
             std::fwrite("data", 4, 1, wf); w32(dataLen);
-            std::fwrite(dumpPcm.data(), 2, dumpPcm.size(), wf);
-            std::fclose(wf);
-            std::fprintf(stderr, "[headless] audio dump → %s (%.1f s at %u Hz)\n",
-                         soundDumpPath.c_str(), double(dumpPcm.size() / 2) / kDumpRate, kDumpRate);
+            const size_t put = std::fwrite(dumpPcm.data(), 2, dumpPcm.size(), wf);
+            const bool wavOk = (put == dumpPcm.size()) && !std::ferror(wf)
+                             && (std::fclose(wf) == 0);
+            if (wavOk) {
+                std::fprintf(stderr, "[headless] audio dump → %s (%.1f s at %u Hz)\n",
+                             soundDumpPath.c_str(), double(dumpPcm.size() / 2) / kDumpRate, kDumpRate);
+            } else {
+                // Un WAV tronqué est PIRE qu'absent : son en-tête RIFF annonce une
+                // longueur que le fichier n'a pas, et un lecteur y croit.
+                std::fprintf(stderr, "[headless] FAILED audio dump %s — %zu/%zu samples "
+                             "written (disk full?)\n", soundDumpPath.c_str(), put, dumpPcm.size());
+                outFail = true;
+            }
         } else {
             std::fprintf(stderr, "[headless] FAILED to open audio dump %s\n", soundDumpPath.c_str());
             outFail = true;
@@ -2156,9 +2175,15 @@ int main(int argc, char** argv) {
                          (long long)neost::pacing::kCpuHzInt);
             for (const auto& [cyc, b] : midiDump)
                 std::fprintf(mf, "%lld %02X\n", (long long)cyc, b);
-            std::fclose(mf);
-            std::fprintf(stderr, "[headless] MIDI OUT: %zu bytes -> %s\n",
-                         midiDump.size(), midiDumpPath.c_str());
+            const bool midiOk = !std::ferror(mf) && (std::fclose(mf) == 0);
+            if (midiOk) {
+                std::fprintf(stderr, "[headless] MIDI OUT: %zu bytes -> %s\n",
+                             midiDump.size(), midiDumpPath.c_str());
+            } else {
+                std::fprintf(stderr, "[headless] FAILED MIDI dump %s (disk full?)\n",
+                             midiDumpPath.c_str());
+                outFail = true;
+            }
         } else {
             std::fprintf(stderr, "[headless] cannot write the MIDI dump %s\n", midiDumpPath.c_str());
             outFail = true;
@@ -2177,8 +2202,15 @@ int main(int argc, char** argv) {
     // les runners de verdict, ex. tools/run_selftests.py qui y cherche NEOST-TEST: … PASS).
     if (!serialDumpPath.empty()) {
         if (FILE* sf = std::fopen(serialDumpPath.c_str(), "wb")) {
-            std::fwrite(serialOut.data(), 1, serialOut.size(), sf);
-            std::fclose(sf);
+            // Capture LUE par les runners de verdict : une troncature ampute la fin,
+            // donc le verdict, et le test rougit — mais sans dire pourquoi. On le dit.
+            const size_t put = std::fwrite(serialOut.data(), 1, serialOut.size(), sf);
+            if (put != serialOut.size() || std::fclose(sf) != 0) {
+                std::fprintf(stderr, "[headless] FAILED serial dump %s — %zu/%zu bytes "
+                             "written (disk full?)\n", serialDumpPath.c_str(),
+                             put, serialOut.size());
+                outFail = true;
+            }
         } else {
             std::fprintf(stderr, "[headless] cannot write the serial dump %s\n",
                          serialDumpPath.c_str());
@@ -2203,7 +2235,12 @@ int main(int argc, char** argv) {
         outFail = true;
     }
 
-    tracer.close();
+    // La trace aussi : `fclose` peut échouer alors qu'aucun `fprintf` n'avait rien dit.
+    if (!tracer.close() && !tracePath.empty()) {
+        std::fprintf(stderr, "[headless] FAILED to finish the trace %s — it is TRUNCATED "
+                     "(disk full?)\n", tracePath.c_str());
+        outFail = true;
+    }
     if (keyLog) { machine.dongle.setLog(nullptr); std::fclose(keyLog); }
     return outFail ? 1 : 0;   // une sortie fichier a échoué → visible du runner
 }

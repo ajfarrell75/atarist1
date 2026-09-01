@@ -100,11 +100,9 @@ void onKey(GLFWwindow*, int key, int scancode, int action, int mods) {
     if (key == GLFW_KEY_F5) { if (action == GLFW_PRESS) A.saveStateReq = true; return; }
     if (key == GLFW_KEY_F7) { if (action == GLFW_PRESS) A.loadStateReq = true; return; }
     if (key == GLFW_KEY_F11) return;
-    // F9/F10/F12 sont des raccourcis HÔTE du kiosk : ils ne partent pas au ST. K a été
-    // ABANDONNÉ comme raccourci — c'est une lettre, donc du jeu (taper ses initiales dans
-    // une table des scores ouvrait le bandeau clavier) ; l'intercepter privait en plus le
-    // ST du K sans même supprimer l'ouverture parasite, qui venait de la scrutation.
-    if (A.kiosk && (key == GLFW_KEY_F9 || key == GLFW_KEY_F10 || key == GLFW_KEY_F12)) return;
+    // F12 n'a PAS de scancode ST (positionalScancode ne le mappe pas) : il ne peut donc
+    // jamais laisser de touche collée, et se filtre ici sans risque.
+    if (A.kiosk && key == GLFW_KEY_F12) return;
     const uint8_t sc = neost::stkeys::scancodeFor(key, scancode);   // symbolique (layout hôte + pays TOS) → positionnel
     if (!sc) return;
     // Suivi des touches dont le MAKE a été transmis au ST : leur BREAK doit
@@ -126,6 +124,17 @@ void onKey(GLFWwindow*, int key, int scancode, int action, int mods) {
     // resté focalisé (sinon le clavier ST « se déconnecte »).
     if (!A.mouseCaptured && ImGui::GetIO().WantCaptureKeyboard) return;
 #endif
+    // F9/F10 sont des raccourcis HÔTE du kiosk : ils ne partent pas au ST. K a été
+    // ABANDONNÉ comme raccourci — c'est une lettre, donc du jeu (taper ses initiales dans
+    // une table des scores ouvrait le bandeau clavier) ; l'intercepter privait en plus le
+    // ST du K sans même supprimer l'ouverture parasite, qui venait de la scrutation.
+    // ⚠ APRÈS le bloc de relâchement, et pas avant. `A.kiosk` est une condition VOLATILE
+    // — la bascule bureau ⇄ borne se fait au clavier — et F9/F10 ont, eux, un scancode ST
+    // ($43 et $44). Placé plus haut, ce filtre était le SEUL à pouvoir avaler un BREAK :
+    // un MAKE transmis en mode bureau, puis la bascule en borne pendant l'appui, et la
+    // touche restait collée côté ST. C'est exactement l'invariant que le commentaire du
+    // bloc de relâchement énonce, et que les trois filtres voisins respectent déjà.
+    if (A.kiosk && (key == GLFW_KEY_F9 || key == GLFW_KEY_F10)) return;
     // Émulation joystick clavier active : les touches du joystick (flèches + Ctrl
     // droit) pilotent la manette et NE sont PAS transmises au clavier ST (sinon
     // double effet) ; elles sont scrutées par trame dans la boucle (cf. stjoy::compose).

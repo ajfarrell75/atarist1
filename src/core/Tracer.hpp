@@ -34,7 +34,7 @@ public:
     void setCpu(const Cpu68k* c) { cpu_ = c; }
 
     bool open(const std::string& path);     // "" ou "-" → stdout
-    void close();
+    bool close();          // false = trace TRONQUÉE (cf. Tracer.cpp)
     bool isOpen() const { return f_ != nullptr; }
 
     void setLogRegs(bool b)       { logRegs_ = b; }

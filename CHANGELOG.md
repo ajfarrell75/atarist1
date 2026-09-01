@@ -53,6 +53,61 @@ Ripper, DAC Pro Sound) avec page Dongles, `disks/dongles.txt` et oracle de rejeu
 vérifié note à note** en headless, corpus MIDI piano/blues ; port MIDI ALSA sous Linux ;
 save-state v16. Détail dans les chantiers datés ci-dessous.
 
+## Chasse round 5 : le save-state acceptait une AUTRE ROM, et le harnais annonçait des écritures tronquées comme réussies (2026-09-02)
+
+**Le tri se resserre : 7 soumises, 3 retenues, 4 ÉCARTÉES.** Le taux de rejet passe à
+57 %, et surtout **la lentille de régression n'a rien trouvé** contre les correctifs du
+round 4 : la seule trouvaille visant la réécriture tactile et le bornage du zoom borne a
+été réfutée (prémisse fausse, comportement documenté). Le modèle tactile repris d'un bloc
+a donc tenu son premier passage adverse — c'est la première fois de la journée qu'un lot
+de correctifs survit intact.
+
+- 🐞 **`Machine.cpp` — un save-state repris sous une AUTRE ROM était accepté, et figeait
+  le CPU.** `loadState` affirme refuser tout état pris dans une autre config, et compare
+  effectivement le type de machine, la taille RAM, les périphériques et un CRC32 COMPLET de
+  la cartouche — mais, pour la ROM, les seuls **2 octets de version TOS**. Or `tos104us`,
+  `uk`, `fr`, `de` et `es` portent toutes `$0104` ; `tos106*` toutes `$0106` ; `etos192us`
+  et `etos192fr` également `$0104`. La ROM étant le composant HORS-snapshot par excellence,
+  rien ne garantissait donc qu'on la recharge. Un état repris sous une localisation
+  différente passait tous les contrôles, et la RAM restaurée — vecteurs d'exception, piles,
+  adresses de retour, pointeurs système — désignait des adresses d'une AUTRE image : CPU
+  figé, sans un mot. L'en-tête porte désormais un **CRC32 de l'image ROM** (v18 → v19).
+  Vérifié : même ROM acceptée, `etos192fr` sur un état pris avec `etos192us` — même version
+  `$0104` — rejeté avec un message qui nomme la cause.
+- 🐞 **`main_headless.cpp` + `Tracer.cpp` — cinq écrivains annonçaient « réussi » sur une
+  écriture tronquée.** Seul `writePpm` contrôlait `fwrite` ET `fclose`, et son commentaire
+  disait pourquoi : « un disque plein peut n'échouer qu'au flush final — une capture
+  tronquée qui "réussit" finit diffée comme si c'était l'image ». `--dump-at`, la trace, le
+  WAV de `--sound-dump`, `--midi-dump` et `--serial-dump` jetaient tous leurs retours,
+  contre l'invariant que le harnais s'est lui-même donné (« une SORTIE fichier a échoué →
+  exit ≠ 0, jamais silencieux »). Sur le même disque plein, `--screenshot` rendait 1 en
+  criant et `--dump-at` rendait 0 en annonçant la réussite.
+  **Reproduit sur un disque RAM de 2 Mo** : avant, dump de 4 Mo → `exit 0` et ligne de
+  succès pour 1 949 696 octets réellement écrits ; après, `exit 1` et
+  « FAILED RAM dump — 1953792/4000000 bytes written (disk full?) ». Idem pour la trace :
+  `Tracer::close()` rend maintenant un verdict, et le harnais annonce « it is TRUNCATED ».
+  ⚠ Le contradicteur a RÉTROGRADÉ la gravité annoncée, à juste titre : aucun runner du
+  dépôt n'appelle `--dump-at`, et les consommateurs réels de la trace et du série échouent
+  du bon côté (une troncature ampute la fin, donc le verdict disparaît et le test rougit).
+  L'impact retenu est un artefact partiel indistinguable d'un artefact complet en
+  diagnostic manuel — plus le temps perdu à chasser une « divergence » qui commence pile à
+  l'octet de troncature.
+- 🐞 **`InputCallbacks.cpp` — touche collée si le mode borne bascule pendant un appui.**
+  `onKey` est bâti sur un invariant écrit : le BREAK d'une touche dont le MAKE est parti au
+  ST doit TOUJOURS partir, sinon la touche reste collée et le clavier semble en panne. Les
+  trois filtres à condition volatile (ImGui, joystick clavier, overlay disquette) sont donc
+  placés APRÈS le bloc de relâchement. Le filtre borne F9/F10 était le seul placé AVANT — et
+  `A.kiosk` est volatile, la bascule bureau ⇄ borne se faisant au clavier. F9 et F10 ont un
+  scancode ST (`$43`/`$44`) : leur BREAK pouvait donc être avalé. Filtre déplacé ; F12, qui
+  n'a pas de scancode ST, reste en amont sans risque.
+
+**Ce qui a été écarté, et pourquoi c'est utile** : un « rétrécissement de 15 % » du zoom
+borne (prémisse fausse) ; un `--loopback` hors fenêtre (mécanisme réel, impact nul sur les
+trois chemins invoqués) ; un aliasing de registres RTC (une garde amont ferme le cas — le
+harnais de la trouvaille testait `Rtc.cpp` compilé SEUL, un chemin qui n'existe pas) ; un
+`std::terminate` du navigateur borne (site immunisé, prouvé). Quatre mécanismes exacts sur
+le papier, quatre impacts qui ne tiennent pas.
+
 ## Chasse round 4 : le tactile Android est REPRIS D'UN BLOC, et le web public démarrait le STE sur une ROM ST (2026-09-01)
 
 **Scheduler et Bus rendent zéro.** Deux sous-systèmes lourds, jamais balayés jusque-là —

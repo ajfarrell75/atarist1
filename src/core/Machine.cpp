@@ -682,11 +682,21 @@ static uint32_t cartFingerprint(const std::vector<uint8_t>& cart) {
 // A17 (2026-08-27) : le numéro de version vivait EN DUR à deux endroits (écriture ici,
 // contrôle dans loadStateFile) — et ils s'étaient déjà désynchronisés : le message de
 // rejet annonçait « writes v16 » alors que le build écrivait v17. Constante unique.
-static constexpr uint16_t kStateVersion = 18;
+static constexpr uint16_t kStateVersion = 19;
 static uint32_t stateCrc32(const uint8_t* p, std::size_t n);   // défini plus bas
 void Machine::serializeState(StateArchive& ar) {
     uint32_t magic   = 0x4E535453u;   // 'NSTS'
-    uint16_t version = kStateVersion; // v18 : + Scheduler::MIDI_RX (horloge de réception
+    uint16_t version = kStateVersion; // v19 : + EMPREINTE CRC32 DE LA ROM dans l'en-tête.
+                                      // Les 2 octets de version TOS ne distinguaient pas
+                                      // deux ROM localisées différentes (tos104us/uk/fr/de/es
+                                      // portent toutes $0104, etos192us et etos192fr aussi) :
+                                      // un état repris sous une AUTRE ROM de même version
+                                      // était accepté, et la RAM restaurée — vecteurs
+                                      // d'exception, piles, adresses de retour — pointait
+                                      // dans une image différente. La ROM est hors-snapshot
+                                      // par construction, donc seule une empreinte peut
+                                      // garder l'appariement ;
+                                      // v18 : + Scheduler::MIDI_RX (horloge de réception
                                       // de l'ACIA MIDI) — SRC_COUNT passe de 20 à 21,
                                       // donc le tableau due_ sérialisé change de taille ;
                                       // v17 : Rtc::mode_ bit3 = TIMER EN désormais HONORÉ
@@ -734,7 +744,11 @@ void Machine::serializeState(StateArchive& ar) {
                             | (isp1160.enabled() ? 8u : 0u)
                             | (dongle.attached() ? 16u : 0u));   // clé Cubase (v14)
     uint32_t cartFp = cartFingerprint(bus.cart);
-    ar(flags); ar(cartFp);
+    // Empreinte de l'IMAGE ROM elle-même. `tosV` ci-dessus ne porte que les 2 octets de
+    // version lus à l'offset 2 : il ne sépare pas deux ROM de même version, alors que la
+    // ROM est précisément le composant que le state NE contient PAS.
+    uint32_t romFp = bus.rom.empty() ? 0u : stateCrc32(bus.rom.data(), bus.rom.size());
+    ar(flags); ar(cartFp); ar(romFp);
     // CRC32 du payload (tout ce qui suit ce champ) : écrit par saveState (patch à
     // l'offset fixe 13), vérifié par loadState AVANT toute restauration. Dans le
     // flux symétrique il vaut 0 — seul le patch post-sérialisation le remplit.
@@ -832,10 +846,10 @@ void Machine::serializeState(StateArchive& ar) {
     }
 }
 
-// En-tête d'un .state v7 : magic(4) version(2) machine(1) ram(4) tos(2) flags(1)
-// cartFp(4) crc32(4) — le CRC du payload reste le DERNIER champ de l'en-tête.
-static constexpr std::size_t kStateHeaderSize = 22;
-static constexpr std::size_t kStateCrcOffset  = 18;
+// En-tête d'un .state v19 : magic(4) version(2) machine(1) ram(4) tos(2) flags(1)
+// cartFp(4) romFp(4) crc32(4) — le CRC du payload reste le DERNIER champ de l'en-tête.
+static constexpr std::size_t kStateHeaderSize = 26;
+static constexpr std::size_t kStateCrcOffset  = 22;
 
 // CRC32 (IEEE, réflexe, sans table) du payload : détecte un fichier corrompu de la
 // bonne longueur AVANT de muter la machine — la seule troncature était couverte.
@@ -888,6 +902,20 @@ bool Machine::loadState(const uint8_t* data, std::size_t n) {
     }
     const uint8_t  flags  = data[13];
     uint32_t cartFp; std::memcpy(&cartFp, data + 14, 4);
+    uint32_t romFp;  std::memcpy(&romFp,  data + 18, 4);
+    const uint32_t curRomFp = bus.rom.empty() ? 0u
+                                              : stateCrc32(bus.rom.data(), bus.rom.size());
+    if (romFp != curRomFp) {
+        // La version TOS contrôlée plus haut ne suffit PAS : tos104us/uk/fr/de/es portent
+        // toutes $0104, tos106* toutes $0106, etos192us et etos192fr aussi $0104. Un état
+        // repris sous une ROM DIFFÉRENTE de même version passait donc, et la RAM restaurée
+        // — vecteurs d'exception, piles, adresses de retour, pointeurs système — désignait
+        // des adresses d'une AUTRE image : CPU figé, sans un mot d'explication.
+        std::fprintf(stderr, "[state] rejected: the state was saved with a DIFFERENT ROM "
+                     "image (same TOS version %03x, but the bytes differ) — reload the "
+                     "exact ROM used for the save\n", bus.tosVersion);
+        return false;
+    }
     const uint8_t  curFlags  = uint8_t((gemdos.active() ? 1u : 0u)
                                        | (ne2000.enabled() ? 2u : 0u) | (usatanOn_ ? 4u : 0u)
                                        | (isp1160.enabled() ? 8u : 0u)
