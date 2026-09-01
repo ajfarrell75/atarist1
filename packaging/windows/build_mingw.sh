@@ -83,32 +83,32 @@ check_dlls "$BUILD_DIR/neost-headless.exe"
 # -- Contenu du zip ----------------------------------------------------------
 mkdir -p "$STAGE"
 cp "$BUILD_DIR/neost.exe" "$BUILD_DIR/neost-headless.exe" "$STAGE/"
-# Même liste autorisée que tous les autres paquets — EmuTOS + les deux TOS UK des
-# profils + diskA + polices. Jamais les autres TOS ni les jeux du dépôt.
+# Même liste autorisée que tous les autres paquets — EmuTOS SEUL (aucune ROM
+# propriétaire depuis la purge du 2026-08-30) + diskA + les trois démos libres +
+# la banque GM + polices. Jamais de TOS Atari ni de jeu du dépôt.
 packaging/stage_free_data.sh "$STAGE"
 
 # resolveData() cherche les données à côté de l'exécutable PUIS un cran au-dessus :
 # ici tout est à plat dans le dossier déballé, donc le premier candidat suffit.
-cat > "$STAGE/LISEZMOI.txt" <<EOF
-NeoST $VERSION — émulateur Atari ST
-=======================================
+cat > "$STAGE/README.txt" <<EOF
+NeoST $VERSION — Atari ST emulator
+==================================
 
-Double-cliquez neost.exe. Rien à installer : tout est dans ce dossier, gardez-le
-d'un seul tenant (l'émulateur cherche roms\\ et disks\\ à côté de l'exécutable).
+Double-click neost.exe. Nothing to install: everything is in this folder, so keep
+it in one piece (the emulator looks for roms\\ and disks\\ next to the executable).
 
-  neost.exe            interface graphique
-  neost-headless.exe   version console, déterministe (--help pour les options)
-  roms\\                EmuTOS + TOS 1.02/1.62 UK
-  disks\\               une disquette de démonstration
-  neost.cfg            créé au premier lancement, à côté de l'exécutable
+  neost.exe            graphical interface
+  neost-headless.exe   console build, deterministic (--help for the options)
+  roms\\                EmuTOS — no proprietary ROM ships with NeoST
+  disks\\               a formatted floppy plus three demoscene productions
+  licenses\\            GPL-3.0, GPL-2.0 and the third-party list
+  neost.cfg            created on first launch, next to the executable
 
-L'interface et les messages sont en anglais.
+SmartScreen may say "Windows protected your PC": the package is not code-signed
+(this project has no code-signing certificate). Click "More info", then
+"Run anyway".
 
-SmartScreen peut afficher « Windows a protégé votre ordinateur » : le paquet
-n'est pas signé (pas de certificat de signature de code pour ce projet).
-« Informations complémentaires » puis « Exécuter quand même ».
-
-Licence GNU GPL v3. Code source et rapports de bug :
+GNU GPL v3. Source code and bug reports:
 https://github.com/habib256/neost
 EOF
 
