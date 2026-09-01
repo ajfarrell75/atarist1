@@ -38,7 +38,13 @@ le reste est ci-dessous.
    `full` porte les étalons pixel : c'est le seul qui interdit de publier une régression
    de rendu.
 6. **Taguer** : un tag annoté par release, `git tag -a x.y.z -m "…"`. Un seul par jour,
-   sauf raison écrite.
+   sauf raison écrite. ⚠ **Le message du tag s'écrit en ANGLAIS**, comme l'interface et
+   les journaux — c'est une publication, elle s'adresse au public, pas au mainteneur.
+   Idem pour les **notes de la Release GitHub** : le job `publish` les génère avec
+   `--generate-notes`, donc à partir de titres de commits FRANÇAIS ; les remplacer
+   ensuite par un texte anglais (`gh release edit x.y.z --notes-file …`). Le CHANGELOG,
+   lui, reste en français : c'est de la documentation, pas une publication.
+   (Règle posée par le mainteneur le 2026-09-01, à la sortie de la 0.6.)
 7. **Publier** : la CI construit les paquets. Vérifier que chacun porte ses licences
    (`GPL-3.0.txt`, `GPL-2.0.txt`, `THIRD-PARTY.txt` — huit jobs le vérifient) et que
    `check_licenses.py` est vert : tout composant livré doit être nommé avec sa licence.
