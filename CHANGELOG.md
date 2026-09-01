@@ -53,6 +53,77 @@ Ripper, DAC Pro Sound) avec page Dongles, `disks/dongles.txt` et oracle de rejeu
 vérifié note à note** en headless, corpus MIDI piano/blues ; port MIDI ALSA sous Linux ;
 save-state v16. Détail dans les chantiers datés ci-dessous.
 
+## Chasse round 2 : 6 défauts de plus, dont un trou dans le correctif du matin (2026-09-01)
+
+**Ce qui a changé dans la méthode.** Cinq axes NEUFS (le frontend GUI, les frontends
+non-desktop, la vidéo, l'IKBD, et une **lentille de régression braquée sur les correctifs
+du jour même**), et une réfutation à barre haute : les contradicteurs devaient ESSAYER DE
+REPRODUIRE, renseigner ce qu'ils avaient réellement exécuté, et réfuter dans le doute.
+Résultat : **8 soumises → 7 prouvées PAR EXÉCUTION, 0 par raisonnement seul, 1 écartée**.
+Le round 1 avait laissé passer 9 sur 9 ; le tri fonctionne maintenant. L'écartée l'a été
+pour la bonne raison — elle tombait dans la catégorie « fidélité Hatari » exclue d'office.
+Deux axes ayant trouvé le même bug Android, cela fait **6 défauts distincts**.
+
+🐞 **Le plus important : la lentille de régression a trouvé un trou dans le correctif
+posé le matin même.** `fixBools()` avait été appliqué aux **trois sites nommés** par le
+round 1 (`Scc::Chn`, `Fpu`, `StePads`) au lieu d'auditer — et il en manquait un, le plus
+lourd : `ar(reg)` (`Cpu68k.cpp`) copie en bloc `moira::Registers`, qui porte
+`StatusRegister sr` avec **neuf booléens**, dont le bit **superviseur**. L'audit est
+désormais fait **par le COMPILATEUR** et non au grep : un
+`static_assert(!std::is_class_v<T>)` temporaire fait énumérer toutes les instanciations,
+ce qui donne les **7 agrégats non-tableaux** du dépôt — 4 portent des booléens (tous
+traités), 3 n'en portent pas (`Bus::MegaSteCache`, `Scu`, `moira::PrefetchQueue`). La
+liste complète est écrite dans `StateArchive.hpp`, avec l'avertissement qu'un agrégat
+AJOUTÉ plus tard ne sera signalé par rien.
+
+**Les cinq autres**
+
+- 🐞 **`ConfigWindow.cpp` / `AppLoop.cpp` — la case MT-32 de la page MIDI était un
+  CONTRÔLE MORT.** Elle posait `reqMidiOutMt32`, que rien ne consommait : la ligne
+  manquait entre ses deux voisines dans le bloc de déversement de la boucle. La case se
+  recochait seule à la trame suivante (elle relit `cfg` à chaque passage), et le réglage
+  n'était atteignable que par le menu Machine — hors de la page dont c'est le sujet. Le
+  contradicteur l'a prouvé **par compilation** : en supprimant le membre d'un en-tête
+  recopié hors dépôt, `AppLoop.cpp` compile encore, donc aucun lecteur ne peut exister.
+  Il a aussi RÉTROGRADÉ lui-même la gravité annoncée — ni plantage, ni UB, contournement
+  existant. Honnêteté à porter à son crédit.
+- 🐞 **`AppConfig.cpp` — couper tous les canaux d'un appareil MIDI le rouvrait EN GRAND
+  au redémarrage.** `formatChannelMask(0)` écrivait « 1-16 » et `parseChannelMask("")`
+  rendait 0xFFFF, au nom d'un invariant écrit — « un masque vide serait une destination
+  muette, ce qu'on n'écrit jamais » — que le bouton `none` de la page MIDI a rendu faux.
+  Le réglage se retournait donc exactement à l'envers. Un jeton explicite « none » sépare
+  désormais le masque vide VOULU de la ligne ILLISIBLE, qui vaut toujours « tous les
+  canaux » comme prévu à l'origine. 8 assertions neuves.
+- 🐞 **`main_android.cpp` — le déballage des assets ne vérifiait aucune écriture.** Ouvrir
+  en `"wb"` crée le fichier à 0 octet, `SDL_RWwrite` n'était pas contrôlé, et la fonction
+  rendait `true` inconditionnellement ; `fileExists()` ne testant que l'ouverture, un TOS
+  tronqué (stockage plein, processus tué) était réputé « déjà déballé » **POUR TOUJOURS**.
+  Lectures et écritures sont vérifiées, un fichier partiel est SUPPRIMÉ plutôt que laissé
+  en place, et la garde compare désormais la TAILLE à celle de l'asset : le déballage se
+  répare tout seul au lancement suivant.
+- 🐞 **`main_android.cpp` — un tap n'envoyait AUCUN clic au ST.** `Ikbd::mouseEvent`
+  n'émet rien, il écrase l'état ; le paquet souris n'est construit qu'à la VBL, et l'appui
+  suivi du relâchement dans la MÊME trame ne laissait aucun changement à voir. Le remède
+  existait déjà deux fonctions plus haut — `g_injectHold`, le clic MAINTENU 4 trames de la
+  page clavier, dont le commentaire décrit précisément ce piège — il n'était simplement
+  pas câblé au tactile. Il l'est.
+- 🐞 **`main_android.cpp` — le clic droit à deux doigts était structurellement
+  inatteignable.** Le compteur de doigts était capturé avant décrément, mais la garde qui
+  suit ne laisse passer que le dernier doigt levé : la valeur lue valait donc toujours 1,
+  et `right = fingers >= 2` était toujours faux. Un maximum atteint pendant le geste
+  (`peakFingers`) remplace le compteur instantané.
+
+📌 **Le contrôle syntaxique a payé, et il a attrapé une erreur DE MOI.** Le frontend
+Android n'est pas construit par le build par défaut : j'ai bouchonné SDL2 (Homebrew) et
+GLES2 (33 fonctions et 20 constantes générées depuis le fichier lui-même) pour obtenir un
+`-fsyntax-only`. Il a immédiatement signalé que mon `std::vector<uint8_t> buf(size_t(sz));`
+est le **« most vexing parse »** — déclaré comme une FONCTION, pas une variable. L'écriture
+d'origine y échappait par accident, son argument étant un ternaire. Sans ce contrôle, du
+code qui ne compile pas serait parti sur la branche : rien dans le palier `full` ne touche
+ce fichier.
+
+Palier `full` vert, poste au repos. Le dépôt n'a pas été modifié par les agents.
+
 ## Chasse aux bugs multi-agents : 9 défauts trouvés et corrigés, dont un hors bornes qui ne visait que Windows (2026-09-01)
 
 **La méthode.** Cinq axes de recherche en parallèle (chemins hôte et bac à sable ;

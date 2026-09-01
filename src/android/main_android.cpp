@@ -242,25 +242,58 @@ bool openAudio() {
 
 // --- Données : déballage des assets au premier lancement ---------------------
 // SDL_RWops sait lire dans l'APK ; le cœur, lui, veut des fichiers ordinaires.
+// ⚠ CHAQUE lecture et CHAQUE écriture est vérifiée, et l'échec DÉTRUIT la destination.
+// Auparavant : ouvrir en "wb" crée le fichier à 0 octet, `SDL_RWwrite` n'était pas
+// contrôlé, et la fonction rendait `true` inconditionnellement. Un stockage plein ou
+// un processus tué au mauvais moment laissait donc un TOS tronqué que `fileExists()`
+// — qui ne teste que l'ouverture — déclarait « déjà déballé » POUR TOUJOURS : plus
+// aucun lancement ne le recopiait, et l'application démarrait sans TOS à chaque fois.
+// Un fichier partiel est pire que pas de fichier : celui-ci se répare tout seul.
 bool copyAsset(const std::string& name, const std::string& dest) {
     SDL_RWops* in = SDL_RWFromFile(name.c_str(), "rb");
     if (!in) { NEOERR("asset absent: %s (%s)", name.c_str(), SDL_GetError()); return false; }
     const Sint64 sz = SDL_RWsize(in);
-    std::vector<uint8_t> buf(size_t(sz > 0 ? sz : 0));
-    if (sz > 0) SDL_RWread(in, buf.data(), 1, buf.size());
+    if (sz <= 0) { NEOERR("asset vide ou illisible: %s", name.c_str()); SDL_RWclose(in); return false; }
+    // static_cast et non size_t(sz) : `std::vector<uint8_t> buf(size_t(sz));`
+    // est le « most vexing parse » — le compilateur y lit la DÉCLARATION d'une
+    // fonction `buf`, pas une variable. L'écriture d'origine y échappait par
+    // accident, son argument étant un ternaire.
+    std::vector<uint8_t> buf(static_cast<size_t>(sz));
+    const size_t got = SDL_RWread(in, buf.data(), 1, buf.size());
     SDL_RWclose(in);
+    if (got != buf.size()) {
+        NEOERR("asset lu partiellement: %s (%zu/%zu)", name.c_str(), got, buf.size());
+        return false;
+    }
     SDL_RWops* out = SDL_RWFromFile(dest.c_str(), "wb");
     if (!out) { NEOERR("écriture impossible: %s", dest.c_str()); return false; }
-    if (!buf.empty()) SDL_RWwrite(out, buf.data(), 1, buf.size());
+    const size_t put = SDL_RWwrite(out, buf.data(), 1, buf.size());
     SDL_RWclose(out);
+    if (put != buf.size()) {
+        NEOERR("écriture partielle: %s (%zu/%zu) — fichier supprimé", dest.c_str(), put, buf.size());
+        std::remove(dest.c_str());     // ne JAMAIS laisser un fichier tronqué derrière soi
+        return false;
+    }
     return true;
 }
 
-bool fileExists(const std::string& p) {
+// Le fichier existe-t-il ET fait-il la taille attendue ? Tester la seule ouverture
+// laissait passer un fichier de 0 octet ou tronqué (cf. copyAsset).
+bool fileHasSize(const std::string& p, Sint64 want) {
     SDL_RWops* f = SDL_RWFromFile(p.c_str(), "rb");
     if (!f) return false;
+    const Sint64 sz = SDL_RWsize(f);
     SDL_RWclose(f);
-    return true;
+    return sz == want;
+}
+
+// Taille d'un asset dans l'APK, ou -1 s'il est introuvable.
+Sint64 assetSize(const std::string& name) {
+    SDL_RWops* f = SDL_RWFromFile(name.c_str(), "rb");
+    if (!f) return -1;
+    const Sint64 sz = SDL_RWsize(f);
+    SDL_RWclose(f);
+    return sz;
 }
 
 // Renvoie le dossier de données de l'application (créé au besoin), assets déballés.
@@ -276,7 +309,12 @@ std::string prepareData() {
     };
     for (const char* a : kAssets) {
         const std::string dest = dir + "/" + a;
-        if (!fileExists(dest)) copyAsset(a, dest);
+        // Comparer à la taille de l'asset, et non à la seule existence : c'est ce qui
+        // rend le déballage RÉPARABLE. Un fichier absent, vide ou tronqué est recopié
+        // au lancement suivant au lieu d'être définitivement pris pour bon.
+        const Sint64 want = assetSize(a);
+        if (want > 0 && !fileHasSize(dest, want) && !copyAsset(a, dest))
+            NEOERR("déballage échoué: %s — l'application démarrera sans lui", a);
     }
     return dir;
 }
@@ -295,6 +333,7 @@ struct Touch {
     Uint64   startMs  = 0;
     float    travel   = 0.0f;      // distance parcourue (fraction d'écran)
     int      fingers  = 0;
+    int      peakFingers = 0;      // maximum atteint pendant le geste (cf. FINGERUP)
 };
 Touch g_touch;
 
@@ -319,6 +358,7 @@ void handleTouch(const SDL_Event& e) {
     switch (e.type) {   // (non appelé quand le menu est ouvert : ImGui a la main)
     case SDL_FINGERDOWN:
         ++g_touch.fingers;
+        if (g_touch.fingers > g_touch.peakFingers) g_touch.peakFingers = g_touch.fingers;
         if (!g_touch.active) {
             g_touch.active  = true;
             g_touch.lastX   = e.tfinger.x;
@@ -340,17 +380,30 @@ void handleTouch(const SDL_Event& e) {
         break;
     }
     case SDL_FINGERUP: {
-        const int fingers = g_touch.fingers;
+        // Nombre de doigts au PLUS FORT du geste, et non au moment du relâchement :
+        // `g_touch.fingers` est décrémenté juste après, et la garde qui suit ne laisse
+        // passer que le dernier doigt levé — le compteur y valait donc toujours 1, ce
+        // qui rendait le clic droit à deux doigts STRUCTURELLEMENT inatteignable.
+        const int peak = g_touch.peakFingers;
         if (g_touch.fingers > 0) --g_touch.fingers;
         if (g_touch.fingers > 0) break;              // il reste un doigt : rien à conclure
         const Uint64 held = SDL_GetTicks64() - g_touch.startMs;
         const bool tap = held <= kTapMaxMs && g_touch.travel <= kTapMaxTravel;
-        if (tap && g_machine) {                      // clic : appui PUIS relâchement
-            const bool right = fingers >= 2;
+        if (tap && g_machine && g_injectHold == 0) {
+            // Clic MAINTENU quatre trames, exactement comme la page clavier et la
+            // borne. Le down+up dans la MÊME trame ne produisait aucun clic du tout :
+            // Ikbd::mouseEvent n'émet rien, il ne fait qu'écraser l'état, et le paquet
+            // souris n'est construit qu'à la VBL — qui voyait donc le bouton relâché,
+            // sans changement, et n'émettait rien. Le tap était intégralement perdu.
+            // Le remède existait déjà deux fonctions plus haut ; il n'était pas câblé ici.
+            const bool right = peak >= 2;
             g_machine->ikbd.mouseEvent(0, 0, !right, right);
-            g_machine->ikbd.mouseEvent(0, 0, false, false);
+            g_injectScancode = 0;
+            g_injectClick    = true;
+            g_injectHold     = 4;
         }
         g_touch.active = false;
+        g_touch.peakFingers = 0;
         break;
     }
     default: break;

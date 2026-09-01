@@ -1828,6 +1828,38 @@ static void testConfigPath() {
 //  branches peuvent être prises. C'est le cas de `Scc::Chn`, de `Fpu` et de
 //  `StePads`, tous relus en bloc. `fixBools()` est le rattrapage ; ce test le garde.
 // -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+//  Masque de canaux MIDI — l'aller-retour du masque VIDE (chasse round 2).
+//
+//  `formatChannelMask(0)` rendait « 1-16 » et `parseChannelMask("")` rendait 0xFFFF,
+//  au nom d'un invariant écrit — « un masque vide serait une destination muette, ce
+//  qu'on n'écrit jamais » — que le bouton `none` de la page MIDI a rendu faux. Couper
+//  TOUS les canaux d'un appareil le rouvrait donc EN GRAND au redémarrage : le
+//  réglage se retournait exactement à l'envers.
+// -----------------------------------------------------------------------------
+static void testChannelMask() {
+    std::printf("MIDI — masque de canaux, aller-retour (chasse round 2)\n");
+    using neost::appconfig::parseChannelMask;
+    using neost::appconfig::formatChannelMask;
+
+    // Le cas du défaut : vide → vide, et pas « tous ».
+    checkStr("masque VIDE s'écrit « none »", formatChannelMask(0), "none");
+    checkBool("« none » se relit VIDE", parseChannelMask("none") == 0, true);
+    checkBool("aller-retour du masque vide", parseChannelMask(formatChannelMask(0)) == 0, true);
+
+    // Une ligne ILLISIBLE reste « tous les canaux » : c'est l'intention d'origine,
+    // et elle ne doit pas avoir changé.
+    checkBool("ligne vide = tous les canaux", parseChannelMask("") == 0xFFFF, true);
+    checkBool("ligne illisible = tous les canaux", parseChannelMask("bruit") == 0xFFFF, true);
+
+    // Les cas ordinaires ne bougent pas.
+    checkStr("tous les canaux", formatChannelMask(0xFFFF), "1-16");
+    checkStr("un seul canal", formatChannelMask(uint16_t(1u << 1)), "2");
+    checkBool("aller-retour 1,3,10-12",
+              parseChannelMask("1,3,10-12") == parseChannelMask(formatChannelMask(parseChannelMask("1,3,10-12"))),
+              true);
+}
+
 static void testFixBools() {
     std::printf("StateArchive — booléens relus EN BLOC (chasse 2026-09-01)\n");
     struct Agg { uint8_t a; bool flag; uint8_t b; };
@@ -2169,6 +2201,7 @@ int main() {
     testConfigPath();
     testConfigWriteCreatesDir();
     testFixBools();
+    testChannelMask();
     std::printf("[selftest-logic] %d OK, %d FAIL\n", g_ok, g_fail);
     return g_fail == 0 ? 0 : 1;
 }

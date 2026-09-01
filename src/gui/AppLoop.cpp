@@ -898,6 +898,12 @@ void appLoop(App& A) {
             if (cfgUi.mixDone) { saveConfig(A, exeDir, cfg, &machine); cfgUi.mixDone = false; }
             if (cfgUi.reqMidiOutGm >= 0)   { cfg.midiOutGm   = cfgUi.reqMidiOutGm   == 1; cfgUi.reqMidiOutGm   = -1; A.midiOutApply(); saveConfig(A, exeDir, cfg, &machine); }
             if (cfgUi.reqMidiOutPort >= 0) { cfg.midiOutPort = cfgUi.reqMidiOutPort == 1; cfgUi.reqMidiOutPort = -1; A.midiOutApply(); saveConfig(A, exeDir, cfg, &machine); }
+            // La ligne MT-32 manquait, entre ses deux voisines : la case de la page MIDI
+            // posait sa requête et RIEN ne la consommait — contrôle mort, qui se recochait
+            // seul à la trame suivante puisque la case relit `cfg` à chaque passage. Le
+            // réglage n'était atteignable que par le menu Machine, hors de la page dont
+            // c'est pourtant le sujet.
+            if (cfgUi.reqMidiOutMt32 >= 0) { cfg.midiOutMt32 = cfgUi.reqMidiOutMt32 == 1; cfgUi.reqMidiOutMt32 = -1; A.midiOutApply(); saveConfig(A, exeDir, cfg, &machine); }
             if (cfgUi.reqMidiLead >= 0) {
                 cfg.midiLeadMs = cfgUi.reqMidiLead; cfgUi.reqMidiLead = -1;
                 midiOut.setLeadMs(cfg.midiLeadMs);

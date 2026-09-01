@@ -147,6 +147,13 @@ Config loadConfig(const std::string& exeDir);
 
 // Sérialisation. full=true : neost.cfg complet ; false : profil nommé.
 void writeConfigKeys(std::ostream& f, const Config& w, bool full);
+// Masque de canaux MIDI ↔ texte. « 1-16 », « 2 », « 1,3,10-12 », et « none » pour le
+// masque VIDE — jeton nécessaire, sans quoi « aucun canal » ne se distingue pas d'une
+// ligne illisible et l'appareil coupé revient grand ouvert au redémarrage. Déclarés
+// ici pour que l'auto-test puisse les exercer : c'est de la logique pure.
+uint16_t    parseChannelMask(const std::string& s);
+std::string formatChannelMask(uint16_t m);
+
 bool writeConfigAtomic(const std::string& finalPath, const Config& w, bool full,
                        bool cwdFallback, std::string& err);
 

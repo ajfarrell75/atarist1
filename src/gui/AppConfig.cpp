@@ -90,6 +90,11 @@ std::vector<std::vector<std::string>> decodeRecords(const std::string& s) {
 // compact à l'écriture : les suites consécutives sont repliées en intervalle, ce qui
 // rend neost.cfg lisible et modifiable à la main.
 uint16_t parseChannelMask(const std::string& s) {
+    // « none » : masque VIDE explicite, c'est-à-dire l'appareil coupé. Il faut un jeton
+    // pour ça, sinon un masque vide ne peut pas se distinguer d'une ligne illisible —
+    // et c'est ce qui faisait qu'un appareil dont on coupait TOUS les canaux (bouton
+    // `none` de la page MIDI) revenait « 1-16 » au redémarrage, donc grand ouvert.
+    if (s == "none") return 0;
     uint16_t m = 0;
     std::size_t i = 0;
     while (i < s.size()) {
@@ -105,9 +110,9 @@ uint16_t parseChannelMask(const std::string& s) {
         for (int c = a; c <= b; ++c)
             if (c >= 1 && c <= 16) m = uint16_t(m | (1u << (c - 1)));
     }
-    // Un masque VIDE serait une destination muette, ce qu'on n'écrit jamais : une
-    // ligne illisible vaut donc « tous les canaux » plutôt qu'un appareil sourd
-    // dont l'utilisateur chercherait la panne.
+    // Une ligne ILLISIBLE vaut « tous les canaux » plutôt qu'un appareil sourd dont
+    // l'utilisateur chercherait la panne. Le masque vide VOULU, lui, s'écrit « none »
+    // et est traité tout en haut : les deux cas ne se confondent plus.
     return m ? m : uint16_t(0xFFFF);
 }
 
@@ -122,7 +127,9 @@ std::string formatChannelMask(uint16_t m) {
         if (e > c) { out += '-'; out += std::to_string(e); }
         c = e + 1;
     }
-    return out.empty() ? std::string("1-16") : out;
+    // Symétrique de parseChannelMask : un masque vide s'écrit « none », pas « 1-16 »
+    // — écrire « tous » pour dire « aucun » inversait le réglage au rechargement.
+    return out.empty() ? std::string("none") : out;
 }
 
 static float crtF(const std::string& s, float lo, float hi, float dflt) {

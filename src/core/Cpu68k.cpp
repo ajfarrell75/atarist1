@@ -496,6 +496,17 @@ public:
     // accessibles ici). reg/queue/StatusRegister sont des PODs → transférés en bloc.
     void serializeState(StateArchive& ar) {
         ar(clock); ar(reg); ar(queue); ar(ipl); ar(iplPrev);
+        // `reg` est copié EN BLOC, donc les NEUF booléens de son registre d'état
+        // (moira::StatusRegister : t1 t0 s m x n z c v) échappent à la normalisation
+        // de StateArchive::operator(), qui ne voit que le type de l'agrégat. Un octet
+        // valant autre chose que 0 ou 1 dans un bool est un COMPORTEMENT INDÉFINI —
+        // et `s` est le bit SUPERVISEUR : les deux branches d'un `if (sr.s)` peuvent
+        // être prises. C'est le plus lourd des sites de cette famille, et il avait été
+        // manqué le 2026-09-01 parce que seuls les trois sites NOMMÉS avaient été
+        // corrigés au lieu d'auditer. Liste complète établie depuis : cf. le bandeau
+        // de fixBools() dans StateArchive.hpp.
+        ar.fixBools(reg.sr.t1, reg.sr.t0, reg.sr.s, reg.sr.m,
+                    reg.sr.x, reg.sr.n, reg.sr.z, reg.sr.v, reg.sr.c);
         ar(iplChangeClock); ar(iplChangeClockPrev); ar(iplDelay4); ar(iplDelay2);
         ar(fcl); ar(readBuffer); ar(flags);
         // LOOPING (mode loop 68010) n'est JAMAIS posé sur un 68000 : forgé dans un

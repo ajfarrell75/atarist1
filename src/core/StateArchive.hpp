@@ -61,6 +61,21 @@ public:
     // membre d'un agrégat sérialisé d'un seul `raw()` : `operator()` ne voit que le
     // type de l'agrégat et ne peut pas les atteindre (cf. la note de portée
     // ci-dessous). Sans effet à l'écriture, et le format de fichier ne bouge pas.
+    //
+    // LISTE COMPLÈTE des agrégats non-tableaux sérialisés en bloc, établie le
+    // 2026-09-01 en faisant énumérer les instanciations PAR LE COMPILATEUR (un
+    // `static_assert(!std::is_class_v<T>)` temporaire) — et non au grep, qui avait
+    // laissé passer le plus gros :
+    //   · moira::Registers      → 9 bool dans `sr`   → fixBools (Cpu68k.cpp)
+    //   · Scc::Chn              → 3 bool             → fixBools (Scc.hpp)
+    //   · Fpu                   → 2 bool             → fixBools (Fpu.hpp)
+    //   · StePads               → 3 bool             → fixBools (StePads.hpp)
+    //   · Bus::MegaSteCache     → aucun bool         → rien à faire
+    //   · Scu                   → aucun bool         → rien à faire
+    //   · moira::PrefetchQueue  → aucun bool         → rien à faire
+    // Tout le reste est un `std::array` de scalaires. ⚠ Un agrégat AJOUTÉ plus tard
+    // ne sera signalé par rien : refaire l'énumération au compilateur le jour où l'on
+    // sérialise une nouvelle struct.
     template <class... B>
     void fixBools(B&... bs) {
         static_assert((std::is_same_v<B, bool> && ...), "fixBools : booléens seulement");
