@@ -53,6 +53,29 @@ Ripper, DAC Pro Sound) avec page Dongles, `disks/dongles.txt` et oracle de rejeu
 vérifié note à note** en headless, corpus MIDI piano/blues ; port MIDI ALSA sous Linux ;
 save-state v16. Détail dans les chantiers datés ci-dessous.
 
+## Plus aucune référence oracle non re-dérivable : `spec512_bands` s'ancre sur la VBL par `stop` (2026-09-01)
+
+Dernière astérisque d'A11. Hatari ne se reproduisait pas lui-même sur ce disque (deux runs →
+deux jeux de phases disjoints, 2 460 px de la référence au mieux) : son RNG de boot décale le
+démarrage du programme de quelques cycles, et une resynchro par scrutation de `$FF8207` ne se
+recale qu'à ~20 cycles près — sur l'étalon dont TOUT l'objet est de rendre un cycle CPU
+visible. `oracle_scan` n'y pouvait rien : le décalage est sous-trame.
+
+Le remède est dans le **programme**, pas dans l'outillage. La séquence vit dans le handler de
+VBL et le programme attend en **`stop #$2300`** : une interruption prise depuis STOP a une
+latence FIXE, là où un `bra.s` d'attente (l'ancrage de `freq_switch`, suffisant là-bas) la
+prend à une frontière d'instruction, jusqu'à 10 cycles de jitter. Mesuré : 2 runs Hatari →
+**mêmes 3 phases** ; NeoST rend **ces mêmes 3 images** (matrice 3×3 des phases, zéro sur la
+diagonale). L'image cycle sur 5 trames — le handler démarre 4 cycles plus tard à chaque trame
+(première écriture à cyc 138, 142, 146…) — **identiquement chez Hatari** : c'est le programme,
+et `oracle_scan` retient la trame identique, qui existe dans toute fenêtre de 5.
+
+Référence régénérée (trame nominale, décalage 0, une image comparée) ; run frais identique.
+L'exclusion `oracle_check: false` est levée, le mécanisme reste. Le job hebdomadaire confronte
+désormais **7 étalons** — les 7 oracles sur ROM libre, sans exception. Règle retenue pour tout
+étalon généré dont la mesure est sous-ligne : ancrer sur la VBL par `stop`, jamais sur le
+compteur vidéo.
+
 ## V3 est CLOS : l'attribution de ligne à la grille réelle devient le défaut — et le verrou ne faisait rien (2026-09-01)
 
 Dernier reste du front « précision cycle » à valeur élevée. Le verrou `NEOST_LINELEN_ATTR`

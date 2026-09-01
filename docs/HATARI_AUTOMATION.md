@@ -138,6 +138,12 @@ prouve ce qu'elle prouve — un jour, sur un run donné, NeoST a rendu cette ima
 comme Hatari — mais elle ne se régénère pas. Le manifeste le déclare
 (`oracle_check: false` + `oracle_check_note`, obligatoire) et `--oracle-check` la saute
 **en la nommant**.
+**Résolu le même jour, dans le programme** : la séquence vit dans le handler de VBL et le
+programme attend en `stop #$2300` — latence d'exception FIXE, là où une boucle de scrutation
+(ou un `bra.s` d'attente) prend l'interruption à une frontière d'instruction. Deux runs Hatari
+rendent alors les mêmes phases, NeoST les mêmes images ; l'exclusion est levée. **Règle pour
+tout étalon généré dont la mesure est sous-ligne** : ancrer sur la VBL par `stop`, jamais sur
+le compteur vidéo.
 
 ## Contrôler les références SANS les écraser (`--oracle-check`, A11)
 

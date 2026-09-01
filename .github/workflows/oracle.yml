@@ -35,17 +35,18 @@
 #
 #  CE QUE CE JOB VÉRIFIE VRAIMENT, EN NOMBRE. Sur les 17 étalons machine :
 #    · 10 ont ref_kind=oracle ;
-#    ·  1 est déclaré NON RE-DÉRIVABLE dans le manifeste, avec sa raison écrite
-#       (`oracle_check: false` + `oracle_check_note`, obligatoire) : `spec512_bands`,
-#       sur lequel HATARI NE SE REPRODUIT PAS lui-même (mesuré : deux runs, deux
-#       jeux de phases disjoints — le prix de ce que cet étalon mesure, un cycle CPU
-#       visible à l'œil). `nocooper` l'était aussi le premier jour (touche tenue hors
-#       de portée du script) : hatari_oracle.sh sait depuis piloter le clavier à la
-#       VBL près (`oracle_keys`), et son oracle se re-dérive — vérifié identique ;
+#    ·  0 est déclaré NON RE-DÉRIVABLE. Le mécanisme existe (`oracle_check: false`
+#       + `oracle_check_note`, raison obligatoire) et a servi le premier jour à
+#       DEUX étalons, réglés depuis : `nocooper` (touche tenue → hatari_oracle.sh
+#       pilote le clavier à la VBL près, `oracle_keys`) et `spec512_bands` (Hatari
+#       ne se reproduisait pas lui-même → le programme s'ancre sur la VBL par
+#       `stop #$2300`, latence fixe ; deux runs Hatari rendent les mêmes phases).
+#       Les deux se re-dérivent, vérifié identique à leur référence ;
 #    ·  3 (`spectrum512_diapo*`) dépendent d'une ROM Atari, que le dépôt ne porte
 #       plus depuis la purge du 2026-08-30 : ils se SAUTENT ici (`rom_is_free()`).
-#  Il reste donc **6 étalons réellement confrontés en CI** : blitter_hog,
-#  cuddly_demos, nocooper, scroll_8264, scroll_8265, trace_odd. Le décompte et les noms sont
+#  Il reste donc **7 étalons réellement confrontés en CI** : blitter_hog,
+#  cuddly_demos, nocooper, scroll_8264, scroll_8265, spec512_bands, trace_odd. Le
+#  décompte et les noms sont
 #  imprimés à chaque exécution — un « TOUS OK » sur deux étalons au lieu de cinq
 #  doit se voir dans le journal, jamais se fondre dans le vert.
 # =============================================================================

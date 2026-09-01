@@ -100,20 +100,41 @@ w(0x20C1)                         # move.l d1,(a0)+    → plans 0 et 1
 w(0x4298)                         # clr.l (a0)+        → plans 2 et 3
 dbra(0, 'fill')
 
-# ---- boucle principale ----------------------------------------------------
-label('sync')
-# Attendre d'être bien DANS l'affichage (octet médian du compteur vidéo grand),
-# puis attendre sa remise à zéro : on repart au même point de chaque trame, donc
-# le motif est identique d'une trame à l'autre → image statique.
-label('s1')
-w(0x1438, 0x8207)                 # move.b $8207.w,d2
-w(0x0C02, 0x0040)                 # cmpi.b #$40,d2
-bcc_s(0x65, 's1')                 # bcs.s s1  (encore trop tôt)
-label('s2')
-w(0x1438, 0x8207)                 # move.b $8207.w,d2
-w(0x0C02, 0x0004)                 # cmpi.b #$04,d2
-bcc_s(0x64, 's2')                 # bcc.s s2  (pas encore le haut de trame)
+# ---- ancrage : VBL + STOP (2026-09-01) ------------------------------------
+# La première version se resynchronisait en haut de trame en scrutant le compteur
+# vidéo ($FF8207). L'image était stable d'une trame à l'autre, mais PAS d'un run
+# à l'autre chez Hatari : son RNG de boot (position angulaire de la disquette)
+# décale le démarrage du programme de quelques cycles, et une boucle de scrutation
+# ne se recale qu'à ~20 cycles près. Mesuré le 2026-09-01 : deux runs de la même
+# ligne de commande → deux jeux de phases entièrement disjoints, la moins pire à
+# 2 460 px de la référence, couleurs permutées sur 4 px au bord de chaque bande.
+# L'oracle de cet étalon n'était donc pas re-dérivable.
+#
+# Remède : la séquence vit dans le HANDLER DE VBL et le programme attend en
+# `stop #$2300`. Une interruption prise depuis STOP a une latence FIXE — là où une
+# boucle `bra.s` la prend à une frontière d'instruction, avec jusqu'à 10 cycles de
+# jitter. Le handler démarre donc toujours au même cycle de la trame, quel que
+# soit le boot. Les IRQ MFP sont coupées à la source (IERA/IERB), IPL 3 ne laisse
+# passer que le niveau 4 (VBL) ; l'HBL (niveau 2) reste masquée.
+#
+# Mesuré après ce changement (2026-09-01) : Hatari rend les MÊMES images d'un run à
+# l'autre (2 runs, 3 phases identiques), et NeoST rend les mêmes trois images
+# qu'Hatari (matrice 3×3 : zéro sur la diagonale). L'image n'est pas figée d'une
+# trame à l'autre — le handler démarre 4 cycles plus tard à chaque trame (première
+# écriture à cyc 138, 142, 146…), période 5 trames, IDENTIQUE chez Hatari : c'est
+# le programme, pas un émulateur. oracle_scan retient la trame identique à la
+# capture NeoST ; elle existe dans toute fenêtre d'au moins 5 trames.
+w(0x4238, 0xFA07)                 # clr.b $fffa07.w   (IERA)
+w(0x4238, 0xFA09)                 # clr.b $fffa09.w   (IERB)
+w(0x43FA)                         # lea vbl(pc),a1    (adresse de boot inconnue à l'assemblage)
+fixups.append((len(code), 'vbl')); code.extend(b'\x00\x00')
+w(0x21C9, 0x0070)                 # move.l a1,$70.w   (autovecteur niveau 4)
+w(0x46FC, 0x2300)                 # move.w #$2300,sr
+label('idle')
+w(0x4E72, 0x2300)                 # stop #$2300       → réveil à la VBL, latence fixe
+bra_s('idle')
 
+label('vbl')
 # Nombre d'itérations : chacune coûte ~300 cycles (3 écritures + 3 délais), mesuré
 # à la trace NEOST_PAL_TRACE. Une trame PAL fait 313×512 = 160 256 cycles, donc ~500
 # itérations la couvrent en laissant de quoi se resynchroniser. Trop peu → le bas de
@@ -134,7 +155,7 @@ w(0x383C, DELAY)
 label('w3')
 dbra(4, 'w3')
 dbra(3, 'band')
-bra_s('sync')
+w(0x4E73)                         # rte → retour au stop
 
 # ---- résolution des déplacements -------------------------------------------
 for off, name in fixups:
@@ -144,9 +165,9 @@ for off, name in fixups:
         disp = target - (off + 2)
         assert -128 <= disp <= 127, f"branche courte hors portée {name} : {disp}"
         code[off + 1] = disp & 0xFF
-    else:                                          # dbra : 16 bits, relatif au mot
+    else:                                          # dbra / lea(pc) : 16 bits, relatif au mot
         disp = target - off
-        assert -32768 <= disp <= 32767, f"dbra hors portée {name} : {disp}"
+        assert -32768 <= disp <= 32767, f"déplacement hors portée {name} : {disp}"
         struct.pack_into('>h', code, off, disp)
 
 assert len(code) <= 510, f"code trop gros : {len(code)} octets"

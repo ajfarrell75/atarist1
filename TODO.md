@@ -202,18 +202,19 @@ est continue, les trous sont du travail fait.
     menaçaient TOUS les oracles : la LED disquette incrustée (`--drive-led off`, zone noire
     vérifiée) et le compteur `n` de `select` que ffmpeg **remet à zéro** à chaque changement
     de format `pal8↔rgb24` de l'AVI (`-reinit_filter 0` sur les deux extractions).
-  - **`spec512_bands`** : **Hatari ne se reproduit pas lui-même** dessus. Deux runs de la
-    même ligne de commande → deux jeux de phases **disjoints**. C'est la rançon de ce que
-    l'étalon mesure — la position horizontale des bascules de palette dépend du cycle exact
-    de l'écriture, et le RNG de la position angulaire de la disquette décale le démarrage
-    du programme. `oracle_scan` n'y peut rien : le décalage est **sous-trame**, pas une
-    renumérotation (les 4 phases d'une fenêtre de 181 trames diffèrent toutes de la
-    référence, la moins pire à 2 460 px, couleurs permutées sur 4 px au bord de chaque
-    bande = 4 cycles). Sa référence reste un VRAI oracle (elle porte la LED disquette
-    d'Hatari) et prouve ce qu'elle prouve : un jour, NeoST a rendu cette image AU PIXEL
-    comme Hatari. Elle n'est simplement pas re-dérivable.
-  **Périmètre réel en CI : 6 étalons** (blitter_hog, cuddly_demos, nocooper, scroll_8264,
-  scroll_8265, trace_odd) — les 3 `spectrum512_diapo*` dépendent d'une ROM Atari que le
+  - ✅ **`spec512_bands` — RÉGLÉ le même jour aussi.** Hatari ne se reproduisait pas
+    lui-même dessus (deux runs → deux jeux de phases disjoints, 2 460 px au mieux) : le RNG
+    de boot décale le démarrage du programme, et la resynchro par scrutation de `$FF8207` ne
+    se recale qu'à ~20 cycles près — `oracle_scan` n'y peut rien, le décalage est sous-trame.
+    Remède dans le GÉNÉRATEUR : séquence dans le handler de VBL, attente en **`stop #$2300`**
+    (latence d'exception FIXE — une boucle `bra.s` prendrait l'interruption à une frontière
+    d'instruction, jusqu'à 10 cycles de jitter). Mesuré : 2 runs Hatari → mêmes 3 phases ;
+    NeoST rend ces mêmes 3 images (matrice 3×3, zéro sur la diagonale). L'image cycle sur
+    5 trames (+4 cyc/trame au démarrage du handler), identiquement chez Hatari : c'est le
+    programme, et `oracle_scan` retient la trame identique. Référence régénérée (trame
+    nominale, décalage 0), run frais identique.
+  **Périmètre réel en CI : 7 étalons** (blitter_hog, cuddly_demos, nocooper, scroll_8264,
+  scroll_8265, spec512_bands, trace_odd) — les 3 `spectrum512_diapo*` dépendent d'une ROM Atari que le
   dépôt ne porte plus. Le décompte et les noms sont imprimés à chaque exécution.
 - ✅ **A41 — SOLDÉ le 2026-09-01 : les 27 px de `closure` sont à HATARI, NeoST est fidèle.**
   L'écart tenait sur la seule ligne 0 (première ligne affichée, `sl=34`, celle qu'ouvre le

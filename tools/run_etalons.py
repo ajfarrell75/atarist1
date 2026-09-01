@@ -614,13 +614,12 @@ def main() -> int:
             if e.get("ref_kind") != "oracle" or not e.get("disk"):
                 continue                       # rien à re-dériver : hors sujet, pas un manque
             # `oracle_check: false` = référence NON RE-DÉRIVABLE par le script, pour une
-            # raison écrite et obligatoire. Un cas mesuré le 2026-09-01 (A11) :
-            # `spec512_bands` — Hatari ne se reproduit pas lui-même dessus (l'étalon rend
-            # UN cycle CPU visible, et le RNG du boot le décale). `nocooper` en faisait
-            # partie le même jour (touche tenue hors de portée du script) jusqu'à ce que
-            # hatari_oracle.sh apprenne à piloter le clavier (`oracle_keys`). Exclure en
-            # silence serait exactement le vert creux que ce fichier combat — on les
-            # nomme, avec leur raison, à chaque exécution.
+            # raison écrite et obligatoire. Deux cas le 2026-09-01 (A11), tous deux réglés
+            # le jour même — `nocooper` (touche tenue → hatari_oracle.sh pilote le clavier,
+            # `oracle_keys`) et `spec512_bands` (Hatari ne se reproduisait pas lui-même →
+            # le générateur s'ancre sur la VBL par `stop #$2300`). Aucun cas ouvert depuis ;
+            # le mécanisme reste, parce qu'exclure en silence serait exactement le vert
+            # creux que ce fichier combat — on nomme, avec la raison, à chaque exécution.
             if e.get("oracle_check") is False:
                 why = e.get("oracle_check_note", "").strip()
                 if not why:
