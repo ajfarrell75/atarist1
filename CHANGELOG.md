@@ -53,6 +53,58 @@ Ripper, DAC Pro Sound) avec page Dongles, `disks/dongles.txt` et oracle de rejeu
 vérifié note à note** en headless, corpus MIDI piano/blues ; port MIDI ALSA sous Linux ;
 save-state v16. Détail dans les chantiers datés ci-dessous.
 
+## A41 — les 27 px de Closure sont à Hatari : il colore avec des écritures pas encore faites (2026-09-01)
+
+Dernier écart oracle inexpliqué du dépôt, résidu d'A40 : l'étalon `closure` tombait à
+**27 px / 114816** contre l'oracle Hatari, **tous sur la ligne 0** du buffer — la première
+ligne affichée (`sl=34`), celle qu'ouvre le retrait de bordure haute — chaque pixel fautif
+portant une couleur *voisine d'un cran* ($210 côté NeoST là où Hatari donne $310).
+
+**Le verdict : NeoST est fidèle, Hatari anticipe.** Et il est MESURÉ, pas déduit. En
+instrumentant `Spec512_StartFrame` dans l'arbre `extern/hatari` (gitignoré ; sonde révoquée
+et binaire rebâti au pin `f0736b2` juste après), la palette d'**amorce** qu'Hatari emploie
+pour cette ligne sort telle quelle :
+
+```
+[probe] vover=3 nStartHBL=34 STScreenStartHorizLine=0 OVERSCAN_TOP=29 nScanLine=29 skip=5
+        seed=000 100 200 210 310 310 320 420 430 531 442 541 552 652 652 763
+```
+
+Or ces seize valeurs sont **exactement**, registre par registre, le bloc que la démo écrit
+aux **cycles 438-508 de cette même ligne 34** — relevé indépendamment côté NeoST par
+`NEOST_SPEC512_TRACE`. Hatari colore donc les pixels des cycles 56-144 avec des écritures
+qui n'auront lieu que 380 cycles plus tard, sur la même ligne. Aucun faisceau ne fait ça.
+
+**La cause, dans le code d'Hatari** : `Spec512_StartFrame` (`spec512.c:233`) fait
+`nScanLine += OVERSCAN_TOP` dès que `V_OVERSCAN_NO_TOP` est armé — les `CyclePalettes` des
+scanlines **0 à 28 ne sont jamais rejouées**. Le bloc d'initialisation de la démo vit
+lignes 1-2, en plein dedans : il est perdu, et l'amorce retombe sur `pHBLPalettes[]`, que le
+`pHBLPalettes -= OVERSCAN_TOP` de `video.c:3429` — commenté « FIXME useless ? » par Hatari
+lui-même — a garni d'écritures postérieures.
+
+**Conséquence actée** : `closure` reste `ref_kind: snapshot` **définitivement**, comme
+`overscan_top` (A40). Le passer en `oracle` installerait l'anticipation d'Hatari comme
+référence ; la self-capture, elle, garde la non-régression AU PIXEL. L'entrée est écrite au
+`ref_note` de l'étalon, aux verdicts (`docs/CASE_STUDIES.md`) et à l'inventaire maître
+(`docs/HATARI_DIVERGENCES.md` § *Cas où NeoST améliore Hatari*).
+
+**Le minimum a été CHERCHÉ avant de conclure**, parce qu'un écart de 27 px sur une démo qui
+anime sa palette ressemble d'abord à une capture mal alignée : 70 trames NeoST voisines
+(10471-10540) comparées à l'oracle commis donnent **27 ou 43 px, jamais 0**. Ce n'est donc
+pas un défaut d'alignement, et l'`oracle_scan` de l'étalon n'y peut rien.
+
+📌 **Deux pièges d'outillage payés en route**, à ne pas repayer :
+- la palette d'init de cette démo **change à chaque trame** ; une trace `--trace video_color`
+  d'Hatari prise sur une AUTRE trame que la capture comparée mène droit à une fausse piste
+  (vécu : la première lecture accusait un décalage de ligne inexistant). Armer la trace sur
+  la bonne trame : `--parse f` avec `b VBL = N :once :file arm.txt`, `arm.txt` contenant
+  `trace video_color` puis `cont` ;
+- l'égalité de breakcond s'écrit **`=`**, pas `==` : le parseur scinde `==` en `= =` et
+  refuse la condition (« Unrecognized number prefix in '=' »).
+
+Itération ramenée de 20 s à 1 s par `--save-state` à la trame 10499 puis `--load-state
+… --frames 1` : capture **identique au pixel** à la référence, donc utilisable comme banc.
+
 ## Le MIDI Windows rejoint macOS et Linux — backend winmm (2026-08-31)
 
 Suite directe du chantier ci-dessous, sur la dernière plateforme en retard. L'inventaire

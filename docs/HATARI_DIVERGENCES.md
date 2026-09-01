@@ -447,6 +447,21 @@ par le présent document :
   NeoST) : l'écart est purement dans la recopie. ⚠ **Conséquence** : `overscan_top` reste
   `ref_kind: snapshot` **définitivement** — le passer en `oracle` installerait l'artefact
   d'Hatari comme référence.
+- **Première ligne affichée quand la bordure HAUTE est retirée** (A41, 2026-09-01) : Hatari
+  amorce sa palette avec des écritures qui n'ont pas encore eu lieu. `Spec512_StartFrame`
+  (`spec512.c:233`) fait `nScanLine += OVERSCAN_TOP` sous `V_OVERSCAN_NO_TOP` : les
+  `CyclePalettes` des scanlines **0 à 28 ne sont jamais rejouées**, et l'amorce vient de
+  `pHBLPalettes[]` — que le `pHBLPalettes -= OVERSCAN_TOP` de `video.c:3429` (commenté
+  « FIXME useless ? » par Hatari lui-même) a garni d'écritures postérieures. **Mesuré** sur
+  Closure en instrumentant `Spec512_StartFrame` : l'amorce vaut
+  `000 100 200 210 310 310 320 420 430 531 442 541 552 652 652 763`, soit **exactement, sur
+  les 16 registres**, le bloc que la démo écrit aux cycles **438-508 de cette même ligne 34**
+  — 380 cycles APRÈS les pixels qu'il colore. Le faisceau au cycle 56 ne peut pas afficher
+  une couleur écrite au cycle 446 : NeoST, qui applique les écritures à leur cycle, est
+  fidèle. Contexte relevé : `vover=3 nStartHBL=34 STScreenStartHorizLine=0 OVERSCAN_TOP=29
+  nScanLine=29 skip=5`. ⚠ **Conséquence** : `closure` reste `ref_kind: snapshot`
+  **définitivement** (27 px d'écart oracle irréductibles, minimum cherché sur 70 trames
+  voisines : 27 ou 43, jamais 0).
 - **GPIP bits 3 (blitter) et 6 (RI)** : NeoST les recalcule depuis l'état vivant des lignes
   (`Mfp.cpp:572-590`), Hatari les traite en VERROU que `MFP_Reset` met à 0 et que rien ne
   relève ensuite (bit 6 n'a **aucun** appelant dans tout son arbre ; bit 3 attend le premier

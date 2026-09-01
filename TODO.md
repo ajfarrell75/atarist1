@@ -180,18 +180,31 @@ est continue, les trous sont du travail fait.
   qui portait le reste (l'écart d'`overscan_top`), est **SOLDÉ le 2026-08-30** — les 4 px
   de Closure étaient un vrai bug de rendu (corrigé), les 144 px d'`overscan_top` sont un
   artefact de recopie d'Hatari (expliqué à l'index de palette près, NeoST est fidèle) :
-  récit dans `CHANGELOG.md`, verdicts dans `docs/CASE_STUDIES.md`. Reste A41, ci-dessous.
-- **A41 ⭘ — `closure` : 27 px d'écart oracle, TOUS sur la ligne 0.** Résidu d'A40 après
-  correction du retrait gauche med (2026-08-30) : l'étalon est passé de 64,08 % à
-  **0,02 %** contre l'oracle Hatari, et ce qui reste tient sur **la seule ligne 0** du
-  buffer — la première ligne affichée de la trame (`sl=34`, celle qu'ouvre le retrait de
-  bordure haute). Mesuré sur trois trames voisines : 27 / 43 / 27 px, jamais une autre
-  ligne. Ce n'est PAS géométrique : les pixels fautifs ne sont pas décalés, ils portent
-  une **couleur voisine d'un cran** (p. ex. NeoST $210 là où Hatari donne $310), donc
-  c'est une **phase d'écriture palette** en début de trame, pas le décodage. Piste :
-  l'ancrage des `colorWrites_` sur la première ligne rendue (frontière de trame,
-  `frameStartPalette_` vs premières écritures). Étalon prêt à passer `ref_kind: oracle`
-  le jour où ça tombe à 0 (l'oracle est déjà commis, `tests/reference/closure_oracle.png`).
+  récit dans `CHANGELOG.md`, verdicts dans `docs/CASE_STUDIES.md`. **A41 est soldé à
+  son tour le 2026-09-01** (ci-dessous) : plus AUCUN écart oracle inexpliqué n'est
+  ouvert. Ne reste donc ici que le job de CI lui-même.
+- ✅ **A41 — SOLDÉ le 2026-09-01 : les 27 px de `closure` sont à HATARI, NeoST est fidèle.**
+  L'écart tenait sur la seule ligne 0 (première ligne affichée, `sl=34`, celle qu'ouvre le
+  retrait de bordure haute), chaque pixel fautif portant une couleur voisine d'un cran.
+  **Mesuré** en instrumentant `Spec512_StartFrame` dans l'arbre gitignoré (sonde révoquée,
+  binaire rebâti au pin ensuite) : l'amorce de palette d'Hatari pour cette ligne est
+  `000 100 200 210 310 310 320 420 430 531 442 541 552 652 652 763` — **exactement, sur les
+  16 registres**, le bloc que la démo écrit aux **cycles 438-508 de cette même ligne 34**,
+  donc 380 cycles APRÈS les pixels qu'il colore. Un faisceau au cycle 56 ne peut pas afficher
+  une couleur écrite au cycle 446 : la palette causale de NeoST est la bonne. Cause :
+  `nScanLine += OVERSCAN_TOP` sous `V_OVERSCAN_NO_TOP` (`spec512.c:233`) saute les
+  `CyclePalettes` des scanlines 0 à 28 — où vit le bloc d'init de la démo — et l'amorce
+  retombe sur `pHBLPalettes[]`. Verdicts : `docs/CASE_STUDIES.md`,
+  `docs/HATARI_DIVERGENCES.md` § *Cas où NeoST améliore Hatari*.
+  ⚠ **`closure` reste `ref_kind: snapshot` DÉFINITIVEMENT** — le passer en `oracle`
+  installerait l'anticipation d'Hatari comme référence. Le minimum a été CHERCHÉ avant de
+  conclure : 70 trames NeoST voisines comparées à l'oracle commis, toutes à 27 ou 43 px,
+  jamais 0 — ce n'était donc pas un défaut d'alignement de capture.
+  📌 Leçon d'outillage : la palette d'init de cette démo **change à chaque trame**, donc une
+  trace `--trace video_color` d'Hatari doit être armée sur LA MÊME trame que la capture
+  NeoST (`--parse` + `b VBL = N :once :file …` ; l'égalité s'écrit `=`, pas `==` — le parseur
+  de breakcond scinde `==` et échoue). Comparer deux trames différentes envoie droit sur une
+  fausse piste, ce qui est arrivé ici avant de recouper.
 - **A12 ⭘ — Aucune cible de livraison validée sur du matériel réel.** Windows jamais lancé
   hors CI, APK Android jamais posé sur un appareil (QEMU seul), aucun budget temps réel
   mesuré sur le Raspberry Pi visé (le perfbench ne garde que des ratios sur le poste de
@@ -412,8 +425,9 @@ décroissant, par priorité d'impact :
 **Faisables sans oracle** : FPU packed decimal bit-exact ; GEMDOS recomposition Unicode NFD→NFC
 (cible macOS) — détaillés dans `docs/HATARI_DIVERGENCES.md`.
 
-**Décisions actées (NE PAS « corriger » vers Hatari)** : SCC `WR14` bit4 loopback (datasheet
-Zilog, NeoST plus fidèle) ; WRITE/READ TRACK STX réinterprétés (NeoST rend la piste lisible) ;
+**Décisions actées (NE PAS « corriger » vers Hatari)** : palette de la PREMIÈRE LIGNE quand
+la bordure haute est retirée (A41 — Hatari amorce avec des écritures postérieures de
+380 cycles) ; SCC `WR14` bit4 loopback (datasheet Zilog, NeoST plus fidèle) ; WRITE/READ TRACK STX réinterprétés (NeoST rend la piste lisible) ;
 densité HD/ED STX (NeoST plus cohérent) ; RTC en temps émulé (déterminisme headless).
 
 > **L'oracle se bâtit, il n'arrive pas tout seul** : `extern/hatari` est GITIGNORÉ et n'est
