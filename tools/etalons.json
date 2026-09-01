@@ -160,6 +160,8 @@
   },
   {
    "id": "spec512_bands",
+   "oracle_check": false,
+    "oracle_check_note": "HATARI NE SE REPRODUIT PAS sur cet etalon (mesure le 2026-09-01, chantier A11) : deux runs de la MEME ligne de commande donnent deux jeux de phases entierement disjoints (md5 des trames de la fenetre : aucun commun). C est la rancon de ce que l etalon mesure — la position HORIZONTALE des bascules de palette depend du cycle exact de l ecriture, et le tirage RNG de la position angulaire de la disquette (Hatari_srand(time(NULL)) -> fdc.c) decale le demarrage du programme de quelques cycles. oracle_scan n y peut RIEN : le decalage est SOUS-TRAME, pas une renumerotation de trames (les 4 phases presentes dans une fenetre de 181 trames different toutes de la reference, la moins pire a 2460 px, avec des couleurs permutees circulairement sur 4 px au bord de chaque bande = un decalage de 4 cycles). La reference commise reste un VRAI oracle Hatari (elle porte sa LED disquette) et vaut ce qu elle vaut : la preuve qu un jour, sur un run donne, NeoST a rendu cette image AU PIXEL comme Hatari. Elle n est simplement pas RE-DERIVABLE, donc --oracle-check la saute.",
    "uniform_ok": false,
    "name": "Palette changée EN COURS DE LIGNE (étalon généré — remplace la couverture spec512 sans ROM Atari)",
    "subsystem": "shifter/spec512",
@@ -365,6 +367,8 @@
   },
   {
    "id": "nocooper",
+   "oracle_check": false,
+    "oracle_check_note": "L oracle de cet etalon exige une TOUCHE TENUE (espace, vbl ~900 — cf. note) que hatari_oracle.sh ne sait pas injecter : il faut --cmd-fifo + keydown/keyup (recette dans docs/HATARI_AUTOMATION.md). La reference a donc ete posee a la main et ne peut pas etre regeneree par le script ; --oracle-check la saute plutot que de rendre un faux echec. Second obstacle du meme ordre : le run NeoST utilise --fastfdc alors que oracle_fastfdc est absent, donc les deux timelines ne sont meme pas alignees. Rouvrir le jour ou hatari_oracle.sh saura tenir une touche.",
    "name": "No Cooper (1984) — écran principal (overscan med-res, étalon V2)",
    "subsystem": "shifter/res-tricks",
    "rom": "roms/etos192fr.img",

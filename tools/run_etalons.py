@@ -338,7 +338,7 @@ def run_one(entry: dict, args) -> bool:
         return False
     print(f"  capture → {neost_ppm.relative_to(ROOT)}")
 
-    if args.oracle and entry.get("disk"):
+    if (args.oracle or args.oracle_check) and entry.get("disk"):
         REF_DIR.mkdir(parents=True, exist_ok=True)
         tmp_png = OUT_DIR / f"{eid}_oracle.png"
         scan = int(entry.get("oracle_scan", 0) or 0)
@@ -348,8 +348,31 @@ def run_one(entry: dict, args) -> bool:
                 return False
         elif run_hatari_oracle(entry, tmp_png) != 0:
             return False
-        shutil.copy2(tmp_png, ref_png)
-        print(f"  référence oracle → {ref_png.relative_to(ROOT)}")
+        if args.oracle_check:
+            # A11 — mode CI : on ne TOUCHE PAS à la référence commise, on la confronte
+            # à l'oracle qu'Hatari produit AUJOURD'HUI. Deux propriétés distinctes se
+            # vérifient dans ce seul passage, et il faut les deux :
+            #   1. l'étape ci-dessus a déjà exigé qu'Hatari rende une image identique à
+            #      la capture NeoST du jour (oracle_scan_pick s'arrête à l'égalité
+            #      EXACTE, jamais à la « moins pire ») ;
+            #   2. la comparaison ci-dessous exige que la référence COMMISE dise encore
+            #      la même chose — sans quoi un fichier de référence pourrait dériver
+            #      (régénéré à la main contre un autre oracle, pin déplacé, ffmpeg
+            #      différent) sans que rien ne le signale.
+            # Ensemble : NeoST == référence == Hatari. C'est la boucle qu'A11 ferme.
+            if not ref_png.exists():
+                print(f"  ✗ {eid}: ref_kind=oracle mais {ref_png.name} absent — "
+                      f"rien à confronter", file=sys.stderr)
+                return False
+            if compare_shots(tmp_png, ref_png, entry) != 0:
+                print(f"  ÉCHEC oracle-check {eid} : l'oracle Hatari REGÉNÉRÉ diffère de "
+                      f"la référence commise {ref_png.name}")
+                return False
+            print(f"  OK oracle-check {eid} — oracle régénéré ≡ {ref_png.name}")
+            # On NE sort PAS ici : la comparaison NeoST ↔ référence suit, plus bas.
+        else:
+            shutil.copy2(tmp_png, ref_png)
+            print(f"  référence oracle → {ref_png.relative_to(ROOT)}")
 
     if args.update_ref:
         # Un étalon « oracle » ne compare JAMAIS la self-capture : y copier un .ppm
@@ -499,6 +522,10 @@ def main() -> int:
     ap.add_argument("--fetch", action="store_true", help="fetch_etalons.py d'abord")
     ap.add_argument("--update-ref", action="store_true", help="sauve la capture NeoST en référence")
     ap.add_argument("--oracle", action="store_true", help="capture Hatari comme référence PNG")
+    ap.add_argument("--oracle-check", action="store_true",
+                    help="A11 : régénère l'oracle Hatari et le CONFRONTE à la référence "
+                         "commise sans l'écraser (mode CI). Ne retient que les étalons "
+                         "ref_kind=oracle qui bootent un disque.")
     ap.add_argument("--verify-refs", action="store_true",
                     help="contrôle la provenance des références (oracle vs snapshot)")
     ap.add_argument("--no-compare", action="store_true")
@@ -565,6 +592,40 @@ def main() -> int:
             disabled.append((entry["id"], entry["disabled"]))
             continue
         runnable.append(entry)
+    # A11 : le mode CI ne concerne QUE les étalons dont la référence EST un oracle
+    # Hatari et qui bootent un disque (les autres n'ont rien à régénérer). On dit
+    # explicitement ce qu'on écarte : « TOUS OK » sur 2 étalons au lieu de 7 doit se
+    # voir, sinon un renommage de ref_kind viderait le job sans un mot.
+    if args.oracle_check:
+        keep, blocked = [], []
+        for e in runnable:
+            if e.get("ref_kind") != "oracle" or not e.get("disk"):
+                continue                       # rien à re-dériver : hors sujet, pas un manque
+            # `oracle_check: false` = référence NON RE-DÉRIVABLE par le script, pour une
+            # raison écrite et obligatoire. Deux cas mesurés le 2026-09-01 (A11) :
+            # `nocooper` (l'oracle exige une touche TENUE, hors de portée de
+            # hatari_oracle.sh) et `spec512_bands` (Hatari ne se reproduit pas lui-même :
+            # l'étalon rend UN cycle CPU visible, et le RNG du boot le décale). Les
+            # exclure en silence serait exactement le vert creux que ce fichier combat —
+            # on les nomme, avec leur raison, à chaque exécution.
+            if e.get("oracle_check") is False:
+                why = e.get("oracle_check_note", "").strip()
+                if not why:
+                    print(f"  ✗ {e['id']}: oracle_check=false SANS oracle_check_note — "
+                          f"une exclusion sans raison écrite est refusée", file=sys.stderr)
+                    return 2
+                blocked.append((e["id"], why))
+                continue
+            keep.append(e)
+        if blocked:
+            print(f"\n⊘ NON RE-DÉRIVABLES ({len(blocked)}) — référence oracle conservée, "
+                  f"mais le script ne peut pas la régénérer :")
+            for eid, why in blocked:
+                head = why.split(" : ")[0] if " : " in why else why[:110]
+                print(f"  · {eid} : {head}")
+        runnable = keep
+        print(f"→ --oracle-check sur {len(runnable)} étalon(s) : "
+              + ", ".join(e["id"] for e in runnable))
     # A27 : les étalons sont indépendants (capture PPM propre à chaque id, disques en
     # lecture) — le mur d'horloge du palier pixel était la SOMME des durées, dominée
     # par nocooper_greetings (~50 s sur 73). En parallèle, il devient ~le max. Reste
@@ -572,7 +633,7 @@ def main() -> int:
     # des chemins), et les générateurs de disques — appelés AVANT le pool, une fois,
     # pour que deux étalons ne régénèrent pas le même fichier en même temps.
     jobs = args.jobs if args.jobs > 0 else min(4, os.cpu_count() or 1)
-    if args.oracle or args.update_ref:
+    if args.oracle or args.oracle_check or args.update_ref:
         jobs = 1
     if jobs > 1 and len(runnable) > 1:
         for entry in runnable:

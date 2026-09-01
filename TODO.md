@@ -170,19 +170,45 @@ est continue, les trous sont du travail fait.
     pas d'eux. La démo joue ses parties à son rythme (la trame change sans touche à
     2 000, 2 800, 3 700…) — un espace anticipé n'est pas pris. Trancher demande de savoir
     QUAND la démo relit le clavier, pas de re-tirer au hasard un calendrier.
-- **A11 ⭘ — L'oracle ne tourne dans aucune CI.** Job planifié ou manuel (pas au push) qui
-  clone Hatari au pin via `tools/setup_hatari.sh`, régénère les captures des étalons
-  `ref_kind: oracle` et compare aux réfs commises. Fermerait la dernière boucle de
-  validation entièrement manuelle. ✅ Le volet « statuer sur les deux étalons `snapshot` à
-  écart oracle inexpliqué » est **SOLDÉ le 2026-08-29** (détail : `CHANGELOG.md`,
-  `docs/HATARI_DIVERGENCES.md` 11ᵉ passe) — `trace_odd` était un **artefact de mesure**
-  (masque LED d'un pixel trop étroit) et est promu `ref_kind: oracle` à 0 px ; **A40**,
-  qui portait le reste (l'écart d'`overscan_top`), est **SOLDÉ le 2026-08-30** — les 4 px
-  de Closure étaient un vrai bug de rendu (corrigé), les 144 px d'`overscan_top` sont un
-  artefact de recopie d'Hatari (expliqué à l'index de palette près, NeoST est fidèle) :
-  récit dans `CHANGELOG.md`, verdicts dans `docs/CASE_STUDIES.md`. **A41 est soldé à
-  son tour le 2026-09-01** (ci-dessous) : plus AUCUN écart oracle inexpliqué n'est
-  ouvert. Ne reste donc ici que le job de CI lui-même.
+- ✅ **A11 — SOLDÉ le 2026-09-01 : l'oracle tourne en CI, et le triangle est fermé.**
+  `.github/workflows/oracle.yml` — **hebdomadaire** (lundi 04:00 UTC) + `workflow_dispatch`,
+  jamais au push : il clone et bâtit Hatari **au pin** (`tools/setup_hatari.sh`, cache CI
+  dont la clé PORTE le pin, donc un changement de pin invalide le cache tout seul),
+  puis lance le mode ajouté pour ce chantier :
+  ```sh
+  python3 tools/run_etalons.py --oracle-check      # régénère et CONFRONTE, sans écraser
+  ```
+  `--oracle` **écrase** les références : il sert à en POSER une, jamais à en contrôler une
+  — il efface la preuve qu'il devrait comparer. `--oracle-check` rejoue Hatari, retient
+  (via `oracle_scan`) l'image identique à la capture NeoST du jour, puis la compare à la
+  référence COMMISE sans jamais écrire dans `tests/reference/`. Trois choses sont donc
+  vraies quand il passe : **NeoST == référence commise == Hatari (aujourd'hui, au pin)**.
+  Ce qu'il attrape et qu'aucun autre palier ne voit : une référence régénérée contre un
+  oracle non épinglé, un pin déplacé sans repose des références, un ffmpeg dont le décodage
+  bouge. Garde vérifiée par mutation : **1 pixel** modifié dans une référence commise
+  → échec. Mesuré au repos : **5 min 31** pour les 8 étalons re-dérivables.
+  **Ce que la première exécution a trouvé, et qui n'était écrit nulle part** — deux
+  références oracle ne sont pas RE-DÉRIVABLES, chacune pour une raison propre. Le manifeste
+  les déclare désormais (`oracle_check: false` + `oracle_check_note`, la raison est
+  OBLIGATOIRE — sans elle le script refuse de tourner) et le journal les NOMME :
+  - **`nocooper`** : son oracle exige une touche **TENUE** (espace, vbl ~900) que
+    `hatari_oracle.sh` ne sait pas injecter — il faut `--cmd-fifo` + `keydown`/`keyup`. La
+    référence a été posée à la main. Second obstacle du même ordre : le run NeoST utilise
+    `--fastfdc` alors qu'`oracle_fastfdc` est absent, donc les deux timelines ne sont même
+    pas alignées. À rouvrir le jour où le script saura tenir une touche.
+  - **`spec512_bands`** : **Hatari ne se reproduit pas lui-même** dessus. Deux runs de la
+    même ligne de commande → deux jeux de phases **disjoints**. C'est la rançon de ce que
+    l'étalon mesure — la position horizontale des bascules de palette dépend du cycle exact
+    de l'écriture, et le RNG de la position angulaire de la disquette décale le démarrage
+    du programme. `oracle_scan` n'y peut rien : le décalage est **sous-trame**, pas une
+    renumérotation (les 4 phases d'une fenêtre de 181 trames diffèrent toutes de la
+    référence, la moins pire à 2 460 px, couleurs permutées sur 4 px au bord de chaque
+    bande = 4 cycles). Sa référence reste un VRAI oracle (elle porte la LED disquette
+    d'Hatari) et prouve ce qu'elle prouve : un jour, NeoST a rendu cette image AU PIXEL
+    comme Hatari. Elle n'est simplement pas re-dérivable.
+  **Périmètre réel en CI : 5 étalons** (blitter_hog, cuddly_demos, scroll_8264,
+  scroll_8265, trace_odd) — les 3 `spectrum512_diapo*` dépendent d'une ROM Atari que le
+  dépôt ne porte plus. Le décompte et les noms sont imprimés à chaque exécution.
 - ✅ **A41 — SOLDÉ le 2026-09-01 : les 27 px de `closure` sont à HATARI, NeoST est fidèle.**
   L'écart tenait sur la seule ligne 0 (première ligne affichée, `sl=34`, celle qu'ouvre le
   retrait de bordure haute), chaque pixel fautif portant une couleur voisine d'un cran.

@@ -123,6 +123,52 @@ pire ; s'il n'y en a aucune, il le dit et échoue — c'est alors une vraie dive
 Côté NeoST rien de tout ceci ne se pose : l'émulation est déterministe, et une référence
 une fois commise se compare de façon reproductible.
 
+⚠ **`oracle_scan` ne rattrape PAS tout — mesuré le 2026-09-01 (A11).** Il corrige une
+**renumérotation de trames**, pas un décalage **sous-trame**. Sur `spec512_bands` —
+l'étalon généré dont TOUT l'objet est de rendre *un cycle CPU visible à l'œil* (la
+position horizontale des bascules de palette) — le tirage RNG décale le démarrage du
+programme de quelques cycles, donc les BANDES elles-mêmes. Deux runs de la même ligne de
+commande donnent alors deux jeux de phases **entièrement disjoints** (md5 des trames de la
+fenêtre : aucun commun), et aucune des 4 phases présentes dans une fenêtre de 181 trames
+ne correspond à la référence commise — la moins pire à 2 460 px, couleurs permutées
+circulairement sur 4 px au bord de chaque bande, signature d'un décalage de 4 cycles.
+Conséquence : une référence oracle peut être **vraie et pourtant non re-dérivable**. Celle
+de `spec512_bands` reste un authentique oracle Hatari (elle porte sa LED disquette) et
+prouve ce qu'elle prouve — un jour, sur un run donné, NeoST a rendu cette image AU PIXEL
+comme Hatari — mais elle ne se régénère pas. Le manifeste le déclare
+(`oracle_check: false` + `oracle_check_note`, obligatoire) et `--oracle-check` la saute
+**en la nommant**.
+
+## Contrôler les références SANS les écraser (`--oracle-check`, A11)
+
+`run_etalons.py --oracle` **régénère et écrase** les références `ref_kind: oracle`. C'est
+l'outil pour en POSER une, pas pour en contrôler une : il efface la preuve qu'il devrait
+comparer. D'où le mode ajouté pour A11 :
+
+```sh
+python3 tools/run_etalons.py --oracle-check            # tous les étalons oracle
+python3 tools/run_etalons.py --oracle-check --only blitter_hog
+```
+
+Il rejoue Hatari au pin, retient (via `oracle_scan`) l'image identique à la capture NeoST
+du jour, puis la **confronte** à la référence commise — sans jamais écrire dans
+`tests/reference/`. Trois choses sont donc vraies quand il passe :
+
+```
+NeoST  ==  référence commise  ==  Hatari (aujourd'hui, au pin)
+```
+
+Ce que ça attrape et qu'aucun autre palier ne voit : une référence régénérée à la main
+contre un oracle **non épinglé**, un pin déplacé sans repose des références, un ffmpeg
+dont le décodage bouge. Le périmètre est imprimé à chaque exécution (`--oracle-check sur
+N étalon(s)`), et ce qui en sort — `ref_kind ≠ oracle`, ou ROM propriétaire absente — est
+recensé nommément : un vert sur deux étalons au lieu de sept doit se voir.
+
+Il tourne en CI **hebdomadairement** (`.github/workflows/oracle.yml`, plus
+`workflow_dispatch`), pas au push : bâtir Hatari et rejouer les fenêtres coûte des
+minutes, et ce qui dérive ici dérive en semaines. Le réflexe reste de le lancer à la main
+après un changement de pin ou une repose de références.
+
 ## Recette headless : boot → image PNG
 
 ```sh

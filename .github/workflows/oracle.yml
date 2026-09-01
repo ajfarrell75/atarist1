@@ -1,0 +1,132 @@
+# =============================================================================
+#  Oracle Hatari — la dernière boucle de validation qui restait MANUELLE (A11).
+#
+#  CE QUE LES AUTRES JOBS PROUVENT DÉJÀ, ET CE QUI MANQUAIT.
+#  `tests.yml` (job « pixel ») compare, à chaque push, la capture NeoST aux
+#  références commises. C'est une non-régression : il dit « NeoST rend encore ce
+#  qu'il rendait ». Il ne dit RIEN de la question qui fonde ces références —
+#  est-ce qu'Hatari, la source de vérité matérielle du projet, rend toujours la
+#  même chose ? Cette moitié-là ne tournait que sous les doigts du mainteneur,
+#  quand il y pensait (`run_etalons.py --oracle`), et ce mode ÉCRASE les
+#  références : il ne peut pas servir de contrôle, il efface la preuve.
+#
+#  CE JOB FERME LE TRIANGLE. `--oracle-check` (ajouté pour A11) rejoue Hatari au
+#  pin, retient l'image qui correspond à la capture NeoST du jour, et la
+#  CONFRONTE à la référence commise sans jamais y toucher :
+#
+#      NeoST  ==  référence commise  ==  Hatari (aujourd'hui, au pin)
+#
+#  Une dérive de N'IMPORTE lequel des trois casse le job. En particulier, il
+#  attrape ce qu'aucun autre ne voit : une référence régénérée à la main contre
+#  un oracle non épinglé, un pin déplacé sans repose des références, ou un
+#  ffmpeg dont le décodage bouge.
+#
+#  POURQUOI PAS AU PUSH. Il faut cloner et BÂTIR Hatari (~5 min la première fois,
+#  ensuite en cache), puis rejouer chaque étalon des DEUX côtés et balayer une
+#  fenêtre de trames pour chacun. Mesuré au repos le 2026-09-01 : **5 min 31**
+#  pour les 8 étalons re-dérivables sur un poste de dev. Ce n'est pas au prix
+#  d'un garde-fou de push, et ça n'en a pas besoin : ce qui dérive ici dérive en
+#  semaines, pas en commits. Hebdomadaire, plus déclenchable à la main
+#  (Actions → Oracle Hatari → Run workflow) — le réflexe après un changement de
+#  pin ou une repose de références.
+#
+#  CE QUE CE JOB VÉRIFIE VRAIMENT, EN NOMBRE. Sur les 17 étalons machine :
+#    · 10 ont ref_kind=oracle ;
+#    ·  2 sont déclarés NON RE-DÉRIVABLES dans le manifeste, avec leur raison
+#       écrite (`oracle_check: false` + `oracle_check_note`, obligatoire) —
+#       `nocooper`, dont l'oracle exige une touche TENUE que hatari_oracle.sh ne
+#       sait pas injecter, et `spec512_bands`, sur lequel HATARI NE SE REPRODUIT
+#       PAS lui-même (mesuré : deux runs, deux jeux de phases disjoints — c'est
+#       le prix de ce que cet étalon mesure, un cycle CPU visible à l'œil) ;
+#    ·  3 (`spectrum512_diapo*`) dépendent d'une ROM Atari, que le dépôt ne porte
+#       plus depuis la purge du 2026-08-30 : ils se SAUTENT ici (`rom_is_free()`).
+#  Il reste donc **5 étalons réellement confrontés en CI** : blitter_hog,
+#  cuddly_demos, scroll_8264, scroll_8265, trace_odd. Le décompte et les noms sont
+#  imprimés à chaque exécution — un « TOUS OK » sur deux étalons au lieu de cinq
+#  doit se voir dans le journal, jamais se fondre dans le vert.
+# =============================================================================
+name: Oracle Hatari
+
+on:
+  schedule:
+    # Lundi 04:00 UTC. Le jour et l'heure n'ont pas d'importance en soi ; ce qui
+    # compte est que ce ne soit PAS au push (cf. l'en-tête).
+    - cron: '0 4 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oracle-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  oracle:
+    name: Références oracle ↔ Hatari au pin
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Dépendances (NeoST + Hatari + extraction des trames)
+        run: |
+          sudo apt-get update
+          # Deux familles à ne pas confondre :
+          #  · NeoST headless      : cmake g++ (pas de GLFW, aucun GUI ici) ;
+          #  · Hatari              : libsdl2-dev est OBLIGATOIRE (son unique
+          #    frontend), zlib et libpng le sont en pratique — sans libpng,
+          #    `--avi-vcodec png` n'existe pas et l'oracle ne peut RIEN extraire ;
+          #  · ffmpeg              : découpe l'AVI en trames PNG (hatari_oracle.sh)
+          #    ET décode les références PNG dans compare_screenshot.py. Requis des
+          #    deux côtés, jamais optionnel.
+          sudo apt-get install -y --no-install-recommends \
+            cmake g++ git ffmpeg \
+            libsdl2-dev zlib1g-dev libpng-dev libreadline-dev
+          ffmpeg -version | head -1
+
+      # Le pin vit dans tools/setup_hatari.sh — on le LIT plutôt que de le
+      # recopier ici : une clé de cache qui répète une constante finit toujours
+      # par mentir sur la version réellement mise en cache.
+      - name: Lire le pin Hatari
+        id: pin
+        run: |
+          PIN=$(grep -m1 '^PIN=' tools/setup_hatari.sh | cut -d= -f2 | awk '{print $1}')
+          test -n "$PIN"
+          echo "pin=$PIN" >> "$GITHUB_OUTPUT"
+          echo "pin Hatari : $PIN"
+
+      # L'arbre complet (source + build) pèse ~136 Mo ; le bâtir prend ~5 min.
+      # La clé porte le PIN : changer d'oracle invalide le cache tout seul, ce
+      # qui est exactement le comportement voulu — un cache qui survivrait à un
+      # changement de pin ferait tourner l'ANCIEN Hatari en prétendant valider
+      # le nouveau.
+      - name: Cache de l'oracle bâti
+        uses: actions/cache@v4
+        with:
+          path: extern/hatari
+          key: hatari-${{ runner.os }}-${{ steps.pin.outputs.pin }}
+
+      - name: Cloner et bâtir Hatari au pin (idempotent)
+        run: tools/setup_hatari.sh
+
+      - name: Configurer NeoST
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Compiler le headless
+        run: cmake --build build -j"$(nproc)" --target neost-headless
+
+      # LE contrôle. Non destructif par construction : `--oracle-check` écrit ses
+      # captures dans tests/out/ et ne touche jamais à tests/reference/.
+      - name: Oracle régénéré ↔ références commises ↔ NeoST
+        run: python3 tools/run_etalons.py --oracle-check
+
+      # Sans ça, un échec ne laisse qu'un décompte de pixels : les images des deux
+      # côtés sont ce qu'on veut regarder en premier.
+      - name: Captures des deux côtés en cas d'échec
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: oracle-diff
+          path: tests/out/
+          if-no-files-found: ignore

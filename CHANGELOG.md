@@ -53,6 +53,73 @@ Ripper, DAC Pro Sound) avec page Dongles, `disks/dongles.txt` et oracle de rejeu
 vérifié note à note** en headless, corpus MIDI piano/blues ; port MIDI ALSA sous Linux ;
 save-state v16. Détail dans les chantiers datés ci-dessous.
 
+## A11 — l'oracle Hatari entre en CI, et sa première exécution trouve deux références non re-dérivables (2026-09-01)
+
+Dernière boucle de validation entièrement manuelle du projet. `tests.yml` compare depuis
+août la capture NeoST aux références commises à chaque push — une non-régression : « NeoST
+rend encore ce qu'il rendait ». Il ne disait rien de la question qui FONDE ces références :
+Hatari, la source de vérité matérielle, rend-il toujours la même chose ? Cette moitié-là ne
+tournait que sous les doigts du mainteneur.
+
+**Le mode manquait, pas seulement le job.** `run_etalons.py --oracle` **écrase** les
+références : il sert à en POSER une, jamais à en contrôler une — il efface la preuve qu'il
+devrait comparer. D'où `--oracle-check`, non destructif : il rejoue Hatari au pin, retient
+(via `oracle_scan`) l'image identique à la capture NeoST du jour, puis la CONFRONTE à la
+référence commise sans jamais écrire dans `tests/reference/`. Quand il passe, trois choses
+sont vraies d'un coup :
+
+```
+NeoST  ==  référence commise  ==  Hatari (aujourd'hui, au pin)
+```
+
+Il attrape ce qu'aucun autre palier ne voit : une référence régénérée contre un oracle non
+épinglé, un pin déplacé sans repose des références, un ffmpeg dont le décodage bouge.
+**Garde vérifiée par mutation** — 1 pixel modifié dans une référence commise suffit à la
+faire échouer (le contraire d'un garde-fou qui ne mord jamais, cf. A38).
+
+`.github/workflows/oracle.yml` : **hebdomadaire** (lundi 04:00 UTC) plus
+`workflow_dispatch`, jamais au push — bâtir Hatari et balayer les fenêtres coûte des
+minutes, et ce qui dérive ici dérive en semaines. Le pin est **lu** dans
+`tools/setup_hatari.sh` pour former la clé de cache, plutôt que recopié : une clé qui
+répète une constante finit par mentir sur ce qu'elle met en cache, et un cache survivant à
+un changement de pin ferait tourner l'ANCIEN Hatari en prétendant valider le nouveau.
+Mesuré au repos : **5 min 31** pour les 8 étalons re-dérivables.
+
+### Ce que la première exécution a trouvé
+
+Deux des dix références `ref_kind: oracle` ne sont **pas re-dérivables**, chacune pour une
+raison propre — et ce n'était écrit nulle part.
+
+- **`nocooper`** : son oracle exige une touche **TENUE** (espace, vbl ~900) que
+  `hatari_oracle.sh` ne sait pas injecter — il faut `--cmd-fifo` + `keydown`/`keyup`. La
+  référence avait donc été posée à la main. Second obstacle du même ordre, resté invisible
+  jusqu'ici : le run NeoST utilise `--fastfdc` alors qu'`oracle_fastfdc` est absent de
+  l'entrée, donc les deux timelines ne sont même pas alignées.
+- **`spec512_bands`** : **Hatari ne se reproduit pas lui-même** dessus. Deux runs de la
+  MÊME ligne de commande donnent deux jeux de phases **entièrement disjoints** (md5 des
+  trames de la fenêtre : aucun commun). C'est la rançon exacte de ce que cet étalon
+  mesure — la position horizontale des bascules de palette dépend du cycle de l'écriture,
+  c'est le seul endroit du rendu où un cycle de CPU se voit à l'œil — et le tirage RNG de
+  la position angulaire de la disquette décale le démarrage du programme.
+  **`oracle_scan` n'y peut rien** : il corrige une renumérotation de TRAMES, or le décalage
+  est **sous-trame**. Les 4 phases présentes dans une fenêtre de 181 trames diffèrent
+  toutes de la référence — la moins pire à **2 460 px**, avec des couleurs permutées
+  circulairement sur 4 px au bord de chaque bande, signature d'un décalage de 4 cycles.
+
+⚠ **Aucune des deux n'est un bug de NeoST, et aucune n'est une mauvaise référence.** Celle
+de `spec512_bands` est un authentique oracle Hatari — elle porte sa LED disquette — et
+prouve ce qu'elle prouve : un jour, sur un run donné, NeoST a rendu cette image AU PIXEL
+comme Hatari. Elle n'est simplement pas RE-DÉRIVABLE. Une référence peut donc être **vraie
+et non reproductible**, cas qui n'était pas prévu par l'outillage.
+
+Le manifeste le déclare désormais : `oracle_check: false` + `oracle_check_note`, où **la
+raison est OBLIGATOIRE** — sans elle `--oracle-check` refuse de tourner plutôt que
+d'exclure en silence. Le journal les nomme à chaque exécution, comme les SKIP de ROM
+propriétaire. Périmètre réel en CI : **5 étalons** (blitter_hog, cuddly_demos, scroll_8264,
+scroll_8265, trace_odd) — les 3 `spectrum512_diapo*` dépendent d'une ROM Atari que le dépôt
+ne porte plus depuis la purge. Le décompte est imprimé : un « TOUS OK » sur deux étalons au
+lieu de cinq doit se voir.
+
 ## A41 — les 27 px de Closure sont à Hatari : il colore avec des écritures pas encore faites (2026-09-01)
 
 Dernier écart oracle inexpliqué du dépôt, résidu d'A40 : l'étalon `closure` tombait à
