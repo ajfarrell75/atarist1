@@ -152,7 +152,7 @@ bar first.
 
 ## Status
 
-**0.5.4.** EmuTOS and TOS 1.02/1.62/2.06 boot; all three Field Service diagnostic
+**0.6.** EmuTOS and TOS 1.02/1.62/2.06 boot; all three Field Service diagnostic
 cartridges pass their internal tests. Demanding games and demos run: Enchanted Land,
 Super Hang-On, Lethal Xcess, The Cuddly Demos, No Cooper. Spectrum 512 pictures and
 No Cooper's med-res overscan come out **0 pixels different** from the Hatari oracle

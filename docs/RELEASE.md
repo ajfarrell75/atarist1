@@ -53,7 +53,8 @@ le reste est ci-dessous.
   seulement). Les **assets des releases 0.5.2/0.5.4** (paquets bureau avec
   `tos102uk.img` + `tos162uk.img` — vérifié) sont assumés tels quels : **les deux
   releases seront supprimées à la sortie de la 0.6** (décision du mainteneur,
-  2026-08-30).
+  2026-08-30). ⏳ **Le tag `0.6` est posé le 2026-09-01** — la suppression est due dès
+  que ses paquets sont publiés.
 - **Signature / notarisation** : le `.dmg` macOS n'est ni signé ni notarisé (Gatekeeper
   affiche « NeoST est endommagé »), le `.zip` Windows n'est pas signé. À traiter **après**
   la purge : signer un paquet qui contient des ROM Atari n'aurait pas de sens.

@@ -65,7 +65,8 @@ leurs paquets bureau publiés contiennent `tos102uk.img` + `tos162uk.img` (véri
 le 2026-08-30 en ouvrant le zip Windows 0.5.4) — la purge git n'y touche pas.
 **Décision du mainteneur (2026-08-30) : assumé tel quel, les deux releases seront
 SUPPRIMÉES quand la 0.6 sortira.** Le zip web-wasm 0.5.4 est propre (EmuTOS seul,
-vérifié).
+vérifié). ⏳ **Le tag `0.6` est posé le 2026-09-01** : la suppression est DUE dès que
+les paquets 0.6 sont publiés — c'est la dernière action de ce blocage.
 
 Conformité annexe (non bloquante) :
 - `packaging/linux/make_appimage.sh` tire `linuxdeploy`/`appimagetool` depuis le tag mouvant
@@ -253,12 +254,16 @@ est continue, les trous sont du travail fait.
   désormais consigné au `CHANGELOG.md` (§ *Numéros de version sautés*) avec ce qu'on
   sait : elle n'a jamais existé, le bump `dec5929` est passé de 0.5.2 à 0.5.4, et la
   raison n'est pas reconstituable.
-  **Reste, et ce sont des décisions du mainteneur, pas du travail technique en
-  attente** : (1) **poser le tag** — 128 commits depuis la 0.5.4 du 2026-08-23, dont le
-  MegaSTE 12/12, CAB/theoldnet, l'audit et le plan A16-A37, puis A10/A14/A16b/A28-A36 et
-  les pas 2 et 5 de la purge : le numéro et le moment appartiennent au mainteneur ;
-  (2) **signer / notariser** le `.dmg` et le `.zip`, à faire APRÈS la purge (signer un
-  paquet contenant des ROM Atari n'aurait pas de sens).
+  ✅ **Le tag est POSÉ : `0.6`, le 2026-09-01** — 192 commits depuis la 0.5.4 du
+  2026-08-23 (MegaSTE 12/12, station MIDI sur les trois plateformes, CAB/theoldnet,
+  l'audit et le plan A16-A42, la purge complète). Procédure suivie en sept pas, palier
+  `full` vert sans une seule étape sautée, `--version` vérifié à 0.6 après
+  reconfiguration avec `-DNEOST_VERSION_STR=0.6`.
+  **Reste, décisions du mainteneur** : (1) **signer / notariser** le `.dmg` et le `.zip`
+  — maintenant que la purge est faite, plus rien ne s'y oppose, et l'entrée de release
+  dit le contournement `xattr` en attendant ; (2) **supprimer les releases GitHub 0.5.2
+  et 0.5.4** dès que les paquets 0.6 sont publiés (§ BLOQUANT ci-dessus — leurs assets
+  contiennent des ROM Atari).
 
 ### Issus de l'évaluation d'architecture du 2026-08-28
 

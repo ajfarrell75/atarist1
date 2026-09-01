@@ -1,7 +1,7 @@
 # Changelog — NeoST
 
 (c) 2026 VERHILLE Arnaud. **La chronologie** : releases, puis les chantiers datés dans
-l'ordre inverse. Version courante : **0.5.4**.
+l'ordre inverse. Version courante : **0.6**.
 
 - « NeoST gère-t-il X ? » → [`docs/IMPLEMENTED.md`](docs/IMPLEMENTED.md) (inventaire par puce)
 - « Que reste-t-il ? » → [`TODO.md`](TODO.md)
@@ -16,6 +16,33 @@ Cette section existe pour qu'un trou dans la numérotation ne soit jamais SILENC
   artefact publié sous ce numéro. **La raison du saut n'est pas consignée** et elle
   n'est pas reconstituable depuis l'historique — on l'écrit tel quel plutôt que
   d'inventer une explication.
+
+## 0.6 — le MegaSTE au banc, le studio MIDI, un paquet 100 % libre (2026-09-01)
+
+Depuis la 0.5.4 :
+
+- **MegaSTE validé au banc Field Service** — suite Q **12/12**, rejouée à chaque palier
+  `full` : l'objectif de tête du projet est atteint et GARDÉ.
+- **Station MIDI** — l'entrée tire à 31 250 bauds réels (**×20**, 92 % d'un vrai câble),
+  **fusion** de plusieurs claviers avec canalisation par source, **aiguillage par canal**
+  en sortie, profils d'appareil, appareils homonymes enfin distingués, avance de sortie
+  réglable, **synthé GM intégré** ; les appareils matériels marchent sur les **trois**
+  plateformes (CoreMIDI, ALSA, winmm).
+- **Réseau** — theoldnet.com s'affiche dans CAB depuis le GUI ; EtherNEC (fenêtres
+  ROM3/ROM4 corrigées) et Slirp 5/5.
+- **Fidélité** — cycles volés du blitter portés à l'horloge des timers, stall du flush
+  FIFO FDC, halt du 68000 annoncé, retrait gauche med corrigé ; Closure et un étalon
+  Spectrum 512 **généré** rejoignent le palier pixel, trois démos étalons quittent les
+  ROM Atari.
+- **Interface** — page Input par port, clavier ST cliquable, mixeur audio par source,
+  bascule bureau ⇄ borne au clavier.
+- **Paquets 100 % libres par défaut** — l'historique public ne distribue plus rien de
+  propriétaire (pack **165 → 12 Mio**), EmuTOS seul, trois démos embarquées, chaque
+  composant livré nommé avec sa licence.
+
+⚠ Le `.dmg` macOS n'est ni signé ni notarisé et le `.zip` Windows n'est pas signé :
+Gatekeeper affiche « NeoST est endommagé ». En attendant la notarisation,
+`xattr -dr com.apple.quarantine /Applications/NeoST.app` lève le blocage.
 
 ## 0.5.4 — dongles, ports, MIDI vérifié (2026-08-23)
 

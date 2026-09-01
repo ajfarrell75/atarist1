@@ -16,8 +16,8 @@ android {
         // par SDL2 ne sont disponibles, pour un parc résiduel.
         minSdk 21
         targetSdk 34
-        versionCode 2
-        versionName '0.5.4'
+        versionCode 3
+        versionName '0.6'
 
         externalNativeBuild {
             cmake {
