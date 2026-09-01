@@ -53,6 +53,58 @@ Ripper, DAC Pro Sound) avec page Dongles, `disks/dongles.txt` et oracle de rejeu
 vérifié note à note** en headless, corpus MIDI piano/blues ; port MIDI ALSA sous Linux ;
 save-state v16. Détail dans les chantiers datés ci-dessous.
 
+## Chasse round 3 : trois axes rendent ZÉRO, et la lentille de régression démolit deux de mes correctifs (2026-09-01)
+
+**Le résultat le plus utile est un silence.** Trois des cinq axes — **Blitter + FDC/DMA
+disquette**, **GEMDOS (handles, Pexec, codes d'erreur, Fsfirst/DTA)** et **couverture du
+save-state** (chaque puce sérialise-t-elle tout son état mutable ?) — ont rendu **zéro
+trouvaille**. La consigne « zéro est une excellente réponse » a donc été prise au mot, et
+c'est un signal en soi : ces sous-systèmes ne cèdent pas à cette méthode. L'axe MFP a
+produit une trouvaille, correctement ÉCARTÉE (divergence de fidélité Hatari, catégorie
+exclue — et son impact annoncé était démenti par la mesure du contradicteur).
+
+**Les deux seules trouvailles sont des RÉGRESSIONS SUR MES PROPRES CORRECTIFS du round 2,
+posés moins d'une heure plus tôt.** Toutes deux prouvées par exécution, toutes deux
+majeures, toutes deux dans le frontend Android — le fichier que le build par défaut ne
+compile pas et que je n'avais vérifié qu'au `-fsyntax-only`.
+
+- 🐞 **Le clic droit à deux doigts était TOUJOURS inatteignable.** Mon correctif avait levé
+  un verrou (le compteur de doigts lu après décrément) ; il y en avait un SECOND, ailleurs
+  et indépendant : `SDL_FINGERMOTION` ne filtre pas `fingerId` et diffe la position du
+  doigt qui bouge contre un `lastX/lastY` UNIQUE. Le premier mouvement d'un second doigt
+  calculait donc **l'écart ENTRE LES DOIGTS** : mesuré, 0,40 de « travel » pour un seuil de
+  tap à 0,02, soit 20×, et 360 px de déplacement souris parasites. Le tap GAUCHE tombait
+  pareillement dès qu'une paume touchait la dalle. Seul le doigt PRIMAIRE pilote désormais
+  le mouvement ; les autres ne servent qu'à compter.
+- 🐞 **La réparation du déballage était un NO-OP.** Sous Android, `SDL_RWFromFile` avec un
+  nom RELATIF cherche D'ABORD dans le stockage interne et ne retombe sur l'AssetManager
+  qu'en cas d'échec (SDL 2.30.9, le tag qu'épingle `fetch_sdl.sh` — le contradicteur est
+  allé le lire). Comme je déballais à la RACINE du stockage interne, « lire l'asset »
+  revenait à relire le fichier DÉJÀ DÉBALLÉ : la garde comparait le fichier à lui-même et
+  valait toujours vrai. Pire pour le cas que mon propre commit nommait — un fichier de
+  0 octet — : `want` valant 0, la condition `want > 0` était fausse et la branche entière
+  était sautée **en silence**, rendant inatteignable jusqu'au message d'erreur que j'avais
+  ajouté. Le déballage vit désormais dans un **sous-dossier** `data/`, ce qui rend au nom
+  relatif son sens : celui de l'asset.
+
+**Vérification, cette fois par l'exécution et non par la lecture.** Après deux correctifs
+Android faux d'affilée, le troisième a été éprouvé sur un harnais dont le corps de
+`handleTouch` est **EXTRAIT du fichier par script**, pas retapé : six scénarios (deux
+doigts sans mouvement, avec un mouvement, avec `ACTION_MOVE` sur les deux, paume posée,
+glissé à un doigt, tap simple). Le clic droit sort maintenant dans les quatre cas à deux
+doigts — « travel » 0,0004 au lieu de 0,400 — le glissé déplace toujours la souris
+(179 px) et le tap simple rend toujours un clic gauche.
+⚠ Ce qui n'est PAS vérifié : le correctif du déballage repose sur la sémantique de
+résolution de chemin de SDL sous Android, qu'aucune machine ici ne peut exécuter. Il est
+établi par lecture du SDL épinglé et par construction — le nom relatif ne peut plus
+désigner la destination — mais pas par une exécution. Et une installation existante verra
+ses fichiers re-déballés dans le sous-dossier : sans conséquence, l'APK n'ayant jamais
+tourné sur un appareil.
+
+**Leçon de méthode** : les deux rounds précédents avaient trouvé des défauts dans le code
+d'autrui ; celui-ci n'a trouvé que les miens. Une lentille de régression braquée sur le
+travail de la même journée vaut, à ce stade, plus qu'un axe neuf.
+
 ## Chasse round 2 : 6 défauts de plus, dont un trou dans le correctif du matin (2026-09-01)
 
 **Ce qui a changé dans la méthode.** Cinq axes NEUFS (le frontend GUI, les frontends
@@ -99,8 +151,11 @@ AJOUTÉ plus tard ne sera signalé par rien.
   rendait `true` inconditionnellement ; `fileExists()` ne testant que l'ouverture, un TOS
   tronqué (stockage plein, processus tué) était réputé « déjà déballé » **POUR TOUJOURS**.
   Lectures et écritures sont vérifiées, un fichier partiel est SUPPRIMÉ plutôt que laissé
-  en place, et la garde compare désormais la TAILLE à celle de l'asset : le déballage se
-  répare tout seul au lancement suivant.
+  en place, et la garde compare désormais la TAILLE à celle de l'asset.
+  ⚠ **La phrase « le déballage se répare tout seul au lancement suivant », écrite ici
+  d'abord, était FAUSSE** : le round 3 a montré que la garde se comparait à elle-même.
+  Corrigé le jour même — cf. l'entrée du round 3 ci-dessus. La phrase est rectifiée là où
+  elle a été écrite plutôt qu'effacée.
 - 🐞 **`main_android.cpp` — un tap n'envoyait AUCUN clic au ST.** `Ikbd::mouseEvent`
   n'émet rien, il écrase l'état ; le paquet souris n'est construit qu'à la VBL, et l'appui
   suivi du relâchement dans la MÊME trame ne laissait aucun changement à voir. Le remède

@@ -24,6 +24,7 @@
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
+#include <sys/stat.h>          // mkdir : le déballage vit dans un sous-dossier
 #include <cstring>
 #include <string>
 #include <vector>
@@ -300,10 +301,20 @@ Sint64 assetSize(const std::string& name) {
 std::string prepareData() {
 #if defined(__ANDROID__)
     const char* internal = SDL_AndroidGetInternalStoragePath();
-    const std::string dir = internal ? std::string(internal) : std::string(".");
+    const std::string root = internal ? std::string(internal) : std::string(".");
 #else
-    const std::string dir = ".";
+    const std::string root = ".";
 #endif
+    // ⚠ SOUS-DOSSIER, et c'est la clé du contrôle de taille ci-dessous. Sous Android,
+    // `SDL_RWFromFile` avec un nom RELATIF cherche D'ABORD dans le stockage interne et
+    // ne retombe sur l'AssetManager de l'APK qu'en cas d'échec (SDL 2.30.9,
+    // src/file/SDL_rwops.c). En déballant à la RACINE du stockage interne, « lire
+    // l'asset » revenait donc à relire le fichier DÉJÀ DÉBALLÉ : la garde comparait le
+    // fichier à lui-même et valait toujours vrai — le contrôle de taille était un
+    // no-op, et un fichier de 0 octet faisait même sauter la branche en silence.
+    // Déballer AILLEURS rend au nom relatif son sens : celui de l'asset.
+    const std::string dir = root + "/data";
+    ::mkdir(dir.c_str(), 0700);        // déjà là = EEXIST, sans conséquence
     static const char* kAssets[] = {
         "etos192us.img", "etos192fr.img", "etos256us.img", "etos256fr.img", "diskA.st",
     };
@@ -334,6 +345,7 @@ struct Touch {
     float    travel   = 0.0f;      // distance parcourue (fraction d'écran)
     int      fingers  = 0;
     int      peakFingers = 0;      // maximum atteint pendant le geste (cf. FINGERUP)
+    SDL_FingerID primary = 0;      // SEUL doigt qui pilote le mouvement (cf. FINGERMOTION)
 };
 Touch g_touch;
 
@@ -361,6 +373,7 @@ void handleTouch(const SDL_Event& e) {
         if (g_touch.fingers > g_touch.peakFingers) g_touch.peakFingers = g_touch.fingers;
         if (!g_touch.active) {
             g_touch.active  = true;
+            g_touch.primary = e.tfinger.fingerId;   // le premier doigt posé, et lui seul
             g_touch.lastX   = e.tfinger.x;
             g_touch.lastY   = e.tfinger.y;
             g_touch.startMs = SDL_GetTicks64();
@@ -368,7 +381,15 @@ void handleTouch(const SDL_Event& e) {
         }
         break;
     case SDL_FINGERMOTION: {
-        if (!g_touch.active) break;
+        // ⚠ FILTRER PAR DOIGT. `lastX/lastY` décrivent la position du doigt PRIMAIRE ;
+        // sans ce test, le premier mouvement d'un SECOND doigt calculait
+        // dx = x(doigt2) − x(doigt1), c'est-à-dire l'ÉCART ENTRE LES DOIGTS. Mesuré :
+        // 0,40 de « travel » pour un seuil de tap à 0,02 (20×), et 360 px de
+        // déplacement souris parasites. Conséquences : le clic droit à deux doigts
+        // restait inatteignable MALGRÉ le correctif de peakFingers — il y avait un
+        // SECOND verrou, ici — et une simple paume posée sur la dalle tuait aussi le
+        // clic gauche. Le geste multi-doigts ne sert qu'à compter, jamais à déplacer.
+        if (!g_touch.active || e.tfinger.fingerId != g_touch.primary) break;
         const float dx = e.tfinger.x - g_touch.lastX;
         const float dy = e.tfinger.y - g_touch.lastY;
         g_touch.lastX = e.tfinger.x;
