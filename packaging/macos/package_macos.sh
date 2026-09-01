@@ -153,5 +153,21 @@ test "$SEALED" -eq 1 \
 echo "OK : .app scellé (signature ad-hoc — non notarisé, cf. docs/RELEASE.md)"
 
 # --- DMG ---------------------------------------------------------------------
-hdiutil create -volname "NeoST" -srcfolder "$APP" -ov -format UDZO "$DMG"
+# Le .dmg ne contenait QUE le .app : pas d'installation par glisser-déposer, il
+# fallait copier le bundle à la main (constaté le 2026-09-01 en ouvrant le .dmg 0.6
+# publié — chantier A12). On monte donc un dossier de présentation : le .app et un
+# lien vers /Applications, la disposition qu'attend tout utilisateur de macOS.
+# ⚠ `ditto` et pas `cp -R` : lui seul préserve la signature du bundle, et le sceau
+# est vérifié APRÈS la copie — un .dmg dont le .app est descellé rejoue exactement
+# le « NeoST est endommagé » que le palier 0 vient d'éteindre.
+STAGE="dist/.dmg-stage"
+rm -rf "$STAGE"
+mkdir -p "$STAGE"
+ditto "$APP" "$STAGE/$(basename "$APP")"
+ln -s /Applications "$STAGE/Applications"
+codesign --verify --deep --strict "$STAGE/$(basename "$APP")" \
+    || { echo "ERREUR : la copie du .app dans le .dmg n'est plus signée"; exit 1; }
+
+hdiutil create -volname "NeoST" -srcfolder "$STAGE" -ov -format UDZO "$DMG"
+rm -rf "$STAGE"
 echo "OK : $DMG"

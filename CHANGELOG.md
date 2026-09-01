@@ -114,8 +114,13 @@ qui ne donne pas de fenêtre. À reprendre à la main dans une vraie session gra
 Windows, l'APK sur appareil, le Raspberry Pi et Linux restent entiers — un émulateur ne
 soldera pas la case Android, c'est encore QEMU.
 
-📌 Autre relevé, non corrigé (c'est du paquetage, pas de la mesure) : le `.dmg` **ne
-contient pas de lien vers `/Applications`** — pas d'installation par glisser-déposer.
+📌 Autre relevé de la passe, **corrigé le même jour** : le `.dmg` ne contenait **pas de
+lien vers `/Applications`** — pas d'installation par glisser-déposer, il fallait copier
+le `.app` à la main. `package_macos.sh` monte désormais un dossier de présentation (le
+`.app` + le lien) au lieu de passer le seul bundle à `hdiutil` ; `ditto` et non `cp -R`,
+parce que lui seul préserve la signature, et le sceau est vérifié APRÈS la copie — un
+`.dmg` dont le `.app` est descellé rejouerait le « NeoST est endommagé » que le palier 0
+vient d'éteindre. Disposition et sceau vérifiés sur un `.dmg` fabriqué et monté ici.
 
 **Suite du même jour — les pas 1 et 2 sont soldés sur les HUIT paquets.** Ils ne
 demandent aucun matériel : ils se font sur les assets publiés, depuis n'importe quelle
@@ -186,6 +191,22 @@ entre les deux, et c'est la leçon à retenir de tout ce chantier.
 📌 Piège d'outillage rencontré en chemin : restaurer le fichier muté avec `cp` dans la
 MÊME SECONDE que la compilation de son `.o` laisse `make` croire l'objet à jour — la
 suite rougissait avec le correctif pourtant en place. `touch` puis reconstruction.
+
+**Quatrième temps — la conformité est éteinte EN LIGNE, et le jour J est préparé.**
+Le job `pages` se déclenche au push sur `main`, et son artefact est le dossier `wasm/` :
+pousser le correctif a donc suffi à redéployer le site. **Vérifié en production** —
+`GPL-3.0.txt`, `GPL-2.0.txt` et `THIRD-PARTY.txt` répondent HTTP 200 sur
+`habib256.github.io/neost`. La non-conformité GPL est close sans qu'aucun tag soit posé.
+La garde ajoutée au job `wasm` est passée verte à sa première exécution.
+
+`docs/RELEASE.md` reçoit un § **JOUR J** : le numéro dû (`0.6.1` — PATCH, parce que la
+0.6 publiée ne conserve aucun réglage sur 5 paquets sur 8), ce que la release emporte,
+les trois pas qu'on saute (bump des trois endroits, le cache `NEOST_VERSION_STR`, le
+palier `full`), les **notes de release EN ANGLAIS déjà rédigées** — le job `publish` les
+génère sinon à partir de titres de commits français — et l'action d'après-publication qui
+solde le dernier blocage (supprimer 0.5.2/0.5.4). Rien n'est bumpé d'avance **à dessein** :
+`check_release.py` exige que les trois numéros soient égaux, et une version bumpée sans
+tag ferait mentir le dépôt aussi sûrement que l'inverse.
 
 ## Plus aucune référence oracle non re-dérivable : `spec512_bands` s'ancre sur la VBL par `stop` (2026-09-01)
 

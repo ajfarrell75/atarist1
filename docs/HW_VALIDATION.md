@@ -136,9 +136,13 @@ Livrer les fichiers satisfait la GPL ; un lien en pied de page serait mieux.
   repli qui rendait le défaut illisible dans le journal. Revérifié dans les conditions
   exactes du défaut (bundle chmod `a-w`, `~/.config/neost` supprimé) : plus de message,
   `neost.cfg` écrit.
-- ⚠ **Le `.dmg` ne contient pas de lien vers `/Applications`** : l'utilisateur ne peut
-  pas installer par glisser-déposer, il doit copier le `.app` à la main. Non corrigé —
-  c'est du paquetage, hors du périmètre d'une passe de mesure.
+- ✅ **Le `.dmg` ne contenait pas de lien vers `/Applications`** — pas d'installation par
+  glisser-déposer, il fallait copier le `.app` à la main. **Corrigé le 2026-09-01** :
+  `package_macos.sh` monte un dossier de présentation (le `.app` + le lien) au lieu de
+  passer le seul bundle à `hdiutil`. ⚠ `ditto` et non `cp -R` — lui seul préserve la
+  signature — et le sceau est vérifié APRÈS la copie, sinon on rejoue le « NeoST est
+  endommagé » que le palier 0 vient d'éteindre. Disposition et sceau vérifiés sur un
+  `.dmg` réellement fabriqué et monté ici.
 - 📌 Pour la **notarisation** (palier 1, 99 $/an) : `syspolicy_check notary-submission`
   bute d'abord sur `Contents/MacOS/neost-headless`. La recette de `docs/RELEASE.md`
   prévoit déjà de signer le binaire secondaire en premier — elle vise juste.

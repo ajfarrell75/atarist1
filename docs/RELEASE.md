@@ -49,6 +49,86 @@ le reste est ci-dessous.
    (`GPL-3.0.txt`, `GPL-2.0.txt`, `THIRD-PARTY.txt` — huit jobs le vérifient) et que
    `check_licenses.py` est vert : tout composant livré doit être nommé avec sa licence.
 
+## Le JOUR J — dossier prêt pour la prochaine release (préparé le 2026-09-01)
+
+Rien n'est tagué ici. Ce paragraphe existe pour que la pose du tag soit une
+**exécution**, pas une rédaction : c'est en rédigeant sous pression qu'on saute une
+étape. Tout ce qui suit est écrit, mesuré ou vérifié à l'avance.
+
+### Le numéro : `0.6.1`
+
+**PATCH** — que des corrections, aucune fonctionnalité. Et il est **dû** : la 0.6
+publiée ne conserve **aucun réglage** sur **5 paquets sur 8** (le `.dmg` et les quatre
+AppImage). Ce n'est pas un confort, c'est un émulateur qui oublie sa configuration à
+chaque fermeture. Cf. `CHANGELOG.md` (2026-09-01, chantier A12) et
+[`docs/HW_VALIDATION.md`](HW_VALIDATION.md).
+
+⚠ **Pas le même jour que la 0.6** (2026-09-01) sans écrire la raison : c'est le geste
+exact que cette discipline a été créée pour empêcher (trois tags le 2026-08-10). Si le
+même jour s'impose malgré tout, la raison s'écrit — « 0.6 ne conserve aucun réglage sur
+5 paquets sur 8 » en est une qui se défend.
+
+### Ce que la 0.6.1 emporte, déjà dans `main`
+
+- **Le paquet conserve ses réglages** (`writeConfigAtomic` crée le dossier de
+  destination) — 5 paquets sur 8 réparés. Gardé par `neost-selftest`, vérifié par
+  mutation.
+- **Le bundle web porte ses licences** — la non-conformité GPL est déjà éteinte SUR LE
+  SITE (Pages redéploie au push ; vérifié en ligne le 2026-09-01, HTTP 200 sur les trois
+  fichiers), elle le sera aussi dans le `.zip` de release.
+- **Le `.dmg` s'installe par glisser-déposer** — il ne contenait que le `.app`, il porte
+  désormais un lien vers `/Applications`. Le sceau du bundle est vérifié APRÈS la copie
+  de présentation (`ditto`, pas `cp -R`).
+
+### Les trois pas qu'on saute, dans l'ordre
+
+1. **Bumper les DEUX endroits** : `CMakeLists.txt` et « Version courante » du
+   `CHANGELOG.md`, **plus** l'en-tête `## 0.6.1 — …`. `check_release.py` exige les trois
+   égales — c'est pour ça qu'aucune n'est bougée d'avance : une version bumpée sans tag
+   ferait mentir le dépôt aussi sûrement que l'inverse.
+2. ⚠ **Reconfigurer** : `cmake -B build -DNEOST_VERSION_STR=0.6.1` — variable de CACHE,
+   sans ce passage `--version` ment.
+3. **`python3 tools/run_all.py --tier full`** sur un poste AU REPOS. (Vert le
+   2026-09-01 sur le contenu actuel de `main`, charge 1,66 — à refaire, le palier garde
+   le rendu.)
+
+### Notes de release, EN ANGLAIS, prêtes à coller
+
+Le job `publish` les génère avec `--generate-notes`, donc à partir de titres de commits
+FRANÇAIS : les remplacer par `gh release edit 0.6.1 --notes-file <fichier>`.
+
+```markdown
+## NeoST 0.6.1 — your settings stay put
+
+A patch release. No new features, three fixes that matter.
+
+**Settings are saved again.** On macOS and on every AppImage, NeoST is run from
+read-only media, so it stores its configuration in your user directory — but it never
+created that directory, so every setting was silently lost on exit. First launch after
+this release creates it and keeps your machine profile, video, audio and MIDI setup.
+
+**The web build ships its licences.** The browser bundle carried none; it now includes
+GPL-3.0, GPL-2.0 and the third-party notices, like every other package.
+
+**The macOS disk image installs by drag and drop.** It now shows an Applications
+shortcut next to the app, instead of leaving you to copy the bundle by hand.
+
+macOS is still unsigned by Apple: right-click the app and choose Open on first launch.
+```
+
+### Après publication — une action, et elle solde le dernier blocage
+
+**Supprimer les releases GitHub 0.5.2 et 0.5.4** : leurs paquets bureau contiennent
+`tos102uk.img` + `tos162uk.img`. Décision du mainteneur du 2026-08-30.
+
+```sh
+gh release delete 0.5.2 --yes   # release + assets ; le TAG git reste
+gh release delete 0.5.4 --yes
+```
+
+Puis vérifier que le `.zip` web de la 0.6.1 porte bien `licenses/` (la garde du job
+`wasm` le fait déjà échouer sinon — verte à sa première exécution le 2026-09-01).
+
 ## Ce qui BLOQUE encore une release publique
 
 - ~~Le § BLOQUANT du `TODO.md`~~ **Purgé le 2026-08-30** : l'historique est réécrit
