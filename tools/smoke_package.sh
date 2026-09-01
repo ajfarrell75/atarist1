@@ -48,13 +48,18 @@ cd "$PKG"
 
 # Nettoyage systématique : le paquet est déjà zippé à ce stade, mais on ne laisse
 # pas traîner de capture ni de dossier de test dedans (ceinture et bretelles).
-cleanup() { rm -rf "$PKG/smoke_boot.ppm" "$PKG/smoke_disk.ppm" "$PKG/smoke_gemdos" ; }
+# Le nettoyage REND d'abord l'écriture : la phase 5 retire le droit d'écrire sur le
+# paquet, et un échec au milieu laisserait sinon un arbre non supprimable.
+cleanup() {
+    chmod -R u+w "$PKG" 2>/dev/null || true
+    rm -rf "$PKG/smoke_boot.ppm" "$PKG/smoke_disk.ppm" "$PKG/smoke_gemdos"
+}
 trap cleanup EXIT
 
 # --- 1) Version annoncée = version du paquet --------------------------------
 # Le define était figé sur le project() de CMake : tous les paquets d'une release
 # se présentaient comme « 0.1.0 » et aucun rapport de bug n'était rattachable.
-say "1/4 version"
+say "1/5 version"
 "./$EXE" --version
 if [ -n "$WANT_VERSION" ]; then
     "./$EXE" --version | grep -qF "$WANT_VERSION" \
@@ -62,12 +67,12 @@ if [ -n "$WANT_VERSION" ]; then
 fi
 
 # --- 2) Boot EmuTOS : la capture ne doit pas être uniforme ------------------
-say "2/4 boot EmuTOS (500 trames)"
+say "2/5 boot EmuTOS (500 trames)"
 "./$EXE" "$ROM" --frames 500 --screenshot smoke_boot.ppm
 python3 "$REPO/tools/check_ppm_nonuniform.py" smoke_boot.ppm
 
 # --- 3) DISQUETTE LIVRÉE : montée, et réellement formatée (issue #38) -------
-say "3/4 disquette livrée ($DISK)"
+say "3/5 disquette livrée ($DISK)"
 [ -f "$DISK" ] || { echo "ERREUR : $PKG/$DISK absent du paquet" >&2; exit 1; }
 # a) structure : FAT12 720 Ko conforme au générateur du dépôt.
 python3 "$REPO/tools/check_disk_assets.py" --image "$PKG/$DISK"
@@ -85,7 +90,7 @@ rm -f smoke_disk.log
 # était traité comme relatif et préfixé du répertoire courant. On passe donc
 # délibérément un chemin ABSOLU au format NATIF de l'hôte — d'où cygpath sous
 # MSYS2, pour ne pas dépendre de la conversion automatique des arguments.
-say "4/4 disque dur GEMDOS (chemin absolu hôte)"
+say "4/5 disque dur GEMDOS (chemin absolu hôte)"
 mkdir -p smoke_gemdos/SUBDIR
 printf 'NeoST smoke test\r\n' > smoke_gemdos/HELLO.TXT
 GD="$PKG/smoke_gemdos"
@@ -107,4 +112,48 @@ if grep -q "REFUSED" smoke_gemdos.log; then
 fi
 rm -f smoke_gemdos.log
 
-say "OK : paquet $PKG validé (version, boot, disquette livrée, HD GEMDOS)"
+# --- 5) LE SUPPORT DE LIVRAISON EST EN LECTURE SEULE (chantier A12) ---------
+# Les quatre phases ci-dessus écrivent DANS le paquet (captures, journaux, dossier
+# GEMDOS) : elles exigent donc un dossier inscriptible, et c'est ce qui les rend
+# structurellement incapables d'exercer le support réel. Or un utilisateur ne lance
+# JAMAIS un dossier extrait — il lance un .dmg monté ou un AppImage, tous deux en
+# LECTURE SEULE. Le défaut du 2026-09-01 est passé exactement par là : le paquet
+# n'enregistrait aucun réglage sur 5 paquets sur 8, et aucun palier ne pouvait le
+# voir puisque tous testaient une copie inscriptible.
+#
+# Cette phase-ci ne prouve pas le réglage (l'écriture de neost.cfg est le fait du
+# binaire GUI, qu'aucune CI ne peut lancer faute d'affichage — elle est gardée par
+# `neost-selftest`). Elle prouve la PROPRIÉTÉ dont ce défaut n'était qu'un cas :
+# le binaire livré démarre et rend une image sans rien écrire dans son paquet.
+#
+# ⚠ `chmod` plutôt qu'un vrai montage : le montage dépend de la plateforme (hdiutil,
+# FUSE, droits root) alors que le retrait du droit d'écriture capture la même
+# propriété partout. Sous MSYS2 il est largement inopérant — la phase y est donc
+# faible, et c'est écrit plutôt que sous-entendu.
+say "5/5 paquet en LECTURE SEULE (support de livraison réel)"
+RO_WORK="$(mktemp -d)"
+chmod -R a-w "$PKG"
+if [ -w "$PKG" ]; then
+    echo "note : le droit d'écriture n'a pas pu être retiré (plateforme ou droits) — phase non concluante"
+else
+    # Tout en ABSOLU : la phase tourne hors du paquet (c'est le but — un utilisateur
+    # lance depuis n'importe où), et `neost-headless` résout `disks/diskA.st` par
+    # rapport au RÉPERTOIRE COURANT. Sans chemin absolu la disquette n'est pas
+    # montée et la capture sort uniforme — le contrôle rougirait pour une raison
+    # qui n'a rien à voir avec la lecture seule. (Mesuré le 2026-09-01 ; le
+    # frontend GUI, lui, résout par rapport au binaire.)
+    ( cd "$RO_WORK" && "$PKG/$EXE" "$PKG/$ROM" --disk "$PKG/$DISK" \
+        --frames 500 --screenshot "$RO_WORK/ro.ppm" ) \
+        || { echo "ERREUR : le binaire livré échoue quand son paquet est en lecture seule" >&2
+             chmod -R u+w "$PKG"; rm -rf "$RO_WORK"; exit 1; }
+    python3 "$REPO/tools/check_ppm_nonuniform.py" "$RO_WORK/ro.ppm"
+    # Rien ne doit avoir été déposé dans le paquet.
+    STRAY=$(find "$PKG" -newer "$RO_WORK" -type f 2>/dev/null | head -3)
+    test -z "$STRAY" || { echo "ERREUR : le paquet a été écrit alors qu'il est en lecture seule : $STRAY" >&2
+                          chmod -R u+w "$PKG"; rm -rf "$RO_WORK"; exit 1; }
+    echo "OK : démarre depuis un support en lecture seule, sans rien y écrire"
+fi
+chmod -R u+w "$PKG"
+rm -rf "$RO_WORK"
+
+say "OK : paquet $PKG validé (version, boot, disquette livrée, HD GEMDOS, lecture seule)"

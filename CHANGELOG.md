@@ -208,6 +208,32 @@ solde le dernier blocage (supprimer 0.5.2/0.5.4). Rien n'est bumpé d'avance **�
 `check_release.py` exige que les trois numéros soient égaux, et une version bumpée sans
 tag ferait mentir le dépôt aussi sûrement que l'inverse.
 
+**Cinquième temps — le trou structurel est fermé, pas seulement constaté.** Les quatre
+phases de `smoke_package.sh` ÉCRIVENT dans le paquet (captures, journaux, dossier
+GEMDOS) : elles exigent donc un dossier EXTRAIT, et c'est ce qui les rendait
+structurellement incapables d'exercer le support que l'utilisateur lance vraiment — un
+`.dmg` monté ou un AppImage, tous deux en LECTURE SEULE. Le défaut de configuration est
+passé exactement par là.
+
+**5ᵉ phase** : retirer le droit d'écriture sur le paquet, relancer le binaire livré
+depuis un répertoire EXTÉRIEUR, vérifier qu'il démarre en rendant une image et qu'il n'a
+**rien déposé** dans son paquet. Elle ne prouve pas le réglage (l'écriture de `neost.cfg`
+est le fait du binaire GUI, qu'aucune CI ne peut lancer faute d'affichage — c'est la
+garde unitaire de `neost-selftest`) mais la PROPRIÉTÉ dont ce défaut n'était qu'un cas.
+Mutation : une écriture délibérée est détectée ; les permissions sont rendues même sur
+échec (le `trap` les rétablit avant de nettoyer, sinon un arbre non supprimable resterait).
+⚠ `chmod` et non un vrai montage — celui-ci dépend de la plateforme (hdiutil, FUSE, root)
+quand le retrait du droit d'écriture capture la même propriété partout ; sous MSYS2 il est
+largement inopérant, la phase y est faible et le script le DIT.
+
+Éprouvée sur le paquet **fabriqué par la CI** (artefact `NeoST-macOS-universal2-dmg` du
+run de `a500bd6`, monté puis recopié) : les cinq phases passent.
+📌 Trouvé en la posant : `neost-headless` résout `disks/diskA.st` par rapport au
+RÉPERTOIRE COURANT, là où le frontend GUI résout par rapport au binaire — lancé
+d'ailleurs, le headless perd la disquette embarquée et la capture sort uniforme. Sans
+conséquence (c'est l'outil de débogage, lancé depuis le dépôt), mais la phase passe ses
+chemins en absolu, et le piège est écrit là où quelqu'un le relira.
+
 ## Plus aucune référence oracle non re-dérivable : `spec512_bands` s'ancre sur la VBL par `stop` (2026-09-01)
 
 Dernière astérisque d'A11. Hatari ne se reproduisait pas lui-même sur ce disque (deux runs →

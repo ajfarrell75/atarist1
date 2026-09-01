@@ -198,7 +198,23 @@ stockage, le bundle web n'est pas concerné.
 vérifiés (aucun `neost.cfg` livré, montage en lecture seule, règle A36) — pas exécuté,
 faute de machine Linux. La distinction est maintenue exprès.
 
-**La garde est posée et vérifiée par mutation.** `tests/selftest_logic.cpp` teste
+**La garde SYSTÈME est posée** (2026-09-01, après coup) : `smoke_package.sh` reçoit une
+**5ᵉ phase** qui retire le droit d'écriture sur le paquet, relance le binaire livré
+depuis un répertoire EXTÉRIEUR et vérifie qu'il démarre en rendant une image **sans rien
+déposer dans son paquet**. Elle ne prouve pas le réglage lui-même — l'écriture de
+`neost.cfg` est le fait du binaire GUI, qu'aucune CI ne peut lancer faute d'affichage —
+mais la PROPRIÉTÉ dont ce défaut n'était qu'un cas. Mutation : une écriture délibérée
+dans le paquet est détectée ; les permissions sont rendues même en cas d'échec.
+⚠ `chmod` et non un vrai montage : celui-ci dépend de la plateforme (hdiutil, FUSE,
+root) alors que le retrait du droit d'écriture capture la même propriété partout. Sous
+MSYS2 il est largement inopérant — la phase y est faible, et c'est écrit dans le script
+plutôt que sous-entendu.
+📌 Trouvé en la posant : `neost-headless` résout `disks/diskA.st` par rapport au
+RÉPERTOIRE COURANT, là où le frontend GUI résout par rapport au binaire. Lancé d'ailleurs
+que du paquet, le headless perd donc la disquette embarquée — sans conséquence (c'est
+l'outil de débogage, lancé depuis le dépôt), mais la phase passe ses chemins en absolu.
+
+**La garde UNITAIRE est posée et vérifiée par mutation.** `tests/selftest_logic.cpp` teste
 désormais l'ÉCRITURE et non plus seulement la règle : écrire une config dans un dossier
 qui n'existe pas encore doit réussir et créer le dossier. `src/gui/AppConfig.cpp` entre
 dans `neost-selftest` pour cela (il ne dépend pas d'ImGui). Mutation : correctif retiré

@@ -23,7 +23,7 @@
 #
 #
 #  Chaque job SMOKE-LANCE le paquet via neost-headless (déterministe, sans
-#  affichage) — tools/smoke_package.sh, 4 phases : --version, boot EmuTOS 500
+#  affichage) — tools/smoke_package.sh, 5 phases : --version, boot EmuTOS 500
 #  trames (le bureau apparaît vers la trame ~400) + capture PPM non uniforme,
 #  montage de la DISQUETTE LIVRÉE (elle avait été écrasée et livrée illisible
 #  pendant des mois, issue #38) et montage d'un dossier hôte en HD GEMDOS par
@@ -31,6 +31,13 @@
 #  paquets Windows, issue #37). Ces deux dernières phases sont la leçon des deux
 #  seuls défauts jamais signalés sur un paquet publié : le binaire démarrait, les
 #  DONNÉES et les MONTAGES n'étaient testés par personne.
+#  La 5e phase (2026-09-01, chantier A12) ferme un trou de la même famille : les
+#  quatre premières ÉCRIVENT dans le paquet (captures, journaux, dossier GEMDOS),
+#  donc elles exigent un dossier EXTRAIT — jamais le support que l'utilisateur
+#  lance vraiment, .dmg monté ou AppImage, tous deux en LECTURE SEULE. C'est par
+#  là qu'est passé le paquet qui n'enregistrait aucun réglage (5 paquets sur 8).
+#  La phase retire le droit d'écriture, relance le binaire depuis un répertoire
+#  extérieur et vérifie qu'il démarre SANS rien déposer dans son paquet.
 #  Les paquets embarquent la liste autorisée (packaging/stage_free_data.sh :
 #  EmuTOS GPL + tos102uk/tos162uk des profils 520 ST / 1040 STE + diskA.st) —
 #  jamais les autres TOS ni les jeux du dépôt.
