@@ -43,7 +43,7 @@ void stContentRegion(Machine& machine, int& cTop, int& cH, int& cW) {
 // HAUTEUR de l'écran (ratio pixel gardé). Contenu court → gros zoom, les bordures
 // inutilisées débordent hors écran (rognées) → l'image remplit l'écran, peu de
 // bandes noires. Contenu plein-cadre/overscan → tient entier (pillarbox latéral).
-void drawStKiosk(App& A, GlScreen& s, int fbw, int fbh, int cTop, int cH) {
+void drawStKiosk(App& A, GlScreen& s, int fbw, int fbh, int cTop, int cH, int cW) {
     if (s.w <= 0 || s.h <= 0 || fbw <= 0 || fbh <= 0 || cH <= 0) return;
     // Effets CRT « cadre complet » (v1) : la passe traite tout le buffer ST à la
     // résolution écran (fbw×fbh, bornée), puis le zoom kiosk (viewport ci-dessous)
@@ -54,7 +54,20 @@ void drawStKiosk(App& A, GlScreen& s, int fbw, int fbh, int cTop, int cH) {
     // Aspect pixel : basse rés (≤480 px de large) et 200 lignes = pixels doublés.
     const float sx = (s.w <= 480) ? 2.f : 1.f;
     const float sy = (s.h <= 300) ? 2.f : 1.f;
-    const float scale = (float)fbh / (cH * sy);        // px écran par px ST logique (vertical)
+    float scale = (float)fbh / (cH * sy);              // px écran par px ST logique (vertical)
+    // ⚠ BORNER PAR LA LARGEUR, exactement comme le chemin bureau. L'échelle ne se
+    // calculait que sur la HAUTEUR, et rien ne vérifiait que le contenu tenait en
+    // largeur : sur tout écran plus étroit que le contenu — une dalle 4:3, 5:4, un
+    // Pi sur un moniteur d'époque, une fenêtre borne redimensionnée — l'image était
+    // AMPUTÉE des deux côtés. Le commentaire du chemin bureau posait pourtant la
+    // règle en toutes lettres (« on préfère une bande haut/bas à une image
+    // amputée ») et supposait le cas absent en borne, « son écran étant plus large
+    // que haut » : c'est vrai du 16:9, faux dès qu'on descend sous ~16:10.
+    // Bornage défensif de cW comme côté bureau : le Glue LIVE peut le donner hors
+    // du buffer courant sur une trame de transition.
+    const float keepW = (float)std::max(1, std::min(cW, s.w));
+    const float maxScale = (float)fbw / (keepW * sx);
+    if (scale > maxScale) scale = maxScale;            // bande haut/bas plutôt qu'amputation
     const float vw = s.w * sx * scale, vh = s.h * sy * scale;   // cadre COMPLET à cette échelle
     // Passe CRT demandée à la taille du CADRE ENTIER À CE ZOOM, pas à celle de l'écran :
     // le viewport ci-dessous étire ensuite le résultat d'un facteur s.h/cH, et un FBO
@@ -148,8 +161,8 @@ void drawStScreen(App& A, const GlScreen& s, bool captured, float topOffset,
     //    « Bureau »/« Options », jeu coupé aux deux bords. L'échelle est donc bornée
     //    pour que `cW` (zone active, ou buffer entier si une bordure est ouverte) tienne
     //    toujours en largeur : on préfère une bande haut/bas à une image amputée. Le
-    //    kiosk garde la règle pure — son écran est plus large que haut, le cas ne s'y
-    //    présente pas.
+    //    kiosk applique DÉSORMAIS la même borne (elle lui manquait : l'hypothèse
+    //    « son écran est plus large que haut » tombe sous ~16:10).
     //  · Zoom auto OFF : ancien comportement, cadre entier en letterbox, jamais rogné.
     // Dans les deux cas le ratio pixel ST est respecté : l'image ne se déforme jamais.
     const ImVec2 avail = ImGui::GetContentRegionAvail();

@@ -53,6 +53,65 @@ Ripper, DAC Pro Sound) avec page Dongles, `disks/dongles.txt` et oracle de rejeu
 vérifié note à note** en headless, corpus MIDI piano/blues ; port MIDI ALSA sous Linux ;
 save-state v16. Détail dans les chantiers datés ci-dessous.
 
+## Chasse round 4 : le tactile Android est REPRIS D'UN BLOC, et le web public démarrait le STE sur une ROM ST (2026-09-01)
+
+**Scheduler et Bus rendent zéro.** Deux sous-systèmes lourds, jamais balayés jusque-là —
+l'ordonnanceur qui porte toutes les puces, et le décodage MMIO avec sa whitelist de bus
+errors — n'ont produit aucune trouvaille. Deux autres ont été ÉCARTÉES par le
+contradicteur, toutes deux de l'axe « outillage de test » : leur mécanisme était exact
+mais leur IMPACT ne tenait pas (une garde amont fermait le cas). C'est le bon tri.
+
+**Deux défauts hors Android, dans des zones jamais regardées**
+
+- 🐞 **`main_web.cpp` — le bundle web PUBLIC démarrait le profil STE sur une ROM ST.**
+  Le défaut du STE était resté `tos162uk.img`, posé le 2026-08-02 et jamais revu — or la
+  purge du 2026-08-30 a sorti cette ROM du bundle. L'enchaînement était silencieux :
+  `adjustMachineForTos` ne pouvant pas OUVRIR le fichier rendait la machine demandée
+  telle quelle, la Machine était donc construite en STE, `loadTos` échouait, et le repli
+  chargeait EmuTOS 192 Ko — une ROM ST-only — **sans rejouer la garde**. Le défaut pointe
+  désormais `etos256us.img`, réellement préchargée (CMakeLists:497), ce qui referme le cas
+  à la source avant même que le repli n'entre en jeu.
+- 🐞 **`StScreenView.cpp` — le zoom de la borne AMPUTAIT l'image sous 16:10.** L'échelle
+  ne se calculait que sur la HAUTEUR et rien ne vérifiait que le contenu tenait en
+  largeur : sur une dalle 4:3 ou 5:4, ou une fenêtre borne redimensionnée, l'image était
+  coupée des deux côtés. Le chemin bureau posait pourtant la règle en toutes lettres — « on
+  préfère une bande haut/bas à une image amputée » — et supposait le cas absent en borne,
+  « son écran étant plus large que haut » : vrai en 16:9, faux dès qu'on descend. La
+  fonction n'avait même pas de paramètre de largeur ; elle reçoit `cW` et applique la même
+  borne.
+
+🔁 **Le tactile Android est REPRIS D'UN BLOC, après trois rustines successives.** Les
+rounds 2, 3 et 4 ont trouvé chacun un défaut DIFFÉRENT au même endroit — compteur de
+doigts lu après décrément ; mouvement d'un second doigt diffé contre la position du
+premier, donc l'écart ENTRE LES DOIGTS ; puis un id « primaire » jamais réarmé, qui figeait
+la souris dès que ce doigt se levait le premier et ressuscitait le bug précédent via le
+recyclage d'id d'Android. Trois symptômes, une seule cause : **un état global pour
+plusieurs doigts**.
+Le modèle porte désormais **un état PAR DOIGT**. Un mouvement se diffe contre la position
+du MÊME doigt — l'écart entre deux doigts n'est plus représentable. Quand le doigt qui
+pilote se lève, un autre prend le relais AVEC SA PROPRE position, donc sans saut. Un id
+recyclé arrive par `FINGERDOWN` et sème sa position : rien ne survit d'un geste à l'autre.
+**Vérifié sur neuf scénarios**, harnais dont le corps est EXTRAIT du fichier par script :
+tap simple → clic gauche ; glissé → 179 px ; deux doigts (sans mouvement, avec mouvement
+du second, avec `ACTION_MOVE` sur les deux) → clic droit ; **pilote levé en premier → la
+souris reste vivante** (le bug du round 4) ; **id recyclé → aucun saut** (594 px avant) ;
+mouvement d'un doigt inconnu → ignoré ; douze doigts → pas de débordement.
+
+- 🐞 **Le déballage Android purge aussi les RELIQUES.** Le sous-dossier `data/` posé au
+  round 3 déplaçait la destination, mais c'est le nom SOURCE qui est relatif : tant qu'un
+  fichier du même nom traînait à la racine du stockage interne — déballé là par une version
+  antérieure — SDL le trouvait AVANT l'AssetManager, et « l'asset » restait ce fichier
+  périmé. Une relique de 0 octet suffisait à rendre l'application définitivement sans TOS,
+  en silence : `want` valant 0, la branche entière était sautée, message d'erreur compris.
+  Les reliques sont maintenant supprimées au démarrage — ce sont des fichiers que NeoST a
+  écrits lui-même, jamais des fichiers utilisateur.
+
+📌 **Leçon.** Quatre rounds : les deux premiers ont trouvé des défauts dans le code
+existant, les deux derniers presque uniquement dans le travail du jour. Et sur le tactile,
+patcher symptôme par symptôme du code qu'on ne peut ni compiler ni exécuter a produit trois
+correctifs dont deux étaient faux. Le harnais ne rate que ce à quoi on n'a pas pensé — et
+c'est justement ce qu'on cherche. Reprendre le modèle valait mieux qu'une quatrième rustine.
+
 ## Chasse round 3 : trois axes rendent ZÉRO, et la lentille de régression démolit deux de mes correctifs (2026-09-01)
 
 **Le résultat le plus utile est un silence.** Trois des cinq axes — **Blitter + FDC/DMA

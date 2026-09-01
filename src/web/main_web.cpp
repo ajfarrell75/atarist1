@@ -628,17 +628,23 @@ int main(int argc, char** argv) {
     }, memBuf);
     const std::size_t ramBytes = parseRamBytes(memBuf);
 
-    // ROM par défaut adaptée à la machine. Sur ST/Mega ST : **EmuTOS 192 Ko**
-    // (libre) plutôt qu'un TOS Atari — la démo publique démarre ainsi sur du
-    // 100 % libre, et EmuTOS 192 Ko est justement le build « Atari ST » (pas
-    // d'autodétection du matériel additionnel). STE → TOS 1.62 UK, Mega STE →
-    // EmuTOS 256 Ko (le seul EmuTOS qui programme le SCU).
+    // ROM par défaut adaptée à la machine, et TOUTES libres — le bundle web est
+    // public. ST / Mega ST : **EmuTOS 192 Ko**, qui est justement le build
+    // « Atari ST ». STE et Mega STE : **EmuTOS 256 Ko**, le seul EmuTOS qui
+    // programme le SCU (cf. CLAUDE.md : 192 Ko = ST/Mega ST, 256 Ko = STE/Mega STE).
+    // ⚠ Le défaut du STE était resté `tos162uk.img`, posé le 2026-08-02 et jamais
+    // revu — or la purge du 2026-08-30 a sorti cette ROM du bundle. L'enchaînement
+    // était silencieux et faux : `adjustMachineForTos` ne pouvant pas OUVRIR le
+    // fichier rendait la machine demandée telle quelle, la Machine était donc
+    // construite en STE, `loadTos` échouait, et le repli chargeait EmuTOS 192 Ko —
+    // une ROM ST-only — SANS rejouer la garde. Le STE public démarrait ainsi sur un
+    // TOS qui ne le connaît pas. Pointer une ROM réellement embarquée referme le cas
+    // à la source, avant même que le repli n'entre en jeu.
     const bool wantsSte     = (machType == MachineType::Ste);
     const bool wantsMegaSte = (machType == MachineType::MegaSte);
     const std::string romPath = (argc > 1) ? argv[1]
-        : (wantsSte     ? "/roms/tos162uk.img"
-         : wantsMegaSte ? "/roms/etos256us.img"
-                        : "/roms/etos192us.img");
+        : (wantsSte || wantsMegaSte ? "/roms/etos256us.img"
+                                    : "/roms/etos192us.img");
 
     if (!glfwInit()) { std::fprintf(stderr, "[web] glfwInit failed\n"); return 1; }
 

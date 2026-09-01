@@ -318,6 +318,16 @@ std::string prepareData() {
     static const char* kAssets[] = {
         "etos192us.img", "etos192fr.img", "etos256us.img", "etos256fr.img", "diskA.st",
     };
+    // ⚠ PURGER LES RELIQUES DE LA RACINE, et pas seulement déballer ailleurs. Le
+    // sous-dossier déplace la DESTINATION, mais c'est le nom SOURCE qui est relatif :
+    // tant qu'un fichier du même nom traîne à la racine du stockage interne — déballé
+    // là par une version antérieure —, SDL le trouve AVANT l'AssetManager et
+    // « l'asset » reste ce fichier périmé. Une relique de 0 octet suffit alors à
+    // rendre l'application définitivement sans TOS, en silence : `want` vaut 0, la
+    // condition `want > 0` est fausse, et la branche entière est sautée sans même le
+    // message d'erreur. Les supprimer rend au nom relatif son sens, DÉFINITIVEMENT —
+    // c'est un fichier que nous avons écrit nous-mêmes, jamais un fichier utilisateur.
+    for (const char* a : kAssets) std::remove((root + "/" + a).c_str());
     for (const char* a : kAssets) {
         const std::string dest = dir + "/" + a;
         // Comparer à la taille de l'asset, et non à la seule existence : c'est ce qui
@@ -338,14 +348,46 @@ std::string prepareData() {
 //   · manette physique (SDL_GameController) → joystick ST du port 1.
 // Le stick virtuel viendra avec la couche d'interface — pas avant d'avoir mesuré
 // ce que donne la souris relative sur un vrai appareil.
+// ÉTAT PAR DOIGT, et non un état global. La v1 gardait UN seul couple lastX/lastY
+// pour tout le geste ; trois défauts distincts en sont sortis, corrigés un par un
+// avant d'admettre que le modèle lui-même était faux :
+//   · le compteur de doigts lu APRÈS décrément rendait le clic droit inatteignable ;
+//   · le mouvement d'un SECOND doigt se diffait contre la position du PREMIER, donc
+//     calculait l'écart ENTRE LES DOIGTS (mesuré : 20× le seuil de tap, 360 px de
+//     souris parasites) — et une paume posée tuait aussi le clic gauche ;
+//   · filtrer sur un doigt « primaire » sans jamais réarmer son id figeait la souris
+//     dès que ce doigt se levait le premier, et Android recyclant le plus petit id
+//     libre, l'écart entre doigts revenait par la bande.
+// Chaque doigt porte donc SA position. Un mouvement se diffe contre la position du
+// MÊME doigt : l'écart entre deux doigts n'est plus représentable. Quand le doigt
+// qui pilote se lève, un autre prend le relais AVEC SA PROPRE position, donc sans
+// saut. Un id recyclé arrive par FINGERDOWN et sème sa position : rien ne survit.
 struct Touch {
-    bool     active   = false;
-    float    lastX = 0, lastY = 0;
+    static constexpr int kMax = 8;               // au-delà, le doigt est ignoré
+    struct Finger { SDL_FingerID id; float x, y; bool used; };
+    Finger   f[kMax] = {};
+    int      count    = 0;         // doigts actuellement posés
+    int      peak     = 0;         // maximum atteint pendant le geste (→ clic droit)
+    bool     active   = false;     // un geste est en cours
     Uint64   startMs  = 0;
-    float    travel   = 0.0f;      // distance parcourue (fraction d'écran)
-    int      fingers  = 0;
-    int      peakFingers = 0;      // maximum atteint pendant le geste (cf. FINGERUP)
-    SDL_FingerID primary = 0;      // SEUL doigt qui pilote le mouvement (cf. FINGERMOTION)
+    float    travel   = 0.0f;      // distance parcourue par le doigt PILOTE
+    SDL_FingerID mover = 0;        // doigt qui pilote la souris
+    bool     moverOk  = false;     // ... et s'il est encore posé
+
+    int slotOf(SDL_FingerID id) const {
+        for (int i = 0; i < kMax; ++i) if (f[i].used && f[i].id == id) return i;
+        return -1;
+    }
+    int freeSlot() const {
+        for (int i = 0; i < kMax; ++i) if (!f[i].used) return i;
+        return -1;
+    }
+    // Le pilote vient de partir : en promouvoir un autre, avec SA position — c'est
+    // ce qui évite le saut. Aucun doigt restant → plus de pilote.
+    void promote() {
+        for (int i = 0; i < kMax; ++i) if (f[i].used) { mover = f[i].id; moverOk = true; return; }
+        moverOk = false;
+    }
 };
 Touch g_touch;
 
@@ -368,32 +410,31 @@ constexpr float  kTapMaxTravel = 0.02f;
 
 void handleTouch(const SDL_Event& e) {
     switch (e.type) {   // (non appelé quand le menu est ouvert : ImGui a la main)
-    case SDL_FINGERDOWN:
-        ++g_touch.fingers;
-        if (g_touch.fingers > g_touch.peakFingers) g_touch.peakFingers = g_touch.fingers;
+    case SDL_FINGERDOWN: {
+        int k = g_touch.slotOf(e.tfinger.fingerId);      // id recyclé encore listé ?
+        if (k < 0) k = g_touch.freeSlot();
+        if (k < 0) break;                                // plus de place : doigt ignoré
+        if (!g_touch.f[k].used) ++g_touch.count;
+        g_touch.f[k] = { e.tfinger.fingerId, e.tfinger.x, e.tfinger.y, true };
+        if (g_touch.count > g_touch.peak) g_touch.peak = g_touch.count;
         if (!g_touch.active) {
             g_touch.active  = true;
-            g_touch.primary = e.tfinger.fingerId;   // le premier doigt posé, et lui seul
-            g_touch.lastX   = e.tfinger.x;
-            g_touch.lastY   = e.tfinger.y;
             g_touch.startMs = SDL_GetTicks64();
             g_touch.travel  = 0.0f;
         }
+        if (!g_touch.moverOk) { g_touch.mover = e.tfinger.fingerId; g_touch.moverOk = true; }
         break;
+    }
     case SDL_FINGERMOTION: {
-        // ⚠ FILTRER PAR DOIGT. `lastX/lastY` décrivent la position du doigt PRIMAIRE ;
-        // sans ce test, le premier mouvement d'un SECOND doigt calculait
-        // dx = x(doigt2) − x(doigt1), c'est-à-dire l'ÉCART ENTRE LES DOIGTS. Mesuré :
-        // 0,40 de « travel » pour un seuil de tap à 0,02 (20×), et 360 px de
-        // déplacement souris parasites. Conséquences : le clic droit à deux doigts
-        // restait inatteignable MALGRÉ le correctif de peakFingers — il y avait un
-        // SECOND verrou, ici — et une simple paume posée sur la dalle tuait aussi le
-        // clic gauche. Le geste multi-doigts ne sert qu'à compter, jamais à déplacer.
-        if (!g_touch.active || e.tfinger.fingerId != g_touch.primary) break;
-        const float dx = e.tfinger.x - g_touch.lastX;
-        const float dy = e.tfinger.y - g_touch.lastY;
-        g_touch.lastX = e.tfinger.x;
-        g_touch.lastY = e.tfinger.y;
+        const int k = g_touch.slotOf(e.tfinger.fingerId);
+        if (k < 0) break;                                // doigt inconnu (DOWN manqué)
+        const float dx = e.tfinger.x - g_touch.f[k].x;   // contre SA position à lui
+        const float dy = e.tfinger.y - g_touch.f[k].y;
+        g_touch.f[k].x = e.tfinger.x;
+        g_touch.f[k].y = e.tfinger.y;
+        // Seul le PILOTE déplace la souris et compte dans « travel » ; les autres
+        // doigts ne servent qu'à compter pour le clic droit.
+        if (!g_touch.moverOk || e.tfinger.fingerId != g_touch.mover) break;
         g_touch.travel += SDL_fabsf(dx) + SDL_fabsf(dy);
         const int mx = int(dx * kTouchSpeed);
         const int my = int(dy * kTouchSpeed);
@@ -401,30 +442,27 @@ void handleTouch(const SDL_Event& e) {
         break;
     }
     case SDL_FINGERUP: {
-        // Nombre de doigts au PLUS FORT du geste, et non au moment du relâchement :
-        // `g_touch.fingers` est décrémenté juste après, et la garde qui suit ne laisse
-        // passer que le dernier doigt levé — le compteur y valait donc toujours 1, ce
-        // qui rendait le clic droit à deux doigts STRUCTURELLEMENT inatteignable.
-        const int peak = g_touch.peakFingers;
-        if (g_touch.fingers > 0) --g_touch.fingers;
-        if (g_touch.fingers > 0) break;              // il reste un doigt : rien à conclure
+        const int k = g_touch.slotOf(e.tfinger.fingerId);
+        if (k >= 0) { g_touch.f[k].used = false; if (g_touch.count > 0) --g_touch.count; }
+        // Le pilote s'en va : passer le relais TOUT DE SUITE. Sans ça son id survit,
+        // plus aucun mouvement ne passe le filtre, et la souris est morte jusqu'à ce
+        // que tous les doigts soient levés.
+        if (g_touch.moverOk && e.tfinger.fingerId == g_touch.mover) g_touch.promote();
+        if (g_touch.count > 0) break;                    // geste non terminé
         const Uint64 held = SDL_GetTicks64() - g_touch.startMs;
-        const bool tap = held <= kTapMaxMs && g_touch.travel <= kTapMaxTravel;
+        const bool tap = g_touch.active && held <= kTapMaxMs && g_touch.travel <= kTapMaxTravel;
         if (tap && g_machine && g_injectHold == 0) {
-            // Clic MAINTENU quatre trames, exactement comme la page clavier et la
-            // borne. Le down+up dans la MÊME trame ne produisait aucun clic du tout :
-            // Ikbd::mouseEvent n'émet rien, il ne fait qu'écraser l'état, et le paquet
-            // souris n'est construit qu'à la VBL — qui voyait donc le bouton relâché,
-            // sans changement, et n'émettait rien. Le tap était intégralement perdu.
-            // Le remède existait déjà deux fonctions plus haut ; il n'était pas câblé ici.
-            const bool right = peak >= 2;
+            // Clic MAINTENU quatre trames, comme la page clavier et la borne : un
+            // appui suivi du relâchement dans la MÊME trame ne produit AUCUN clic —
+            // Ikbd::mouseEvent n'émet rien, il écrase l'état, et le paquet souris
+            // n'est construit qu'à la VBL, qui ne verrait donc aucun changement.
+            const bool right = g_touch.peak >= 2;        // deux doigts = clic droit
             g_machine->ikbd.mouseEvent(0, 0, !right, right);
             g_injectScancode = 0;
             g_injectClick    = true;
             g_injectHold     = 4;
         }
-        g_touch.active = false;
-        g_touch.peakFingers = 0;
+        g_touch = Touch{};                               // geste clos : tout repart à neuf
         break;
     }
     default: break;

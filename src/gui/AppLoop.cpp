@@ -1577,7 +1577,7 @@ void appLoop(App& A) {
         }
 
         ImGui::Render();
-        if (A.kiosk) drawStKiosk(A, screen, fbw, fbh, kTop, kH);   // rendu adaptatif (ImGui vide au-dessus)
+        if (A.kiosk) drawStKiosk(A, screen, fbw, fbh, kTop, kH, kW);   // rendu adaptatif (ImGui vide au-dessus)
         ImGui_ImplOpenGL2_RenderDrawData(ImGui::GetDrawData());
 
         // --- Glisser-déposer : le TYPE du support décide de la destination ----
@@ -1750,7 +1750,7 @@ void appLoop(App& A) {
             reqHardReset = true;
         }
 #else
-        if (A.kiosk) drawStKiosk(A, screen, fbw, fbh, kTop, kH);   // kiosk : zoom adaptatif
+        if (A.kiosk) drawStKiosk(A, screen, fbw, fbh, kTop, kH, kW);   // kiosk : zoom adaptatif
         else GlScreen::blitTexFullscreen(crtApply(A, screen, fbw, fbh));  // repli sans ImGui + CRT
 #endif
         // Changement de moniteur (couleur/mono) → hard reset pour que TOS

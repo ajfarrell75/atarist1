@@ -67,7 +67,10 @@ GLuint crtApply(App& A, const GlScreen& s, int dstW, int dstH);
 // PARTAGÉ avec le plein écran WASM — même règle, mêmes latches d'hystérésis.
 void stContentRegion(Machine& machine, int& cTop, int& cH, int& cW);
 // Rendu borne : viewport GL, contenu calé sur la hauteur de l'écran.
-void drawStKiosk(App& A, GlScreen& s, int fbw, int fbh, int cTop, int cH);
+// `cW` = largeur de contenu (zone active, ou buffer entier si une bordure est
+// ouverte). Elle manquait, et son absence AMPUTAIT l'image sur tout écran plus
+// étroit que le contenu — cf. StScreenView.cpp.
+void drawStKiosk(App& A, GlScreen& s, int fbw, int fbh, int cTop, int cH, int cW);
 // Rendu bureau : fenêtre ImGui de BASE, même zoom adaptatif cadré en UV.
 void drawStScreen(App& A, const GlScreen& s, bool captured, float topOffset,
                   int cTop, int cH, int cW);
