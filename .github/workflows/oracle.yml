@@ -23,8 +23,11 @@
 #
 #  POURQUOI PAS AU PUSH. Il faut cloner et BÂTIR Hatari (~5 min la première fois,
 #  ensuite en cache), puis rejouer chaque étalon des DEUX côtés et balayer une
-#  fenêtre de trames pour chacun. Mesuré au repos le 2026-09-01 : **5 min 31**
-#  pour les 8 étalons re-dérivables sur un poste de dev. Ce n'est pas au prix
+#  fenêtre de trames pour chacun. Mesuré le 2026-09-01 : **5 min 31** pour les
+#  8 étalons re-dérivables sur un poste de dev au repos, et **13 min 43** pour la
+#  première exécution RÉELLE de ce job (runner ubuntu-24.04, cache froid, donc
+#  build complet d'Hatari inclus) — d'où le `timeout-minutes: 60`, large mais pas
+#  fantaisiste. Ce n'est pas au prix
 #  d'un garde-fou de push, et ça n'en a pas besoin : ce qui dérive ici dérive en
 #  semaines, pas en commits. Hebdomadaire, plus déclenchable à la main
 #  (Actions → Oracle Hatari → Run workflow) — le réflexe après un changement de

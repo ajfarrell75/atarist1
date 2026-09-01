@@ -83,7 +83,11 @@ minutes, et ce qui dérive ici dérive en semaines. Le pin est **lu** dans
 `tools/setup_hatari.sh` pour former la clé de cache, plutôt que recopié : une clé qui
 répète une constante finit par mentir sur ce qu'elle met en cache, et un cache survivant à
 un changement de pin ferait tourner l'ANCIEN Hatari en prétendant valider le nouveau.
-Mesuré au repos : **5 min 31** pour les 8 étalons re-dérivables.
+Mesuré : **5 min 31** pour les 8 étalons re-dérivables sur un poste de dev au repos, et
+**13 min 43** pour la première exécution réelle du job (runner ubuntu-24.04, cache froid —
+build complet d'Hatari inclus), verte : 5 étalons confrontés, les 3 `spectrum512_diapo*`
+sautés faute de ROM Atari et recensés comme tels. Le job n'est donc pas seulement écrit,
+il a tourné.
 
 ### Ce que la première exécution a trouvé
 
