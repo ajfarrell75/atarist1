@@ -17,6 +17,7 @@
 #include "core/YM2149.hpp"
 #include "io/Mfp.hpp"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -1659,7 +1660,15 @@ uint8_t Fdc::readTrackStx(int track, int side) {
         double totalPrev = 0;
         for (int i = 0; i < t->trackImageSize; ++i) {
             const double totalCur = (readTime * (i + 1)) / t->trackImageSize;
-            const uint16_t timing = uint16_t(std::rint(totalCur - totalPrev));
+            // Borner AVANT la conversion : `trackImageSize` vient du FICHIER et n'est
+            // borné que par le haut (StxImage::clampImage rend min(taille annoncée,
+            // octets restants), sans plancher). Le delta vaut 1 600 000 / taille, donc
+            // il déborde uint16_t dès qu'une piste porte moins de 25 octets d'image —
+            // et une conversion flottant→entier hors domaine est un comportement
+            // INDÉFINI ([conv.fpint]), pas un enroulement : c'est ce que signale
+            // -fsanitize=float-cast-overflow, utilisé ailleurs dans ce dépôt.
+            const double raw = std::rint(totalCur - totalPrev);
+            const uint16_t timing = uint16_t(std::min(raw, 65535.0));
             totalPrev += timing;
             bufferAddTiming(t->pTrackImage[i], timing);
         }

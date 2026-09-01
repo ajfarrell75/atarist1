@@ -117,6 +117,25 @@ static void testWindowsPaths() {
     checkStr("lexicalAbsolute(.\\hd)",
              hostpath::lexicalAbsolute(".\\hd", "C:\\NeoST", W), "C:/NeoST/hd");
 
+    // Remontée AU-DESSUS de la racine (chasse aux bugs du 2026-09-01). Le corps
+    // d'Hatari est purement Unix : quand rfind ne trouvait plus de séparateur il
+    // retombait sur « / », ce qui sous Windows désigne la racine du lecteur COURANT
+    // du processus — donc un AUTRE lecteur. Les cas ci-dessus ne franchissaient
+    // jamais la racine, d'où le trou.
+    checkStr("lexicalAbsolute(C:\\..\\X) reste sur C:",
+             hostpath::lexicalAbsolute("C:\\..\\X", "C:\\NeoST", W), "C:/X");
+    checkStr("lexicalAbsolute(C:\\a\\..\\..\\X) reste sur C:",
+             hostpath::lexicalAbsolute("C:\\a\\..\\..\\X", "C:\\NeoST", W), "C:/X");
+    checkStr("lexicalAbsolute(UNC ..\\..) garde le partage",
+             hostpath::lexicalAbsolute("\\\\srv\\part\\a\\..\\..\\X", "C:\\NeoST", W),
+             "//srv/part/X");
+    // Posix : le clamp EXISTANT ne bouge pas — c'est la racine « / », et y rester
+    // est correct. Ces deux cas prouvent que le correctif n'a rien déplacé.
+    checkStr("lexicalAbsolute(/../x) reste à la racine",
+             hostpath::lexicalAbsolute("/../x", "/home/u", Style::Posix), "/x");
+    checkStr("lexicalAbsolute(/a/../../x) reste à la racine",
+             hostpath::lexicalAbsolute("/a/../../x", "/home/u", Style::Posix), "/x");
+
     // Racine de lecteur : « C:/ » rabattu en « C: » désignerait le dossier COURANT
     // du lecteur C, pas sa racine — piège classique de l'API Windows.
     checkStr("stripTrailingSep(C:/)",      hostpath::stripTrailingSep("C:/", W),      "C:/");
@@ -1798,6 +1817,52 @@ static void testConfigPath() {
 //  `dist/NeoST.app/Contents`, `_check/*/`), donc inscriptible. Le support de
 //  livraison réel — image montée en lecture seule — n'est jamais exercé.
 // -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+//  Chasse aux bugs du 2026-09-01 — un `bool` MEMBRE d'un agrégat copié en bloc.
+//
+//  `StateArchive::operator()` normalise les booléens, mais UNIQUEMENT ceux qu'on lui
+//  passe seuls : quand `T` est une struct, il ne voit que la struct et les octets du
+//  fichier atterrissent tels quels dans ses membres. Or un `bool` dont l'octet vaut
+//  autre chose que 0 ou 1 est un COMPORTEMENT INDÉFINI — le compilateur teste souvent
+//  le bit 0 dans `if (b)` et l'octet entier dans `if (!b)`, si bien que les DEUX
+//  branches peuvent être prises. C'est le cas de `Scc::Chn`, de `Fpu` et de
+//  `StePads`, tous relus en bloc. `fixBools()` est le rattrapage ; ce test le garde.
+// -----------------------------------------------------------------------------
+static void testFixBools() {
+    std::printf("StateArchive — booléens relus EN BLOC (chasse 2026-09-01)\n");
+    struct Agg { uint8_t a; bool flag; uint8_t b; };
+    static_assert(std::is_trivially_copyable_v<Agg>, "l'agrégat doit être copiable en bloc");
+
+    std::vector<uint8_t> buf;
+    { Agg w{1, true, 2}; StateArchive s = StateArchive::saver(buf); s(w); }
+
+    // On force l'octet du bool à 63 — exactement la valeur qu'un .state forgé avait
+    // posée dans Machine::frameInProgress_ et qu'UBSan avait signalée.
+    const std::size_t off = offsetof(Agg, flag);
+    checkBool("l'octet du bool est bien dans le tampon", off < buf.size(), true);
+    buf[off] = 63;
+
+    Agg r{};
+    StateArchive l = StateArchive::loader(buf.data(), buf.size());
+    l(r);
+    unsigned char brut;
+    std::memcpy(&brut, &r.flag, 1);
+    checkBool("sans rattrapage, l'octet reste 63 (c'est le défaut)", brut == 63, true);
+
+    l.fixBools(r.flag);
+    std::memcpy(&brut, &r.flag, 1);
+    checkBool("fixBools normalise à 1", brut == 1, true);
+    checkBool("et la valeur reste VRAIE", r.flag, true);
+
+    // Un octet nul doit rester faux — le rattrapage ne doit pas tout allumer.
+    Agg z{}; std::memcpy(&z.flag, "\0", 1);
+    StateArchive l2 = StateArchive::loader(buf.data(), buf.size());
+    l2(z); buf[off] = 0;
+    StateArchive l3 = StateArchive::loader(buf.data(), buf.size());
+    Agg f{}; l3(f); l3.fixBools(f.flag);
+    checkBool("un octet nul reste FAUX", f.flag, false);
+}
+
 static void testConfigWriteCreatesDir() {
     std::printf("neost.cfg — l'écriture CRÉE son dossier (A12)\n");
     namespace fs = std::filesystem;
@@ -2103,6 +2168,7 @@ int main() {
     testConfigParser();
     testConfigPath();
     testConfigWriteCreatesDir();
+    testFixBools();
     std::printf("[selftest-logic] %d OK, %d FAIL\n", g_ok, g_fail);
     return g_fail == 0 ? 0 : 1;
 }

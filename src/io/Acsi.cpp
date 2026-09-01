@@ -71,6 +71,7 @@ bool Acsi::mount(int target, const std::string& path) {
     if (ec || sz == 0 || (sz & 511)) {
         std::fprintf(stderr, "[acsi] invalid image (zero size or not a multiple of 512): %s\n",
                      path.c_str());
+        d.path.clear();          // même raison qu'unmountAll : pas de chemin sans image
         d.enabled = devicePopulated;
         return false;
     }
@@ -79,6 +80,7 @@ bool Acsi::mount(int target, const std::string& path) {
     if (!fp) { fp = fopen(path.c_str(), "rb"); ro = true; }
     if (!fp) {
         std::fprintf(stderr, "[acsi] cannot open: %s\n", path.c_str());
+        d.path.clear();          // même raison qu'unmountAll
         d.enabled = devicePopulated;
         return false;
     }
@@ -100,6 +102,14 @@ void Acsi::unmountAll() {
         Dev& d = devs_[i];
         if (d.fp) fclose(d.fp);
         d.fp = nullptr;
+        // Le CHEMIN part avec le descripteur. Il survivait, et comme `mountedPath()`
+        // le rend dès que `enabled` est vrai — ce qui reste le cas des slots
+        // UltraSatan, appareil présent sans carte —, l'appelant lisait un chemin
+        // PÉRIMÉ. `App::usatanApply()` s'en sert comme unique test « faut-il
+        // remonter ? » : le chemin périmé étant égal à celui voulu, le remontage
+        // était sauté et le slot restait « carte absente » (NOT READY / ASC $3A)
+        // jusqu'à la fin de la session.
+        d.path.clear();
         // Les cibles UltraSatan restent peuplées (appareil sans carte).
         d.enabled = usatanSlot(i) >= 0;
     }
@@ -443,6 +453,15 @@ void Acsi::emulateCommand() {
     Dev& dev = devs_[target_];
     dataLen_ = 0;
     dmaWrite_ = false;
+    // Le secteur d'un paquet 'USWr…' n'est attendu QUE juste après lui. Le drapeau
+    // n'était effacé que par `writeToDisk()`, `executeUltraSatan()` et `reset()` :
+    // si le transfert DMA du paquet n'avait pas lieu (sens DMA non concordant,
+    // REQUEST SENSE intercalé, pilote qui abandonne), il survivait — et le PROCHAIN
+    // WRITE(6) vers la même cible partait dans `usatan_->writeData()` au lieu de
+    // l'image. Le secteur destiné à la carte SD écrasait alors les réglages de
+    // l'appareil, et `writeData` rendant ST_OK, l'écriture perdue était annoncée
+    // RÉUSSIE au pilote. Toute commande qui n'est pas ce paquet le désarme donc.
+    usatanPending_ = false;
     switch (opcode_) {
     case HD_TEST_UNIT_RDY: cmdTestUnitReady(); break;
     case HD_READ_CAPACITY1: cmdReadCapacity(); break;

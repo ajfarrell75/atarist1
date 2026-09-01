@@ -790,6 +790,20 @@ void Machine::serializeState(StateArchive& ar) {
     bus.serialize(ar);      mapAt("cpu",     ar.saveSize());
     cpu.serialize(ar);      mapAt("sched",   ar.saveSize());
     sched.serialize(ar);    mapAt("shifter", ar.saveSize());
+    // ⚠ ANCRAGE ABSOLU de la fenêtre de trame sur l'horloge maître — impossible plus
+    // haut, `sched` n'étant restauré qu'ICI. Les gardes ci-dessus ne contraignent que
+    // l'ÉCART entre frameStart_ et frameEnd_ : un couple décalé DE FAÇON COHÉRENTE
+    // (les deux à 2^58, écart intact) les passait toutes, et `runFrame` bouclait
+    // ensuite sur `while (busClockNow() < frameEnd)` pendant 2^58 cycles — le gel à
+    // 100 % de CPU que le commentaire d'en haut annonce fermer, et qu'il ne fermait
+    // que pour un champ bougé SEUL. `frameStart_ >= 0` n'avait aucune borne HAUTE.
+    // Même slack que les autres gardes (8 trames) : on ne vise que l'absurde.
+    {
+        const int64_t slack = 8 * int64_t(lpf_) * int64_t(cpl_);
+        const int64_t now = sched.now();
+        ar.check(frameEnd_ - now <= slack && now - frameStart_ <= slack,
+                 "Machine::frameStart_/frameEnd_ désancrés de l'horloge maître");
+    }
     shifter.serialize(ar);  mapAt("mfp",     ar.saveSize());
     mfp.serialize(ar);      mapAt("psg",     ar.saveSize());
     psg.serialize(ar);      mapAt("dmasnd",  ar.saveSize());

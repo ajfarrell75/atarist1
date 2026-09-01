@@ -57,6 +57,19 @@ public:
         }
     }
 
+    // Normalise des booléens APRÈS une lecture en bloc. À appeler sur chaque bool
+    // membre d'un agrégat sérialisé d'un seul `raw()` : `operator()` ne voit que le
+    // type de l'agrégat et ne peut pas les atteindre (cf. la note de portée
+    // ci-dessous). Sans effet à l'écriture, et le format de fichier ne bouge pas.
+    template <class... B>
+    void fixBools(B&... bs) {
+        static_assert((std::is_same_v<B, bool> && ...), "fixBools : booléens seulement");
+        if (!loading_) return;
+        // Relire la REPRÉSENTATION OBJET est défini ; lire le bool lui-même ne l'est
+        // pas quand son octet vaut autre chose que 0 ou 1.
+        ((void)[](bool& b) { unsigned char c; std::memcpy(&c, &b, 1); b = (c != 0); }(bs), ...);
+    }
+
     // Un scalaire/POD (uint32_t, int64_t, bool, un struct trivial…).
     template <class T>
     void operator()(T& v) {
@@ -67,9 +80,14 @@ public:
             // 0 ou 1 est un COMPORTEMENT INDÉFINI : le compilateur teste souvent le bit
             // 0 dans un `if (b)` et l'octet entier dans un `if (!b)`, si bien que les
             // deux branches peuvent être prises. Un .state forgé posait par exemple
-            // Machine::frameInProgress_ à 63 (détecté par UBSan). Sanitisé ICI, donc
-            // pour TOUS les booléens du projet d'un coup — il y en a des dizaines, et
-            // les garder un par un serait illusoire. Format de fichier inchangé.
+            // Machine::frameInProgress_ à 63 (détecté par UBSan). Format inchangé.
+            // ⚠ PORTÉE RÉELLE, et le commentaire d'origine la surestimait : ceci ne
+            // couvre que les `bool` passés SEULS. Un bool MEMBRE d'un agrégat copié
+            // en bloc — `ar(chn_[0])`, `ar(fpu)`, `ar(stePads)` — n'est pas vu, `T`
+            // valant alors la struct : les octets du fichier atterrissent tels quels.
+            // C++17 n'a pas de réflexion, il n'existe donc pas de correctif générique
+            // ici ; les sites concernés appellent `fixBools()` juste après leur
+            // lecture en bloc. (Chasse aux bugs du 2026-09-01.)
             static_assert(sizeof(bool) == 1, "bool non tenu sur 1 octet : format à revoir");
             if (loading_) {
                 unsigned char b;                 // relire la représentation objet est

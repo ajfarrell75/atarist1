@@ -587,6 +587,9 @@ void MidiOutHost::parse(uint8_t b) {
         std::fprintf(stderr, "[midi-out] %.1f %02X\n",
                      std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count(), b);
     }
+    // Demande de remise à zéro posée par panic() : honorée ICI, sur le thread qui
+    // possède le décodeur, et entre deux octets.
+    if (parserResetReq_.exchange(false, std::memory_order_acquire)) parser_.reset();
     parser_.byte(b, [this](const uint8_t* msg, int len) { emit(msg, len); });
 }
 
@@ -610,8 +613,9 @@ void MidiOutHost::panic() {
         emit(allNotesOff, 3);
     }
     // Le décodeur est repris à zéro : un SysEx interrompu par la panique laisserait
-    // sinon l'analyse au milieu d'un message.
-    parser_.reset();
+    // sinon l'analyse au milieu d'un message. DEMANDÉ, pas fait ici : `parser_`
+    // appartient au thread de livraison (cf. MidiOutHost.hpp).
+    parserResetReq_.store(true, std::memory_order_release);
 }
 
 // -----------------------------------------------------------------------------

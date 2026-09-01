@@ -88,9 +88,11 @@ void Bus::serialize(StateArchive& ar) {
 
     // Coprocesseurs / gate / pads : classes triviales à état interne.
     ar(fpu);                // inclut fpu.present (la carte ioFault_ se rebâtit au besoin)
+    fpu.fixSerializedBools(ar);   // copie EN BLOC → booléens hors de portée d'operator()
     ar.check(fpu.stateValid());   // index du tampon CIR : cf. Fpu::stateValid
     ar(scu);
     ar(stePads);
+    stePads.fixSerializedBools(ar);   // idem
 
     // Largeur d'accès MMIO en cours (transitoire, inoffensif).
     ar(ioAccessWidth_);

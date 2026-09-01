@@ -40,9 +40,15 @@
 // =============================================================================
 #pragma once
 #include <cstdint>
+#include "core/StateArchive.hpp"
 
 class StePads {
 public:
+    // Les booléens de cette classe sont relus EN BLOC (`ar(stePads)` dans Bus) : la
+    // normalisation de StateArchive::operator() ne les voit pas — elle ne s'applique
+    // qu'aux `bool` passés seuls (cf. sa note de portée). Un octet valant autre chose
+    // que 0 ou 1 dans un bool est un COMPORTEMENT INDÉFINI, pas une valeur vraie.
+    void fixSerializedBools(StateArchive& ar) { ar.fixBools(megaSte_, hasAnalog_[0], hasAnalog_[1]); }
     // Bits d'un octet joystick ST (cf. Hatari joy.h, ATARIJOY_BITMASK_*).
     enum : uint8_t { UP = 0x01, DOWN = 0x02, LEFT = 0x04, RIGHT = 0x08, FIRE = 0x80 };
 

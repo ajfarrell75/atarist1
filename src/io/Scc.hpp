@@ -55,6 +55,12 @@ public:
     // (drapeau de débogage, pas de l'état machine).
     void serialize(StateArchive& ar) {
         ar(chn_[0]); ar(chn_[1]);
+        // `Chn` est copié EN BLOC : ses booléens échappent à la normalisation de
+        // `operator()`, qui ne voit que le type de la struct. Relus dans les DEUX
+        // polarités (`if (!ch.rr0Latched)`, `if (!ch.tsrFull)` puis `if (ch.tsrFull)`),
+        // un octet valant 63 ferait prendre les deux branches — l'UB même que la
+        // normalisation existe pour fermer.
+        for (auto& ch : chn_) ar.fixBools(ch.rr0Latched, ch.txWritten, ch.tsrFull);
         ar(irqLine_); ar(ius_); ar(activeReg_);
         // writeControl fait « ch.WR[activeReg_] = value » : un état forgé passant le CRC
         // écrirait hors du tableau WR[16] (même convention de garde qu'Acsi::serialize).

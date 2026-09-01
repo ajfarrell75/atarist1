@@ -17,6 +17,17 @@
 #include <cstdio>
 
 bool DriveSound::init(const std::string& dir, uint32_t sampleRate) {
+    // RÉ-initialisation : libérer d'abord. `init()` est appelé DEUX fois sur le même
+    // objet — une fois à 48 kHz, puis de nouveau si le périphérique a négocié une
+    // autre fréquence (AppInit.cpp) — et le second appel écrasait `engine_`, `motor_`
+    // et `tick_` sans rien désinitialiser. Ce n'était pas qu'un bloc mémoire perdu :
+    // `ma_engine_init` sans resource manager fourni en crée un, avec son THREAD de
+    // travail (jobThreadCount = 1 par défaut), plus deux `ma_sound` aux tampons PCM
+    // entièrement décodés (MA_SOUND_FLAG_DECODE). Le tout restait vivant et
+    // inaccessible jusqu'à la fin du processus. `shutdown()` est idempotent — sur un
+    // objet neuf les trois poignées sont nulles et il ne fait rien.
+    shutdown();
+
     // Moteur SANS périphérique : on ne tire pas la carte son nous-mêmes, c'est
     // Audio qui lira nos frames (ma_engine_read_pcm_frames) et les mixera.
     ma_engine_config cfg = ma_engine_config_init();

@@ -181,6 +181,13 @@ private:
 
     // Reconstitution des messages : partagée avec MidiInHost (cf. MidiMessageParser).
     neost::midi::Parser parser_;
+    // `parser_` n'appartient QU'AU THREAD DE LIVRAISON. panic() tourne sur le thread
+    // principal et faisait `parser_.reset()` pendant que le worker était dans
+    // `parser_.byte()` — course de données sur le `std::vector` de SysEx, et le
+    // chemin est AUTOMATIQUE (setDestinations → closeDestinations → panic, déclenché
+    // à 1 Hz par la boucle GUI). Il pose donc une demande, que le worker honore entre
+    // deux octets — l'endroit exact où une remise à zéro a un sens.
+    std::atomic<bool> parserResetReq_{false};
 
     void emit(const uint8_t* msg, int len);     // message complet → synthé + port
     void parse(uint8_t b);                      // octet → parseur → emit (thread de livraison)

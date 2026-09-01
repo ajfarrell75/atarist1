@@ -1541,9 +1541,22 @@ int GemdosHd::loadAndReloc(const std::string& prgName, uint32_t baseaddr, bool f
     // Lecture de 4 octets (premier offset de relocation) à relIdx : elle doit
     // tenir dans le fichier (Hatari borne à fileSize-3, off-by-one d'un octet ;
     // ici prg fait exactement fileSize octets → borne stricte).
-    long relIdx = (long)(0x1cu + nText + nData);   // ≤ fileSize (vérifié plus haut, pas de wrap)
-    if (relIdx + 4 > fileSize) return GEMDOS_EPLFMT;
-    if (relIdx + (long)nSym + 4 <= fileSize) relIdx += nSym;
+    // ⚠ Arithmétique en 64 BITS SIGNÉS, et pas en `long`. `nSym` (champ `slen` de
+    // l'en-tête, octets 14-17) vient du FICHIER et n'est validé NULLE PART : ni
+    // `gemPexec`, qui ne teste que tlen/dlen/blen, ni la borne ci-dessus, qui ne
+    // couvre que texte+données. Avec `long` sur 32 bits — MinGW-w64, donc le paquet
+    // Windows x64 livré — un `slen ≥ 0x80000000` rendait `(long)nSym` NÉGATIF : le
+    // test passait (débordement signé, déjà de l'UB), puis `relIdx += nSym` repassait
+    // par `unsigned int` et rendait `relIdx` négatif. `prg[relIdx]` lisait alors
+    // ~2 Gio SOUS le tampon, et la table de relocation ainsi « lue » était appliquée
+    // à la RAM invitée. Sur LP64 la branche n'était simplement jamais prise : le
+    // défaut ne se voyait que sur la plateforme qu'on ne lance jamais à la main.
+    // En int64_t, `(int64_t)nSym` est positif pour tout uint32_t et la somme ne peut
+    // pas déborder — le test redevient celui qu'il croyait être.
+    const int64_t fsz = (int64_t)fileSize;
+    int64_t relIdx = (int64_t)(0x1cu + nText + nData);   // ≤ fsz (vérifié plus haut)
+    if (relIdx + 4 > fsz) return GEMDOS_EPLFMT;
+    if (relIdx + (int64_t)nSym + 4 <= fsz) relIdx += (int64_t)nSym;
 
     uint32_t relOff = (uint32_t)((prg[relIdx] << 24) | (prg[relIdx + 1] << 16)
                                | (prg[relIdx + 2] << 8) | prg[relIdx + 3]);
@@ -1552,7 +1565,7 @@ int GemdosHd::loadAndReloc(const std::string& prgName, uint32_t baseaddr, bool f
     uint32_t cur = baseaddr + 0x100 + relOff;
     writeLong(cur, readLong(cur) + baseaddr + 0x100);
     relIdx += 4;
-    while (relIdx < fileSize && prg[relIdx]) {
+    while (relIdx < fsz && prg[relIdx]) {
         if (prg[relIdx] == 1) { relOff += 254; relIdx += 1; continue; }
         relOff += prg[relIdx];
         cur = baseaddr + 0x100 + relOff;

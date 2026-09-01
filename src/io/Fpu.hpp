@@ -33,10 +33,16 @@
 // =============================================================================
 #pragma once
 #include <cstdint>
+#include "core/StateArchive.hpp"
 #include "io/SoftFloatX80.hpp"   // arithmétique étendue 80 bits (mantisse 64 bits réelle)
 
 class Fpu {
 public:
+    // Les booléens de cette classe sont relus EN BLOC (`ar(fpu)` dans Bus) : la
+    // normalisation de StateArchive::operator() ne les voit pas — elle ne s'applique
+    // qu'aux `bool` passés seuls (cf. sa note de portée). Un octet valant autre chose
+    // que 0 ou 1 dans un bool est un COMPORTEMENT INDÉFINI, pas une valeur vraie.
+    void fixSerializedBools(StateArchive& ar) { ar.fixBools(present, bufIn_); }
     // Présence du coprocesseur (socket peuplé). false = fidèle Hatari : la zone
     // $FFFA40-$FFFA5F déclenche une bus error et la sonde conclut « not found ».
     bool present = false;

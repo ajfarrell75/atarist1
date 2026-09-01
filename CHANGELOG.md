@@ -53,6 +53,98 @@ Ripper, DAC Pro Sound) avec page Dongles, `disks/dongles.txt` et oracle de rejeu
 vérifié note à note** en headless, corpus MIDI piano/blues ; port MIDI ALSA sous Linux ;
 save-state v16. Détail dans les chantiers datés ci-dessous.
 
+## Chasse aux bugs multi-agents : 9 défauts trouvés et corrigés, dont un hors bornes qui ne visait que Windows (2026-09-01)
+
+**La méthode.** Cinq axes de recherche en parallèle (chemins hôte et bac à sable ;
+parseurs d'entrées non fiables ; pile réseau et extensions du port cartouche ; audio
+temps réel et concurrence ; bornes et débordements du cœur), deux trouvailles maximum
+par axe, puis **un contradicteur par trouvaille** dont la mission était de la RÉFUTER,
+pas de la confirmer, avec consigne de reproduire plutôt que d'argumenter. 14 agents,
+34 min. Périmètre EXCLU d'emblée et écrit dans chaque prompt : une divergence de
+fidélité avec Hatari n'est pas un bug (c'est `docs/HATARI_DIVERGENCES.md`), sauf si elle
+produit un plantage ou de l'UB.
+⚠ **Zéro trouvaille sur neuf n'a été écartée.** Un étage adversarial qui ne rejette
+jamais rien n'a pas fait son travail d'étage adversarial — deux trouvailles ont donc été
+re-vérifiées À LA MAIN avant d'être crues (`HostPath` et `Fdc`, toutes deux confirmées).
+
+**Les cinq majeurs**
+
+- 🐞 **`GemdosHd.cpp` — lecture hors bornes à ~2 Gio sous le tampon, sur le paquet
+  WINDOWS uniquement.** Le champ `slen` de l'en-tête d'un `.PRG` (taille de la table de
+  symboles) n'était validé NULLE PART : ni `gemPexec`, qui ne teste que tlen/dlen/blen,
+  ni la borne de `loadAndReloc`, qui ne couvre que texte+données. Avec `long` sur
+  32 bits — MinGW-w64, donc le paquet livré depuis la 0.5.1 — un `slen ≥ 0x80000000`
+  rendait `(long)nSym` négatif : la garde passait (débordement signé, déjà de l'UB),
+  puis `relIdx += nSym` rendait l'index NÉGATIF, et la table de relocation ainsi « lue »
+  était appliquée à la RAM invitée. Sur LP64 la branche n'était simplement jamais prise :
+  **le défaut ne se voyait que sur la plateforme qu'on ne lance jamais à la main** — le
+  lien avec A12 est direct. Le contradicteur a prouvé l'atteignabilité sur le binaire
+  réel (PRG forgé lancé depuis le bureau TOS via `DESKTOP.INF`) et rejoué l'arithmétique
+  LLP64 dans un programme séparé. Correctif : arithmétique en `int64_t`, où
+  `(int64_t)nSym` est positif pour tout `uint32_t`.
+- 🐞 **`Acsi.cpp` — un paquet UltraSatan en vol détournait l'écriture suivante.** Le
+  drapeau `usatanPending_` n'était effacé que par `writeToDisk()`, `executeUltraSatan()`
+  et `reset()`. Si le transfert DMA du paquet n'avait pas lieu, il survivait, et le
+  prochain `WRITE(6)` partait dans `usatan_->writeData()` au lieu de l'image : le secteur
+  destiné à la carte SD écrasait les réglages de l'appareil — et `writeData` rendant
+  ST_OK, **l'écriture perdue était annoncée RÉUSSIE au pilote**. Désarmé désormais par
+  `emulateCommand()` et par `clearData()`. Vérifié que le chemin NORMAL n'est pas touché :
+  `clearData()` est appelé APRÈS `writeToDisk`, et `emulateCommand()` n'est jamais pris
+  pour le paquet UltraSatan.
+- 🐞 **`Acsi.cpp` — chemin périmé après démontage.** `unmountAll()` fermait le
+  descripteur mais gardait `path`, et `mountedPath()` le rend dès que `enabled` est vrai
+  (ce qui reste le cas des slots UltraSatan). `App::usatanApply()` s'en sert comme unique
+  test « faut-il remonter ? » : le chemin périmé étant égal à celui voulu, le remontage
+  était sauté et le slot restait « carte absente » (NOT READY / ASC $3A) jusqu'à la fin
+  de la session. Le chemin part maintenant avec le descripteur, montage raté compris.
+- 🐞 **`Machine.cpp` — save-state forgé, gel définitif.** Les gardes d'horloge ne
+  contraignaient que l'ÉCART entre `frameStart_` et `frameEnd_` : un couple décalé DE
+  FAÇON COHÉRENTE les passait toutes, et `runFrame` bouclait ensuite sur 2^58 cycles.
+  `frameStart_ >= 0` n'avait aucune borne HAUTE, et le commentaire d'en tête annonçait
+  pourtant fermer exactement ce trou. La fenêtre est désormais **ancrée sur l'horloge
+  maître restaurée** — contrôle impossible plus haut, `sched` n'étant restauré qu'après.
+  **Prouvé par forge** : offsets retrouvés en diffant deux états (frameStart_ à 23,
+  frameEnd_ à 32), CRC32 du payload recalculé, décalage de 2^58 appliqué aux deux →
+  l'état est REJETÉ par nom, alors qu'un état légitime charge toujours.
+- 🐞 **`MidiOutHost.cpp` — course de données sur le décodeur MIDI.** `panic()` faisait
+  `parser_.reset()` depuis le thread principal pendant que le thread de livraison était
+  dans `parser_.byte()` — `std::vector` de SysEx écrit des deux côtés, sans verrou
+  (`outMtx_` ne couvre que `emit`). Et le chemin est AUTOMATIQUE : `setDestinations` →
+  `closeDestinations` → `panic`, déclenché à 1 Hz par la boucle GUI. `parser_`
+  n'appartient plus qu'au thread de livraison ; `panic()` pose une demande atomique que
+  le worker honore entre deux octets — l'endroit exact où une remise à zéro a un sens.
+  Pas de verrou ajouté : en prendre un ferait attendre le thread d'émulation sur un
+  pilote MIDI.
+
+**Les quatre mineurs**
+
+- **`HostPath.cpp`** — le clamp de « .. » était le corps purement Unix d'Hatari : sous
+  Windows, remonter au-dessus de la racine JETAIT la lettre de lecteur et rendait un
+  chemin relatif au lecteur COURANT du processus (et « //X » pour une racine UNC). La
+  remontée est bornée à la racine réelle du lecteur ; 5 cas ajoutés à l'auto-test, dont
+  deux Posix qui prouvent que rien n'a bougé de ce côté.
+- **`StateArchive.hpp`** — la normalisation des booléens ne couvrait que les `bool`
+  passés SEULS, alors que son commentaire affirmait couvrir « TOUS les booléens du projet
+  d'un coup ». Un bool membre d'un agrégat copié en bloc (`Scc::Chn`, `Fpu`, `StePads`)
+  recevait son octet brut — UB, et `Chn` est relu dans les DEUX polarités. `fixBools()`
+  est le rattrapage, appelé sur les trois sites ; la portée réelle est écrite là où le
+  commentaire mentait. C++17 n'a pas de réflexion : il n'y a pas de correctif générique.
+- **`DriveSound.cpp`** — `init()` est appelé deux fois (48 kHz, puis la fréquence
+  négociée) et écrasait ses trois poignées sans rien libérer : un `ma_engine`, son
+  resource manager, son THREAD de travail et deux `ma_sound` aux tampons PCM décodés
+  restaient vivants jusqu'à la fin du processus. `init()` commence par `shutdown()`,
+  qui est idempotent.
+- **`Fdc.cpp`** — `readTrackStx` convertissait en `uint16_t` un délai valant
+  1 600 000 / `trackImageSize` ; `trackImageSize` vient du FICHIER et n'est borné que par
+  le haut, donc toute piste STX de moins de 25 octets d'image produisait une conversion
+  flottant→entier **hors domaine**, comportement indéfini ([conv.fpint]) et non un
+  enroulement. Borné avant conversion.
+
+**Gardes posées** : 10 assertions neuves au palier `fast` (5 pour le clamp de racine,
+5 pour `fixBools`), plus la garde d'ancrage d'horloge prouvée par forge. Palier `full`
+vert. Le dépôt n'a PAS été modifié par les agents (lecture seule imposée, `git status`
+vérifié vide à la fin de la chasse).
+
 ## A12 — la première cible de livraison est validée sur du vrai matériel, et le paquet macOS n'enregistrait rien (2026-09-01)
 
 **Le point de départ.** Huit paquets livrés, **aucun** jamais lancé sur la machine

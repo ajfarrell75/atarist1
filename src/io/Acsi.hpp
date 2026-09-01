@@ -87,7 +87,10 @@ public:
     int      dataLen() const { return dataLen_; }      // octets à transférer (0 = aucun)
     bool     isWrite() const { return dmaWrite_; }     // true = RAM→disque, false = disque→RAM
     const uint8_t* readBuffer() const { return buf_.data(); }   // données disque→RAM
-    void     clearData() { dataLen_ = 0; dmaWrite_ = false; }
+    // Abandon de la phase de données : le secteur attendu par un paquet 'USWr…'
+    // ne viendra plus, donc on désarme aussi. Sans cela le drapeau survivait à
+    // l'abandon et détournait la prochaine écriture (cf. Acsi::emulateCommand).
+    void     clearData() { dataLen_ = 0; dmaWrite_ = false; usatanPending_ = false; }
     // Écrit `len` octets de `src` (RAM) vers l'image de la cible courante (DMA write).
     void     writeToDisk(const uint8_t* src, int len);
 
