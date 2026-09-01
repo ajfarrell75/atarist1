@@ -61,9 +61,15 @@ fi
 assert_universal build-deps/glfw/lib/libglfw3.a
 
 # --- Build NeoST universel contre le GLFW statique ---------------------------
+# NEOST_WITH_SLIRP=OFF, EXPLICITEMENT : les paquets publiés sont bâtis sans
+# libslirp (la CI ne l'installe pas, et le README le dit). En AUTO, une machine de
+# dev qui a la libslirp de Homebrew produisait autre chose que la release — et,
+# Homebrew étant MONO-ARCH, la tranche x86_64 ne se liait même pas
+# (« ld: symbol(s) not found for architecture x86_64 » sur slirp_new, mesuré le
+# 2026-09-01 en rebâtissant le .dmg 0.6). Le paquet doit être le même partout.
 cmake -B build-macos -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_OSX_ARCHITECTURES="$ARCHS" -DCMAKE_OSX_DEPLOYMENT_TARGET="$MACOS_MIN" \
-      -DNEOST_VERSION_STR="$VERSION" \
+      -DNEOST_VERSION_STR="$VERSION" -DNEOST_WITH_SLIRP=OFF \
       -DCMAKE_PREFIX_PATH="$ROOT/build-deps/glfw"
 cmake --build build-macos -j"$(sysctl -n hw.ncpu)"
 test -x build-macos/neost || { echo "ERREUR : le frontend GUI n'a pas été construit (GLFW introuvable ?)"; exit 1; }
@@ -116,6 +122,35 @@ LEAKED=$(otool -L "$APP/Contents/MacOS/neost" | tail -n +2 | awk '{print $1}' \
 if [ -n "$LEAKED" ]; then
     echo "ERREUR : le .app référence des dylibs hors bundle :"; echo "$LEAKED"; exit 1
 fi
+
+# --- Signature AD-HOC (palier 0) ---------------------------------------------
+# Mesuré sur le .dmg 0.6 publié : `codesign --verify` répondait « code object is
+# not signed at all » et `spctl` « no usable signature ». Le seul cachet présent
+# était celui que le LINKER pose sur les Mach-O arm64 (adhoc, linker-signed), avec
+# « Info.plist=not bound » et « Sealed Resources=none » — le bundle n'était pas
+# scellé. C'est cette configuration qui donne « NeoST est endommagé, placez-le
+# dans la corbeille » dès que le fichier téléchargé porte la quarantaine : un
+# CUL-DE-SAC, l'utilisateur n'a aucun bouton pour passer outre.
+#
+# Sceller le bundle, même sans identité, ne fait PAS accepter l'application par
+# Gatekeeper (il n'y a pas de Developer ID : `spctl` refuse toujours) — mais le
+# refus change de nature, « développeur non identifié », qui a une sortie : clic
+# droit → Ouvrir, ou Réglages → Confidentialité → Ouvrir quand même. C'est tout
+# ce que la gratuité permet ; la notarisation (99 $/an) est le palier au-dessus.
+#
+# Ordre imposé par codesign : les binaires SECONDAIRES d'abord (neost-headless
+# est du code, pas une ressource), le bundle ENSUITE — il scelle le reste et
+# signe l'exécutable principal au passage. Et tout ceci APRÈS le staging : la
+# moindre écriture dans le .app après signature casse le sceau.
+codesign --force --sign - "$APP/Contents/MacOS/neost-headless"
+codesign --force --sign - "$APP"
+# Garde-fou : un sceau cassé ne se voit qu'à l'usage, chez l'utilisateur.
+codesign --verify --deep --strict "$APP" \
+    || { echo "ERREUR : la signature ad-hoc du .app ne se vérifie pas"; exit 1; }
+SEALED=$(codesign -dvv "$APP" 2>&1 | grep -c 'Sealed Resources version=' || true)
+test "$SEALED" -eq 1 \
+    || { echo "ERREUR : le bundle n'est pas scellé (Sealed Resources absent)"; exit 1; }
+echo "OK : .app scellé (signature ad-hoc — non notarisé, cf. docs/RELEASE.md)"
 
 # --- DMG ---------------------------------------------------------------------
 hdiutil create -volname "NeoST" -srcfolder "$APP" -ov -format UDZO "$DMG"

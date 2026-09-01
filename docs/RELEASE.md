@@ -61,9 +61,29 @@ le reste est ci-dessous.
   releases seront supprimées à la sortie de la 0.6** (décision du mainteneur,
   2026-08-30). ⏳ **Le tag `0.6` est posé le 2026-09-01** — la suppression est due dès
   que ses paquets sont publiés.
-- **Signature / notarisation** : le `.dmg` macOS n'est ni signé ni notarisé (Gatekeeper
-  affiche « NeoST est endommagé »), le `.zip` Windows n'est pas signé. À traiter **après**
-  la purge : signer un paquet qui contient des ROM Atari n'aurait pas de sens.
+- **Signature / notarisation** — ◐ **palier 0 fait le 2026-09-01, palier 1 ouvert.**
+  Mesuré sur le `.dmg` 0.6 publié : `codesign --verify` répondait « code object is not
+  signed at all » et `spctl` « no usable signature ». Le seul cachet était celui du
+  LINKER sur les Mach-O (`adhoc, linker-signed`), `Info.plist=not bound`,
+  `Sealed Resources=none` — le bundle n'était pas scellé, d'où « NeoST est endommagé,
+  placez-le dans la corbeille », qui est un **cul-de-sac** pour l'utilisateur.
+  `package_macos.sh` scelle désormais le bundle par une **signature ad-hoc** (binaire
+  secondaire d'abord, bundle ensuite, garde `--verify --deep --strict`). Gatekeeper
+  refuse toujours — il n'y a pas de Developer ID, aucune signature gratuite n'y change
+  rien — mais le refus devient « développeur non identifié », qui a une sortie : clic
+  droit → Ouvrir.
+  **Reste le palier 1** : Developer ID + notarisation, **99 $/an** (Apple Developer
+  Program). Recette : `codesign --options runtime --timestamp` sur les deux binaires
+  puis le `.app`, signer aussi le `.dmg`, `xcrun notarytool submit --wait` (clé API App
+  Store Connect), `xcrun stapler staple` sur les deux — l'agrafe est ce qui fait que le
+  premier lancement marche hors ligne. En CI : 4 secrets et un trousseau temporaire.
+  Risque technique faible ici : Moira est un interpréteur, donc **pas de JIT**, l'écueil
+  habituel du hardened runtime.
+  Côté **Windows**, le `.zip` reste non signé : depuis juin 2023 la clé doit vivre sur un
+  token FIPS ou un HSM, donc signer en CI impose un service de signature cloud ; un
+  certificat OV (~200-400 €/an) n'éteint même pas l'avertissement SmartScreen tant que la
+  réputation n'est pas bâtie. Et SmartScreen, lui, est un clic — pas un cul-de-sac.
+  Mauvais rapport, à faire en dernier.
 
 ## Ce que la machine vérifie déjà
 

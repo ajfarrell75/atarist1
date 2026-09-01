@@ -87,14 +87,18 @@ Every release ships **8 packages** with SHA-256 sums:
 floppy, and three freely distributable demoscene productions — *The Cuddly Demos*,
 *No Cooper* and *Closure* — so it has something worth looking at out of the box.
 
-⚠️ **The packages are not code-signed yet.** On macOS, Gatekeeper will claim the app is
-damaged; clear the quarantine flag once and it runs:
+⚠️ **The packages are not notarised**, so both systems will stop you the first time.
+
+On **macOS**, the app carries an ad-hoc signature — enough to be a sealed, intact bundle,
+but there is no paid Apple Developer ID behind it, so macOS asks. Right-click (or
+Control-click) NeoST.app → **Open** → **Open**, once. If it still refuses, clear the
+quarantine flag yourself:
 
 ```sh
 xattr -dr com.apple.quarantine /Applications/NeoST.app
 ```
 
-On Windows, SmartScreen warns on first launch (*More info* → *Run anyway*).
+On **Windows**, SmartScreen warns on first launch (*More info* → *Run anyway*).
 
 ### Build from source
 
