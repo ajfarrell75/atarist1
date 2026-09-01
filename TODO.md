@@ -60,7 +60,13 @@ servi par `habib256.github.io/neost` embarquait les deux TOS Atari depuis le
 job `wasm`, le site continuant de servir le dernier bundle réussi. Premier déploiement
 réellement libre : celui de 10:03 ce jour-là, vérifié sur le site (cf. `CHANGELOG.md`).
 
-**Seul reste, calé sur la 0.6** — ⚠ **assets des releases GitHub 0.5.2 / 0.5.4** :
+✅ **SOLDÉ le 2026-09-02 — le § BLOQUANT n'a plus d'objet.** Les releases **0.5.2 et
+0.5.4 sont SUPPRIMÉES** (`gh release delete`), leurs 17 assets avec elles. Les **tags git
+restent** : la traçabilité des versions est conservée, seule la diffusion des paquets
+cesse. Plus aucun canal public ne distribue de ROM Atari — historique, Pages, paquets et
+releases sont tous propres. Ce qui suit est le récit de ce qui a mené là.
+
+~~Seul reste, calé sur la 0.6~~ — ⚠ **assets des releases GitHub 0.5.2 / 0.5.4** :
 leurs paquets bureau publiés contiennent `tos102uk.img` + `tos162uk.img` (vérifié
 le 2026-08-30 en ouvrant le zip Windows 0.5.4) — la purge git n'y touche pas.
 **Décision du mainteneur (2026-08-30) : assumé tel quel, les deux releases seront

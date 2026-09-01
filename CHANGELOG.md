@@ -1,7 +1,7 @@
 # Changelog — NeoST
 
 (c) 2026 VERHILLE Arnaud. **La chronologie** : releases, puis les chantiers datés dans
-l'ordre inverse. Version courante : **0.6**.
+l'ordre inverse. Version courante : **0.6.1**.
 
 - « NeoST gère-t-il X ? » → [`docs/IMPLEMENTED.md`](docs/IMPLEMENTED.md) (inventaire par puce)
 - « Que reste-t-il ? » → [`TODO.md`](TODO.md)
@@ -16,6 +16,39 @@ Cette section existe pour qu'un trou dans la numérotation ne soit jamais SILENC
   artefact publié sous ce numéro. **La raison du saut n'est pas consignée** et elle
   n'est pas reconstituable depuis l'historique — on l'écrit tel quel plutôt que
   d'inventer une explication.
+
+## 0.6.1 — vos réglages restent en place (2026-09-02)
+
+Une version de correction. Aucune fonctionnalité nouvelle : **23 défauts** trouvés et
+corrigés en cinq rounds de chasse multi-agents, plus la passe de validation matérielle
+A12. Ce que l'utilisateur y gagne :
+
+- **Les réglages sont enfin conservés.** Sur macOS et sur les quatre AppImage, NeoST est
+  lancé depuis un support en LECTURE SEULE : il range donc sa configuration dans le
+  dossier utilisateur — mais il ne créait jamais ce dossier, et **tout réglage était perdu
+  en silence à la fermeture**. Cinq paquets sur huit étaient concernés.
+- **Le `.dmg` macOS s'installe par glisser-déposer** : il ne contenait que l'application,
+  sans le raccourci vers `/Applications`.
+- **Le paquet web porte ses licences**, comme les sept autres — et le site les sert déjà.
+- **Un save-state ne peut plus être rechargé sous une autre ROM.** L'appariement ne tenait
+  qu'aux 2 octets de version TOS, que cinq localisations partagent : reprendre un état sous
+  la mauvaise ROM figeait le CPU sans un mot. Le format passe en v19 ; **les états v18 et
+  antérieurs sont refusés explicitement**.
+- **Un `.PRG` malformé ne peut plus faire lire NeoST hors de sa mémoire** (paquet Windows).
+- **Android** : le déballage des données se répare de lui-même au lieu de rester
+  définitivement incomplet ; le modèle tactile est refait — un tap produit un vrai clic, et
+  le clic droit à deux doigts fonctionne.
+- **Borne** : l'image n'est plus amputée sur un écran moins large que 16:10, et une touche
+  ne reste plus collée quand on bascule bureau ⇄ borne pendant un appui.
+- **Web** : le profil STE démarrait sur une ROM ST ; il démarre désormais sur EmuTOS 256 Ko.
+- **UltraSatan** : un paquet resté en vol ne détourne plus l'écriture du secteur suivant,
+  et une carte éjectée est réellement remontée.
+- **MIDI** : la case MT-32 de la page de configuration répondait dans le vide ; couper tous
+  les canaux d'un appareil le rouvrait en grand au redémarrage ; une course entre deux
+  threads pouvait corrompre le décodeur.
+
+Les paquets 0.5.2 et 0.5.4 ont été retirés le 2026-09-02 : leurs archives contenaient des
+ROM Atari. Leurs tags git restent en place.
 
 ## 0.6 — le MegaSTE au banc, le studio MIDI, un paquet 100 % libre (2026-09-01)
 

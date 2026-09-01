@@ -116,10 +116,12 @@ shortcut next to the app, instead of leaving you to copy the bundle by hand.
 macOS is still unsigned by Apple: right-click the app and choose Open on first launch.
 ```
 
-### Après publication — une action, et elle solde le dernier blocage
+### ✅ Fait le 2026-09-02 — le dernier blocage est soldé
 
-**Supprimer les releases GitHub 0.5.2 et 0.5.4** : leurs paquets bureau contiennent
-`tos102uk.img` + `tos162uk.img`. Décision du mainteneur du 2026-08-30.
+**Les releases GitHub 0.5.2 et 0.5.4 sont SUPPRIMÉES**, leurs 17 assets avec elles : leurs
+paquets bureau contenaient `tos102uk.img` + `tos162uk.img`. Les **tags git sont conservés**
+— la traçabilité des versions reste, seule la diffusion cesse. Décision du mainteneur du
+2026-08-30, exécutée le 2026-09-02. La commande, pour mémoire :
 
 ```sh
 gh release delete 0.5.2 --yes   # release + assets ; le TAG git reste
@@ -131,6 +133,8 @@ Puis vérifier que le `.zip` web de la 0.6.1 porte bien `licenses/` (la garde du
 
 ## Ce qui BLOQUE encore une release publique
 
+- ✅ **CLOS le 2026-09-02** : 0.5.2 et 0.5.4 supprimées, plus aucun canal public ne
+  distribue de ROM Atari. Le récit ci-dessous est conservé pour la mémoire du chantier.
 - ~~Le § BLOQUANT du `TODO.md`~~ **Purgé le 2026-08-30** : l'historique est réécrit
   (`git filter-repo`), le dépôt ne suit plus ni ROM Atari, ni jeux, ni cartouches, ni
   Cubase Lite. Le pas **4** est fait le même jour : les paquets sont **100 % libres par
