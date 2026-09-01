@@ -17,6 +17,29 @@ Cette section existe pour qu'un trou dans la numérotation ne soit jamais SILENC
   n'est pas reconstituable depuis l'historique — on l'écrit tel quel plutôt que
   d'inventer une explication.
 
+## La 0.6.1 ne se publiait pas : un `apt-get install` sans `update` (2026-09-02)
+
+Le tag `0.6.1` a été posé, mais la release **n'est pas sortie** : le job `linux-bionic` a
+échoué, et `publish` dépendant des huit paquets, il a été `skipped`. Deux fois de suite —
+donc pas un aléa.
+
+**Cause.** L'index apt de l'image runner est figé à sa date de construction. Quand Ubuntu
+publie une révision d'un paquet, l'ancienne SORT du pool et l'index périmé la demande
+encore : `libssh-gcrypt-4 0.10.6-2ubuntu0.4`, dépendance transitive de ffmpeg, était
+ignorée par les trois miroirs puis rendait 404. L'étape échouait avant d'avoir rien
+construit.
+
+**Ce qui rend le diagnostic sûr** : c'était le **SEUL** `apt-get install` du dépôt sans
+`apt-get update` devant lui. Les six autres — `tests.yml` ×4, `oracle.yml`, et le job
+`linux-arm64` situé quinze lignes plus bas dans le même fichier — l'ont toujours eu. Une
+omission isolée, pas une pratique.
+
+📌 **Le tag a été REPOSITIONNÉ** sur le commit portant le correctif. C'est assumé et écrit
+ici plutôt que fait en silence : `gh run rerun` rejoue le workflow tel qu'il existe AU TAG,
+donc relancer sans déplacer le tag aurait rejoué le même échec indéfiniment. Aucune release
+n'avait été publiée depuis ce tag et aucun asset n'avait été diffusé — le numéro n'est donc
+pas brûlé et rien n'a changé sous les pieds d'un utilisateur.
+
 ## 0.6.1 — vos réglages restent en place (2026-09-02)
 
 Une version de correction. Aucune fonctionnalité nouvelle : **23 défauts** trouvés et

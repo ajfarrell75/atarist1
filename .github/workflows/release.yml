@@ -138,6 +138,17 @@ jobs:
       # sans problème sur le runner hôte, la glibc étant compatible ascendante.
       - name: Suite de validation (palier full — inclut les étalons PIXEL)
         run: |
+          # ⚠ `apt-get update` D'ABORD. L'index apt de l'image runner est figé à sa date
+          # de construction : quand Ubuntu publie une révision d'un paquet, l'ancienne
+          # SORT du pool et l'index périmé la demande encore — 404, et l'étape entière
+          # échoue avant d'avoir rien construit. Mesuré le 2026-09-02 sur la 0.6.1, DEUX
+          # fois de suite (donc pas un aléa) : `libssh-gcrypt-4 0.10.6-2ubuntu0.4`,
+          # dépendance transitive de ffmpeg, ignorée par les trois miroirs puis 404. Le
+          # job `publish` dépendant des huit paquets, la release n'était pas publiée.
+          # C'était le SEUL `apt-get install` du dépôt sans update — les six autres
+          # (tests.yml ×4, oracle.yml, et le job linux-arm64 juste en dessous) l'ont
+          # toujours eu.
+          sudo apt-get update -qq
           # ffmpeg : cf. le job arm64 — compare_screenshot.py décode les références
           # .png via ffmpeg, sans quoi les 5 étalons à référence PNG échouent.
           sudo apt-get install -y --no-install-recommends ffmpeg
