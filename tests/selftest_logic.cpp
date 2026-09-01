@@ -42,6 +42,7 @@
 #include "core/Pacing.hpp"
 
 #include <cmath>
+#include <filesystem>
 
 #include <cstdio>
 #include <cstring>
@@ -1777,6 +1778,56 @@ static void testConfigPath() {
 }
 
 // -----------------------------------------------------------------------------
+//  A12 — écrire la config dans un dossier qui N'EXISTE PAS ENCORE.
+//
+//  Le test ci-dessus est PUR : il prouve quel chemin la règle retient, et c'est
+//  tout. Le défaut trouvé le 2026-09-01 vivait juste après — la règle rendait le
+//  bon chemin (`~/.config/neost/neost.cfg`, le dossier du binaire étant en lecture
+//  seule), mais RIEN ne créait ce dossier, donc l'écriture échouait. Conséquence
+//  livrée : sur le `.dmg` macOS monté — et sur tout AppImage, dont le contenu est
+//  monté en lecture seule lui aussi — le paquet ne conservait AUCUN réglage, chez
+//  tout premier utilisateur.
+//
+//  ⚠ Ce test-ci touche le DISQUE, contrairement à son voisin. C'est délibéré et
+//  c'est la leçon : la partie pure était testée, la partie qui écrit ne l'était
+//  pas, et c'est exactement là que le défaut s'est logé. Il écrit sous le dossier
+//  temporaire du système et nettoie derrière lui.
+//
+//  ⚠ Pourquoi la CI ne pouvait pas l'attraper autrement : les six smoke-tests de
+//  paquet tournent sur un dossier EXTRAIT (`squashfs-root/usr`,
+//  `dist/NeoST.app/Contents`, `_check/*/`), donc inscriptible. Le support de
+//  livraison réel — image montée en lecture seule — n'est jamais exercé.
+// -----------------------------------------------------------------------------
+static void testConfigWriteCreatesDir() {
+    std::printf("neost.cfg — l'écriture CRÉE son dossier (A12)\n");
+    namespace fs = std::filesystem;
+
+    const fs::path base = fs::temp_directory_path() / "neost-selftest-cfg";
+    std::error_code ec;
+    fs::remove_all(base, ec);                 // repartir propre, sans exiger l'absence
+    const fs::path target = base / "neost" / "neost.cfg";
+
+    // Le dossier n'existe pas : c'est TOUTE la situation du défaut.
+    checkBool("le dossier de destination n'existe pas encore",
+              fs::exists(base, ec), false);
+
+    neost::appconfig::Config w{};
+    std::string err;
+    // cwdFallback=false À DESSEIN : le repli sur le répertoire courant masquerait
+    // le défaut en écrivant ailleurs — et c'est lui qui rendait le message d'erreur
+    // trompeur (il nommait « neost.cfg.tmp », pas le chemin voulu).
+    const bool ok = neost::appconfig::writeConfigAtomic(
+        target.string(), w, /*full=*/true, /*cwdFallback=*/false, err);
+    if (!ok) std::printf("  (err = %s)\n", err.c_str());
+    checkBool("écrire dans un dossier absent RÉUSSIT", ok, true);
+    checkBool("le fichier est bien là", fs::exists(target, ec), true);
+    checkBool("aucun temporaire laissé derrière",
+              fs::exists(fs::path(target.string() + ".tmp"), ec), false);
+
+    fs::remove_all(base, ec);
+}
+
+// -----------------------------------------------------------------------------
 //  A33 — DEUX CPU vivants dans le même processus.
 //
 //  `Cpu68k` jetait sur une seconde instance :
@@ -2051,6 +2102,7 @@ int main() {
     testNativeDefaults();
     testConfigParser();
     testConfigPath();
+    testConfigWriteCreatesDir();
     std::printf("[selftest-logic] %d OK, %d FAIL\n", g_ok, g_fail);
     return g_fail == 0 ? 0 : 1;
 }

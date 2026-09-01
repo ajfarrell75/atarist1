@@ -672,12 +672,29 @@ jobs:
           test "$TOTAL" -lt 40000000 \
             || { echo "ERREUR : bundle > 40 Mo — du contenu non libre a fui dedans ?"; exit 1; }
 
+      # Licences : la GPL exige que son texte ACCOMPAGNE le binaire. Les six autres
+      # jobs de paquet le gardent depuis le 2026-08-19 — le bundle web avait été
+      # OUBLIÉ, et il est distribué DEUX fois (le .zip de la release et le site
+      # Pages). Constaté le 2026-09-01 en ouvrant le paquet 0.6 publié : quatre
+      # fichiers, aucune licence (chantier A12).
+      - name: Poser et vérifier les licences du bundle
+        run: |
+          set -euo pipefail
+          mkdir -p wasm/licenses
+          cp LICENSE wasm/licenses/GPL-3.0.txt
+          cp packaging/licenses/GPL-2.0.txt wasm/licenses/
+          cp packaging/licenses/THIRD-PARTY.txt wasm/licenses/
+          for lic in GPL-3.0.txt GPL-2.0.txt THIRD-PARTY.txt; do
+            test -s "wasm/licenses/$lic" \
+              || { echo "ERREUR : licence absente du bundle web : $lic"; exit 1; }
+          done
+
       - name: Zipper le bundle
         env:
           NEOST_VERSION: ${{ needs.version.outputs.neost_version }}
         run: |
           mkdir -p dist
-          (cd wasm && zip -9 "../dist/NeoST-$NEOST_VERSION-web-wasm.zip" index.html index.js index.wasm index.data)
+          (cd wasm && zip -9 -r "../dist/NeoST-$NEOST_VERSION-web-wasm.zip" index.html index.js index.wasm index.data licenses)
 
       - uses: actions/upload-artifact@v5
         with:

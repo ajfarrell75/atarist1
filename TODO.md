@@ -238,11 +238,48 @@ est continue, les trous sont du travail fait.
   NeoST (`--parse` + `b VBL = N :once :file …` ; l'égalité s'écrit `=`, pas `==` — le parseur
   de breakcond scinde `==` et échoue). Comparer deux trames différentes envoie droit sur une
   fausse piste, ce qui est arrivé ici avant de recouper.
-- **A12 ⭘ — Aucune cible de livraison validée sur du matériel réel.** Windows jamais lancé
-  hors CI, APK Android jamais posé sur un appareil (QEMU seul), aucun budget temps réel
-  mesuré sur le Raspberry Pi visé (le perfbench ne garde que des ratios sur le poste de
-  dev). Une passe de validation PAR CIBLE, consignée avec sa config — de la mesure, pas
-  du code.
+- **A12 ◐ — Le registre existe et macOS est passé ; 4 cibles sur 5 restent.**
+  Ouvert le 2026-09-01 : [`docs/HW_VALIDATION.md`](docs/HW_VALIDATION.md) tient une
+  ligne PAR CIBLE avec la config de la machine, et un protocole en cinq pas (intégrité,
+  contenu, chaîne de confiance, exécution, débit) pour que chaque passe soit une recette
+  et non une improvisation. L'outil manquant est posé : `run_perfbench.py --budget` rend
+  le **facteur temps réel absolu** (trames/s ÷ balayage annoncé par la machine émulée)
+  là où les ratios, machine-indépendants par construction, ne pouvaient pas répondre ;
+  `NEOST_HEADLESS=…` le pointe sur le binaire LIVRÉ. ⚠ Il ne doit JAMAIS entrer dans un
+  palier de test — un seuil absolu sur un runner de CI est le piège que l'en-tête de
+  l'outil décrit.
+  **macOS arm64 : passé le 2026-09-01** sur le `.dmg` 0.6 publié (M1, 8 Gio) — somme
+  conforme, contenu 100 % libre VÉRIFIÉ sur le paquet servi, scellement du palier 0
+  confirmé (`syspolicy_check` ne relève plus que *Notary Ticket Missing*), binaire livré
+  à **×26,9 temps réel** au pire, soit rien de mesurable face au build natif (×26,4).
+  **Ce que la passe a trouvé** : le paquet ne pouvait JAMAIS enregistrer sa configuration
+  chez un premier utilisateur — bundle en lecture seule → règle A36 sur
+  `~/.config/neost/`, dossier que rien ne créait. Corrigé et revérifié dans les
+  conditions du défaut (détail au `CHANGELOG.md`).
+  **Les pas 1 et 2 sont soldés sur les HUIT paquets** (ils ne demandent aucun matériel) :
+  sommes 8/8, et **aucune ROM Atari nulle part** — la promesse « 100 % libre » passe du
+  script qui fabrique aux artefacts réellement servis. `tools/appimage_ls.py` rend les
+  quatre AppImage inspectables sans `unsquashfs`. Ce passage a trouvé une
+  **non-conformité GPL vivante** : le paquet web ne portait aucune licence, alors qu'il
+  est distribué deux fois (zip de release + GitHub Pages) — corrigé, huit jobs gardent
+  désormais les licences (ils étaient sept, là où la doc en annonçait huit).
+  **Ce qui se tranche sans la cible est tranché** : Windows n'a **aucune DLL manquante**
+  (table d'importation PE = DLL système seulement, build MinGW statique), et le plancher
+  glibc du Pi était **déjà gardé** en CI. Constat associé : **six jobs** lancent
+  `smoke_package.sh` sur le paquet — ce qui manque n'est pas « ça ne démarre jamais »
+  mais l'INTERFACE, le MATÉRIEL et le CHEMIN D'INSTALLATION.
+  ⚠ **Trou structurel mis au jour** : les six smoke-tests tournent sur un dossier
+  EXTRAIT donc inscriptible ; le support de livraison réel (monté en lecture seule) n'est
+  jamais exercé — c'est ce qui a laissé passer le défaut de configuration, lequel touche
+  en réalité **5 paquets sur 8** (le `.dmg` mesuré, les 4 AppImage déduits). Garde posée
+  dans `neost-selftest` et vérifiée par mutation (2 FAIL sans le correctif).
+  **Restent** : le pas visuel de macOS (ouvrir le `.app` dans une vraie session
+  graphique — l'automatisation n'obtient pas de fenêtre, et le build de dev se comporte
+  à l'identique, donc rien n'incrimine le paquet) ; **Windows** jamais lancé hors CI ;
+  **APK** jamais posé sur un appareil (QEMU seul — un émulateur ne solderait pas la
+  case) ; **Raspberry Pi**, la cible qui motive le chantier, toujours sans budget mesuré ;
+  **Linux** non consigné. Autrement dit : les pas 3, 4 et 5 pour quatre cibles sur cinq,
+  et eux exigent du matériel.
 - **A13** = save-states × GEMDOS HD → § *Périphériques & profils machine*.
 - **A15** = DSL d'injection sans token « mouvement bouton tenu » (pas de DRAG GEM).
 

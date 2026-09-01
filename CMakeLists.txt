@@ -314,8 +314,13 @@ set_source_files_properties(src/headless/main_headless.cpp
 # casse silencieusement, un débordement de 6850 mangeant le statut d'un message.
 # GmSynth y entre pour sa TABLE DE VÉRITÉ (banque livrée roms/gm + datation au
 # cycle du rendu) : c'est le garde du synthé GM intégré des plateformes non-macOS.
+# AppConfig y entre pour son ÉCRITURE : `writeConfigAtomic` est la seule partie de
+# la chaîne neost.cfg qui touche le disque, et c'est là que le défaut d'A12 s'est
+# logé (le dossier de destination n'était jamais créé) alors que la règle PURE
+# d'A36, elle, était testée. Le fichier ne dépend pas d'ImGui — il compile tel quel
+# contre neost_core.
 add_executable(neost-selftest tests/selftest_logic.cpp src/audio/MidiInHost.cpp
-    src/audio/GmSynth.cpp)
+    src/audio/GmSynth.cpp src/gui/AppConfig.cpp)
 target_link_libraries(neost-selftest PRIVATE neost_core)
 target_include_directories(neost-selftest PRIVATE "${CMAKE_SOURCE_DIR}/src"
     "${CMAKE_SOURCE_DIR}/extern/tsf")

@@ -53,6 +53,140 @@ Ripper, DAC Pro Sound) avec page Dongles, `disks/dongles.txt` et oracle de rejeu
 vérifié note à note** en headless, corpus MIDI piano/blues ; port MIDI ALSA sous Linux ;
 save-state v16. Détail dans les chantiers datés ci-dessous.
 
+## A12 — la première cible de livraison est validée sur du vrai matériel, et le paquet macOS n'enregistrait rien (2026-09-01)
+
+**Le point de départ.** Huit paquets livrés, **aucun** jamais lancé sur la machine
+visée : la CI construit, elle n'exécute pas. Et l'outil qui aurait pu répondre ne le
+pouvait pas — `run_perfbench.py` garde des RATIOS, machine-indépendants *par
+construction*, ce qui en fait une bonne barrière de CI et une réponse impossible à
+« cette machine tient-elle le temps réel ? ».
+
+**L'outil.** `run_perfbench.py --budget` (mode ajouté à l'outil existant, pas un 18ᵉ
+outil — garde-fou A38) rend le **facteur temps réel absolu** : trames/s ÷ balayage
+annoncé par la machine émulée. Le balayage est **lu sur la sortie** (`video: … @ NN Hz`)
+et jamais supposé — il dépend de la ROM. `NEOST_HEADLESS=…` pointe le banc sur le
+binaire LIVRÉ plutôt que sur le build de l'arbre. La **charge** de la machine entre dans
+la config relevée : la leçon du 2026-08-25 s'appliquait aussi à l'outil qui mesure.
+⚠ Ce mode ne doit jamais entrer dans un palier — un seuil absolu sur un runner de CI est
+exactement le piège décrit dans l'en-tête du fichier.
+
+**Le registre.** [`docs/HW_VALIDATION.md`](docs/HW_VALIDATION.md) : une ligne par cible,
+avec la config de la machine, et un protocole en cinq pas (intégrité, contenu, chaîne de
+confiance, exécution, débit). Il n'accepte que du mesuré — une case vide vaut mieux
+qu'une case remplie de bonne foi.
+
+**La passe macOS arm64** (MacBook Air M1, 8 Gio, macOS 15.6), sur le `.dmg` 0.6 **publié** :
+
+- somme conforme à `SHA256SUMS.txt` — l'asset ayant été remplacé APRÈS la publication du
+  fichier de sommes, ce n'était pas acquis ;
+- contenu **100 % libre vérifié sur le paquet servi** (EmuTOS seul, trois démos, les
+  trois licences) — jusque-là la promesse ne l'était que sur le script qui fabrique ;
+- **le palier 0 de signature tient sur l'artefact publié** : bundle scellé
+  (`Sealed Resources version=2`, `Info.plist entries=9`), *valid on disk*, et
+  `syspolicy_check distribution` ne relève plus qu'**un** défaut fatal, *Notary Ticket
+  Missing*. La cause du cul-de-sac « NeoST est endommagé » a donc bien disparu. Le
+  `.dmg` lui-même, lui, n'est toujours pas signé ;
+- **débit du binaire livré : ×26,9 temps réel au pire**, contre ×26,4 pour le build
+  natif de l'arbre — le paquet universal2 ne coûte **rien de mesurable**.
+
+🐞 **Ce que la passe a trouvé, et qu'aucun test ne pouvait voir : le paquet macOS ne
+pouvait JAMAIS enregistrer sa configuration.** Sur le `.dmg` monté, `Contents/` est en
+lecture seule ; la règle A36 retombe donc — correctement — sur `~/.config/neost/`. Mais
+**rien ne créait ce dossier** : l'ouverture du temporaire échouait, le repli sur le
+répertoire courant échouait aussi (cwd = `/` au lancement Finder), et le paquet annonçait
+`[cfg] cannot write … configuration NOT saved` à chaque lancement. Tout réglage perdu à
+chaque fermeture, chez **tout premier utilisateur**.
+
+**Prouvé par expérience, pas par lecture** : (A) sans le dossier → le message ;
+(B) le dossier créé à la main, *rien d'autre changé* → configuration écrite. Correctif
+dans `writeConfigAtomic` (`src/gui/AppConfig.cpp`) : créer le dossier parent du chemin
+retenu — et **pas** dans `resolve()`, qui est une fonction pure et le reste (c'est ce qui
+la rend testable). Le message d'erreur nomme désormais le chemin VOULU : son écrasement
+par le repli est ce qui rendait le défaut illisible dans le journal. Revérifié dans les
+conditions exactes du défaut (bundle `chmod a-w`, `~/.config/neost` supprimé) : plus de
+message, `neost.cfg` écrit. Palier `fast` vert.
+
+**Ce qui n'est PAS acquis, et pourquoi c'est écrit** : le pas visuel de macOS. Lancé
+depuis une session d'automatisation, le `.app` prend la barre de menus mais n'affiche
+aucune fenêtre — **le build de dev se comporte à l'identique sur la même machine**, donc
+le contrôle est négatif et rien n'incrimine le paquet : c'est le contexte d'exécution
+qui ne donne pas de fenêtre. À reprendre à la main dans une vraie session graphique.
+Windows, l'APK sur appareil, le Raspberry Pi et Linux restent entiers — un émulateur ne
+soldera pas la case Android, c'est encore QEMU.
+
+📌 Autre relevé, non corrigé (c'est du paquetage, pas de la mesure) : le `.dmg` **ne
+contient pas de lien vers `/Applications`** — pas d'installation par glisser-déposer.
+
+**Suite du même jour — les pas 1 et 2 sont soldés sur les HUIT paquets.** Ils ne
+demandent aucun matériel : ils se font sur les assets publiés, depuis n'importe quelle
+machine. `shasum -c SHA256SUMS.txt` → **8/8**. Contenu : `unzip -l` pour les archives,
+le manifeste `files:[…]` d'`index.js` pour le bundle web (la liste faisant foi de ce
+qu'`index.data` embarque — 17 entrées), et `tools/appimage_ls.py` pour les quatre
+AppImage, `unsquashfs` n'existant pas sur macOS : il lit le superbloc squashfs et
+décompresse la table des répertoires. **Aucune ROM Atari nulle part**, bundle web
+compris — le troisième canal de la purge, ici re-vérifié sur le paquet publié. La
+promesse « 100 % libre » n'était vérifiée que sur le script qui fabrique ; elle l'est
+maintenant sur les artefacts servis.
+
+🐞 **Non-conformité GPL trouvée et corrigée : le paquet web ne portait aucune licence.**
+Quatre fichiers, `index.*`, rien d'autre — et la page ne mentionne ni GPL ni licence.
+Il est pourtant distribué DEUX fois : le `.zip` de la release et le site GitHub Pages.
+C'est la non-conformité même que le 2026-08-19 avait corrigée pour les paquets de
+bureau ; le job `wasm` était l'un des **deux** jobs de paquet sans garde de licence.
+Le job pose désormais les trois textes dans `wasm/licenses/`, les vérifie sur le patron
+des six autres et les zippe — Pages les reçoit aussi, son artefact étant le dossier
+`wasm/`. **Huit jobs distincts gardent maintenant les licences**, ce que
+`docs/RELEASE.md` affirmait déjà alors qu'ils n'étaient que **sept** : l'affirmation
+comptait des occurrences, pas des jobs (`borne` en porte deux). Elle devient vraie.
+L'autre job non gardé, `android`, s'est révélé SAIN et n'a rien reçu :
+`stage_assets.sh` pose les licences sous `set -euo pipefail`, un `cp` qui échoue casse
+le build — garantie par construction, une garde de plus n'aurait été que de la cérémonie.
+⚠ Correctif de CI : il ne sera exercé qu'à la prochaine construction de release. Vérifié
+ici autant que ce poste le permet (YAML valide, logique de l'étape rejouée à la main →
+zip portant bien `licenses/`).
+
+**Troisième temps — ce qui se tranche SANS la cible, et un trou structurel.**
+Deux classes de défaut de premier lancement se vérifient sur l'artefact depuis
+n'importe quel poste. **Windows** : la table d'importation PE des deux exécutables ne
+cite que des DLL système (`KERNEL32`, `USER32`, `GDI32`, `OPENGL32`, `WINMM`, `WS2_32`,
+`SHELL32`, `msvcrt`) — le build MinGW est statique, donc le classique « il manque
+`libstdc++-6.dll` » est **exclu** sans machine Windows. **Raspberry Pi** : le plancher
+glibc était **déjà gardé** (le job `raspberry` échoue au-delà de `GLIBC_2.36`) — rien
+ajouté, le contrôle est au bon endroit.
+
+Au passage, la CI en fait plus qu'A12 ne le laissait entendre : **six jobs** lancent
+`tools/smoke_package.sh` sur le paquet (version, boot EmuTOS, disquette embarquée, HD
+GEMDOS). Ce qui manque n'est donc pas « le paquet ne démarre jamais », mais trois choses
+précises : l'INTERFACE (pas d'affichage en CI), le MATÉRIEL réel, et le CHEMIN
+D'INSTALLATION d'un utilisateur.
+
+⚠ **Le trou structurel, et il explique le bug du matin** : les six smoke-tests tournent
+sur un dossier **EXTRAIT**, donc inscriptible (`squashfs-root/usr`,
+`dist/NeoST.app/Contents`, `_check/*/`). Le support de livraison réel — image montée en
+lecture seule — n'est jamais exercé. Dans un dossier extrait, le chemin portable est
+inscriptible et la règle A36 n'atteint jamais sa branche « config utilisateur » : le
+défaut ne pouvait pas apparaître.
+
+**Le défaut de configuration touche donc 5 paquets sur 8, pas seulement macOS.** Aucun
+paquet ne livre de `neost.cfg` portable (vérifié sur les huit) : tout support monté en
+lecture seule bascule sur `~/.config/neost/`, ce qui vise le `.dmg` **et les quatre
+AppImage**. Le `.zip` Windows y échappe (extrait dans un dossier inscriptible), l'APK a
+sa propre logique, le web n'est pas concerné. ⚠ Pour le `.dmg` c'est MESURÉ ; pour les
+AppImage c'est DÉDUIT de trois faits vérifiés (aucun `neost.cfg` livré, montage en
+lecture seule, règle A36) — pas exécuté, faute de machine Linux, et la distinction est
+maintenue exprès.
+
+**Garde posée, vérifiée par mutation.** `tests/selftest_logic.cpp` teste maintenant
+l'ÉCRITURE et non plus seulement la règle : écrire une config dans un dossier qui
+n'existe pas doit réussir ET créer le dossier. `src/gui/AppConfig.cpp` entre dans
+`neost-selftest` pour cela (aucune dépendance ImGui). Correctif retiré → **2 FAIL**,
+correctif remis → 337 OK. Le test d'A36 était PUR : il prouvait quel chemin la règle
+retient, jamais qu'on sache y écrire — le défaut s'est logé dans l'intervalle exact
+entre les deux, et c'est la leçon à retenir de tout ce chantier.
+📌 Piège d'outillage rencontré en chemin : restaurer le fichier muté avec `cp` dans la
+MÊME SECONDE que la compilation de son `.o` laisse `make` croire l'objet à jour — la
+suite rougissait avec le correctif pourtant en place. `touch` puis reconstruction.
+
 ## Plus aucune référence oracle non re-dérivable : `spec512_bands` s'ancre sur la VBL par `stop` (2026-09-01)
 
 Dernière astérisque d'A11. Hatari ne se reproduisait pas lui-même sur ce disque (deux runs →

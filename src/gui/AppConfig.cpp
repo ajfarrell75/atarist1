@@ -420,10 +420,30 @@ void writeConfigKeys(std::ostream& f, const Config& w, bool full) {
 bool writeConfigAtomic(const std::string& finalPath, const Config& w, bool full,
                               bool cwdFallback, std::string& err) {
     std::string tmpPath = finalPath + ".tmp";
+    // A36 choisit le chemin, mais RIEN ne créait son dossier : quand la règle retient
+    // la config utilisateur (~/.config/neost/), ce dossier n'existe pas encore chez un
+    // utilisateur neuf et l'ouverture échoue. Mesuré le 2026-09-01 sur le .dmg 0.6
+    // MONTÉ (chantier A12) : le bundle est en lecture seule, la règle retombe donc sur
+    // la config utilisateur, et le paquet livré annonçait « configuration NOT saved » à
+    // CHAQUE lancement — donc aucun réglage conservé, pour tout premier utilisateur.
+    // Créer le dossier ici et pas dans `resolve()` : celle-ci est une fonction PURE,
+    // c'est ce qui la rend testable (cf. le bandeau de ConfigPath.hpp).
+    const std::size_t slash = finalPath.find_last_of("/\\");
+    if (slash != std::string::npos) {
+        std::error_code mkec;
+        fs::create_directories(finalPath.substr(0, slash), mkec);
+        // Une erreur ici ne décide de rien : l'ouverture qui suit tranche, et son
+        // échec porte déjà le repli puis le message.
+    }
     std::ofstream f(tmpPath);
+    // Le repli écrase `tmpPath` : sans garder le chemin VOULU, le message d'erreur
+    // nomme « neost.cfg.tmp » et cache l'emplacement qui a réellement échoué — c'est
+    // ce qui a rendu le défaut ci-dessus illisible depuis le journal.
+    const std::string wanted = tmpPath;
     if (!f && cwdFallback) { tmpPath = "neost.cfg.tmp"; f.open(tmpPath); }
     if (!f) {
-        err = "cannot write (" + tmpPath + ")";
+        err = "cannot write (" + wanted + ")";
+        if (tmpPath != wanted) err += " nor (" + tmpPath + ")";
         f.close(); std::error_code rmec; fs::remove(tmpPath, rmec);
         return false;
     }
