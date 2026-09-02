@@ -17,6 +17,309 @@ Cette section existe pour qu'un trou dans la numérotation ne soit jamais SILENC
   n'est pas reconstituable depuis l'historique — on l'écrit tel quel plutôt que
   d'inventer une explication.
 
+## Le PSG grésillait dans Super Hang-On : un digidrum à 45 kHz décimé de 61 % (2026-09-02)
+
+Rapport utilisateur : « le PSG grésille dans Super Hang-On ». C'était un vrai défaut, et
+l'inventaire des divergences le portait depuis longtemps — mais sous-évalué.
+
+**Ce qui a été écarté d'abord.** Pas une sous-alimentation audio : mesuré à **×35 le temps
+réel** sur ce titre, la boucle d'émulation a 35 fois la marge nécessaire. Pas non plus une
+saturation : aucun échantillon près de la butée sur 40 s.
+
+**La cause.** `YM2149::synthesizeFrame` datait chaque écriture de registre en
+**échantillons HÔTE** (`e.cycle * frames / frameCycles`), soit une grille de 20,8 µs à
+48 kHz, au lieu de la grille interne du modèle YM (250 kHz, 4 µs).
+
+Super Hang-On joue un **digidrum 3 voies** : son mixeur pose `R8`, `R9`, `R10` — les trois
+registres de volume — pour chaque instant d'échantillon. Mesuré (`NEOST_YMEV_DIAG=1`) :
+897 écritures par trame, en **groupes de 3** espacés de 524 cycles, soit **15,3 kHz**
+d'instants sonores. L'histogramme des écarts le prouve sans ambiguïté — **66,7 % sous
+32 cycles, 33,3 % au-delà de 64, presque rien entre les deux** — et la trace nomme les
+registres : `R8@134518 R9@134526 R10@134546`, puis le groupe suivant 524 cycles plus loin.
+
+Le défaut n'est donc PAS une perte d'échantillons : sur la grille hôte, 350 offsets
+distincts suffisaient pour 299 groupes, aucun groupe n'était perdu. C'est un **JITTER DE
+DATATION**. Une période de 65,3 µs quantifiée sur une grille de 20,8 µs sort en 3 ou 4 pas
+— 62,5 ou 83,3 µs — soit **±30 % de gigue sur la période** d'un flux à 15,3 kHz. Cette
+modulation de période est exactement ce qui fabrique du bruit de bande large : le
+grésillement entendu. Sur la grille 250 kHz la même période sort en 16 ou 17 pas (64 ou
+68 µs), soit ±3 %.
+
+**Le correctif** pose les écritures sur la grille **250 kHz**, la cadence interne du modèle
+YM, au lieu de la grille de sortie. Le rééchantillonneur pondéré qui existait déjà
+(`nextResampleWeightedN`) fait alors sa moyenne sur ~5,6 pas internes par écriture : le flux
+est **filtré** au lieu d'être décimé. C'est ce que fait Hatari, qui appelle `Sound_Update`
+avant chaque `Sound_WriteReg` (psg.c:346). En pratique : `synthBlock` est scindé en
+`applyRegs` + `renderHost`, et `synthesizeFrame` génère le 250 kHz par segments délimités
+par les événements.
+
+**Vérifié à l'oracle**, spectre sur la même fenêtre de 4 s (audio extrait de l'AVI d'Hatari) :
+
+| | <1k | 1-3k | 3-6k | 6-10k | 10-16k |
+|---|---|---|---|---|---|
+| NeoST **avant** | 92,5 % | 3,1 % | 2,3 % | 1,4 % | **0,5 %** |
+| NeoST **après** | 93,5 % | 2,8 % | 2,0 % | 1,2 % | **0,3 %** |
+| Hatari | 93,8 % | 2,5 % | 2,0 % | 1,2 % | **0,3 %** |
+
+NeoST rejoint l'oracle exactement dans les bandes où tombait le repliement, et l'énergie
+revient au fondamental.
+
+⚠ **Ce qui reste « non résolu » ne doit PAS l'être.** 37,5 % des écritures tombent
+encore dans un pas 250 kHz déjà occupé — ce sont précisément `R9` et `R10`, qui
+appartiennent au MÊME instant sonore que le `R8` qui les précède de 8 et 28 cycles. Les
+séparer synthétiserait les états transitoires de 1 à 3,5 µs où une voie est à jour et pas
+les deux autres : ce n'est pas du signal, c'est l'ordre d'écriture du 68000, et le
+passe-bas C10 du STF (~7,6 kHz) l'efface de toute façon. Les résoudre AJOUTERAIT du bruit.
+Hatari ne les sépare pas davantage.
+
+📌 **Leçon, et une correction que je me fais à moi-même.** La ligne existait dans
+`docs/HATARI_DIVERGENCES.md`, classée « basse », avec la mention « jitter ≤ 21 µs
+(sync-buzzer) ». Le mécanisme était le bon — c'est bien un jitter — mais la borne « ≤ 21 µs »
+était présentée comme négligeable, or elle ne l'est que rapportée à une période longue. Sur
+un digidrum à 15,3 kHz (période 65 µs), 21 µs valent ±30 % : le même chiffre devient
+audible. **Ma première rédaction de cette entrée disait « 61 % du flux perdu » — c'était
+faux**, et c'est l'histogramme des écarts, mesuré ensuite, qui l'a montré : les 61 %
+étaient les trois registres d'un même instant, dont la fusion est correcte. Le correctif et
+sa validation à l'oracle ne changent pas ; l'explication, si.
+
+Instrument conservé : `NEOST_YMEV_DIAG=1` imprime, par trame, le nombre d'écritures, le
+nombre d'instants sonores distincts, et combien chacune des deux grilles en résout.
+
+## Un réglage de sensibilité pour la souris émulée (2026-09-02)
+
+Demandé à l'usage : une souris hôte à très haute résolution rend le pointeur du ST
+inutilisable.
+
+**Le problème.** La souris du ST est mécanique — environ 200 points par pouce — et le
+TOS n'offre aucune accélération réglable digne de ce nom. NeoST transmettait le delta
+de la souris hôte **tel quel** à l'IKBD. Une souris moderne à 1600, 3200 ou 8000 dpi
+envoie donc jusqu'à 40 fois plus de pas pour le même geste : le pointeur GEM traverse
+l'écran au moindre mouvement, et viser une icône devient un exercice de patience.
+
+**Le réglage** : un curseur *Emulated mouse speed* sur la page **Input** de la fenêtre
+Configuration, de 0,05× à 4,00×, avec un bouton *Reset*. Il divise (ou multiplie) le
+delta hôte avant l'IKBD. **1,00× est le défaut et reproduit exactement le comportement
+d'avant** — une configuration existante, qui n'a pas la clé, se comporte à l'identique.
+Persisté en `mousespeed=` dans `neost.cfg`, appliqué au bureau **comme en borne** (c'est
+le seul chemin de MOUVEMENT vers le ST : les autres appels à `Ikbd::mouseEvent` ne
+portent que les boutons).
+
+**Le point délicat n'est pas la multiplication, c'est le RESTE.** Sous 1,0, la plupart
+des deltas mis à l'échelle valent moins d'un pas entier. Les tronquer sans les reporter
+ferait perdre **tous** les petits mouvements : la souris ST ne bougerait plus du tout
+sur un déplacement lent — c'est-à-dire exactement au moment où le réglage sert. La règle
+vit donc dans `src/util/MouseScale.hpp`, isolée pour être exerçable : `selftest_logic`
+vérifie qu'à 0,25× le premier pas tombe bien au 4ᵉ appel, et surtout la CONSERVATION
+(3000 px hôte à 0,3× → 900 pas ST à ±1 près), le signe des deltas négatifs, et le
+bornage défensif.
+
+⚠ **NaN est traité, et ce n'est pas de la bureaucratie** : `int(NaN)` est un
+comportement indéfini, et un reste devenu NaN figerait la souris ST pour toute la
+session. Un `mousespeed=nan` venu d'un fichier corrompu retombe donc sur 1,0 — la même
+leçon que celle payée sur `volume=`/`mix_*` (cf. `mixGain`, AppConfig.cpp), appliquée
+cette fois du premier coup. Le plancher n'est pas 0 non plus : à 0 la souris serait
+figée sans que rien ne le dise.
+
+**Périmètre** : bureau et borne. Les frontends **web et Android ne sont pas touchés** —
+ils ont leur propre chemin souris et leurs propres réglages, et je n'ai pas de moyen de
+les vérifier ici.
+
+## Super Hang-On : le vrai coupable était `MFP_UpdateTimers` — que j'avais porté puis retiré le matin même (2026-09-02)
+
+Suite du rapport « des bandes pleine largeur, à n'importe quelle hauteur, de temps en
+temps, souvent noires ou blanches ». Deux correctifs d'affichage plus tard, l'utilisateur
+voyait toujours le défaut et a demandé de chercher du côté des autres émulateurs. C'était
+la bonne idée : **Hatari nomme ce jeu et ce symptôme dans son propre journal.**
+
+`mfp.c:135`, entrée du 2022/01/27 :
+
+> *Call MFP_UpdateTimers / CycInt_Process before accessing any MFP registers, to ensure
+> MFP timers are updated in chronological order (**fix the game Super Hang On**, where
+> `bclr #0,$fffffa0f` to clear Timer B ISR sometimes happens at the same time that Timer C
+> expires, which used the wrong ISR value and gave **flickering raster colors**)*
+
+« Flickering raster colors » : des lignes rendues avec la palette de leur voisine, donc des
+bandes pleine largeur, à hauteur arbitraire, par intermittence. Le symptôme, mot pour mot.
+
+⚠ **Et j'avais porté ce correctif le matin même, avant de le retirer.** L'entrée écrite
+alors — « correctif prescrit RÉFUTÉ À LA MESURE, ne pas re-tenter » — reposait sur un seul
+chiffre : le port faisait passer l'étalon `mfp_poll` de 80 à 88 px contre l'oracle. **Ce
+chiffre était un artefact**, mesuré AVANT la correction de l'échéance arrondie de
+`readTimerData` — le vrai défaut de cet étalon, corrigé quelques heures plus tard le même
+jour. Sur une base saine, le port est **neutre sur `mfp_poll` : 0 px contre l'oracle**. Il
+n'y avait jamais eu de raison de le rejeter, et le rejet avait été inscrit dans
+l'inventaire avec une consigne de non-répétition — exactement le genre de verdict faux qui
+coûte plus cher qu'une case vide. `docs/HATARI_DIVERGENCES.md` porte la correction.
+
+**Ce qui est en place** : `Scheduler::runMfpTimersTo` sert les timers délai
+(TIMER_A/B_DELAY/C/D) échus avant chaque `Mfp::read8`/`write8`, à l'horloge live. Le
+dispatch reste CIBLÉ sur ces quatre sources — un `syncTo` nu réactiverait le modèle
+sync-driven réfuté (deadlock Enchanted Land) — et `now_` n'est pas avancé.
+
+**Portée mesurée** sur une partie de Super Hang-On : **125 890 accès registre sur 1,4 M
+(≈ 9 %)** trouvent un timer échu à servir. Le chemin travaille donc en permanence ; seule
+sa conséquence visible — la course entre l'acquittement d'ISR et une expiration
+concurrente — est occasionnelle, ce que le « *sometimes* » de Hatari dit déjà.
+Sur une fenêtre de 60 trames en course, les images avec et sans le correctif sont
+d'ailleurs **identiques** : la course ne s'y produit pas. Verrou d'A/B :
+`NEOST_MFP_UPDTIMERS=0`.
+
+📌 **Leçon de méthode, et elle est à mes dépens.** `CLAUDE.md` prescrit de comparer à
+`extern/hatari/src` AVANT d'investiguer. Sur ce dossier j'ai fait l'inverse : trois passes
+d'instrumentation sur l'affichage — cadrage, rééchantillonnage, capture de fenêtre — avant
+de lire le journal d'Hatari, où le nom du jeu apparaît quatre fois. Un `grep -i 'hang.on'`
+dans `extern/hatari/src` aurait donné la réponse en dix secondes.
+
+## Les bandes de Super Hang-On : UNE trame de transitoire faisait sauter le cadre pendant 0,6 s (2026-09-02)
+
+Rapport utilisateur : « des bandes complètes sur toute la largeur de l'écran, à n'importe
+quelle hauteur, de temps en temps, souvent noires ou blanches », en jeu, dans l'interface.
+
+**Ce qui a été éliminé, dans l'ordre.** Pas la passe CRT (l'utilisateur a vérifié : les
+bandes apparaissent CRT éteint). Pas le framebuffer émulé : un détecteur de bande
+intrusive (`NEOST_BAND_DIAG=1`) en trouve **0 sur 18 000 trames** en jeu. Pas une
+déchirure : `runFrame()` puis `screen.update()` s'enchaînent dans la même itération.
+
+**Il manquait l'instrument, et c'est la vraie leçon.** `--shot` ne rend que le
+framebuffer ÉMULÉ : tout ce qui se passe entre lui et l'écran — cadrage, échelle,
+filtrage, CRT — était **invisible au harnais**. D'où deux ajouts : `--shot-window P N C`
+capture la FENÊTRE réellement composée (glReadPixels avant le swap), et
+`NEOST_WBAND_DIAG=1` traque les bandes dans l'image affichée en ne relisant qu'une bande
+verticale de 16 px — une bande pleine largeur la traverse forcément, et le coût reste
+négligeable là où relire 2880×1800 coûterait 15 Mo par trame.
+
+**La cause.** `stContentRegion` armait son verrou de 30 trames dès que la Glue signalait
+une bordure ouverte — **sur une seule trame**. L'hystérésis ne protégeait donc que le
+RETOUR : elle empêchait de rebasculer trop vite, mais rien n'empêchait de basculer sur un
+transitoire isolé. Mesuré (`NEOST_FRAMING_DIAG=1`) sur Super Hang-On : à la trame 2, la
+Glue rend `live=58+197` contre une zone active `29+200` — un transitoire de mise en route
+vidéo, d'UNE trame — et le cadre passait de `top=29 h=200 w=320` à `top=29 h=226 w=416`
+pour les **29 trames suivantes**. L'image saute, se redimensionne, et les BORDURES NOIRES
+entrent dans le cadre. Sur le run de 12 000 trames : 11 968 au cadre normal, **29 au cadre
+élargi**.
+
+Et les deux mécanismes se composent : le cadre qui change fait varier l'échelle, donc —
+en échantillonnage au plus proche voisin — la façon dont les lignes source retombent sur
+les lignes écran. D'où des bandes à des hauteurs ARBITRAIRES pendant 0,6 s, puis un retour
+à la normale. C'est exactement le symptôme décrit.
+
+**Le correctif** exige que la bordure reste ouverte **3 trames consécutives** avant
+d'élargir le cadre, en gardant l'hystérésis de relâchement. Une vraie démo overscan ouvre
+ses bordures à CHAQUE trame : elle ne perd que 60 ms, imperceptibles. Un transitoire isolé,
+lui, ne déclenche plus rien.
+
+**Mesuré des deux côtés** :
+
+| titre | avant | après |
+|---|---|---|
+| Super Hang-On (12 000 trames) | 11 968 normal + **29 élargi** | **12 000 / 12 000 normal** |
+| Enchanted Land en jeu | `top=0 h=229 w=320` | inchangé |
+| étalon `overscan_top` | `top=0 h=229 w=320` | inchangé |
+| `closure` (overscan complet) | `top=0 h=276 w=416` | inchangé |
+| bureau EmuTOS | `top=29 h=200 w=320` | inchangé |
+
+📌 **Leçon.** Le commentaire d'origine annonçait « hystérésis pour ne pas basculer sur un
+retrait d'une trame ». L'intention était juste ; le code ne la réalisait qu'à moitié —
+il protégeait la sortie et pas l'entrée. Un garde-fou à moitié posé se lit comme un
+garde-fou posé.
+
+## Le zoom auto cadrait Enchanted Land sur 416 px de large pour une image de 320 (2026-09-02)
+
+Signalé à l'usage : « l'autozoom devrait être meilleur avec Enchanted Land ». Il l'est, et
+le défaut était double.
+
+**Le cadre était trop LARGE.** `stContentRegion` ne connaissait que deux cas — zone active,
+ou buffer entier — et décidait des deux sur un signal unique, `Shifter::bordersOpen()`. Or ce
+signal est vrai dès qu'une bordure **haute, basse OU latérale** bouge. Enchanted Land n'ouvre
+que le haut : son cadre passait quand même à 416 px pour une image qui n'en occupe que 320
+(boîte de contenu mesurée : x 48..367, exactement la zone active), soit un zoom **1,3× trop
+petit** avec deux bandes noires. Le pire est que le signal latéral existait dans la Glue mais
+était **inatteignable** : son balayage par ligne était gardé par `if (!bordersTrick_)`, donc
+sauté dès qu'un trick vertical avait déjà mordu.
+
+**Le cadre ROGNAIT en hauteur.** La branche « bordure haute seule » remontait le cadre de
+2 lignes en gardant la hauteur active : sur Enchanted Land elle coupait les 2 dernières
+lignes de l'image, et sur l'étalon `overscan_top` les **29 lignes du haut**, que ce programme
+dessine réellement (sa boîte de contenu commence à y=0).
+
+**Ce qui tranche, et c'est mesuré.** La Glue compte désormais les lignes affichées dont le DE
+déborde des cycles nominaux, au lieu de poser un booléen. Relevé le 2026-09-02 :
+
+| titre | lignes élargies | contenu mesuré |
+|---|---|---|
+| Closure | **272-275 / 276** (99 %) | x 8..407 — déborde vraiment des deux côtés |
+| Enchanted Land | **4 / 229** (2 %) | x 48..367 — pile la zone active |
+| `overscan_top` | **5 / 229** (2 %) | x 44..367 |
+
+Deux ordres de grandeur séparent les régimes ; le seuil est posé à un quart. Contrôle de
+cohérence : sur `overscan_top`, les lignes qui portent des pixels à gauche de x=48 sont
+**exactement 5** — ce sont les 5 lignes élargies, c'est-à-dire l'artefact de synchro et non
+l'image. La règle les écarte à juste titre.
+
+**Nouvelle règle** : verticalement, l'étendue que la Glue AFFICHE (plus de rognage) ;
+horizontalement, les bordures latérales seulement si elles débordent sur une part
+significative des lignes. L'hystérésis d'origine est conservée et généralisée — on retient
+l'UNION des étendues vues pendant le latch, donc le cadre ne rétrécit jamais en cours de
+scène et rien ne « respire ».
+
+**Gain mesuré** sur Enchanted Land (contenu 320×197), hauteur d'image à l'écran :
+
+| fenêtre | avant | après |
+|---|---|---|
+| 1920×1080 (16:9) | 909 px | 929 px (+2 %) |
+| 1280×800 (16:10) | 606 px | 688 px (+13 %) |
+| 1024×768 (4:3) | 485 px | 630 px (**+30 %**) |
+
+Le gain est modeste en 16:9, où c'est la hauteur qui borne — c'est dit ainsi plutôt
+qu'annoncé plus large. Sur les fenêtres moins larges il est très net.
+
+⚠ **Effet de bord assumé** : `cW` est un PLANCHER (le frontend dessine tout le buffer quand
+il tient, et ne rogne jamais en deçà), donc le passage de 416 à 320 ne cache rien — il
+autorise seulement un zoom plus grand. Seul cas où il retire quelque chose : une fenêtre plus
+étroite que ~1,41:1, où `overscan_top` perd jusqu'à 2 px de chaque côté — sur les 5 lignes
+d'artefact ci-dessus, jamais sur l'image. En échange, le même étalon cesse de perdre 29 lignes.
+
+**Instrument conservé** : `NEOST_FRAMING_DIAG=1` sur `neost-headless` imprime, par trame, la
+zone active, l'étendue live, les deux moitiés du signal de bordure et le cadre décidé. Sans
+lui, juger le cadrage demandait de regarder une fenêtre à l'œil — donc de ne rien pouvoir
+mesurer. Le refactor du signal Glue est vérifié neutre : `bordersTrick_` garde exactement la
+même valeur (OU des deux mêmes conditions), et les 25 étalons pixel sont inchangés.
+
+## Un infini en décimal empaqueté sortait en chiffres arbitraires (2026-09-02)
+
+Le dernier item « faisable sans oracle » de l'inventaire. Deux de ses trois points sont
+faits ; le troisième ne l'est PAS, et c'est une décision, pas un abandon.
+
+**±inf / NaN.** Le 68881 n'émet pas de BCD pour un infini ou un NaN : il recopie le motif
+étendu, dont les 12 bits bas du premier mot valent alors `$FFF` — l'exposant « spécial » du
+format P (`fp_from_pack`, fpp_softfloat.c:702). NeoST, lui, tombait dans son
+`snprintf("%+.*e")` : la libc rend « +inf », et le parseur BCD tirait des chiffres
+**arbitraires** des lettres de « inf ». Corrigé ; le payload d'un NaN traverse désormais
+intact, vérifié sur une valeur témoin.
+
+**k-factor > 17 → OPERR.** Le format P ne porte que 17 chiffres significatifs ; au-delà, le
+68881 arme OPERR (softfloat_decimal.c:412-414). NeoST écrêtait à 17 **en silence**. Le test
+ne vise que le k positif : un k négatif sélectionne le style point fixe, qui n'est pas
+concerné.
+
+Les deux sont gardés par les tests 13 et 14 du banc (`make_fpu_testrom.py`, 12 → 14 tests,
+exécuté au palier `fast`), chacun vérifié par mutation.
+
+⏸ **INEX1 n'est PAS posé, délibérément.** Chez Hatari le drapeau est `float_flag_decimal` →
+`FPSR_INEX1` (fpp_softfloat.c:100), et il est armé sur la direction **décimal → étendu**
+(`floatdecimal_to_floatx80`, softfloat_decimal.c:369) — pas sur la sortie, contrairement à ce
+que la formulation de `TODO.md` laissait croire. Or NeoST approxime cette direction par
+`std::strtod`, soit 53 bits pour 17 chiffres décimaux : **on ne sait pas** quand la conversion
+a été exacte. Poser le drapeau à l'estime serait pire que ne pas l'avoir — un programme qui
+teste INEX1 se fierait à une information parfois fausse. Le débloquer demande le vrai
+`floatdecimal_to_floatx80`, c'est-à-dire le port de `softfloat_decimal.c` (492 lignes), qui
+livrerait aussi la génération de chiffres bit-exacte et le style point fixe k ≤ 0. C'est ce
+qui reste écrit dans `TODO.md`.
+
+📌 Ce chantier illustre une limite de l'inventaire lui-même : sa puce disait « INEX1 sur
+conversion inexacte » sans dire DE QUELLE DIRECTION, et il a fallu remonter au mapping
+d'Hatari pour voir que le drapeau n'appartient pas au chemin qu'on était en train de corriger.
+
 ## Sur macOS, un fichier accentué du lecteur GEMDOS était introuvable (2026-09-02)
 
 Un des deux items « faisables sans oracle » de l'inventaire des divergences. Il y dormait

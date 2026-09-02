@@ -254,6 +254,8 @@ private:
     // (16 octets). Mutualisé entre synthesize (legacy, r=regs_) et synthesizeFrame
     // (push, r=audioRegs_, appelé par segments entre deux écritures rejouées).
     void synthBlock(const uint8_t* r, float* out, uint32_t frames, uint32_t sampleRate);
+    void applyRegs(const uint8_t* r);      // état dérivé + rechargement d'enveloppe
+    void renderHost(float* out, uint32_t frames, uint32_t sampleRate);  // 250 kHz → hôte
 
     // Met à jour périodes/mixeurs/volumes depuis les registres (port Sound_WriteReg).
     void updateFromRegs(const uint8_t* r);

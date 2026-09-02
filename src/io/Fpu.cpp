@@ -315,8 +315,24 @@ void Fpu::encodeFmt(int fmt, const Ext& v, uint8_t* b, int k) {
             b[0] = uint8_t(v.se >> 8); b[1] = uint8_t(v.se);
             b[2] = b[3] = 0; put64(b + 4, v.man); break;
         case 3: case 7: {                                                       // P
+            // ±INFINI / NaN : le 68881 n'émet PAS de BCD — il recopie le motif étendu,
+            // dont les 12 bits bas du premier mot valent alors $FFF, l'exposant
+            // « spécial » du format P (port de fp_from_pack, fpp_softfloat.c:702-706 :
+            // `if ((f.high & 0x7FFF) == 0x7FFF) { wrd[0] = f.high << 16; … }`).
+            // AVANT : on tombait dans le snprintf ci-dessous, où la libc rend « +inf »
+            // et où le parseur BCD tirait des chiffres arbitraires de « inf ».
+            if ((v.se & 0x7FFF) == 0x7FFF) {
+                b[0] = uint8_t(v.se >> 8); b[1] = uint8_t(v.se);
+                b[2] = b[3] = 0; put64(b + 4, v.man);
+                break;
+            }
             // k-factor : nombre de digits significatifs (k ≤ 0 = style point
             // fixe, approché ici par 17 digits — limite documentée).
+            // k > 17 arme OPERR : le format P ne porte que 17 chiffres significatifs
+            // (≙ softfloat_decimal.c:412-414, `kfactor = 17; float_raise(invalid)`).
+            // AVANT : écrêtage à 17 EN SILENCE. Ne concerne que le k POSITIF — un k
+            // négatif sélectionne le style point fixe, que ce test ne vise pas.
+            if (!(k & 0x40) && k > 17) fpsr_ |= EXC_OPERR | AEXC_IOP;
             int digits = (k & 0x40) ? 17 : k;                // k signé 7 bits
             if (digits < 1 || digits > 17) digits = 17;
             char s[40];

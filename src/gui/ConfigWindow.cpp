@@ -693,6 +693,23 @@ void drawConfigWindow(App& A, ConfigUi& ui) {
             A.joyCfgDirty = true;
         }
         ImGui::Separator();
+        // Sensibilité de la souris ÉMULÉE. La souris du ST est mécanique (~200 points
+        // par pouce) et le TOS n'offre aucun réglage d'accélération utilisable : une
+        // souris moderne à 1600, 3200 ou 8000 dpi envoie jusqu'à 40 fois plus de pas
+        // pour le même geste, et le pointeur GEM traverse l'écran au moindre mouvement.
+        // Ce curseur divise le delta hôte AVANT l'IKBD (cf. App::mouseSpeed).
+        ImGui::TextDisabled("Emulated mouse speed");
+        ImGui::SetNextItemWidth(220.0f);
+        ImGui::SliderFloat("##mousespeed", &A.mouseSpeed, 0.05f, 4.0f, "%.2f x",
+                           ImGuiSliderFlags_AlwaysClamp);
+        if (ImGui::IsItemDeactivatedAfterEdit()) {
+            A.mouseSpeed = A.mouseSpeed < 0.05f ? 0.05f : (A.mouseSpeed > 4.0f ? 4.0f : A.mouseSpeed);
+            ui.cfgDirty = true;
+        }
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Reset##mousespeed")) { A.mouseSpeed = 1.0f; ui.cfgDirty = true; }
+        ImGui::TextDisabled("1.00 x = one host step per ST step. Lower it for a high-dpi mouse.");
+        ImGui::Separator();
         ImGui::TextDisabled("USB pads detected (effective assignment):");
         int nPad = 0;
         for (int jid = GLFW_JOYSTICK_1; jid <= GLFW_JOYSTICK_LAST; ++jid) {

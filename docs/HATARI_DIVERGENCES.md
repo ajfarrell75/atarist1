@@ -662,8 +662,13 @@ divergences ne casse le boot. Trouvailles actionnables ci-dessous (terrain neuf 
   ∞/NaN gère NaN→propagation / ∞→OPERR (plus d'UB) ; ✅ octet AEXC corrigé (UNFL conditionné par
   INEXACT, INEX sur OVFL) ; ✅ FMOVECR arme INEX2/AEXC_INEX et applique l'ajustement d'arrondi
   RN/RZ/RM/RP (table `fpp_cr` `inex`+`rnd[4]` portée). ⏸️ Reste : FMOVE/FABS/FNEG n'arrondissent
-  pas selon la précision FPCR ; packed decimal via libc hôte (drapeaux INEX1/OPERR du format P
-  absents) ; octet AEXC accumulé (UNFL non conditionné par INEX2).
+  pas selon la précision FPCR ; packed decimal via libc hôte — ✅ **OPERR (k > 17) et le cas
+  ±inf/NaN sont posés le 2026-09-02** (l'infini sortait en BCD arbitraire, la libc rendant
+  « +inf » au `snprintf`), ⏸ **INEX1 reste NON posé délibérément** : c'est `float_flag_decimal`
+  → `FPSR_INEX1` (fpp_softfloat.c:100), armé sur la direction DÉCIMAL → ÉTENDU
+  (softfloat_decimal.c:369) que NeoST approxime par `strtod` — on ne sait donc pas quand la
+  conversion fut exacte, et poser le drapeau à l'estime serait pire que l'absence ;
+  octet AEXC accumulé (UNFL non conditionné par INEX2).
 - ✅ **FPU — masques FPCR/FPSR non appliqués** *(BASSE — CORRIGÉ)* : les bits réservés sont forcés
   à 0 au chargement depuis `<ea>` — `fpcr_ & 0xFFF0`, `fpsr_ & 0x0FFFFFF8` (`Fpu.cpp:534-535`,
   cf. Hatari `get_features`).
@@ -867,8 +872,33 @@ MFP, périphériques (FDC/son-statuts/bus/SCC/ACIA), son approfondi (cœur YM + 
 
 **MFP** — chaîne IRQ/timers/GPIP quasi 1:1 (NeoST fait même le spurious $60 que Hatari laisse en
 TODO) :
-- **[CLOS le 2026-09-02] ~~Pas de `MFP_UpdateTimers` avant lecture IPR/ISR/TBDR en mode bloc~~ —
-  l'écart N'EXISTE PLUS, et le correctif prescrit a été RÉFUTÉ À LA MESURE.** Ce qui était écrit
+- **[✅ PORTÉ le 2026-09-02 — et l'entrée qui disait « RÉFUTÉ » était FAUSSE, cf. ⚠ ci-dessous]
+  `MFP_UpdateTimers` avant tout accès registre du MFP.**
+  ⚠ **CORRECTION D'UN VERDICT.** Une première rédaction de cette entrée, le matin même,
+  concluait « correctif prescrit RÉFUTÉ À LA MESURE, ne pas re-tenter » : le port faisait
+  passer l'étalon `mfp_poll` de 80 à 88 px contre l'oracle. **Ce verdict était un artefact** :
+  il était mesuré AVANT la correction de l'échéance arrondie de `readTimerData` (le vrai
+  défaut de cet étalon, corrigé le même jour). Une fois cette base saine, le port est
+  **neutre sur `mfp_poll` — 0 px contre l'oracle** — et il n'y avait donc jamais eu de
+  raison de le rejeter. Leçon : juger un correctif contre une référence elle-même fausse
+  produit un verdict faux, et un verdict faux écrit dans l'inventaire coûte plus cher
+  qu'une case vide.
+  **Ce que le port corrige, et Hatari le nomme** (mfp.c:135, entrée du 2022/01/27) :
+  « *fix the game Super Hang On, where `bclr #0,$fffffa0f` to clear Timer B ISR sometimes
+  happens at the same time that Timer C expires, which used the wrong ISR value and gave
+  **flickering raster colors*** ». Sans le dispatch, l'écriture qui acquitte l'ISR travaille
+  sur un ISR qui n'inclut pas encore l'expiration concurrente : l'acquittement porte sur la
+  mauvaise valeur, une interruption raster est perdue ou rejouée, et la ligne sort avec la
+  palette de sa voisine — des bandes de couleur pleine largeur, à hauteur arbitraire, par
+  intermittence. C'est le symptôme rapporté par l'utilisateur sur ce jeu.
+  **Portée mesurée** : 125 890 accès registre sur 1,4 M (≈ 9 %) trouvent effectivement un
+  timer échu à servir — le chemin travaille en permanence, seule sa conséquence visible est
+  rare. Verrou d'A/B : `NEOST_MFP_UPDTIMERS=0`.
+  **Ce qui reste vrai de l'ancienne rédaction** : le dispatch doit être CIBLÉ sur les
+  sources `TIMER_*` et surtout pas un `syncTo` nu, qui réactiverait le modèle sync-driven
+  réfuté (deadlock Enchanted Land).
+
+- **[historique] ~~L'écart de latence IPR/ISR~~** Ce qui était écrit
   ici depuis le 2026-08-25 (« un timer expirant PENDANT l'instruction qui polle est vu en retard,
   jusqu'à 157 cycles ») décrivait un état dépassé. Confronté à l'oracle sur l'étalon `mfp_poll`,
   bâti exprès pour l'exhiber : **IPRA est IDENTIQUE à Hatari sur les 100 lignes**. Le modèle BLOC
@@ -942,8 +972,28 @@ read-latch/PWM/LPF C10/HPF/resampler 16.16 : tous vérifiés 1:1 contre sound.c/
   WAV cloche GEM / Rick Dangerous II bit-identiques (YM intact).
 - **[basses]** ~~Horloge YM figée 250 000 Hz~~ **✅ 10ᵉ passe : 250 663 Hz** (= MCLK/2/2/4/8,
   MÊME MCLK ST et STE chez Hatari — le « 250 332 STE » de cette liste était erroné) ;
-  écritures YM rejouées au grain ~48 kHz vs frontière 250 kHz (`Sound_Update` avant
-  `Sound_WriteReg`, psg.c:346) — jitter ≤ 21 µs (sync-buzzer) ; ~~HPF appliqué au YM seul vs
+  ~~écritures YM rejouées au grain ~48 kHz vs frontière 250 kHz~~ ✅ **CORRIGÉ le
+  2026-09-02, et ce n'était PAS un « jitter »** : `synthesizeFrame` datait chaque écriture
+  registre en ÉCHANTILLONS HÔTE, donc toutes celles tombant dans le même échantillon
+  étaient ÉCRASÉES sauf la dernière. Sur un flux lent c'est bien le jitter ≤ 21 µs décrit
+  ici ; sur un DIGIDRUM c'est une **DÉCIMATION**. Mesuré sur Super Hang-On (rapport
+  utilisateur « le PSG grésille ») : **897 instants sonores par trame — 44,9 kHz — dont
+  350 seulement résolus par la grille hôte, soit 61 % du flux perdu**, d'où le repliement
+  entendu. Les écritures sont désormais posées sur la grille **250 kHz**, comme Hatari
+  (`Sound_Update` avant `Sound_WriteReg`, psg.c:346) : 561 instants résolus, et le
+  rééchantillonneur pondéré filtre au lieu de décimer.
+  **Vérifié à l'oracle** (spectre sur la même fenêtre de 4 s, AVI audio d'Hatari) :
+  | | <1k | 1-3k | 3-6k | 6-10k | 10-16k |
+  |---|---|---|---|---|---|
+  | NeoST avant | 92,5 % | 3,1 % | 2,3 % | 1,4 % | **0,5 %** |
+  | NeoST après | 93,5 % | 2,8 % | 2,0 % | 1,2 % | **0,3 %** |
+  | Hatari | 93,8 % | 2,5 % | 2,0 % | 1,2 % | **0,3 %** |
+  NeoST rejoint l'oracle exactement dans les bandes où tombait le repliement.
+  Instrument conservé : `NEOST_YMEV_DIAG=1`. ⚠ Les 37,5 % d'écritures qui tombent encore
+  dans un pas déjà occupé sont R9 et R10, du MÊME instant que le R8 qui les précède de 8 et
+  28 cycles : les séparer synthétiserait des transitoires de 1-3,5 µs qui ne sont pas du
+  signal mais l'ordre d'écriture du 68000 — et que le passe-bas C10 du STF efface. Ce n'est
+  donc pas un reliquat à corriger ; ~~HPF appliqué au YM seul vs
   au MIX YM+DMA en STE~~ **✅ 10ᵉ passe : HPF déplacé sur le mix** (`applyHpfStereo/Mono`) ;
   `mixing≠1`+DMA arrêté ne mute pas le YM (volontaire, `DmaSound.hpp:53-54`) ;
   ~~signe DMA non inversé~~ **✅ 10ᵉ passe : `kDmaGain=−0.375`** ; garde

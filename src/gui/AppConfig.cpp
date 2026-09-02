@@ -3,6 +3,7 @@
 //  (c) 2026 VERHILLE Arnaud — projet NeoST.
 // =============================================================================
 #include "util/ConfigPath.hpp"
+#include "util/MouseScale.hpp"   // bornes partagées avec le curseur
 #include "gui/AppConfig.hpp"
 
 #include <cmath>
@@ -35,6 +36,18 @@ std::string cfgPath(const std::string& exeDir) {
 static float mixGain(const std::string& s) {
     const float v = std::strtof(s.c_str(), nullptr);
     return std::isnan(v) ? 1.0f : std::clamp(v, 0.0f, 2.0f);
+}
+
+// Sensibilité de la souris émulée, bornée comme le curseur de la page Input.
+// MÊME leçon NaN que mixGain ci-dessus (test en POSITIF) : un « mousespeed=nan » d'un
+// fichier corrompu passerait au travers d'un bornage par comparaisons, et le delta
+// mis à l'échelle deviendrait NaN — `int(NaN)` est un comportement indéfini, et la
+// souris ST ne bougerait plus jamais. Le plancher n'est pas 0 : à 0 la souris serait
+// FIGÉE sans que rien ne le dise à l'utilisateur.
+static float mouseSpeedOf(const std::string& s) {
+    const float v = std::strtof(s.c_str(), nullptr);
+    namespace ms = neost::mousescale;
+    return std::isnan(v) ? ms::kDefault : std::clamp(v, ms::kMin, ms::kMax);
 }
 
 // A24 (audit 2026-08-27) : les 14 clés crt_* étaient des strtof NUS — la leçon NaN
@@ -294,6 +307,7 @@ void parseConfigLine(Config& c, std::string line) {
     else if (line.rfind("diskb=", 0)  == 0) c.diskb   = line.substr(6);
     else if (line.rfind("dock=", 0) == 0) c.dock = (line.substr(5) == "1");
     else if (line.rfind("autozoom=", 0) == 0) c.autoZoom = (line.substr(9) == "1");
+    else if (line.rfind("mousespeed=", 0) == 0) c.mouseSpeed = mouseSpeedOf(line.substr(11));
     else if (line.rfind("rtc_saved=", 0) == 0) c.rtcSaved = std::strtoll(line.substr(10).c_str(), nullptr, 10);
     else if (line.rfind("rtc=", 0) == 0) c.rtc = line.substr(4);
     else if (line.rfind("kiosk_romdir=", 0) == 0) { const std::string d = line.substr(13); if (!d.empty()) c.romDirs.push_back(d); }
@@ -391,6 +405,7 @@ void writeConfigKeys(std::ostream& f, const Config& w, bool full) {
           << "\nshowFloppy=" << (w.showFloppy ? 1 : 0)
           << "\nuiVersion=" << w.uiVersion
           << "\ndock=" << (w.dock ? 1 : 0) << "\n";
+    f << "mousespeed=" << w.mouseSpeed << "\n";
     f << "autozoom=" << (w.autoZoom ? 1 : 0)
       << "\ncrt=" << (w.crt ? 1 : 0)
       << "\ncrt_bright=" << w.crtParams.brightness

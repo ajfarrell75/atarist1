@@ -217,6 +217,42 @@ movel_absl_dn(OPER, 0); cmpil_dn(0x3EAAAAAA, 0); bne_to("fail12")
 command(0x9000)                          # FPCR ← 0 (ne pas polluer la suite)
 movel_imm_absl(0x00000000, OPER)
 
+# Test 13 : ±INFINI en DÉCIMAL EMPAQUETÉ. Le 68881 n'émet pas de BCD pour un infini
+# ou un NaN : il recopie le motif étendu, dont les 12 bits bas du premier mot valent
+# alors $FFF — l'exposant « spécial » du format P (≙ fp_from_pack, fpp_softfloat.c:702 :
+# `if ((f.high & 0x7FFF) == 0x7FFF) { wrd[0] = f.high << 16; wrd[1..2] = f.low; }`).
+# NeoST passait par snprintf("%+.*e") : sur un infini la libc rend « +inf », dont le
+# parseur BCD tirait des chiffres arbitraires.
+command(0x4800)                          # FMOVE.X +inf → FP0
+movel_imm_absl(0x7FFF0000, OPER); movel_imm_absl(0x00000000, OPER); movel_imm_absl(0x00000000, OPER)
+command(0x6C11)                          # FMOVE.P FP0 → mem, k statique = 17
+movel_absl_dn(OPER, 0); cmpil_dn(0x7FFF0000, 0); bne_to("fail13")
+movel_absl_dn(OPER, 1); cmpil_dn(0x00000000, 1); bne_to("fail13")
+movel_absl_dn(OPER, 2); cmpil_dn(0x00000000, 2); bne_to("fail13")
+# Même chemin pour un NaN, dont le PAYLOAD doit traverser intact. On prend un QNaN
+# (bit 62 déjà posé) : un SNaN serait quiété par propagateFloatx80NaNOneArg côté
+# oracle, ce qui testerait autre chose que le format P.
+command(0x4800)                          # FMOVE.X QNaN → FP0
+movel_imm_absl(0x7FFF0000, OPER); movel_imm_absl(0xC0000000, OPER); movel_imm_absl(0x0BADF00D, OPER)
+command(0x6C11)                          # FMOVE.P FP0 → mem
+movel_absl_dn(OPER, 0); cmpil_dn(0x7FFF0000, 0); bne_to("fail13")
+movel_absl_dn(OPER, 1); cmpil_dn(0xC0000000, 1); bne_to("fail13")
+movel_absl_dn(OPER, 2); cmpil_dn(0x0BADF00D, 2); bne_to("fail13")   # payload intact
+
+# Test 14 : k-factor > 17 → OPERR. Le format P ne porte que 17 chiffres significatifs ;
+# au-delà, le 68881 arme OPERR (≙ floatx80_to_floatdecimal, softfloat_decimal.c:412 :
+# `if (kfactor > 17) { kfactor = 17; float_raise(float_flag_invalid); }`). NeoST
+# écrêtait à 17 EN SILENCE.
+command(0x8800)                          # FPSR ← 0 (efface les drapeaux)
+movel_imm_absl(0x00000000, OPER)
+command(0x4800)                          # FMOVE.X 1.0 → FP0
+movel_imm_absl(0x3FFF0000, OPER); movel_imm_absl(0x80000000, OPER); movel_imm_absl(0x00000000, OPER)
+command(0x6C12)                          # FMOVE.P FP0 → mem, k statique = 18 (> 17)
+command(0xA800)                          # FMOVEM FPSR → <ea>
+movel_absl_dn(OPER, 0)
+w16(0x0280); w32(0x00002080)             # andi.l #$2080,d0  → OPERR (bit13) | IOP (bit7)
+cmpil_dn(0x00002080, 0); bne_to("fail14")
+
 # Test 9 : livraison d'exception FP. On ACTIVE DZ dans le FPCR (bit10), puis FDIV
 # par 0 → le Response CIR doit livrer « Take Pre-Instruction Exception » (CA=0,
 # vecteur DZ $32 en octet bas) = $7032 au lieu du null $0802.
@@ -236,7 +272,7 @@ movel_label_a3("pass_str")              # move.l #pass_str,a3
 bsr_to("emit")
 w16(0x60FE)                             # bra.s *
 
-for n in range(1, 13):                   # FAILn : D7 = -n (compat trace) → verdict commun
+for n in range(1, 15):                   # FAILn : D7 = -n (compat trace) → verdict commun
     labels[f"fail{n}"] = len(code)
     w16(0x7E00 | ((-n) & 0xFF))          # moveq #-n,d7
     bra_to("fail_common")

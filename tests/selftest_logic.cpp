@@ -42,6 +42,8 @@
 #include "core/Pacing.hpp"
 
 #include <cmath>
+#include "util/MouseScale.hpp"
+#include "core/MachineType.hpp"
 #include <filesystem>
 
 #include <cstdio>
@@ -254,6 +256,97 @@ static void testPrecomposeUtf8() {
 //  démarrage, il rend juste le réglage inopérant à la session suivante. C'est
 //  exactement le genre de défaut qu'aucun test d'émulation ne peut voir.
 // -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+//  Sensibilité de la souris émulée : la règle d'accumulation.
+//
+//  C'est LE point qui peut rendre le réglage inutilisable. Sous 1,0, la plupart des
+//  deltas mis à l'échelle valent moins d'un pas entier ; les tronquer sans reporter
+//  le reste ferait perdre TOUS les petits mouvements — la souris ST ne bougerait plus
+//  du tout sur un déplacement lent, c'est-à-dire exactement au moment où le réglage
+//  sert. Le test vérifie donc surtout la CONSERVATION : sur une longue série, le total
+//  émis doit suivre le total attendu à moins d'un pas près.
+// -----------------------------------------------------------------------------
+static void testMouseScale() {
+    std::printf("Souris émulée — mise à l'échelle du delta hôte\n");
+    using neost::mousescale::step;
+
+    // 1,0 = comportement d'AVANT le réglage : un pas hôte, un pas ST.
+    { double a = 0; checkBool("1.0x : 10 px → 10", step(10, 1.0f, a) == 10, true); }
+
+    // 0,25 : un delta de 1 px ne franchit un pas qu'au 4ᵉ appel — mais il le franchit.
+    {
+        double a = 0; int emis = 0, first = -1;
+        for (int i = 0; i < 8; ++i) { const int d = step(1, 0.25f, a); emis += d; if (d && first < 0) first = i; }
+        checkBool("0.25x : le 1er pas tombe au 4e appel", first == 3, true);
+        checkBool("0.25x : 8 px hôte → 2 pas ST",         emis == 2,  true);
+    }
+
+    // CONSERVATION sur une longue série : rien ne se perd en route.
+    {
+        double a = 0; int emis = 0;
+        for (int i = 0; i < 1000; ++i) emis += step(3, 0.3f, a);
+        checkBool("0.3x : 3000 px → ~900 pas (±1)", std::abs(emis - 900) <= 1, true);
+    }
+
+    // Le signe est préservé, et la troncature va VERS ZÉRO des deux côtés.
+    {
+        double a = 0; int emis = 0;
+        for (int i = 0; i < 10; ++i) emis += step(-2, 0.5f, a);
+        checkBool("deltas négatifs : -20 px → -10 pas", emis == -10, true);
+    }
+
+    // Accélération : au-dessus de 1, un seul pixel doit déjà donner plusieurs pas.
+    { double a = 0; checkBool("3.0x : 1 px → 3", step(1, 3.0f, a) == 3, true); }
+
+    // Bornage DÉFENSIF de la vitesse — la même règle que la relecture du neost.cfg,
+    // mais appliquée ici aussi : le curseur n'est pas le seul chemin vers ce champ.
+    { double a = 0; checkBool("vitesse 0 bornée (souris jamais figée)", step(100, 0.0f, a) > 0, true); }
+    { double a = 0; checkBool("vitesse énorme bornée", step(100, 1e9f, a) <= 100 * 4, true); }
+    // NaN : `int(NaN)` est INDÉFINI et figerait la souris pour la session entière.
+    { double a = 0; const int d = step(10, std::nanf(""), a);
+      checkBool("vitesse NaN → défaut, pas de NaN propagé", d == 10 && std::isfinite(a), true); }
+    { double a = std::nan(""); const int d = step(10, 1.0f, a);
+      checkBool("reste NaN assaini", d == 10 && std::isfinite(a), true); }
+}
+
+// -----------------------------------------------------------------------------
+//  « Machine gelée » : nommer le matériel absent plutôt que de laisser deviner.
+//
+//  Un jeu STE-only lancé sur un profil ST lit un registre qui n'existe pas, prend une
+//  bus error, et le gestionnaire du TOS 1.x recharge un A7 corrompu → double faute →
+//  CPU halté. Le comportement est FIDÈLE (Hatari halte à l'identique) — mais le bandeau
+//  disait seulement « check the machine profile ». Rapport du 2026-09-02 sur Stardust :
+//  l'utilisateur a légitimement conclu à un bug de NeoST. Le bandeau nomme désormais la
+//  puce et le profil à choisir ; ce test garde la table de correspondance.
+// -----------------------------------------------------------------------------
+static void testMissingHwHint() {
+    std::printf("Machine gelée — diagnostic du profil manquant\n");
+    MissingHw m{};
+    // Le cas rapporté : $FF8900 = son DMA STE, lu sur un profil ST.
+    checkBool("$FF8900 sur ST → manquant", mmioNeedsBetterMachine(0xFF8900, MachineType::St, m), true);
+    checkStr ("… nommé « STE DMA sound »", m.chip ? m.chip : "", "STE DMA sound");
+    checkStr ("… profil conseillé",        m.needs ? m.needs : "", "ste");
+    // L'adresse arrive parfois en 32 bits non tronqués : le 68000 n'a que 24 bits.
+    checkBool("$00FF8900 (24 bits) idem", mmioNeedsBetterMachine(0x00FF8900, MachineType::St, m), true);
+    // Sur STE le même registre EXISTE → aucun diagnostic.
+    checkBool("$FF8900 sur STE → rien",     mmioNeedsBetterMachine(0xFF8900, MachineType::Ste, m),     false);
+    checkBool("$FF8900 sur MegaSTE → rien", mmioNeedsBetterMachine(0xFF8900, MachineType::MegaSte, m), false);
+    // Joypads STE, Microwire : même famille.
+    checkBool("$FF9200 sur ST → manquant",  mmioNeedsBetterMachine(0xFF9200, MachineType::St, m), true);
+    checkBool("$FF8922 sur ST → manquant",  mmioNeedsBetterMachine(0xFF8922, MachineType::St, m), true);
+    // Blitter : absent du ST NU seulement — présent sur Mega ST comme sur STE.
+    checkBool("blitter $FF8A00 sur ST → manquant", mmioNeedsBetterMachine(0xFF8A00, MachineType::St, m), true);
+    checkBool("blitter sur MegaST → rien", mmioNeedsBetterMachine(0xFF8A00, MachineType::MegaSt, m), false);
+    checkBool("blitter sur STE → rien",    mmioNeedsBetterMachine(0xFF8A00, MachineType::Ste, m),    false);
+    // SCU / SCC : Mega STE seulement.
+    checkBool("SCU $FF8E00 sur STE → manquant",   mmioNeedsBetterMachine(0xFF8E00, MachineType::Ste, m),     true);
+    checkBool("SCU sur MegaSTE → rien",           mmioNeedsBetterMachine(0xFF8E00, MachineType::MegaSte, m), false);
+    // Une adresse RAM ordinaire ne doit JAMAIS produire de conseil : le halt a alors
+    // une autre cause, et pointer le profil enverrait l'utilisateur sur une fausse piste.
+    checkBool("RAM $001000 → aucun conseil",  mmioNeedsBetterMachine(0x001000, MachineType::St, m), false);
+    checkBool("vidéo $FF8240 → aucun conseil", mmioNeedsBetterMachine(0xFF8240, MachineType::St, m), false);
+}
+
 static void testConfigParser() {
     using namespace neost::appconfig;
     std::printf("neost.cfg (analyse / écriture)\n");
@@ -502,6 +595,33 @@ static void testConfigParser() {
                                      && dt.wday == 4 && dt.day == 5 && dt.month == 6
                                      && dt.year == 26, true);
         checkBool("rtc= tronquée refusée", parseRtcConfig("1,2,3", dt), false);
+    }
+    // --- Sensibilité de la souris émulée --------------------------------------
+    // Réglage AJOUTÉ le 2026-09-02 pour les souris hôtes à haute résolution (le ST
+    // compte les crans d'une souris ~200 dpi ; une souris à 3200 dpi envoie 16 fois
+    // plus de pas et le pointeur GEM devient inutilisable). Trois choses à garder :
+    // qu'il fasse l'aller-retour dans neost.cfg, qu'il soit BORNÉ à la relecture, et
+    // que NaN ne passe pas — `int(NaN)` est indéfini, et un delta NaN figerait la
+    // souris ST définitivement (même leçon que mixGain, cf. AppConfig.cpp).
+    {
+        Config c; c.mouseSpeed = 0.35f;
+        std::ostringstream os; writeConfigKeys(os, c, true);
+        Config relu; std::istringstream is(os.str()); std::string l;
+        while (std::getline(is, l)) parseConfigLine(relu, l);
+        checkBool("mousespeed : aller-retour", std::fabs(relu.mouseSpeed - 0.35f) < 1e-4f, true);
+
+        Config d;
+        parseConfigLine(d, "mousespeed=nan");
+        checkBool("mousespeed=nan → défaut 1.0", d.mouseSpeed == 1.0f, true);
+        parseConfigLine(d, "mousespeed=0");
+        checkBool("mousespeed=0 borné (souris jamais figée)", d.mouseSpeed >= 0.05f, true);
+        parseConfigLine(d, "mousespeed=-3");
+        checkBool("mousespeed négatif borné", d.mouseSpeed >= 0.05f, true);
+        parseConfigLine(d, "mousespeed=999");
+        checkBool("mousespeed énorme borné", d.mouseSpeed <= 4.0f, true);
+        // Défaut du champ : 1,0 = comportement d'AVANT ce réglage, à l'identique.
+        Config neuf;
+        checkBool("défaut = 1.0 (comportement d'origine)", neuf.mouseSpeed == 1.0f, true);
     }
 }
 
@@ -2237,6 +2357,8 @@ int main() {
     testPosixPaths();
     testNativeDefaults();
     testPrecomposeUtf8();
+    testMouseScale();
+    testMissingHwHint();
     testConfigParser();
     testConfigPath();
     testConfigWriteCreatesDir();

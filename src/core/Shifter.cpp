@@ -273,6 +273,8 @@ void Shifter::beginFrame() {
     frameStartPalette_ = palette;
     syncWrites_.clear();
     bordersTrick_ = false;
+    sideTrick_    = false;
+    sideTrickLines_ = 0;
     // VDE_On live du compteur vidéo : valeur nominale selon la fréquence verrouillée
     // (50 Hz → 63, 60 Hz → 34). En MONO (haute rés), Hatari force nStartHBL =
     // VIDEO_START_HBL_71HZ = 34 QUELLE QUE SOIT la fréquence du registre $FF820A
@@ -559,6 +561,8 @@ void Shifter::finishFrame() {
     snapGlueVOverscan_  = glueVOverscan_;
     snapGlueBlankLines_ = glueBlankLines_;
     snapBordersTrick_   = bordersTrick_;
+    snapSideTrick_      = sideTrick_;
+    snapSideTrickLines_ = sideTrickLines_;
 }
 
 // Rejoue HORS-LIGNE les wait states d'alignement bus du shifter (port fidèle de

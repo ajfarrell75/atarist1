@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 
 #include "imgui.h"
 
@@ -21,13 +22,40 @@
 // contexte 2.1 macOS) ou si process() échoue — passthrough sans surprise.
 // dstW×dstH = taille écran cible (pilote l'anti-alias analytique scanline/masque).
 GLuint crtApply(App& A, const GlScreen& s, int dstW, int dstH) {
-    if (!A.crtOn || s.tex == 0) return s.tex;
+    if (s.tex == 0) return s.tex;
+    // ⚠ LA PASSE SERT AUSSI DE RÉÉCHANTILLONNEUR QUAND LES EFFETS SONT ÉTEINTS.
+    // Sinon `ImGui::Image` étire la texture ST BRUTE (416×276) en GL_NEAREST à une
+    // échelle presque toujours NON ENTIÈRE : chaque ligne source reçoit alors 2 ou 3
+    // rangées écran selon sa position. Mesuré (NEOST_SCALE_DIAG=1) dans la disposition
+    // par défaut : 549 px pour 200 lignes = 2,745 px/ligne, donc 149 lignes à 3 px et
+    // 51 à 2 px — un quart des lignes 33 % plus fines que les autres. Sur des détails
+    // horizontaux fins (marquages de route, séparateurs du bandeau), ça se voit comme
+    // des BANDES pleine largeur, à hauteur arbitraire, claires ou sombres, qui se
+    // déplacent quand l'image défile. C'est le défaut rapporté sur Super Hang-On le
+    // 2026-09-02 — et il est STABLE d'une trame à l'autre, ce qui l'a longtemps caché :
+    // comparer deux trames consécutives ne le montre pas, il faut comparer à la vérité.
+    // La passe, elle, force GL_LINEAR sur la source et interpole en Catmull-Rom dès
+    // qu'elle agrandit (cf. sampleSrc) : les lignes y gardent toutes le même poids.
+    const bool neutral = !A.crtOn;
     if (!A.crt.available()) {
         if (A.crtInit) return s.tex;        // déjà tenté et échoué → brut
         A.crtInit = true;
         if (!A.crt.initialize()) return s.tex;
     }
-    A.crt.setParams(A.crtParams);
+    if (neutral) {
+        // Tous les post-effets à leur valeur PLATE : la passe ne fait plus que
+        // redimensionner. `sharpness` 0.5 = passthrough, `persistence` 0 = aucune
+        // rémanence (donc aucune dépendance à la trame précédente : le rendu reste
+        // reproductible, ce dont dépendent le boot GUI du palier et --shot-window).
+        neost::CrtParams flat;
+        flat.sharpness = 0.5f; flat.persistence = 0.0f;
+        flat.scanlines = 0.0f; flat.barrel = 0.0f;
+        flat.shadowMask = neost::CrtParams::ShadowMask::Off;
+        flat.luminanceGain = 1.0f; flat.centerLighting = 1.0f; flat.phosphorGamma = 1.0f;
+        A.crt.setParams(flat);
+    } else {
+        A.crt.setParams(A.crtParams);
+    }
     const GLuint out = A.crt.process(s.tex, s.w, s.h, dstW, dstH);
     return out ? out : s.tex;
 }
@@ -45,6 +73,10 @@ void stContentRegion(Machine& machine, int& cTop, int& cH, int& cW) {
 // bandes noires. Contenu plein-cadre/overscan → tient entier (pillarbox latéral).
 void drawStKiosk(App& A, GlScreen& s, int fbw, int fbh, int cTop, int cH, int cW) {
     if (s.w <= 0 || s.h <= 0 || fbw <= 0 || fbh <= 0 || cH <= 0) return;
+    // En borne l'écran ST occupe tout le viewport : le rectangle de centrage des
+    // bandeaux (cf. App::stRectValid) est donc la fenêtre entière.
+    A.stRectX0 = 0; A.stRectY0 = 0;
+    A.stRectX1 = (float)fbw; A.stRectY1 = (float)fbh; A.stRectValid = true;
     // Effets CRT « cadre complet » (v1) : la passe traite tout le buffer ST à la
     // résolution écran (fbw×fbh, bornée), puis le zoom kiosk (viewport ci-dessous)
     // cadre/rogne le résultat comme pour la texture brute. Le cadrage du quad
@@ -205,6 +237,21 @@ void drawStScreen(App& A, const GlScreen& s, bool captured, float topOffset,
     const int fboW = (int)std::lround(dw / std::max(0.001f, u1 - u0));
     const int fboH = (int)std::lround(dh / std::max(0.001f, v1 - v0));
     const ImTextureID id = (ImTextureID)(intptr_t)crtApply(A, s, std::max(1, fboW), std::max(1, fboH));
+    { static const bool dz = std::getenv("NEOST_SCALE_DIAG") != nullptr;
+      static int n = 0;
+      if (dz && n < 6) { ++n;
+        const float srcRows = (v1 - v0) * (float)s.h;      // lignes SOURCE montrées
+        std::fprintf(stderr, "[scale] image %dx%d px ecran pour %.1f lignes source"
+                     " -> %.4f px/ligne (%s)\n", dstW, dstH, srcRows,
+                     srcRows > 0 ? dstH / srcRows : 0.f,
+                     (srcRows > 0 && std::fabs(dstH / srcRows - std::round(dstH / srcRows)) < 0.01f)
+                        ? "ENTIER" : "NON ENTIER -> lignes dupliquees inegalement");
+      } }
     ImGui::Image(id, ImVec2((float)dstW, (float)dstH), ImVec2(u0, v0), ImVec2(u1, v1));
+    // Rectangle EFFECTIF de l'image ST (cf. App::stRectValid) : les bandeaux qui
+    // parlent de la machine se centrent dessus, pas sur la fenêtre entière.
+    { const ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
+      A.stRectX0 = a.x; A.stRectY0 = a.y; A.stRectX1 = b.x; A.stRectY1 = b.y;
+      A.stRectValid = (b.x > a.x && b.y > a.y); }
     ImGui::End();
 }
