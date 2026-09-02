@@ -53,8 +53,19 @@ int64_t Mfp::writeEventTime() const {
     return sched_ ? sched_->liveNow() + mmioWriteEnd() : 0;
 }
 
+// NEOST_MFP_BATCH : élection de l'IRQ GROUPÉE après toutes les entrées d'une même
+// instruction (défaut ON, ≙ MFP_UpdateNeeded). =0 restaure l'élection immédiate à
+// chaque entrée — l'ancien comportement, où la règle chronologique était inopérante.
+namespace { const bool g_mfpBatch = []{ const char* s = std::getenv("NEOST_MFP_BATCH");
+                                        return s ? std::atoi(s) != 0 : true; }(); }
+
 void Mfp::updateTimers() {
-    if (g_mfpUpdTimers && sched_) sched_->runMfpTimersTo(sched_->liveNow());
+    if (!(g_mfpUpdTimers && sched_)) return;
+    sched_->runMfpTimersTo(sched_->liveNow());
+    // ≙ mfp.c:689-690 : après avoir servi les timers, si des entrées ont eu lieu, on
+    // élit MAINTENANT — et avec l'horloge courante comme date de front, comme Hatari
+    // (`MFP_UpdateIRQ(pMFP, Clock)`) et non avec pendingTime_.
+    if (irqUpdateNeeded_) { irqUpdateNeeded_ = false; updateIrq(sched_->liveNow()); }
 }
 
 // RESET matériel du MC68901 (port de MFP_Reset, mfp.c:519-569). Le vrai MFP n'a PAS
@@ -865,7 +876,24 @@ void Mfp::raiseAt(int source, int64_t when) {
     } else {
         ipr &= ~bit;                      // canal désactivé : la requête est perdue
     }
-    updateIrq(0);                         // 0 → front daté de pendingTime_[canal élu]
+    // ⚠ PAS D'ÉLECTION ICI (port de MFP_InputOnChannel, mfp.c:1125 : « MFP_UpdateNeeded
+    // = true ; Tell main CPU loop to call MFP_UpdateIRQ() »). Élire tout de suite
+    // consommerait `pendingTimeMin_` avant l'arrivée des autres entrées de la MÊME
+    // instruction, et la règle chronologique ne pourrait jamais les départager : une
+    // interruption PLUS RÉCENTE mais plus prioritaire l'emporterait, là où le 68901 sert
+    // la PLUS ANCIENNE. Deux entrées consécutives existent dans ce fichier même
+    // (TXERR→TXEMPTY, RXERR→RXFULL). L'élection est faite par flushIrqUpdate(), appelé
+    // au calcul d'IPL — l'équivalent NeoST de la boucle CPU d'Hatari.
+    if (g_mfpBatch) irqUpdateNeeded_ = true;
+    else            updateIrq(0);         // A/B : ancien comportement, élection immédiate
+}
+
+// Élection différée (cf. Mfp.hpp). Event_Time = 0 → le front est daté de
+// `pendingTime_[canal élu]`, comme MFP_UpdateIRQ appelé depuis la boucle CPU.
+void Mfp::flushIrqUpdate() {
+    if (!irqUpdateNeeded_) return;
+    irqUpdateNeeded_ = false;
+    updateIrq(0);
 }
 
 // Port de MFP_UpdateIRQ (mfp.c:946-985) : recalcule le signal IRQ du 68901. Sur un

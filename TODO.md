@@ -301,6 +301,36 @@ est continue, les trous sont du travail fait.
 
 ### Chantiers structurels (UN à la fois, jamais combinés)
 
+- **A42 — Élection MFP : passer le flush d'IPL du CALLBACK à l'INSTRUCTION.**
+  Ouvert le 2026-09-02, suite directe du port partiel de `MFP_UpdateNeeded`
+  (cf. `CHANGELOG.md` et `docs/HATARI_DIVERGENCES.md` § MFP).
+  **Le problème, en une phrase** : Hatari élit l'interruption MFP **une fois par
+  instruction CPU** (`if (MFP_UpdateNeeded) MFP_UpdateIRQ_All(0)`, newcpu.c:3005 et 5509),
+  NeoST l'élit **une fois par callback d'ordonnanceur**, parce que `Machine` fait suivre
+  chacun d'eux d'un `cpu.updateIpl()` — **18 sites**. Deux timers MFP échus dans le même
+  `runTo` sont donc élus séparément, et la règle « seules les plus anciennes concourent »
+  (`pendingTime_ <= pendingTimeMin_`) ne peut pas les départager.
+  **Ce qui est DÉJÀ fait** : `raiseAt` n'élit plus, il arme `irqUpdateNeeded_` ;
+  `flushIrqUpdate()` élit au calcul d'IPL et en fin de `Mfp::updateTimers`. Les entrées
+  multiples d'une MÊME fonction (`TXERR`→`TXEMPTY`, `RXERR`→`RXFULL`) sont correctes.
+  Verrou d'A/B : `NEOST_MFP_BATCH=0`.
+  **Ce qui reste** : sortir `updateIpl()` des callbacks pour un appel UNIQUE en fin de
+  dispatch (`Scheduler::runTo`), de sorte que la fenêtre d'élection couvre toute
+  l'instruction. C'est une refonte du pilotage de l'IPL, pas un correctif local.
+  ⚠ **AVANT DE COMMENCER, deux choses à savoir.**
+  1. **Aucun exhibiteur connu.** Mesuré sur Super Hang-On : **0 groupement sur 1 000 000
+     d'entrées**, et l'A/B rend 0 px sur Super Hang-On, `mfp_poll`, `blitter_timer` et
+     `trace_odd`. Hatari cite « Fuzion CD Menus 77, 78, 84 » — disques absents du dépôt.
+     **Poser un exhibiteur d'abord** (étalon généré : deux timers programmés pour expirer
+     dans la même instruction, le plus ancien étant le MOINS prioritaire — l'image doit
+     montrer lequel a été servi), sinon la refonte se fera à l'aveugle.
+  2. **`mfp_poll` NE PEUT PAS arbitrer ce chantier** : son programme masque les IRQ
+     (`SR=$2700`), il est aveugle à toute la datation et à la livraison des interruptions —
+     vérifié, `NEOST_MFP_WRITE_END=40` le laisse à 0 px. C'est précisément cet étalon qui a
+     fait rejeter `MFP_UpdateTimers` à tort le matin du 2026-09-02.
+  **Filet minimum** : la cartouche diagnostic (verdicts série `cpu`/`timing`/`frame`/`ipl`),
+  la suite Q MegaSTE et les 25 étalons pixel — tous verts aujourd'hui avec le port partiel.
+
 - **A32 ◐ — Découper `Shifter` : le fichier et les NOMS sont faits, les CLASSES
   restent.** Fait le 2026-08-28 (détail au `CHANGELOG.md`) : `Shifter.cpp` passe de
   **2 917 à 1 331 lignes**, la machine à états des bordures vit dans `VideoGlue.cpp`
