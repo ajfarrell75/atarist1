@@ -27,6 +27,32 @@ namespace { const int g_mfpExact = []{ const char* s = std::getenv("NEOST_MFP_EX
 namespace { const bool g_mfpUpdTimers = []{ const char* s = std::getenv("NEOST_MFP_UPDTIMERS");
                                             return s ? std::atoi(s) != 0 : true; }(); }
 
+// Instant d'un ÉVÉNEMENT DÉCLENCHÉ PAR UNE ÉCRITURE registre du MFP : le cycle où
+// l'écriture est TERMINÉE, pas celui où elle commence.
+//
+// Port de `Cycles_GetInternalCycleOnWriteAccess` (cycles.c) : en mode cycle-exact
+// Hatari date une écriture MMIO à `currcycle + 4` — « the number of cycles when the
+// write will be completed », un accès mémoire du 68000 durant 4 cycles. Côté NeoST,
+// `liveNow()` vaut déjà « cycles avant l'accès + 2 » (Moira a facturé le SYNC(2) de
+// tête), donc la fin d'accès est à +2 — la convention est écrite dans
+// `Cpu68k::cyclesIntoInstr`, et le Shifter l'applique déjà à ses écritures palette.
+// Le MFP, lui, ne l'appliquait PAS : ses IRQ nées d'une écriture registre étaient
+// antidatées de 2 cycles, et comme la visibilité CPU court depuis cet instant
+// (irqTime_ + 4), l'exception partait 2 cycles trop tôt.
+//
+// Hatari nomme le titre que ça corrige (mfp.c:113, entrée du 2013/03/14) : « When
+// writing to the MFP's registers, take the write cycles into account when updating
+// MFP_IRQ_Time (properly fix Super Hang On) ».
+int64_t Mfp::mmioWriteEnd() {
+    static const int64_t v = []{ const char* s = std::getenv("NEOST_MFP_WRITE_END");
+                                 return s ? int64_t(std::atoi(s)) : int64_t(2); }();
+    return v;
+}
+
+int64_t Mfp::writeEventTime() const {
+    return sched_ ? sched_->liveNow() + mmioWriteEnd() : 0;
+}
+
 void Mfp::updateTimers() {
     if (g_mfpUpdTimers && sched_) sched_->runMfpTimersTo(sched_->liveNow());
 }
@@ -231,15 +257,15 @@ void Mfp::write8(uint32_t addr, uint8_t v) {
         // d'écriture : démasquer une requête déjà pendante fait monter IRQ MAINTENANT
         // (visible du CPU 4 cycles plus tard), pas à la date d'arrivée de la requête.
         // Désactiver un canal (IER=0) efface aussi son interruption pendante.
-        case 0x07: iera = v; ipra &= iera; updateIrq(sched_ ? sched_->liveNow() : 0); break;
-        case 0x09: ierb = v; iprb &= ierb; updateIrq(sched_ ? sched_->liveNow() : 0); break;
+        case 0x07: iera = v; ipra &= iera; updateIrq(writeEventTime()); break;
+        case 0x09: ierb = v; iprb &= ierb; updateIrq(writeEventTime()); break;
         // IPR/ISR : on n'EFFACE que les bits écrits à 0 (les 1 laissent inchangé).
-        case 0x0B: ipra &= v; updateIrq(sched_ ? sched_->liveNow() : 0); break;
-        case 0x0D: iprb &= v; updateIrq(sched_ ? sched_->liveNow() : 0); break;
-        case 0x0F: isra &= v; updateIrq(sched_ ? sched_->liveNow() : 0); break;
-        case 0x11: isrb &= v; updateIrq(sched_ ? sched_->liveNow() : 0); break;
-        case 0x13: imra = v; updateIrq(sched_ ? sched_->liveNow() : 0); break;
-        case 0x15: imrb = v; updateIrq(sched_ ? sched_->liveNow() : 0); break;
+        case 0x0B: ipra &= v; updateIrq(writeEventTime()); break;
+        case 0x0D: iprb &= v; updateIrq(writeEventTime()); break;
+        case 0x0F: isra &= v; updateIrq(writeEventTime()); break;
+        case 0x11: isrb &= v; updateIrq(writeEventTime()); break;
+        case 0x13: imra = v; updateIrq(writeEventTime()); break;
+        case 0x15: imrb = v; updateIrq(writeEventTime()); break;
         case 0x17: {
             // VR : vecteur d'interruption + bit3 = mode EOI (1 = software, 0 =
             // automatique). Le passage software→automatique (1→0) VIDE les bits
@@ -249,7 +275,7 @@ void Mfp::write8(uint32_t addr, uint8_t v) {
             const uint8_t oldVr = vr;
             vr = v;
             if ((oldVr & 0x08) && !(v & 0x08)) { isra = 0; isrb = 0; }
-            updateIrq(sched_ ? sched_->liveNow() : 0);
+            updateIrq(writeEventTime());
             break;
         }
         // TxCR : changement de mode (port des MFP_TimerXCtrl_WriteByte) — une valeur

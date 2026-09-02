@@ -124,6 +124,40 @@ figée sans que rien ne le dise.
 ils ont leur propre chemin souris et leurs propres réglages, et je n'ai pas de moyen de
 les vérifier ici.
 
+## Les trois autres pistes « Super Hang-On » d'Hatari, instruites (2026-09-02)
+
+Le nom du jeu apparaît **quatre fois** dans les sources d'Hatari. Après `MFP_UpdateTimers`,
+les trois restantes ont été lues et confrontées à NeoST — deux étaient déjà couvertes, la
+troisième manquait.
+
+**Déjà porté — délai de 4 cycles sur la montée d'IRQ** (mfp.c:107, 2013/03/01) :
+`kIrqDelayToCpu`, `irqTime_`, source `Scheduler::MFP_IRQ` armée à `irqTime_ + 4`, et le cas
+« délai déjà écoulé » qui prend l'exception à la frontière courante plutôt qu'une
+instruction plus tard.
+
+**Déjà correct par construction — bit pending posé deux fois avant l'IACK**
+(video.c:320, 2013/05/03) : NeoST modélise HBL et VBL par des BOOLÉENS effacés à
+l'acquittement et lus comme un NIVEAU pour l'IPL. Poser le bit deux fois s'y confond
+naturellement en une seule interruption, là où Hatari a dû ajouter du code pour l'obtenir.
+Le commentaire de `Cpu68k.cpp:51-52` disait déjà « ≙ pendingInterrupts = 0 ».
+
+**Manquait — cycles d'écriture dans `MFP_IRQ_Time`** (mfp.c:113, 2013/03/14, « properly fix
+Super Hang On ») : Hatari date une écriture MMIO à `currcycle + 4`,
+« *the number of cycles when the write will be completed* ». NeoST datait ses IRQ nées
+d'une écriture registre MFP à `liveNow()` — or sa propre convention veut que la fin d'accès
+soit à **+2** (Moira facture déjà le SYNC de tête ; c'est écrit dans
+`Cpu68k::cyclesIntoInstr`, et le Shifter l'applique à ses écritures palette). Les IRQ du MFP
+étaient donc antidatées de 2 cycles, et comme la visibilité CPU court depuis cet instant,
+l'exception partait 2 cycles trop tôt. Corrigé sur les 9 sites (`Mfp::writeEventTime`).
+
+⚠ **Ce qui n'est PAS démontré, et je le dis plutôt que de l'habiller** : à la valeur juste,
+ce port ne change aucune image mesurée — sur Super Hang-On en jeu, `+0` et `+2` rendent la
+même trame au pixel près. Ce qui est démontré, c'est que le chemin pilote réellement
+l'émulation : `NEOST_MFP_WRITE_END=40` déplace 24 773 px sur cette même trame. C'est donc un
+port de FIDÉLITÉ adopté sur la lettre d'Hatari, pas sur un pixel. Et `mfp_poll` ne peut pas
+l'arbitrer : son programme masque les IRQ (`SR=$2700`), il reste à 0 px même à 40 cycles de
+décalage — utile à savoir avant de croire cet étalon omniscient.
+
 ## Super Hang-On : le vrai coupable était `MFP_UpdateTimers` — que j'avais porté puis retiré le matin même (2026-09-02)
 
 Suite du rapport « des bandes pleine largeur, à n'importe quelle hauteur, de temps en

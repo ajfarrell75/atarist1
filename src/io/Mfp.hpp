@@ -122,6 +122,14 @@ public:
     // le cas « Super Hang On » nommé par Hatari, cf. Scheduler::runMfpTimersTo.
     void updateTimers();
 
+    // Fin d'accès d'une ÉCRITURE registre MFP (cf. Mfp.cpp) : c'est cet instant qui
+    // date une IRQ née de l'écriture, pas le début de l'accès.
+    int64_t writeEventTime() const;
+    // Décalage « début → fin » d'un accès MMIO, en cycles bus (cf. Cpu68k::cyclesIntoInstr :
+    // Moira a déjà facturé le SYNC(2) de tête, la fin d'accès est donc à +2).
+    // Verrou d'A/B : NEOST_MFP_WRITE_END (défaut 2 ; =0 restaure l'ancienne datation).
+    static int64_t mmioWriteEnd();
+
     // Auto-test DÉTERMINISTE du MFP : (a) bits d'ENTRÉE GPIP forcés à la lecture
     // (moniteur bit7, FDC bit5, ACIA bit4 en wire-OR) ; (b) détection de FRONT
     // (gpipSetLine lève le canal seulement sur le front sélectionné par l'AER, ligne en
