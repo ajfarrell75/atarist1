@@ -124,6 +124,72 @@ figée sans que rien ne le dise.
 ils ont leur propre chemin souris et leurs propres réglages, et je n'ai pas de moyen de
 les vérifier ici.
 
+## CI : les deux téléchargements du job Android n'avaient aucun filet (2026-09-02)
+
+Le workflow *Artefacts* a échoué sur le push du 2026-09-02, sur le seul job `android` :
+
+```
+An error occurred while preparing SDK package NDK (Side by side) 27.2.12479018:
+Error on ZipFile unknown archive.
+```
+
+Archive tronquée au téléchargement du NDK. **Aléa confirmé** : le même job, sans aucune
+modification côté Android, est repassé au push suivant. Mais `publish` dépend des huit
+paquets — donc **un aléa réseau suffit à bloquer une release**, et c'est exactement ce qui
+avait empêché la 0.6.1 de sortir (l'`apt-get install` sans `update` de `linux-bionic`).
+
+Audit du job : **deux** étapes réseau sans reprise, et aucune des deux n'en avait.
+- `sdkmanager --install` (SDK/NDK/CMake) : 3 tentatives, en **purgeant le NDK
+  partiellement installé** entre deux — sans quoi une extraction à moitié faite peut être
+  reprise telle quelle et échouer à l'identique.
+- `packaging/android/fetch_sdl.sh` (clone SDL2) : même motif, avec purge de `extern/SDL2`
+  entre deux tentatives. C'est nécessaire pour une raison propre à ce script : son garde
+  d'entrée teste `-d extern/SDL2/.git`, donc un clone interrompu laisserait un arbre
+  PARTIEL que le tour suivant prendrait pour une installation valide.
+
+Les deux échouent explicitement après 3 tentatives (« ce n'est plus un aléa ») plutôt que
+de passer en silence. Logique vérifiée dans les deux sens sous `set -eu` : succès après
+échecs transitoires, et code 1 après trois échecs consécutifs.
+
+## L'élection de l'exception MFP : la règle chronologique existait mais ne pouvait jamais s'appliquer (2026-09-02)
+
+Suite du dossier MFP. En comparant `MFP_InputOnChannel` à `Mfp::raiseAt` — fonction
+entière, `else` compris — les deux sont identiques ligne pour ligne. L'écart était
+ailleurs, dans QUAND l'élection a lieu.
+
+**La règle d'Hatari.** Une ENTRÉE d'interruption ne déclenche pas l'élection : elle pose
+son bit pending et sa date, puis marque « à faire » (`MFP_UpdateNeeded = true`). L'élection
+vient plus tard, une fois toutes les entrées reçues. Son propre commentaire
+(mfp.c:1084-1087) l'explique : « *As we can have several inputs during one CPU instruction,
+not necessarily sorted by Interrupt_Delayed_Cycles, we must call MFP_UpdateIRQ() only later
+in the main CPU loop, when all inputs were received, to choose the oldest input's event
+time* ». C'est ce qui rend opérant le test `Pending_Time[Int] <= Pending_Time_Min` de
+`MFP_InterruptRequest` (2013/04/21, « fix Fuzion CD Menus 77, 78, 84 »).
+
+**Le défaut.** NeoST avait bien `pendingTime_[]`, `pendingTimeMin_` et le test
+chronologique dans `checkPendingInterrupts` — mais il élisait IMMÉDIATEMENT à chaque
+`raiseAt`, et `updateIrq` remet `pendingTimeMin_` à l'infini en sortant. Le minimum était
+donc consommé avant l'arrivée de l'entrée suivante : la règle avait **toujours un seul
+candidat** et ne pouvait rien départager. Une entrée plus récente mais plus prioritaire
+l'emportait, là où le 68901 sert la plus ancienne.
+
+**Ce qui est porté.** `raiseAt` n'arme plus qu'un drapeau ; l'élection est faite par
+`flushIrqUpdate()`, appelé au calcul d'IPL (`neostUpdateIpl`, l'équivalent NeoST de la
+boucle CPU) et en fin de `Mfp::updateTimers` (≙ mfp.c:689, avec l'horloge courante comme
+date de front, comme Hatari). Les paires d'entrées d'une même fonction — `TXERR`→`TXEMPTY`,
+`RXERR`→`RXFULL` — sont désormais départagées correctement. Verrou : `NEOST_MFP_BATCH=0`.
+
+⚠ **CE QUI RESTE, mesuré et dit plutôt qu'habillé.** Chez Hatari le flush est PAR
+INSTRUCTION ; chez NeoST il est par CALLBACK, parce que `Machine` fait suivre chaque
+callback d'ordonnanceur d'un `cpu.updateIpl()` — 18 sites. Deux timers MFP échus dans le
+même `runTo` sont donc encore élus séparément. Compté sur Super Hang-On : **0 groupement
+sur 1 000 000 d'entrées**, la fenêtre se refermant aussitôt. Conséquence honnête : ce port
+**ne change aucune image** — A/B à 0 px sur Super Hang-On, `mfp_poll`, `blitter_timer` et
+`trace_odd`. Il rend la règle opérante là où elle peut l'être, sans prétendre couvrir le
+cas inter-callbacks. Le fermer demande de sortir `updateIpl()` des callbacks pour un unique
+appel en fin de dispatch : une refonte du pilotage de l'IPL, à faire séparément et avec son
+propre filet — pas en fin de session.
+
 ## Les trois autres pistes « Super Hang-On » d'Hatari, instruites (2026-09-02)
 
 Le nom du jeu apparaît **quatre fois** dans les sources d'Hatari. Après `MFP_UpdateTimers`,

@@ -888,8 +888,24 @@ jobs:
           SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
           command -v sdkmanager >/dev/null 2>&1 && SDKM=sdkmanager
           yes | "$SDKM" --licenses > /dev/null || true
-          "$SDKM" --install "platforms;android-34" "build-tools;34.0.0" \
-                  "ndk;27.2.12479018" "cmake;3.22.1"
+          # REPRISE (2026-09-02). `sdkmanager` télécharge PUIS dézippe, et une archive
+          # tronquée est FATALE : « Error on ZipFile unknown archive » sur le NDK a fait
+          # échouer ce job le 2026-09-02 — et `publish` avec lui, puisqu'il dépend des
+          # huit paquets. Le job a repassé tel quel au push suivant : c'était bien un aléa
+          # réseau, pas une régression. C'est la MÊME leçon que l'`apt-get install` sans
+          # `update` de la 0.6.1 (cf. CHANGELOG) : une seule étape réseau sans filet suffit
+          # à bloquer une release. On réessaie donc, en PURGEANT l'installation partielle
+          # entre deux tentatives — sans quoi une extraction à moitié faite peut être
+          # reprise telle quelle et échouer à l'identique.
+          ok=0
+          for try in 1 2 3; do
+            if "$SDKM" --install "platforms;android-34" "build-tools;34.0.0" \
+                       "ndk;27.2.12479018" "cmake;3.22.1"; then ok=1; break; fi
+            echo "::warning::sdkmanager a échoué (tentative $try/3) — purge puis nouvelle tentative"
+            rm -rf "$ANDROID_HOME/ndk/27.2.12479018" || true
+            sleep $(( try * 15 ))
+          done
+          [ "$ok" = 1 ] || { echo "::error::sdkmanager a échoué 3 fois de suite — ce n'est plus un aléa"; exit 1; }
 
       - name: Récupérer SDL2 (couche plateforme, vendorisée non commitée)
         run: ./packaging/android/fetch_sdl.sh

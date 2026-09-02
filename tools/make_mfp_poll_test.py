@@ -82,7 +82,17 @@ while len(code) < 0x1E:
     code.append(0x00)
 
 label('code')
-w(0x46FC, 0x2700)                  # move.w #$2700,sr  → IRQ masquées : on veut le PENDING, pas le handler
+# IRQ MASQUÉES (IPL 7) : l'étalon mesure l'ÉTAT DES REGISTRES — le bit pending d'IPRA
+# et le compteur vivant TADR — et non la LIVRAISON de l'interruption. Ouvrir les IRQ y
+# ferait tourner un handler Timer A toutes les ~169 cycles : la boucle de poll serrée,
+# qui est tout l'instrument, serait détruite, et l'étalon mesurerait le dispatch.
+# ⚠ COROLLAIRE À CONNAÎTRE AVANT DE LUI FAIRE DIRE TROP : cet étalon est par
+# construction AVEUGLE à tout ce qui touche la datation ou la livraison des IRQ. Vérifié
+# le 2026-09-02 — décaler de 40 cycles la datation des écritures registre
+# (NEOST_MFP_WRITE_END=40) le laisse à 0 px, alors que le même décalage déplace
+# 24 773 px sur Super Hang-On. C'est ce qui l'a fait rejeter à tort le port de
+# MFP_UpdateTimers le matin du 2026-09-02 (cf. CHANGELOG).
+w(0x46FC, 0x2700)                  # move.w #$2700,sr
 
 # ---- vidéo : basse résolution, 50 Hz, base écran $020000 -------------------
 w(0x4238, 0x8260)                  # clr.b $8260.w
@@ -107,10 +117,18 @@ dbra(0, 'cls')
 # l'étalon lirait des zéros — il ne contraindrait alors plus rien.
 w(0x11FC, 0x0020, 0xFA07)          # move.b #$20,$fa07.w  → IERA, Timer A
 w(0x11FC, 0x0020, 0xFA13)          # move.b #$20,$fa13.w  → IMRA, Timer A
-                                   # ⚠ IMRA armé, PAS laissé à 0 : mesuré, avec IMRA=0
-                                   # le bit de pending ne se pose jamais et IPRA lit 0
-                                   # sur les 100 lignes — l'étalon ne contraindrait alors
-                                   # plus rien. Les IRQ restent bloquées par SR=$2700.
+                                   # ⚠ CORRECTION (2026-09-02) : ce commentaire affirmait
+                                   # qu'avec IMRA=0 « le bit de pending ne se pose jamais
+                                   # et IPRA lit 0 sur les 100 lignes ». C'est FAUX, et
+                                   # vérifié : une variante à IMRA=0 rend les 100 octets
+                                   # IPRA *et* TADR IDENTIQUES. Le bit pending ne dépend
+                                   # que d'IER — `if (*pEnableReg & Bit) *pPendingReg |=
+                                   # Bit` (MFP_InputOnChannel, mfp.c:1099-1114), dont
+                                   # Mfp::raiseAt est le port 1:1 ; IMR ne gouverne que
+                                   # l'élection de l'IRQ (Pending_Time_Min). IMRA reste
+                                   # armé ici — le changer imposerait de re-poser la
+                                   # référence pour un gain nul — mais il n'est PAS ce
+                                   # qui rend l'étalon non vide.
 w(0x11FC, TADR_INIT, 0xFA1F)       # move.b #13,$fa1f.w   → TADR
 w(0x11FC, TACR, 0xFA19)            # move.b #1,$fa19.w    → TACR = /4 (démarre le timer)
 

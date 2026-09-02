@@ -122,9 +122,23 @@ public:
     // le cas « Super Hang On » nommé par Hatari, cf. Scheduler::runMfpTimersTo.
     void updateTimers();
 
+    // Élection GROUPÉE de l'IRQ (≙ MFP_UpdateNeeded / MFP_UpdateIRQ, mfp.c:1125 et
+    // newcpu.c:3005,5509…). Une ENTRÉE d'interruption ne déclenche PAS l'élection : elle
+    // pose seulement son bit pending et sa date, puis marque l'élection « à faire ».
+    // C'est ce qui permet à la règle chronologique (`pendingTime_ <= pendingTimeMin_`)
+    // de départager PLUSIEURS entrées d'une même instruction — Hatari :
+    // « we must call MFP_UpdateIRQ() only later […] when all inputs were received, to
+    // choose the oldest input's event time ». Une ÉCRITURE registre, elle, élit
+    // immédiatement avec le cycle d'écriture (cf. write8).
+    // NON SÉRIALISÉ À DESSEIN : transitoire à l'intérieur d'une instruction, et toujours
+    // consommé par le calcul d'IPL qui suit tout dispatch. La sérialiser imposerait un
+    // bump du format de save-state pour un drapeau qui vaut faux à toute frontière.
+    void flushIrqUpdate();
+
     // Fin d'accès d'une ÉCRITURE registre MFP (cf. Mfp.cpp) : c'est cet instant qui
     // date une IRQ née de l'écriture, pas le début de l'accès.
     int64_t writeEventTime() const;
+    bool    irqUpdateNeeded_ = false;   // cf. flushIrqUpdate (non sérialisé)
     // Décalage « début → fin » d'un accès MMIO, en cycles bus (cf. Cpu68k::cyclesIntoInstr :
     // Moira a déjà facturé le SYNC(2) de tête, la fin d'accès est donc à +2).
     // Verrou d'A/B : NEOST_MFP_WRITE_END (défaut 2 ; =0 restaure l'ancienne datation).

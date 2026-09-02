@@ -963,8 +963,30 @@ TODO) :
 - **[basses]** AER bit3 écrit mid-ligne : tic Timer B déjà armé non repositionné (mfp.c:2772-2815,
   cas Seven Gates of Jambala) ; `setBusyLine` GPIP0 Centronics sans détection de front (fix
   trivial : `gpipSetLine(busyLine_, a)`) ; `setXsintLine` sans test DDR bit7 ; RS232 CTS/DCD/RI
-  `raise()` direct (volontaire, fixture) ; élection chronologique par lot (`MFP_UpdateNeeded`)
-  non groupée — rarissime. **[volontaires]** jitter Lethal Xcess (hack PC codé en dur, résolu
+  `raise()` direct (volontaire, fixture) ; ◐ **élection chronologique par lot (`MFP_UpdateNeeded`) — PARTIELLEMENT portée le
+  2026-09-02.** La règle d'Hatari : une ENTRÉE d'interruption ne déclenche pas l'élection,
+  elle pose son bit et sa date et marque « à faire » ; l'élection a lieu plus tard, une
+  fois toutes les entrées reçues, pour « choisir la date de la PLUS ANCIENNE »
+  (mfp.c:1084-1087). C'est ce qui rend opérante la règle `Pending_Time <= Pending_Time_Min`
+  de `MFP_InterruptRequest` — sans elle, une entrée plus RÉCENTE mais plus prioritaire
+  l'emporte, là où le 68901 sert la plus ancienne (Hatari 2013/04/21, « fix Fuzion CD
+  Menus 77, 78, 84 »). NeoST élisait immédiatement à CHAQUE entrée : `pendingTimeMin_`
+  était donc consommé avant l'arrivée de la suivante et ne pouvait jamais départager.
+  **Ce qui est porté** : `Mfp::raiseAt` ne fait plus qu'armer `irqUpdateNeeded_` ;
+  l'élection est faite par `flushIrqUpdate()`, appelé au calcul d'IPL
+  (`neostUpdateIpl`) et en fin de `Mfp::updateTimers` (≙ mfp.c:689). Les paires d'entrées
+  d'une MÊME fonction — `TXERR`→`TXEMPTY`, `RXERR`→`RXFULL` — sont désormais départagées
+  correctement. Verrou d'A/B : `NEOST_MFP_BATCH=0`.
+  ⚠ **CE QUI RESTE, et c'est mesuré** : chez Hatari le flush est PAR INSTRUCTION (boucle
+  CPU, newcpu.c:3005/5509) ; chez NeoST il est par CALLBACK, parce que `Machine` fait
+  suivre chaque callback d'ordonnanceur d'un `cpu.updateIpl()` (18 sites). Deux timers MFP
+  échus dans le MÊME `runTo` sont donc encore élus SÉPARÉMENT. Mesuré sur Super Hang-On :
+  **0 groupement sur 1 000 000 d'entrées** — la fenêtre se referme aussitôt. Le port
+  actuel ne change donc AUCUNE image (A/B à 0 px sur Super Hang-On, `mfp_poll`,
+  `blitter_timer`, `trace_odd`) ; il rend la règle opérante là où elle peut l'être, sans
+  prétendre couvrir le cas inter-callbacks. Le fermer demande de sortir `updateIpl()` des
+  callbacks pour un unique appel en fin de dispatch — une refonte du pilotage de l'IPL,
+  à faire séparément et avec son propre filet. **[volontaires]** jitter Lethal Xcess (hack PC codé en dur, résolu
   par le vrai beam-sync) et « PATCH TIMER D » (hack de performance inutile ici) non portés.
 
 **Son** — générateurs YM = port exact (tons/bruit LFSR 17 bits/enveloppes/mixeur/masques/
