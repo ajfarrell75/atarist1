@@ -104,12 +104,13 @@ est continue, les trous sont du travail fait.
 - **A3 ◐ — Le corpus de régression n'est pas livrable — et depuis la purge du
   2026-08-30 il est LOCAL par construction** : jeux et ROM propriétaires ne sont plus
   suivis par git, chaque machine les restaure via `tools/private_assets.sh unpack`
-  (§ BLOQUANT). Recompté 2026-08-30 (pose de `closure`) : **14 étalons
-  pixel sur 18** survivent au retrait des TOS Atari (`etos_ste_boot`, `overscan_top`,
+  (§ BLOQUANT). Recompté 2026-09-02 (pose de `dmasnd_poll`) : **15 étalons
+  pixel sur 19** survivent au retrait des TOS Atari (`etos_ste_boot`, `overscan_top`,
   `trace_odd`, `scroll_8264`, `scroll_8265`, `blitter_timer`, `blitter_hog`, `mfp_poll`,
   plus `cuddly_demos`, `nocooper`, `nocooper_greetings` et `closure` migrés/posés sur
   EmuTOS, `spec512_bands` — l'étalon GÉNÉRÉ qui rend la couverture « palette en cours
-  de ligne » — et `freq_switch`, l'exhibiteur généré de V3) ; les 4 restants sont le reliquat d'**A10**.
+  de ligne » —, `freq_switch`, l'exhibiteur généré de V3, et `dmasnd_poll`, celui de la
+  quantification HBL du refill FIFO son) ; les 4 restants sont le reliquat d'**A10**.
 - **A9 ◐ — `main.cpp` : 5 100 → 28 lignes ; reste LA BOUCLE.** Fait le 2026-08-30
   (détail au `CHANGELOG.md`). `main()` tient en **10 lignes** — `appInit` → `appLoop`
   → `appShutdown` — et les **84 globaux `g_*` n'existent plus** : ils sont les membres
@@ -219,9 +220,12 @@ est continue, les trous sont du travail fait.
     5 trames (+4 cyc/trame au démarrage du handler), identiquement chez Hatari : c'est le
     programme, et `oracle_scan` retient la trame identique. Référence régénérée (trame
     nominale, décalage 0), run frais identique.
-  **Périmètre réel en CI : 7 étalons** (blitter_hog, cuddly_demos, nocooper, scroll_8264,
-  scroll_8265, spec512_bands, trace_odd) — les 3 `spectrum512_diapo*` dépendent d'une ROM Atari que le
-  dépôt ne porte plus. Le décompte et les noms sont imprimés à chaque exécution.
+  **Périmètre réel en CI : 8 étalons** (blitter_hog, cuddly_demos, **mfp_poll**, nocooper,
+  scroll_8264, scroll_8265, spec512_bands, trace_odd) — les 3 `spectrum512_diapo*` dépendent d'une
+  ROM Atari que le dépôt ne porte plus. Le décompte et les noms sont imprimés à chaque exécution.
+  `mfp_poll` a rejoint le corpus le 2026-09-02 (promu snapshot → oracle, cf. § Divergences n°3) ;
+  il est le plus ROBUSTE des huit : son programme finit sur `bra.s *`, donc l'image est figée et
+  ne dépend pas de la durée de boot — il n'a pas besoin d'`oracle_scan`.
 - ✅ **A41 — SOLDÉ le 2026-09-01 : les 27 px de `closure` sont à HATARI, NeoST est fidèle.**
   L'écart tenait sur la seule ligne 0 (première ligne affichée, `sl=34`, celle qu'ouvre le
   retrait de bordure haute), chaque pixel fautif portant une couleur voisine d'un cran.
@@ -487,15 +491,41 @@ décroissant, par priorité d'impact :
    ⚠ Le pixel n'était PAS juge ici : les lignes 60 Hz d'une trame 50 Hz sortent chez Hatari
    avec l'artefact « left+2 » tranché en A40 (toute la ligne à l'index 8) — 56 % d'écart image
    qui ne dit rien de l'attribution ; d'où `ref_kind: snapshot`, preuve consignée au `ref_note`.
-2. **[SON]** quantification HBL du refill FIFO à confronter à l'oracle sur un poll serré de
-   `$FF8909/0B/0D` — validable par dump WAV + trace.
-3. **[MFP]** `UpdateTimers` avant lecture IPR/ISR/TBDR en mode bloc — retard **mesuré à
-   157 cycles** dans le pire cas observé. Le correctif évident (dispatch sync-driven) est
-   **réfuté**, et A34 a SUPPRIMÉ ce modèle le 2026-08-28 : il ne reste plus rien à
-   attendre de ce côté. Toute correction devra se faire DANS le modèle BLOC — par
-   exemple en rafraîchissant les timers à la lecture du registre plutôt qu'à la
-   frontière de bloc.
-4. **[FPU]** arrondis de conversion sortante et précision FPCR (détail § Roadmap / FPU).
+2. ✅ **[SON] CLOS le 2026-09-02 — confronté, et l'oracle est le PERDANT.** L'exhibiteur manquait :
+   `tools/make_dmasnd_poll_test.py` → étalon **`dmasnd_poll`** (généré, ROM libre, STE), 100 tours
+   d'un poll de `$FF890B/0D` pendant que le DMA joue à 50066 Hz stéréo. Il contraint ce qu'aucun
+   test ne touchait : le compteur ne doit **avancer qu'au HBL** (39 deltas nuls sur 99, puis des
+   sauts de 6 et de 8) — le WAV, lui, mesure ce que le DAC CONSOMME, pas la date du FETCH.
+   **Verdict : NeoST rend le découpage IDÉAL implanté par le débit** (6,398 o/ligne ⇒ 19,9 % de
+   sauts de 8 ; mesuré 20,3 %), là où Hatari jitte sur 4/6/8/12 — sa consommation DAC passant par
+   le rééchantillonnage vers le taux hôte. Le débit MOYEN est identique des deux côtés
+   (**382 octets exactement** sur la fenêtre) : c'est bien la granularité, pas le débit.
+   ⚠ **Hatari ne se reproduit pas lui-même dessus** — 664 à 1432 px entre deux runs identiques,
+   `--sound off` comme `--sound 50066`, l'ancrage VBL de `spec512_bands` n'y changeant rien (il
+   fixe la phase du programme, pas celle du resampler, dont l'accumulateur court depuis le
+   démarrage de l'émulateur). **Aucun oracle n'est dérivable sur ce chemin** : `ref_kind: snapshot`,
+   premier étalon du corpus refusé à l'oracle pour non-reproductibilité d'HATARI. Garde vérifiée
+   par mutation : réintroduire le `fifoRefill()` de `DmaSound::liveCounter` rend 1592 px et une
+   RAMPE CONTINUE au lieu du palier-saut. Détail → `docs/HATARI_DIVERGENCES.md` § *Cas où NeoST
+   améliore Hatari*.
+3. ✅ **[MFP] CLOS le 2026-09-02 — mais PAS par le correctif prescrit, qui est réfuté.**
+   L'écart « pas d'`UpdateTimers` avant lecture IPR/ISR » **n'existait plus** : confronté à
+   l'oracle sur `mfp_poll` (l'étalon bâti exprès), IPRA est identique à Hatari sur les
+   100 lignes — le modèle BLOC préempte déjà à chaque échéance de timer. Le port du `runTo`
+   ciblé `TIMER_*` a quand même été écrit pour le vérifier : il ne ferme rien et **dégrade
+   l'étalon de 80 à 88 px** (balayage de l'instant sur ±12 cyc, aucun offset à 0 px) — retiré.
+   Le résidu de 80 px était AILLEURS et n'était écrit nulle part : `readTimerData` lisait le
+   compteur vivant sur l'échéance **arrondie au plafond entier** du Scheduler au lieu de
+   l'échéance sous-cyclique que NeoST tenait déjà (`timerDueSub_`), d'où un `ceil` un cran
+   trop haut sur 6 lignes / 100. Corrigé → **0 px contre l'oracle** (les 100 octets IPRA et
+   les 100 octets TADR), et `mfp_poll` promu snapshot → **oracle** : le corpus oracle de la
+   CI passe de 7 à 8 étalons. Récit → `docs/HATARI_DIVERGENCES.md` § MFP.
+   📌 Leçon : la borne « 157 cycles » qui justifiait ce chantier était une métrique
+   (`Scheduler::timerMaxLate`, maximum sur toute la trace, boot compris), pas un écart de
+   rendu — et l'inventaire l'a portée un an sans qu'on la confronte à une image.
+4. ◐ **[FPU]** ~~arrondis de conversion sortante~~ **FAITS le 2026-09-02** (double arrondi,
+   INEX2, mode FPCR en sortie, payload NaN — cf. § Roadmap / FPU, banc porté à 12 tests) ;
+   restent la précision FSGLMUL/FSGLDIV, le décimal empaqueté et FMOVECR/FMOD.
 5. **[BLITTER]** résidu BL5 : ~10 cyc par démarrage de blit + ~3,3 par reprise de tranche,
    **paradoxe de signe non levé** — cf. Garde-fous (aucune correction sans 3ᵉ mesure).
 6. **[VIDÉO, P3]** wakeup-state WS3 sous-pixel, mode 336 px STE (`bSteBorderFlag`), rendu
@@ -549,11 +579,27 @@ densité HD/ED STX (NeoST plus cohérent) ; RTC en temps émulé (déterminisme 
   autrement). Trace façon FDC + Hatari en oracle sur la même cartouche. _Valeur moyenne._
 
 ### FPU MC68881 (audit 2026-07-12 — différés)
-- **Arrondis de conversion SORTANTE bit-exacts** : FMOVE.L/W/B (double arrondi 53 bits via
-  extToD, INEX2 jamais levé, NaN→0 au lieu du payload) et FMOVE.S/D (mode FPCR ignoré,
-  INEX2/UNFL absents, OVFL silencieux en D) → porter `floatx80_to_int32/float32/float64`
-  (softfloat.c). FSGLMUL/FSGLDIV : plage d'exposant ÉTENDUE avec mantisse 24 bits → porter
-  `roundSigAndPackFloatx80` (softfloat.c:1502).
+- ✅ **Arrondis de conversion SORTANTE bit-exacts — FAIT le 2026-09-02.**
+  `floatx80_to_int32/16/8` et `floatx80_to_float32/64` (+ leurs `roundAndPack*`) sont portés
+  dans `src/io/SoftFloatX80.hpp` (`sf::toInt`, `sf::toFloat32/64`) et `Fpu::encodeFmt` ne
+  traverse plus de `double` hôte pour L/W/B/S/D. Sont réglés du même coup : le **double
+  arrondi** (64 → 53 bits AVANT l'arrondi demandé), **INEX2 jamais levé**, le **mode FPCR
+  ignoré** en sortie, l'**UNFL** absent et l'**OVFL silencieux en D**, et un NaN rend enfin
+  son **payload** au lieu de 0.
+  Exhibé et gardé par trois cas ajoutés au banc (`tools/make_fpu_testrom.py`, 9 → 12 tests,
+  palier `fast` via l'auto-test série `fpu_cir`) : **test 10** l'étendu juste au-dessus de 0,5
+  ($3FFE 80000000_00000001) doit rendre 1 en FMOVE.L — il rendait **0**, le `double` le
+  ramenant à 0,5 exact puis la règle du pair l'envoyant à zéro ; **test 11** INEX2 armé par
+  FMOVE.L de 1,5 ; **test 12** FPCR en RZ → FMOVE.S de 1/3 TRONQUE ($3EAAAAAA) au lieu
+  d'arrondir au plus près ($3EAAAAAB) comme le faisait l'hôte. Les trois vérifiés par
+  mutation (chacun échoue si l'on rétablit le chemin `double`).
+  ⚠ **Piège d'outillage débusqué au passage** : `disks/etalons/fpu_testrom.img` est COMMISE et
+  `ensure_rom_asset` ne la régénère que si elle est ABSENTE — les tests ajoutés sont restés
+  invisibles du palier tant qu'on ne l'avait pas re-commise. Et une ROM `rom_generate`
+  manquante était classée « TOS Atari absent » donc SKIP (vert sans rien exécuter) : garde
+  corrigée dans `tools/run_selftests.py`.
+  **Reste sur cette puce** : FSGLMUL/FSGLDIV (plage d'exposant ÉTENDUE avec mantisse 24 bits
+  → porter `roundSigAndPackFloatx80`, softfloat.c:1502) — non touché.
 - **Packed decimal** : ±inf/NaN → exposant $FFF (pas du BCD invalide), INEX1 sur conversion
   inexacte, OPERR si k>17.
 - FMOVECR : précision FPCR non appliquée après la table ; offsets indéfinis → table silicium

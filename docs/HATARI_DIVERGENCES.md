@@ -51,7 +51,7 @@ de contradiction avec les sections historiques.
 
 | Sous-système | NeoST | Hatari (vérité) | Fidélité | Écarts ouverts M / B (5ᵉ passe 2026-07-07) |
 |---|---|---|---|---|
-| MFP 68901 | `Mfp.cpp` | `mfp.c` | très élevée | 1 (UpdateTimers, mode bloc) / 5 |
+| MFP 68901 | `Mfp.cpp` | `mfp.c` | très élevée | 0 moyennes (UpdateTimers CLOS + compteur vivant ✅ 2026-09-02) / 5 |
 | Vidéo (Shifter/Glue) | `Shifter.cpp` | `video.c` | très élevée (STF WS3 + Glue STE + tricks res) | 0 moyennes (WS/V1/V2 ✅ 2026-07-08 ; résidus V2 : Paulo Simoes, $FF8261) / ~9 |
 | FDC + DMA + STX | `Fdc.cpp`, `StxImage.cpp` | `fdc.c`, `floppies/stx.c` | très élevée | 2 (D3, wait-state 4 cyc) / 4 (+2 assumés D1/D2) |
 | Son (YM2149 + DMA STE) | `YM2149.cpp`, `DmaSound.cpp` | `psg.c`, `dmaSnd.c`, `sound.c` | très élevée (générateurs 1:1, FIFO DMA au faisceau) | 0 (S2/S3/S4 ✅ 2026-07-07) / ~6 |
@@ -428,6 +428,23 @@ par le présent document :
 - **WRITE TRACK `.ST`** : NeoST écrit les secteurs d'une géométrie standard (Hatari renvoie
   LOST_DATA, TODO).
 - **SCC `WR14` bit4** : bouclage local conforme à la datasheet Zilog (absent d'Hatari).
+
+- **Granularité du refill FIFO du son DMA STE** (2026-09-02, étalon `dmasnd_poll`) : sur un poll
+  serré de $FF890B/0D, NeoST rend le découpage par HBL **IDÉAL implanté par le débit** — à
+  50066 Hz stéréo, 100 132 o/s ÷ 15 650 lignes/s = **6,398 o/ligne**, donc des sauts de 6 avec
+  19,9 % de sauts de 8 ; mesuré : 12 sauts de 8 pour 47 de 6, soit **20,3 %**. Hatari, lui, jitte
+  sur 4/6/8/12 autour du même débit moyen, parce que sa consommation DAC passe par le
+  rééchantillonnage vers le **taux hôte** : le découpage y hérite d'une granularité d'échantillon
+  hôte, étrangère au matériel.
+  ⚠ **Et c'est ce qui l'empêche de se reproduire** : son accumulateur fractionnaire court depuis
+  le DÉMARRAGE de l'émulateur, donc dépend de la durée du boot — que son RNG tire au sort. Deux
+  runs Hatari identiques donnent **664 à 1432 px d'écart entre eux** selon les options son
+  (`--sound off` comme `--sound 50066`), et l'ancrage VBL de la recette `spec512_bands` n'y peut
+  rien : il fixe la phase du PROGRAMME, pas celle du resampler. **Aucun oracle n'est donc dérivable
+  sur ce chemin** — d'où `ref_kind: snapshot`, et c'est le premier étalon du corpus refusé à
+  l'oracle pour non-reproductibilité d'HATARI et non pour une raison de modèle.
+  **Ce qui a quand même été confronté**, et qui valide le débit : sur la fenêtre des 100 polls, les
+  deux émulateurs avancent le compteur de **382 octets EXACTEMENT**.
 - **SCC RR9** (SC2) : NeoST rend l'image de RR13 (datasheet) ; Hatari rend WR9 (son commentaire
   dit l'inverse de son code).
 - **SCU $FF8E07** (SC3) : NeoST renvoie le VME Interrupter ; Hatari renvoie le Sys Interrupter
@@ -548,13 +565,15 @@ du PSG (port de `psg.c:419-420` → `FDC_SetDriveSide`). Sans lui, un programme 
 commande FDC AVANT de sélectionner le lecteur restait à `driveSel_ = -1` pour toujours (Stardust
 STE : gel noir, `drv=-1`, INTRQ jamais levé). Après : `drv=0`, 374 294 lignes FDC au lieu de
 4714, intro jouée, puis recherche de la disquette 2 dans le lecteur B — comme l'oracle.
-**MFP UpdateTimers** : ⚠ le motif de report « risque de réentrance » est **CADUC** —
-`Scheduler::runTo` est ré-entrant depuis BL4 (garde RAII `FiringGuard`). Le motif VALIDE est
-autre : l'écart est **confirmé et exhibé** (Super Hang-On, 48 courses ISRA↔expiration Timer C en
-14 000 VBL) mais **sans différence de pixels démontrée**, et le patch doit être un `runTo`
-**CIBLÉ sur les sources `TIMER_*`** (comme `HATARI_MAPPING.md` le prescrit déjà) et NON un
-`syncTo` nu — lequel réactiverait le modèle **sync-driven RÉFUTÉ** (deadlock Enchanted Land,
-`Cpu68k.cpp`, `IMPLEMENTED.md`), à ~1590 dispatches mid-instruction par trame. Et les basses
+**MFP UpdateTimers** : ⚠ **le chantier est CLOS le 2026-09-02, et sa conclusion est NÉGATIVE** —
+le `runTo` ciblé sur les sources `TIMER_*` prescrit ici a été écrit, mesuré, puis RETIRÉ : il ne
+ferme rien (IPRA est déjà identique à l'oracle) et dégrade `mfp_poll` de 80 à 88 px. Le résidu réel
+était ailleurs — l'échéance ARRONDIE du compteur vivant, corrigée le même jour. Détail et garde de
+non-répétition dans l'entrée MFP de l'inventaire ci-dessus. Ce qui reste vrai de l'ancien texte :
+le motif de report « risque de réentrance » était bien CADUC (`Scheduler::runTo` est ré-entrant
+depuis BL4, garde RAII `FiringGuard`), et un `syncTo` nu reste à proscrire — il réactiverait le
+modèle **sync-driven RÉFUTÉ** (deadlock Enchanted Land, `Cpu68k.cpp`, `IMPLEMENTED.md`), à
+~1590 dispatches mid-instruction par trame. Et les basses
 **cycle-exactes** (vidéo) / niche (bus N2-N5, blitter BL-R/BL-MST). À reprendre quand l'oracle
 Hatari headless (`extern/hatari/build/src/hatari`) est bâti.
 
@@ -828,12 +847,37 @@ MFP, périphériques (FDC/son-statuts/bus/SCC/ACIA), son approfondi (cœur YM + 
 
 **MFP** — chaîne IRQ/timers/GPIP quasi 1:1 (NeoST fait même le spurious $60 que Hatari laisse en
 TODO) :
-- **[moyenne-basse] Pas de `MFP_UpdateTimers` avant lecture IPR/ISR/TBDR en mode bloc** (défaut) :
-  un timer expirant PENDANT l'instruction qui polle est vu en retard — borne MESURÉE le
-  2026-08-25 : **jusqu'à 157 cycles** (`Scheduler::timerMaxLate`, trois charges `machine st` ;
-  163 relevé par ailleurs), et NON « ≤ 1 instruction » comme écrit jusqu'ici. Compensé
-  pour les data-registers en mode délai (`Mfp.cpp:449-480` `readTimerData`) ; fermé par `NEOST_SYNC_DISPATCH=1`
-  (réfuté par ailleurs). L'IRQ elle-même n'est PAS affectée (antidatage + commit frontière).
+- **[CLOS le 2026-09-02] ~~Pas de `MFP_UpdateTimers` avant lecture IPR/ISR/TBDR en mode bloc~~ —
+  l'écart N'EXISTE PLUS, et le correctif prescrit a été RÉFUTÉ À LA MESURE.** Ce qui était écrit
+  ici depuis le 2026-08-25 (« un timer expirant PENDANT l'instruction qui polle est vu en retard,
+  jusqu'à 157 cycles ») décrivait un état dépassé. Confronté à l'oracle sur l'étalon `mfp_poll`,
+  bâti exprès pour l'exhiber : **IPRA est IDENTIQUE à Hatari sur les 100 lignes**. Le modèle BLOC
+  préempte déjà le timeslice CPU à chaque échéance de timer (`Scheduler::schedule` → `endSlice_`),
+  et BL4/D3 ont fermé le reste ; il ne restait plus rien à rattraper.
+  ⚠ **Ne pas re-tenter le port.** `MFP_UpdateTimers` (dispatch ciblé des sources `TIMER_*` en tête
+  de `Mfp::read8`/`write8`, à l'horloge live) a été ÉCRIT et MESURÉ le 2026-09-02 : il ne ferme
+  rien et **dégrade l'étalon de 80 à 88 px** (il fait recharger le timer avant la lecture de TADR,
+  ajoutant une ligne divergente). Balayage de l'instant de dispatch sur ±12 cycles : aucun offset
+  n'atteint 0 px, et le meilleur (−12) ne fait que reproduire l'image NON corrigée. Le patch a été
+  retiré. La borne de 157 cycles reste vraie comme MÉTRIQUE de `Scheduler::timerMaxLate` (elle est
+  un maximum sur toute la trace, boot compris), mais elle ne mesure aucun écart de rendu.
+- **[moyenne ✅ corrigé le 2026-09-02] Compteur vivant des timers lu sur l'échéance ARRONDIE** —
+  le VRAI résidu de cet étalon, et il n'était écrit nulle part. `readTimerData` reconstruisait le
+  compteur depuis l'échéance vue par le `Scheduler`, qui n'en est que le **plafond entier**
+  (`scheduleTimerAt` : `next = (nextSub + 255) >> 8`) : le reste était surestimé de presque un
+  cycle CPU, et comme le compte est un `ceil` (≙ `MFP_CYCLE_TO_REG`, mfp.c:393), TADR sortait **un
+  cran trop haut** chaque fois que le reste tombait sur un multiple du prescaler. Mesuré : 6 lignes
+  sur 100 (période 19), **toutes NeoST = Hatari+1**, 80 px / 114816. Hatari ne peut pas avoir le
+  défaut — son `InterruptHandlers[].Cycles` EST la valeur fractionnaire (unités internes CPU<<8,
+  `CYCINT_SHIFT`) et `CycInt_FindCyclesRemaining` la soustrait telle quelle de l'horloge live.
+  **Correctif** : partir de l'échéance SOUS-CYCLIQUE que NeoST tenait déjà (`Mfp::timerDueSub_`,
+  8 bits de fraction, au save-state depuis v11) et ne lâcher la fraction qu'à la conversion
+  CPU→MFP. Résultat : **0 px contre l'oracle**, les 100 octets IPRA ET les 100 octets TADR
+  identiques ; `mfp_poll` promu `ref_kind: snapshot` → **`oracle`** (le corpus oracle de la CI
+  passe de 7 à 8). Garde vérifiée par mutation : revenir au plafond entier rend 80 px.
+  ⚠ `storeStoppedCounter` a reçu le MÊME changement par cohérence (chez Hatari les deux chemins
+  sont le seul `MFP_ReadTimer_AB/CD`, avec `TimerIsStopping`) — mais **aucun test ne le couvre** :
+  le muter seul laisse l'étalon vert. C'est un port raisonné, pas une correction mesurée.
 - **[moyenne-basse] ✅ corrigé (2026-08-14)** — conversion MFP→CPU et grille périodique
   conservées en unités ×256 comme `cycInt` : Timer C 200 Hz = 40106,238 cycles sans
   perdre la fraction à chaque recharge. Échéances `timerDueSub_` incluses au save-state v11.

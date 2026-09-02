@@ -174,6 +174,49 @@ movel_absl_dn(OPER, 0); cmpil_dn(0x3FFD0000, 0); bne_to("fail8")   # signe/expos
 movel_absl_dn(OPER, 1); cmpil_dn(0xAAAAAAAA, 1); bne_to("fail8")   # mantisse 63..32
 movel_absl_dn(OPER, 2); cmpil_dn(0xAAAAAAAB, 2); bne_to("fail8")   # mantisse 31..0 (64 bits !)
 
+# Test 10 : DOUBLE ARRONDI de la conversion sortante — le cas qui tranche.
+# FP0 = 0,5 + 2^-64, soit l'étendu IMMÉDIATEMENT SUPÉRIEUR à 0,5 :
+#   $3FFE 80000000_00000001  (exposant -1, mantisse 1 + 2^-63)
+# FMOVE.L au plus près doit rendre 1 : la valeur est STRICTEMENT au-dessus de 0,5,
+# il n'y a pas d'égalité à départager. Mais un émulateur qui passe d'abord par un
+# `double` (53 bits de mantisse) perd le bit 2^-64, retombe sur 0,5 EXACTEMENT,
+# puis applique la règle du pair le plus proche → 0. C'est le double arrondi.
+# Aucun des tests 1-9 ne le voyait : le test 8 sort en FMOVE.X, qui recopie la
+# mantisse sans conversion, et les autres tiennent tous en 53 bits.
+command(0x4800)                          # FMOVE.X <ea> → FP0
+movel_imm_absl(0x3FFE0000, OPER); movel_imm_absl(0x80000000, OPER); movel_imm_absl(0x00000001, OPER)
+command(0x6000)                          # FMOVE.L FP0 → mem
+movel_absl_dn(OPER, 0); cmpil_dn(0x00000001, 0); bne_to("fail10")
+
+# Test 11 : INEX2 sur conversion entière inexacte. FMOVE.L de 1,5 rend 2 (pair le
+# plus proche) ET DOIT armer INEX2 (FPSR bit 9) + le bit accumulé INEX (bit 3).
+# Le 68881 lève INEX2 dès qu'une conversion perd de l'information ; du code qui
+# teste l'exactitude d'un arrondi le lit.
+command(0x8800)                          # FMOVEM <ea> → FPSR (efface les drapeaux)
+movel_imm_absl(0x00000000, OPER)
+command(0x4800)                          # FMOVE.X 1,5 → FP0  ($3FFF C0000000_00000000)
+movel_imm_absl(0x3FFF0000, OPER); movel_imm_absl(0xC0000000, OPER); movel_imm_absl(0x00000000, OPER)
+command(0x6000)                          # FMOVE.L FP0 → mem
+movel_absl_dn(OPER, 0); cmpil_dn(0x00000002, 0); bne_to("fail11")
+command(0xA800)                          # FMOVEM FPSR → <ea>
+movel_absl_dn(OPER, 0)
+w16(0x0280); w32(0x00000208)             # andi.l #$208,d0   → INEX2 (bit9) | INEX (bit3)
+cmpil_dn(0x00000208, 0); bne_to("fail11")
+
+# Test 12 : le MODE D'ARRONDI DU FPCR s'applique à la conversion SORTANTE simple.
+# FPCR ← $10 (RZ, vers zéro), FP0 ← 1/3 étendu ($3FFD AAAAAAAA_AAAAAAAB), puis
+# FMOVE.S. En RZ la mantisse simple TRONQUE : $3EAAAAAA. Au plus près (le mode de
+# l'HÔTE, qu'un `float(double)` applique quoi qu'en dise le FPCR) on obtiendrait
+# $3EAAAAAB — un ulp au-dessus. C'est le test qui distingue les deux.
+command(0x9000)                          # FMOVEM <ea> → FPCR
+movel_imm_absl(0x00000010, OPER)         # RZ
+command(0x4800)                          # FMOVE.X 1/3 → FP0
+movel_imm_absl(0x3FFD0000, OPER); movel_imm_absl(0xAAAAAAAA, OPER); movel_imm_absl(0xAAAAAAAB, OPER)
+command(0x6400)                          # FMOVE.S FP0 → mem
+movel_absl_dn(OPER, 0); cmpil_dn(0x3EAAAAAA, 0); bne_to("fail12")
+command(0x9000)                          # FPCR ← 0 (ne pas polluer la suite)
+movel_imm_absl(0x00000000, OPER)
+
 # Test 9 : livraison d'exception FP. On ACTIVE DZ dans le FPCR (bit10), puis FDIV
 # par 0 → le Response CIR doit livrer « Take Pre-Instruction Exception » (CA=0,
 # vecteur DZ $32 en octet bas) = $7032 au lieu du null $0802.
@@ -193,7 +236,7 @@ movel_label_a3("pass_str")              # move.l #pass_str,a3
 bsr_to("emit")
 w16(0x60FE)                             # bra.s *
 
-for n in range(1, 10):                   # FAILn : D7 = -n (compat trace) → verdict commun
+for n in range(1, 13):                   # FAILn : D7 = -n (compat trace) → verdict commun
     labels[f"fail{n}"] = len(code)
     w16(0x7E00 | ((-n) & 0xFF))          # moveq #-n,d7
     bra_to("fail_common")

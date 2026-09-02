@@ -114,7 +114,11 @@ def run_one(entry, args) -> bool:
     # retirer les TOS Atari du dépôt ferait ROUGIR le palier `fast` au lieu de le
     # laisser dire ce qu'il n'a pas pu vérifier.
     rom = entry.get("rom", DEFAULT_ROM)
-    if not (ROOT / rom).exists() and not rom_is_free(rom):
+    # ⚠ Une ROM GÉNÉRÉE (rom_generate) n'est jamais un « TOS Atari absent » : sans cette
+    # exclusion, effacer disks/etalons/fpu_testrom.img faisait passer l'auto-test FPU en
+    # SKIP « copyright Atari » — un verdict vert qui n'a rien exécuté — au lieu de le
+    # laisser se régénérer par ensure_rom_asset juste en dessous.
+    if not (ROOT / rom).exists() and not rom_is_free(rom) and not entry.get("rom_generate"):
         print(f"  SKIP recensé : {rom} absent (copyright Atari — cf. TODO "
               "§ BLOQUANT RELEASE) — cet auto-test n'a PAS tourné")
         SKIPPED_ROM.append(eid)

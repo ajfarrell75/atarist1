@@ -20,7 +20,7 @@
   },
   {
    "id": "fpu_cir",
-   "name": "MC68881 CIR (Mega STE) — 9 tests FPU (verdict série)",
+   "name": "MC68881 CIR (Mega STE) — 12 tests FPU (verdict série)",
    "rom": "disks/etalons/fpu_testrom.img",
    "rom_generate": "tools/make_fpu_testrom.py",
    "machine": "megaste",
@@ -29,7 +29,8 @@
    "frames": 30,
    "expect": [
     "fpu"
-   ]
+   ],
+   "rom_note": "ROM GÉNÉRÉE (tools/make_fpu_testrom.py), aucune dépendance propriétaire. ⚠ L'image est COMMISE et `ensure_rom_asset` ne la régénère que si elle est ABSENTE : toute modification du générateur exige de la RE-COMMETTRE, sinon le palier continue d'exercer l'ancienne. Piège vécu le 2026-09-02 — les tests 10 et 11 ajoutés ce jour-là sont restés invisibles du palier `fast` jusqu'à la régénération."
   },
   {
    "id": "usatan_netusbee",
