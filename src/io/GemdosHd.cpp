@@ -638,7 +638,12 @@ std::string GemdosHd::matchHostDirEntry(const std::string& path, const std::stri
     std::string match;
     struct dirent* e;
     while ((e = readdir(dir))) {
-        const char* dn = e->d_name;
+        // macOS rend les noms en forme DÉCOMPOSÉE (NFD) : on recompose AVANT de
+        // comparer, et on retient le nom RECOMPOSÉ (≙ gemdos.c:1201 et 1214, qui
+        // convertit d_name sur place puis le strdup). Sans ça, un fichier accentué
+        // du lecteur GEMDOS est introuvable depuis le TOS. Nul sur Linux.
+        const std::string dnBuf = neost::hostpath::precomposeUtf8(e->d_name);
+        const char* dn = dnBuf.c_str();
         if (pattern) { if (fsfirst_match(name.c_str(), dn, /*subdir=*/false, onlyInvalid)) { match = dn; break; } }
         else          { if (strcasecmp(name.c_str(), dn) == 0) { match = dn; break; } }
     }
@@ -1329,7 +1334,9 @@ bool GemdosHd::gemSFirst(uint32_t p) {
     std::string mask = baseName(host.c_str());
     std::vector<std::string> all;
     struct dirent* e;
-    while ((e = readdir(dir))) all.push_back(e->d_name);
+    // Recomposition NFD → NFC comme ci-dessus (≙ gemdos.c:3182) : le listing Fsfirst
+    // doit rendre le même nom que celui que matchHostDirEntry saura retrouver.
+    while ((e = readdir(dir))) all.push_back(neost::hostpath::precomposeUtf8(e->d_name));
     closedir(dir);
     std::sort(all.begin(), all.end());
 
@@ -1801,6 +1808,26 @@ bool GemdosHd::sandboxSelfTest() {
     if (physicalCanon(host) + PATHSEP == rootCanon || physicalCanon(host) == rootCanon) ++pass;
     else { ++fail; std::fprintf(stderr, "  FAIL %-34s -> %s (attendu la racine %s)\n",
                                 "racine du lecteur", host.c_str(), rootCanon.c_str()); }
+
+    // --- Nom ACCENTUÉ écrit en forme DÉCOMPOSÉE (le cas macOS), de bout en bout ----
+    // On écrit le fichier avec les octets NFD (« cafe » + U+0301) — ce que macOS rend
+    // à readdir — puis on le cherche sous sa forme PRÉCOMPOSÉE, celle que le reste du
+    // monde (et Linux) emploie. Sans la recomposition de matchHostDirEntry, la
+    // comparaison échoue et le fichier est INTROUVABLE depuis le TOS.
+    // ⚠ Le test tient sur les DEUX familles de systèmes de fichiers : si le volume
+    // normalise de lui-même (et rend donc déjà du NFC), la recomposition est un no-op
+    // et la recherche réussit pareil. Il ne peut donc pas être vert par accident.
+    {
+        const std::string nfd = "cafe\xCC\x81.txt";       // e + U+0301
+        const std::string nfc = "caf\xC3\xA9.txt";        // é
+        { std::ofstream(root / nfd) << "x"; }
+        const std::string got = matchHostDirEntry(emudrives_[0].hdEmuDir, nfc,
+                                                  /*pattern=*/false, /*onlyInvalid=*/false);
+        if (got == nfc) ++pass;
+        else { ++fail; std::fprintf(stderr,
+               "  FAIL %-34s '%s' introuvable (rendu '%s')\n",
+               "nom accentue NFD -> NFC", nfc.c_str(), got.c_str()); }
+    }
 
     unmount();
     stdfs::remove_all(root, ec);

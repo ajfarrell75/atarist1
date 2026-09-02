@@ -531,8 +531,13 @@ décroissant, par priorité d'impact :
 6. **[VIDÉO, P3]** wakeup-state WS3 sous-pixel, mode 336 px STE (`bSteBorderFlag`), rendu
    live du retrait bas, interfoliage blitter → `docs/CYCLE_ACCURACY.md` §4.
 
-**Faisables sans oracle** : FPU packed decimal bit-exact ; GEMDOS recomposition Unicode NFD→NFC
-(cible macOS) — détaillés dans `docs/HATARI_DIVERGENCES.md`.
+**Faisables sans oracle** : FPU packed decimal bit-exact — détaillé dans
+`docs/HATARI_DIVERGENCES.md`. ✅ La **recomposition Unicode NFD→NFC (cible macOS)** est FAITE le
+2026-09-02 : `neost::hostpath::precomposeUtf8`, branchée sur `matchHostDirEntry` et le listing
+Fsfirst. Le bug était réel et mesuré — sans elle, un fichier accentué écrit en NFD (ce que macOS
+rend à `readdir`) est INTROUVABLE depuis le TOS (vérifié par mutation sur APFS). Gardé à deux
+niveaux : `selftest_logic` pour la fonction pure (13 cas, exerçables depuis n'importe quelle
+plateforme) et `gemdos-selftest` pour le câblage, avec un vrai fichier sur disque.
 
 **Décisions actées (NE PAS « corriger » vers Hatari)** : palette de la PREMIÈRE LIGNE quand
 la bordure haute est retirée (A41 — Hatari amorce avec des écritures postérieures de

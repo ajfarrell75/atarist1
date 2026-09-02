@@ -210,6 +210,45 @@ static void testNativeDefaults() {
 }
 
 // -----------------------------------------------------------------------------
+//  Recomposition Unicode NFD → NFC des noms de fichiers (cible macOS).
+//
+//  macOS rend les noms de fichiers DÉCOMPOSÉS : « café » y est « cafe » + U+0301.
+//  Sans recomposition, un fichier accentué du lecteur GEMDOS est INTROUVABLE depuis
+//  le TOS. Le test est ici — et non dans un auto-test qui aurait besoin d'un vrai
+//  volume macOS — parce que la fonction est PURE : on lui donne la forme décomposée
+//  en dur, elle doit rendre la précomposée, sur n'importe quelle plateforme. C'est la
+//  même discipline que `Style` pour les chemins Windows (cf. l'en-tête de HostPath.hpp) :
+//  un défaut spécifique à une plateforme n'est gardé que s'il est exerçable ailleurs.
+// -----------------------------------------------------------------------------
+static void testPrecomposeUtf8() {
+    std::printf("Unicode NFD → NFC (noms de fichiers macOS)\n");
+    using neost::hostpath::precomposeUtf8;
+    // « café » : la forme NFD fait 6 octets (e + U+0301 = 0xCC 0x81), la NFC 5
+    // (é = U+00E9 = 0xC3 0xA9). C'est LE cas qui motive le port.
+    checkStr("cafe+U+0301 → café", precomposeUtf8("cafe\xCC\x81"), "caf\xC3\xA9");
+    checkStr("la chaîne raccourcit", std::to_string(precomposeUtf8("cafe\xCC\x81").size()), "5");
+    // Déjà précomposé (Linux) : STRICTEMENT inchangé — le port doit être nul ailleurs.
+    checkStr("café déjà NFC inchangé", precomposeUtf8("caf\xC3\xA9"), "caf\xC3\xA9");
+    checkStr("ASCII pur inchangé",     precomposeUtf8("README.TXT"),    "README.TXT");
+    checkStr("vide",                   precomposeUtf8(""),              "");
+    // Majuscules, tréma, tilde, cédille, rond : les autres familles de la table.
+    checkStr("A+U+0308 → Ä", precomposeUtf8("A\xCC\x88"), "\xC3\x84");
+    checkStr("n+U+0303 → ñ", precomposeUtf8("n\xCC\x83"), "\xC3\xB1");
+    checkStr("c+U+0327 → ç", precomposeUtf8("c\xCC\xA7"), "\xC3\xA7");
+    checkStr("a+U+030A → å", precomposeUtf8("a\xCC\x8A"), "\xC3\xA5");
+    // Plusieurs accents dans le même nom, et un accent en fin de chaîne (le cas où
+    // l'accès à s[i+2] déborderait si la borne était mal écrite).
+    checkStr("deux accents", precomposeUtf8("e\xCC\x81te\xCC\x81"), "\xC3\xA9t\xC3\xA9");
+    checkStr("accent final", precomposeUtf8("cle\xCC\x81"), "cl\xC3\xA9");
+    // Combinaison ABSENTE de la table (b + accent aigu n'existe pas en Latin-1) :
+    // laissée telle quelle. Recomposer au-delà du jeu Atari n'aurait aucun sens.
+    checkStr("hors table inchangé", precomposeUtf8("b\xCC\x81"), "b\xCC\x81");
+    // Séquence tronquée : un octet de tête de marque combinante SANS son second
+    // octet ne doit ni déborder ni être consommé.
+    checkStr("marque tronquée", precomposeUtf8("e\xCC"), "e\xCC");
+}
+
+// -----------------------------------------------------------------------------
 //  neost.cfg — le parseur et l'écrivain doivent se répondre CLÉ POUR CLÉ. Un
 //  réglage écrit mais jamais relu (ou l'inverse) est muet : il ne casse rien au
 //  démarrage, il rend juste le réglage inopérant à la session suivante. C'est
@@ -2197,6 +2236,7 @@ int main() {
     testWindowsPaths();
     testPosixPaths();
     testNativeDefaults();
+    testPrecomposeUtf8();
     testConfigParser();
     testConfigPath();
     testConfigWriteCreatesDir();

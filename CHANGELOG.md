@@ -17,6 +17,48 @@ Cette section existe pour qu'un trou dans la numérotation ne soit jamais SILENC
   n'est pas reconstituable depuis l'historique — on l'écrit tel quel plutôt que
   d'inventer une explication.
 
+## Sur macOS, un fichier accentué du lecteur GEMDOS était introuvable (2026-09-02)
+
+Un des deux items « faisables sans oracle » de l'inventaire des divergences. Il y dormait
+depuis la 3ᵉ passe d'audit, classé MOYENNE et différé comme « spécifique plateforme ».
+
+**Le défaut.** macOS rend les noms de fichiers en forme DÉCOMPOSÉE (NFD) : « café » y est
+stocké « cafe » suivi de U+0301, l'accent aigu combinant — six caractères, pas cinq. NeoST
+comparait ces octets tels quels au nom demandé par le programme Atari. Résultat : **un
+fichier accentué du lecteur GEMDOS était introuvable depuis le TOS**, et le même dossier
+n'exposait pas les mêmes noms sur macOS et sur Linux.
+
+**Le correctif** suit la méthode imposée : `Str_DecomposedToPrecomposedUtf8`
+(`hatari/src/str.c:726`) est porté en `neost::hostpath::precomposeUtf8`, avec sa table des
+53 couples (lettre, marque combinante) → point de code précomposé reprise TELLE QUELLE — le
+sous-ensemble qui existe dans le jeu de caractères Atari, pas au-delà. Branché sur les deux
+mêmes sites que Hatari : `matchHostDirEntry` et le listing Fsfirst. `determineMaxPartitions`
+n'en a pas besoin, Hatari n'y convertit pas non plus (seule la première lettre y est lue).
+
+**Le bug était réel, et c'est mesuré plutôt que supposé** : en retirant la recomposition, un
+fichier créé avec les octets NFD est bel et bien introuvable sous sa forme précomposée —
+`gemdos-selftest` passe de 14 OK à 13 OK / 1 FAIL. APFS préserve les octets tels qu'écrits,
+donc le cas se reproduit sur cette machine.
+
+⚠ **Ce que le port apporte, exactement.** Ni NeoST ni Hatari ne convertissent le JEU DE
+CARACTÈRES sur ce chemin (comparaison octet à octet, « conversion charset off » des deux
+côtés). Le gain n'est donc pas un affichage correct des accents côté TOS — un « é » restera
+rendu selon le jeu Atari — mais la COHÉRENCE macOS ↔ Linux : le même dossier hôte rend
+désormais les mêmes noms, de la même longueur, donc la même troncature 8.3 et le même
+aller-retour listage → ouverture. C'est dit ainsi plutôt que promis plus large.
+
+**Gardé à deux niveaux**, et c'est délibéré :
+- `selftest_logic` exerce la FONCTION PURE (13 cas : le cas « café » qui motive le port, une
+  chaîne déjà précomposée qui doit rester STRICTEMENT inchangée, l'ASCII, les quatre familles
+  d'accents, deux accents dans un nom, un accent en FIN de chaîne, une combinaison absente de
+  la table, et une marque combinante TRONQUÉE). Elle est pure et sans `#ifdef`, donc exerçable
+  depuis n'importe quelle machine — la même discipline que `Style` pour les chemins Windows,
+  et pour la même raison : un défaut spécifique à une plateforme n'est gardé que s'il est
+  exerçable ailleurs.
+- `gemdos-selftest` exerce le CÂBLAGE de bout en bout, avec un vrai fichier écrit sur disque
+  en NFD. Ce test ne peut pas être vert par accident : si le volume normalise de lui-même et
+  rend déjà du NFC, la recomposition est un no-op et la recherche réussit pareil.
+
 ## Le FPU arrondissait deux fois — et son banc de test ne voyait pas les tests qu'on lui ajoutait (2026-09-02)
 
 Chantier n°4 de la liste des divergences, après les n°3 et n°2 le même jour. Celui-ci se
