@@ -442,9 +442,14 @@ void Mfp::storeStoppedCounter(int timer) {
     }
     uint8_t count = reload;
     if (sched_ && ctrl >= 1 && ctrl <= 7) {
-        const int64_t remCpu = sched_->cyclesUntil(kTimerSrc[timer]);
-        if (remCpu >= 0) {
-            const int64_t remMfp = remCpu * 9600 / 31333;          // cycles CPU → MFP
+        // MÊME échéance sous-cyclique que readTimerData, et pour la MÊME raison (le
+        // plafond entier du Scheduler surestime le reste de presque un cycle) : chez
+        // Hatari les deux chemins passent par le SEUL MFP_ReadTimer_AB/CD, celui-ci
+        // avec TimerIsStopping — il n'y a donc pas deux arrondis à faire diverger.
+        const int64_t dueSub = timerDueSub_[timer];
+        if (dueSub > 0 && sched_->rawCyclesUntil(kTimerSrc[timer]) != INT64_MIN) {
+            const int64_t remSub = dueSub - sched_->liveNow() * 256;
+            const int64_t remMfp = remSub > 0 ? (remSub * 9600 / 31333) >> 8 : 0;
             const int     div    = kMfpDiv[ctrl];
             if (remMfp >= div)                                     // sinon : règle « < 1 » → recharge
                 count = static_cast<uint8_t>(((remMfp + div - 1) / div) & 0xFF);
@@ -462,20 +467,34 @@ uint8_t Mfp::readTimerData(int timer) const {
     const int ctrl = delayCtrl(timerCtrl(timer));
     // Mode délai (ctrl 1-7) ET échéance armée → compteur vivant (MFP_CYCLE_TO_REG).
     if (sched_ && ctrl >= 1 && ctrl <= 7) {
-        int64_t remCpu = sched_->rawCyclesUntil(kTimerSrc[timer]);
-        if (remCpu != INT64_MIN) {
+        // ⚠ L'échéance de référence est la SOUS-CYCLIQUE (timerDueSub_, 8 bits de
+        // fraction), PAS celle que voit le Scheduler — qui en est le PLAFOND entier
+        // (`next = (nextSub + 255) >> 8`, cf. scheduleTimerAt) et surestime donc le
+        // reste de presque un cycle CPU. Comme le compte est un ceil (MFP_CYCLE_TO_REG),
+        // cette fraction perdue faisait lire UN CRAN DE TROP chaque fois que le reste
+        // tombait pile sur un multiple du prescaler. Mesuré à l'oracle Hatari sur
+        // l'étalon `mfp_poll` (2026-09-02) : 6 lignes sur 100, toutes NeoST = Hatari+1,
+        // 80 px — closes par ce seul changement. Hatari ne peut pas avoir le défaut :
+        // son `InterruptHandlers[].Cycles` EST la valeur fractionnaire (unités internes
+        // CPU<<8, CYCINT_SHIFT), et `CycInt_FindCyclesRemaining` la soustrait telle
+        // quelle de l'horloge live (cycInt.c) — c'est exactement ce qu'on fait ici.
+        const int64_t dueSub = timerDueSub_[timer];
+        if (dueSub > 0 && sched_->rawCyclesUntil(kTimerSrc[timer]) != INT64_MIN) {
+            int64_t remSub = dueSub - sched_->liveNow() * 256;
             // Échéance passée mais pas encore dispatchée (lecture sous-instruction
             // entre l'expiration et la fin du bloc CPU) : le matériel a DÉJÀ
             // rechargé → repli modulo la période de recharge. Hatari obtient le
             // même effet en avançant les timers (MFP_UpdateTimers) avant la lecture.
             // Sans ce repli, l'écrêtage à 0 rend la valeur de recharge ILLISIBLE
             // (Captain Blood compare TADR au compteur vivant et ne sort jamais).
-            if (remCpu <= 0) {
-                const int64_t period = timerPeriodCycles(timer, /*fromCounter=*/false);
-                if (period > 0) remCpu = period - ((-remCpu) % period);
-                else            remCpu = 0;
+            if (remSub <= 0) {
+                const int64_t periodSub = timerPeriodSubCycles(timer, /*fromCounter=*/false);
+                if (periodSub > 0) remSub = periodSub - ((-remSub) % periodSub);
+                else               remSub = 0;
             }
-            const int64_t remMfp = remCpu * 9600 / 31333;          // cycles CPU → MFP
+            // Sous-cycles CPU → cycles MFP : inverse EXACTE de timerPeriodSubCycles
+            // (× 31333/9600 avec 8 bits de fraction), la fraction n'étant lâchée qu'ici.
+            const int64_t remMfp = (remSub * 9600 / 31333) >> 8;
             const int     div    = kMfpDiv[ctrl];
             const int64_t count  = (remMfp + div - 1) / div;       // ceil (round vers le haut)
             return static_cast<uint8_t>(count & 0xFF);             // 256 → 0

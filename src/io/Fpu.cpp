@@ -11,10 +11,15 @@
 //  again » = occupé), la boucle de scrutation SFP004 `cmpiw #0x8900` sort
 //  donc au premier tour.
 //
-//  Arithmétique : registres en étendu 80 bits (bit-exact tant qu'on ne
-//  calcule pas), calculs en double hôte (53 bits de mantisse au lieu de 64 —
-//  limitation documentée, cf. Fpu.hpp). Constantes ROM FMOVECR bit-exactes
-//  (dumps silicium recoupés MAME/Previous/WinUAE).
+//  Arithmétique : registres ET calculs en étendu 80 bits, mantisse 64 bits RÉELLE
+//  (SoftFloatX80.hpp) — ce bandeau annonçait encore « calculs en double hôte », ce
+//  qui n'était plus vrai depuis le portage softfloat. Les CONVERSIONS SORTANTES le
+//  sont devenues le 2026-09-02 : FMOVE.L/W/B passent par sf::toInt et FMOVE.S/D par
+//  sf::toFloat32/64, au lieu de traverser un `double` hôte qui arrondissait une
+//  PREMIÈRE fois (64 → 53 bits) avant l'arrondi demandé — double arrondi, mode FPCR
+//  ignoré et INEX2 jamais levé. Reste sur `double` : les TRANSCENDANTES (cf. Fpu.hpp)
+//  et le décimal empaqueté (P), qui passe par snprintf. Constantes ROM FMOVECR
+//  bit-exactes (dumps silicium recoupés MAME/Previous/WinUAE).
 // =============================================================================
 #include "Fpu.hpp"
 #include <cmath>
@@ -282,21 +287,28 @@ Fpu::Ext Fpu::decodeFmt(int fmt, const uint8_t* b) {
 
 void Fpu::encodeFmt(int fmt, const Ext& v, uint8_t* b, int k) {
     const double d = extToD(v);
-    // Entier : arrondi selon FPCR, saturation + OPERR en cas de débordement.
-    auto toInt = [&](double lo, double hi) -> int64_t {
-        if (std::isnan(d)) { fpsr_ |= EXC_OPERR; fpsr_ |= AEXC_IOP; return 0; }
-        double r = roundMode(d);
-        if (r < lo || r > hi) {
-            fpsr_ |= EXC_OPERR; fpsr_ |= AEXC_IOP;
-            r = r < lo ? lo : hi;
-        }
-        return int64_t(r);
+    // Entier (L/W/B) : conversion DIRECTE depuis la mantisse 64 bits, via le port de
+    // floatx80_to_int32/16/8 (sf::toInt). ⚠ NE PAS repasser par `d` : l'étendu vaut
+    // 64 bits de mantisse contre 53 au `double`, et arrondir deux fois de suite ne
+    // vaut pas arrondir une fois — l'étendu juste au-dessus de 0,5 retombait sur 0,5
+    // EXACTEMENT puis sortait à 0 au lieu de 1 (test 10 du banc FPU, 2026-09-02).
+    // Effet de bord acquis : INEX2 est enfin levé sur toute conversion inexacte, et
+    // un NaN rend son PAYLOAD (bits de tête de la mantisse) et non 0.
+    auto toInt = [&](int bits) -> int64_t {
+        sf::Status st = sfStatus();
+        st.exceptionFlags = 0;
+        const int64_t r = sf::toInt(sf::f80{ v.se, v.man }, bits, st);
+        sfFold(st.exceptionFlags);        // invalid → OPERR/IOP, inexact → INEX2/INEX
+        return r;
     };
     switch (fmt) {
-        case 0:  put32(b, uint32_t(toInt(-2147483648.0, 2147483647.0))); break; // L
+        case 0:  put32(b, uint32_t(toInt(32))); break;                          // L
         case 1: {                                                               // S
-            const float f = float(d); uint32_t u; std::memcpy(&u, &f, 4);
-            if (std::isinf(f) && !std::isinf(d)) { fpsr_ |= EXC_OVFL | AEXC_OVFL; }
+            // Port de floatx80_to_float32 : arrondi UNIQUE depuis la mantisse 64 bits,
+            // dans le mode du FPCR (et non celui de l'hôte), avec INEX2/OVFL/UNFL.
+            sf::Status st = sfStatus(); st.exceptionFlags = 0;
+            const uint32_t u = sf::toFloat32(sf::f80{ v.se, v.man }, st);
+            sfFold(st.exceptionFlags);
             put32(b, u); break;
         }
         case 2:                                                                 // X
@@ -327,13 +339,18 @@ void Fpu::encodeFmt(int fmt, const Ext& v, uint8_t* b, int k) {
             break;
         }
         case 4: {                                                               // W
-            const int64_t i = toInt(-32768.0, 32767.0);
+            const int64_t i = toInt(16);
             b[0] = uint8_t(i >> 8); b[1] = uint8_t(i); break;
         }
         case 5: {                                                               // D
-            uint64_t u; std::memcpy(&u, &d, 8); put64(b, u); break;
+            // Idem en double (floatx80_to_float64). L'ancien chemin recopiait le `double`
+            // fabriqué par extToD : arrondi hôte, et AUCUN drapeau — pas même l'OVFL.
+            sf::Status st = sfStatus(); st.exceptionFlags = 0;
+            const uint64_t u = sf::toFloat64(sf::f80{ v.se, v.man }, st);
+            sfFold(st.exceptionFlags);
+            put64(b, u); break;
         }
-        case 6:  b[0] = uint8_t(toInt(-128.0, 127.0)); break;                   // B
+        case 6:  b[0] = uint8_t(toInt(8)); break;                               // B
         default: std::memset(b, 0, 12); break;
     }
 }

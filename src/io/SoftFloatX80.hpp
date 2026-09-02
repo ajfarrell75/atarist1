@@ -651,6 +651,187 @@ inline f80 getMan(f80 a, Status& st) {
     return pack(aSign, 0x3FFF, aSig);
 }
 
+// --- Conversion étendu → ENTIER signé (L/W/B) ---------------------------------
+// Port de `roundAndPackInt32/16/8` + `floatx80_to_int32/16/8`
+// (hatari/src/cpu/softfloat/softfloat.c). `bits` ∈ {32,16,8}.
+//
+// ⚠ POURQUOI CE CHEMIN EXISTE, alors que `Fpu::encodeFmt` savait déjà « arrondir ».
+// Il arrondissait un `double` obtenu par `extToD` — donc APRÈS une première perte de
+// 64 → 53 bits de mantisse. Deux arrondis successifs ne valent pas un seul : l'étendu
+// juste au-dessus de 0,5 ($3FFE 80000000_00000001) retombe EXACTEMENT sur 0,5 en
+// double, puis la règle du pair le plus proche l'envoie sur 0 — là où le 68881 rend 1,
+// la valeur étant strictement supérieure à 0,5. Exhibé par le test 10 de
+// `tools/make_fpu_testrom.py` (2026-09-02). On convertit donc depuis la mantisse
+// 64 bits, sans jamais passer par un flottant hôte.
+//
+// Les 7 bits de poids faible servent de bits d'arrondi (d'où le décalage à
+// `0x4037 = 16383 + 63 - 7`) ; `shift64RightJamming` conserve la « collante » qui
+// distingue une demie EXACTE d'une demie APPROCHÉE — c'est elle qui manquait.
+inline int64_t roundAndPackInt(int bits, int sign, uint64_t absZ, Status& st) {
+    const int  rm  = st.roundingMode;
+    const bool rne = (rm == round_nearest_even);
+    int roundIncrement;
+    switch (rm) {
+        case round_to_zero: roundIncrement = 0;                 break;
+        case round_up:      roundIncrement = sign ? 0    : 0x7F; break;
+        case round_down:    roundIncrement = sign ? 0x7F : 0;    break;
+        default:            roundIncrement = 0x40;               break;   // au plus près
+    }
+    const int roundBits = int(absZ & 0x7F);
+    absZ = (absZ + uint64_t(roundIncrement)) >> 7;
+    // Égalité EXACTE au demi sous « au plus près » → on force le bit 0 à 0 (pair).
+    absZ &= ~uint64_t((roundBits ^ 0x40) == 0 && rne ? 1u : 0u);
+    int64_t z = int64_t(absZ);
+    if (sign) z = -z;
+    const uint64_t over = absZ >> bits;                     // >>32, >>16 ou >>8
+    if (over || (z != 0 && ((z < 0) != (sign != 0)))) {
+        raise(st, flag_invalid);                            // → OPERR, valeur saturée
+        const int64_t maxv = (int64_t(1) << (bits - 1)) - 1;
+        return sign ? -maxv - 1 : maxv;
+    }
+    if (roundBits) raise(st, flag_inexact);                 // → INEX2
+    return z;
+}
+
+inline int64_t toInt(f80 a, int bits, Status& st) {
+    const uint64_t aSig  = fracOf(a);
+    const int32_t  aExp  = expOf(a);
+    const int      aSign = signOf(a);
+    if (aExp == 0x7FFF) {
+        if (uint64_t(aSig << 1)) {                          // NaN → PAYLOAD, pas 0
+            const f80 n = propagateNaN1(st, a);
+            if (n.low == aSig) raise(st, flag_invalid);
+            // int32 → low>>32, int16 → low>>48, int8 → low>>56 (softfloat.c).
+            const uint64_t raw = n.low >> (64 - bits);
+            const uint64_t sgn = uint64_t(1) << (bits - 1);
+            return int64_t((raw ^ sgn) - sgn);              // extension de signe
+        }
+        raise(st, flag_invalid);                            // ±inf → saturation
+        const int64_t maxv = (int64_t(1) << (bits - 1)) - 1;
+        return aSign ? -maxv - 1 : maxv;
+    }
+    int shiftCount = 0x4037 - aExp;
+    if (shiftCount <= 0) shiftCount = 1;
+    uint64_t sig;
+    shift64RightJamming(aSig, shiftCount, sig);
+    return roundAndPackInt(bits, aSign, sig, st);
+}
+
+// --- Conversion étendu → SIMPLE / DOUBLE (FMOVE.S / FMOVE.D) -------------------
+// Port de `roundAndPackFloat32/64` + `floatx80_to_float32/64` (softfloat.c).
+// Mêmes raisons que `toInt` : `Fpu::encodeFmt` fabriquait un `double` hôte avec
+// l'arrondi HÔTE (toujours au plus près), ignorant le mode du FPCR, et ne levait
+// ni INEX2 ni UNFL ; en D il ne signalait même pas l'OVFL. Ici l'arrondi se fait UNE
+// fois, depuis la mantisse 64 bits, dans le mode demandé, avec les drapeaux.
+inline void shift32RightJamming(uint32_t a, int count, uint32_t& z) {
+    if (count == 0)      z = a;
+    else if (count < 32) z = (a >> count) | ((a << ((-count) & 31)) != 0);
+    else                 z = (a != 0);
+}
+
+inline uint32_t roundAndPackF32(int sign, int32_t zExp, uint32_t zSig, Status& st) {
+    const int  rm  = st.roundingMode;
+    const bool rne = (rm == round_nearest_even);
+    int roundIncrement;
+    switch (rm) {
+        case round_to_zero: roundIncrement = 0;                  break;
+        case round_up:      roundIncrement = sign ? 0    : 0x7F; break;
+        case round_down:    roundIncrement = sign ? 0x7F : 0;    break;
+        default:            roundIncrement = 0x40;               break;
+    }
+    int roundBits = int(zSig & 0x7F);
+    if (uint16_t(zExp) >= 0xFD) {
+        if (zExp > 0xFD || (zExp == 0xFD && int32_t(zSig + uint32_t(roundIncrement)) < 0)) {
+            raise(st, flag_overflow);
+            if (roundBits) raise(st, flag_inexact);
+            const uint32_t inf = (uint32_t(sign) << 31) | (0xFFu << 23);
+            return roundIncrement == 0 ? (inf - 1) : inf;      // RZ → plus grand fini
+        }
+        if (zExp < 0) {                                        // dénormalisation
+            const bool tiny = (zExp < -1) || (zSig + uint32_t(roundIncrement) < 0x80000000u);
+            if (tiny) raise(st, flag_underflow);
+            shift32RightJamming(zSig, -zExp, zSig);
+            zExp = 0;
+            roundBits = int(zSig & 0x7F);
+        }
+    }
+    if (roundBits) raise(st, flag_inexact);
+    zSig = (zSig + uint32_t(roundIncrement)) >> 7;
+    zSig &= ~uint32_t((roundBits ^ 0x40) == 0 && rne ? 1u : 0u);
+    if (zSig == 0) zExp = 0;
+    return (uint32_t(sign) << 31) + (uint32_t(zExp) << 23) + zSig;
+}
+
+inline uint64_t roundAndPackF64(int sign, int32_t zExp, uint64_t zSig, Status& st) {
+    const int  rm  = st.roundingMode;
+    const bool rne = (rm == round_nearest_even);
+    int roundIncrement;
+    switch (rm) {
+        case round_to_zero: roundIncrement = 0;                   break;
+        case round_up:      roundIncrement = sign ? 0     : 0x3FF; break;
+        case round_down:    roundIncrement = sign ? 0x3FF : 0;     break;
+        default:            roundIncrement = 0x200;                break;
+    }
+    int roundBits = int(zSig & 0x3FF);
+    if (uint16_t(zExp) >= 0x7FD) {
+        if (zExp > 0x7FD || (zExp == 0x7FD && int64_t(zSig + uint64_t(roundIncrement)) < 0)) {
+            raise(st, flag_overflow);
+            if (roundBits) raise(st, flag_inexact);
+            const uint64_t inf = (uint64_t(sign) << 63) | (uint64_t(0x7FF) << 52);
+            return roundIncrement == 0 ? (inf - 1) : inf;
+        }
+        if (zExp < 0) {
+            const bool tiny = (zExp < -1)
+                           || (zSig + uint64_t(roundIncrement) < 0x8000000000000000ull);
+            if (tiny) raise(st, flag_underflow);
+            uint64_t s; shift64RightJamming(zSig, -zExp, s); zSig = s;
+            zExp = 0;
+            roundBits = int(zSig & 0x3FF);
+        }
+    }
+    if (roundBits) raise(st, flag_inexact);
+    zSig = (zSig + uint64_t(roundIncrement)) >> 10;
+    zSig &= ~uint64_t((roundBits ^ 0x200) == 0 && rne ? 1u : 0u);
+    if (zSig == 0) zExp = 0;
+    return (uint64_t(sign) << 63) + (uint64_t(uint32_t(zExp)) << 52) + zSig;
+}
+
+inline uint32_t toFloat32(f80 a, Status& st) {
+    uint64_t aSig = fracOf(a); int32_t aExp = expOf(a); const int aSign = signOf(a);
+    if (aExp == 0x7FFF) {
+        if (uint64_t(aSig << 1)) {                             // NaN → payload tronqué
+            const f80 n = propagateNaN1(st, a);
+            return (uint32_t(signOf(n)) << 31) | (0xFFu << 23)
+                 | uint32_t((n.low >> 40) & 0x7FFFFFu);
+        }
+        return (uint32_t(aSign) << 31) | (0xFFu << 23);        // ±inf
+    }
+    if (aExp == 0) {
+        if (aSig == 0) return uint32_t(aSign) << 31;           // ±0
+        normalizeSubnormal(aSig, aExp, aSig);
+    }
+    uint64_t s; shift64RightJamming(aSig, 33, s);
+    return roundAndPackF32(aSign, aExp - 0x3F81, uint32_t(s), st);
+}
+
+inline uint64_t toFloat64(f80 a, Status& st) {
+    uint64_t aSig = fracOf(a); int32_t aExp = expOf(a); const int aSign = signOf(a);
+    if (aExp == 0x7FFF) {
+        if (uint64_t(aSig << 1)) {
+            const f80 n = propagateNaN1(st, a);
+            return (uint64_t(signOf(n)) << 63) | (uint64_t(0x7FF) << 52)
+                 | ((n.low >> 11) & 0xFFFFFFFFFFFFFull);
+        }
+        return (uint64_t(aSign) << 63) | (uint64_t(0x7FF) << 52);
+    }
+    if (aExp == 0) {
+        if (aSig == 0) return uint64_t(aSign) << 63;
+        normalizeSubnormal(aSig, aExp, aSig);
+    }
+    uint64_t s; shift64RightJamming(aSig, 1, s);
+    return roundAndPackF64(aSign, aExp - 0x3C01, s, st);
+}
+
 // Comparaison ordonnée : -1 (a<b), 0 (a==b), +1 (a>b), 2 (non ordonné = NaN).
 inline int compare(f80 a, f80 b) {
     if (isNaN(a) || isNaN(b)) return 2;

@@ -17,6 +17,153 @@ Cette section existe pour qu'un trou dans la numérotation ne soit jamais SILENC
   n'est pas reconstituable depuis l'historique — on l'écrit tel quel plutôt que
   d'inventer une explication.
 
+## Le FPU arrondissait deux fois — et son banc de test ne voyait pas les tests qu'on lui ajoutait (2026-09-02)
+
+Chantier n°4 de la liste des divergences, après les n°3 et n°2 le même jour. Celui-ci se
+termine là où il visait, pour changer.
+
+**Le défaut.** `Fpu::encodeFmt` convertissait la valeur étendue en `double` hôte (`extToD`)
+AVANT toute conversion sortante. Or l'étendu porte 64 bits de mantisse et le `double` 53 :
+arrondir deux fois de suite ne vaut pas arrondir une fois. L'étendu immédiatement supérieur à
+0,5 — `$3FFE 80000000_00000001` — retombait sur 0,5 EXACTEMENT en double, puis la règle du pair
+le plus proche l'envoyait sur **0**, là où le 68881 rend **1** (la valeur est strictement
+au-dessus de 0,5, il n'y a aucune égalité à départager). Dans la même famille : **INEX2 n'était
+jamais levé** sur une conversion inexacte, le **mode d'arrondi du FPCR était ignoré** en sortie
+(le `float(double)` appliquait celui de l'hôte, toujours « au plus près »), **UNFL** était
+absent, l'**OVFL silencieux en D**, et un NaN rendait 0 au lieu de son payload.
+
+**Le correctif** suit la méthode imposée : porter Hatari plutôt que réinventer.
+`floatx80_to_int32/16/8` et `floatx80_to_float32/64`, avec leurs `roundAndPackInt32/16/8` et
+`roundAndPackFloat32/64`, sont portés depuis `extern/hatari/src/cpu/softfloat/softfloat.c` dans
+`src/io/SoftFloatX80.hpp` (`sf::toInt`, `sf::toFloat32/64`). `encodeFmt` ne traverse plus de
+`double` pour L/W/B/S/D — il reste sur `double` pour les transcendantes et le décimal empaqueté,
+et le bandeau du fichier le dit maintenant (il annonçait encore « calculs en double hôte », faux
+depuis le portage softfloat).
+
+**Trois cas ajoutés au banc** (`tools/make_fpu_testrom.py`, 9 → 12 tests, exécuté au palier
+`fast` par l'auto-test série `fpu_cir`), chacun vérifié par mutation :
+- **test 10** — FMOVE.L de l'étendu juste au-dessus de 0,5 doit rendre 1. Aucun des tests 1-9 ne
+  pouvait le voir : le test 8 sort en FMOVE.X, qui recopie la mantisse sans conversion, et tous
+  les autres tiennent en 53 bits.
+- **test 11** — INEX2 (et l'accumulé INEX) armés par FMOVE.L de 1,5.
+- **test 12** — FPCR en RZ : FMOVE.S de 1/3 doit TRONQUER ($3EAAAAAA), pas arrondir au plus
+  près ($3EAAAAAB).
+
+⚠ **Deux pièges d'outillage débusqués, et le premier est sérieux.**
+`disks/etalons/fpu_testrom.img` est **commise**, et `ensure_rom_asset` ne la régénère que si
+elle est **absente** : les tests 10 et 11 ajoutés au générateur sont restés **invisibles du
+palier `fast`** jusqu'à ce qu'on re-commette l'image. Un banc de test peut donc être vert en
+exerçant une version périmée de lui-même. La note de l'entrée `fpu_cir` le dit désormais.
+Second piège, corrigé dans `tools/run_selftests.py` : une ROM `rom_generate` manquante était
+classée « TOS Atari absent → SKIP » — un verdict vert qui n'exécute rien — au lieu d'être
+régénérée. La garde exclut maintenant les ROM générées de ce test ; vérifié en effaçant l'image
+(elle se régénère au lieu de sauter).
+
+**Reste ouvert sur cette puce** : FSGLMUL/FSGLDIV (plage d'exposant étendue avec mantisse
+24 bits, `roundSigAndPackFloatx80`), le décimal empaqueté, FMOVECR et FMOD — non touchés, et
+dits tels quels dans `TODO.md`.
+
+## Le fetch du son DMA se mesure enfin — et c'est l'oracle qui ne se reproduit pas (2026-09-02)
+
+Chantier n°2 de la liste des divergences ouvertes, dans la foulée du n°3. Il est **CLOS**, et
+comme le précédent il ne se termine pas où il visait.
+
+**Ce qui manquait.** L'item disait : « quantification HBL du refill FIFO à confronter à l'oracle
+sur un poll serré de `$FF8909/0B/0D` ». Le modèle FIFO (divergence S2) était porté depuis le
+2026-07-07 et validé au WAV — mais **le WAV mesure ce que le DAC CONSOMME, pas la date à laquelle
+le DMA FETCHE**. Or c'est le fetch que le compteur de trame expose, et c'est lui que les
+programmes lisent pour se synchroniser. Ce chemin n'avait aucun étalon : `make_dmasnd_test.py`
+module le tampon et s'écoute, il ne lit jamais le compteur.
+
+**L'exhibiteur** : `tools/make_dmasnd_poll_test.py` → étalon **`dmasnd_poll`** (généré, ROM libre,
+STE 1 Mo). 100 tours d'une boucle qui lit `$FF890B` puis `$FF890D` et écrit le mot en RAM vidéo,
+pendant que le DMA joue à 50066 Hz stéréo. Ce qu'il contraint : le compteur ne doit **avancer
+qu'au HBL** — deux polls tombant dans la même ligne doivent lire la même valeur. Mesuré : 39
+deltas nuls sur 99, puis des sauts de 6 (×47) et de 8 (×12).
+
+**Verdict : NeoST est le plus fidèle des deux.** L'arithmétique tranche sans arbitre : 100 132 o/s
+÷ 15 650 lignes/s = **6,398 octets par ligne**, ce qui impose 19,9 % de sauts de 8 parmi des sauts
+de 6. NeoST en rend **20,3 %**. Hatari, lui, jitte sur 4/6/8/12 autour du même débit moyen, parce
+que sa consommation DAC passe par le rééchantillonnage vers le **taux hôte** : le découpage y
+hérite d'une granularité d'échantillon hôte, étrangère au matériel. Et le débit moyen, lui, est
+identique des deux côtés — sur la fenêtre des 100 polls, les deux émulateurs avancent le compteur
+de **382 octets exactement**. C'est donc bien la granularité qui diffère, pas la cadence.
+
+⚠ **L'oracle ne se reproduit pas lui-même sur ce chemin.** Deux runs Hatari de la même ligne de
+commande donnent **664 px d'écart entre eux** ; 1160 après ancrage VBL, 1432 avec `--sound 50066`
+au lieu de `--sound off`. Cause : l'accumulateur fractionnaire du resampler court depuis le
+DÉMARRAGE de l'émulateur, donc dépend de la durée du boot — que le RNG d'Hatari tire au sort.
+L'ancrage VBL (recette éprouvée de `spec512_bands`) a été appliqué et **n'y change rien** : il fixe
+la phase du PROGRAMME, pas celle du resampler. `dmasnd_poll` est donc `ref_kind: snapshot`, et le
+**premier étalon du corpus refusé à l'oracle pour non-reproductibilité d'HATARI** — pas pour une
+raison de modèle. La distinction est écrite dans son `ref_note` pour qu'on ne retente pas la pose.
+
+**Garde vérifiée par mutation**, et sa signature est sans ambiguïté : réintroduire le
+`fifoRefill()` que `DmaSound::liveCounter` avait de trop (défaut corrigé le 2026-08-13) rend
+1592 px — et surtout transforme l'image en **rampe continue** (100 valeurs distinctes, deltas 2
+et 4, plus aucun delta nul) au lieu du palier-saut. L'étalon ne compte pas des pixels, il exhibe
+une forme.
+
+📌 **Leçon**, jumelle de celle du n°3 le même jour : un étalon qui encode des VALEURS mérite un
+décodeur. C'est en lisant les octets écrits à l'écran — et non le nombre de pixels différents —
+qu'on voit que le débit est exact et que seul le découpage diffère. Le compteur de pixels, seul,
+aurait rendu « 896 px, divergence son » et envoyé chercher un bug qui n'existe pas.
+
+## Le poll de timer MFP passe à 0 px de l'oracle — et la divergence qu'on croyait tenir n'existait plus (2026-09-02)
+
+Chantier n°3 de la liste des divergences ouvertes (`TODO.md` § *Divergences Hatari & précision
+cycle*). Il est **CLOS**, mais aucune des deux moitiés du résultat n'était celle attendue.
+
+**Ce qu'on croyait corriger.** L'inventaire portait depuis le 2026-08-25 : « pas de
+`MFP_UpdateTimers` avant lecture IPR/ISR/TBDR en mode bloc — un timer qui expire PENDANT
+l'instruction qui polle est vu en retard, jusqu'à 157 cycles ». Le correctif était même
+prescrit (un `runTo` CIBLÉ sur les sources `TIMER_*`, surtout pas un `syncTo` nu qui
+réactiverait le modèle sync-driven réfuté), et la condition de reprise était remplie : l'oracle
+Hatari headless tourne depuis A11.
+
+**Ce que la mesure a dit.** L'étalon `mfp_poll` existe depuis le 2026-08-26 justement pour
+exhiber cet écart ; sa note annonçait 120 px, « 18 lignes où IPRA diffère contre 3 pour TADR ».
+En décodant les octets de l'image plutôt qu'en comptant les pixels : **IPRA est identique à
+Hatari sur les 100 lignes**. L'écart visé n'existe plus — le modèle BLOC préempte déjà le
+timeslice CPU à chaque échéance de timer, et BL4/D3 ont fermé le reste. La note décrivait un
+état dépassé, et le décompte en pixels l'avait masqué : 80 px, ça ressemblait au même défaut.
+
+**Le port a quand même été écrit, puis retiré.** `MFP_UpdateTimers` (dispatch ciblé des quatre
+timers délai en tête de `Mfp::read8`/`write8`, à l'horloge live) : il ne ferme rien et **dégrade
+l'étalon de 80 à 88 px** — il fait recharger le timer avant la lecture de TADR et ajoute une
+ligne divergente. Balayage de l'instant de dispatch sur ±12 cycles : aucun offset n'atteint 0 px,
+et le meilleur (−12) ne fait que reproduire l'image non corrigée. C'est écrit dans
+`docs/HATARI_DIVERGENCES.md` pour que personne ne le re-tente.
+
+**La vraie cause, qui n'était écrite nulle part.** Les 80 px étaient **entièrement sur TADR** :
+6 lignes sur 100 (période 19), **toujours NeoST = Hatari + 1**. `readTimerData` reconstruisait le
+compteur vivant depuis l'échéance vue par le `Scheduler` — or celle-ci n'est que le **plafond
+entier** de l'échéance réelle (`scheduleTimerAt` : `next = (nextSub + 255) >> 8`). Le reste était
+donc surestimé de presque un cycle CPU, et comme le compte est un `ceil` (≙ `MFP_CYCLE_TO_REG`),
+TADR sortait d'un cran trop haut chaque fois que le reste tombait pile sur un multiple du
+prescaler. Hatari ne peut pas avoir ce défaut : son `InterruptHandlers[].Cycles` EST la valeur
+fractionnaire (unités internes CPU<<8, `CYCINT_SHIFT`).
+
+**Correctif** : partir de l'échéance SOUS-CYCLIQUE que NeoST tenait déjà (`Mfp::timerDueSub_`,
+8 bits de fraction, au save-state depuis la v11) et ne lâcher la fraction qu'à la conversion
+CPU→MFP. Trois lignes de calcul. Résultat : **0 px contre l'oracle**, les 100 octets IPRA **et**
+les 100 octets TADR identiques. Garde vérifiée par mutation : revenir au plafond entier rend
+80 px. `storeStoppedCounter` reçoit le même changement par cohérence (chez Hatari les deux
+chemins sont le seul `MFP_ReadTimer_AB/CD`) — mais **aucun test ne le couvre**, le muter seul
+laisse l'étalon vert : c'est un port raisonné, pas une correction mesurée, et c'est dit tel quel.
+
+**Effet de bord utile** : `mfp_poll` passe de `ref_kind: snapshot` à **`oracle`**, donc le corpus
+que la CI re-dérive chaque lundi (A11) passe de 7 à 8 étalons. Il en est le plus robuste : son
+programme finit sur `bra.s *`, l'image est figée dès la fin des 100 tours et ne dépend donc pas
+de la durée de boot — deux runs Hatari indépendants rendent 0 px, sans `oracle_scan`.
+
+📌 **Leçon de méthode.** La borne « 157 cycles » qui a justifié ce chantier pendant huit jours
+est une métrique (`Scheduler::timerMaxLate`, un maximum sur toute la trace, boot compris), pas un
+écart de rendu. Et le décompte en pixels d'un étalon ne dit pas CE QUI diffère : ici il fallait
+décoder les octets que le programme écrit à l'écran pour voir que la colonne IPRA était verte
+depuis longtemps et que tout le reliquat était dans la colonne TADR. Un étalon qui encode des
+VALEURS mérite un décodeur, pas seulement un compteur de pixels.
+
 ## La 0.6.1 ne se publiait pas : un `apt-get install` sans `update` (2026-09-02)
 
 Le tag `0.6.1` a été posé, mais la release **n'est pas sortie** : le job `linux-bionic` a
