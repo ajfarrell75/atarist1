@@ -76,6 +76,23 @@ std::string lexicalAbsolute(const std::string& p, const std::string& cwd,
 std::string makeAbsolute(const std::string& p);
 
 // Répertoire courant du processus, séparateurs normalisés ('\' sous Windows).
+// Recomposition Unicode NFD → NFC d'un nom de fichier UTF-8, restreinte aux
+// caractères qui EXISTENT dans le jeu Atari (port de Str_DecomposedToPrecomposedUtf8,
+// hatari/src/str.c:726).
+//
+// POURQUOI, et pourquoi ce n'est pas cosmétique : macOS rend les noms de fichiers en
+// forme DÉCOMPOSÉE (NFD) — « café » y est stocké « cafe » + U+0301 (accent aigu
+// combinant), soit 6 caractères. Le code Atari, lui, ne connaît qu'un octet unique
+// par lettre accentuée. Sans recomposition, un fichier accentué du lecteur GEMDOS est
+// INTROUVABLE depuis le TOS : la comparaison de noms échoue et le listing affiche des
+// caractères parasites. Nul sur Linux (déjà en NFC) ; le port est donc sans effet
+// mesurable ailleurs, ce qui est exactement ce qu'on veut.
+//
+// Fonction PURE et sans #ifdef, pour la même raison que `Style` ci-dessus : l'auto-test
+// l'exerce depuis n'importe quelle machine (cf. tests/selftest_logic.cpp).
+// La chaîne ne s'allonge jamais : deux caractères UTF-8 en deviennent un.
+std::string precomposeUtf8(const std::string& s);
+
 std::string currentDir();
 
 }  // namespace neost::hostpath

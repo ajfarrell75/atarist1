@@ -598,8 +598,10 @@ divergences ne casse le boot. Trouvailles actionnables ci-dessous (terrain neuf 
 > « caractères invalides » séparée de la troncature, `?` ne matche que les caractères invalides) ·
 > **FPU FMOVECR INEX2+arrondi** (table `fpp_cr` portée : `inex` + `rnd[4]` par mode RN/RZ/RM/RP,
 > arme `EXC_INEX2`/`AEXC_INEX`). ⏸️ **DIFFÉRÉS** (table de données / plateforme / plomberie / non
-> vérifiables headless) : ACSI délai IRQ post-transfert · GEMDOS recomposition Unicode macOS · FPU
-> arrondi de précision FMOVE/FABS/FNEG (plomberie softfloat) · FPU packed decimal bit-exact.
+> vérifiables headless) : ACSI délai IRQ post-transfert · FPU arrondi de précision
+> FMOVE/FABS/FNEG (plomberie softfloat) · FPU packed decimal bit-exact.
+> ✅ **Sortis de cette liste le 2026-09-02** : GEMDOS recomposition Unicode macOS (portée et
+> gardée à deux niveaux) et les arrondis de conversion SORTANTE du FPU (L/W/B/S/D).
 
 - ✅ **SCU — jamais réinitialisé au reset** *(HAUTE — CORRIGÉ)* : `Scu::reset(bool cold)` existe
   (`Scu.hpp:87-92` : masques/états à 0, GPR1=0x01, GPR2 seulement à froid) et `Machine::reset()`
@@ -637,8 +639,25 @@ divergences ne casse le boot. Trouvailles actionnables ci-dessous (terrain neuf 
   « invalide » qu'un caractère réellement invalide pour Atari (`filenameInvalidChar`, port de
   `Str_Filename_Invalid_Char`). Plus de risque d'ouvrir le mauvais fichier hôte.
   (`GemdosHd.cpp` vs `gemdos.c:1374-1396`)
-- **GEMDOS — recomposition Unicode NFD→NFC macOS non portée** *(MOYENNE, macOS)* :
-  `Str_DecomposedToPrecomposedUtf8` absent → fichiers accentués introuvables sur macOS (nul sur Linux).
+- ✅ **GEMDOS — recomposition Unicode NFD→NFC macOS** *(MOYENNE, macOS — CORRIGÉ le 2026-09-02)* :
+  `Str_DecomposedToPrecomposedUtf8` (str.c:726) porté en `neost::hostpath::precomposeUtf8`
+  (`HostPath.cpp`), table des 53 couples reprise TELLE QUELLE, et branché sur les deux mêmes
+  sites que Hatari — `matchHostDirEntry` (≙ gemdos.c:1201/1214) et le listing Fsfirst
+  (≙ gemdos.c:3182). `determineMaxPartitions` n'en a pas besoin (Hatari n'y convertit pas
+  non plus : seule la première lettre y est lue).
+  **Le bug était RÉEL et il est mesuré** : sans la recomposition, un fichier créé avec les
+  octets NFD (« cafe » + U+0301, ce que macOS rend à `readdir`) est INTROUVABLE quand on le
+  cherche sous sa forme précomposée — vérifié par mutation sur APFS, qui préserve bien les
+  octets tels qu'écrits (`gemdos-selftest` : 14 OK → 13 OK / 1 FAIL).
+  ⚠ **Ce que le port apporte exactement** : ni NeoST ni Hatari ne convertissent le JEU DE
+  CARACTÈRES sur ce chemin (comparaison octet à octet, « conversion charset off » des deux
+  côtés) — le gain n'est donc pas un affichage correct des accents côté TOS, mais la
+  COHÉRENCE macOS ↔ Linux : le même dossier hôte rend désormais les mêmes noms, de la même
+  longueur, donc la même troncature 8.3 et le même aller-retour listage → ouverture.
+  Gardé à DEUX niveaux : `selftest_logic` exerce la fonction pure (13 cas, dont l'accent en
+  fin de chaîne, la combinaison hors table et la marque tronquée) depuis n'importe quelle
+  plateforme — même discipline que `Style` pour les chemins Windows — et `gemdos-selftest`
+  exerce le câblage de bout en bout avec un vrai fichier sur disque.
 - **FPU — divers** *(MOYENNE)* : ✅ FSGLMUL tronque désormais ses entrées à 24 bits ; ✅ FSCALE par
   ∞/NaN gère NaN→propagation / ∞→OPERR (plus d'UB) ; ✅ octet AEXC corrigé (UNFL conditionné par
   INEXACT, INEX sur OVFL) ; ✅ FMOVECR arme INEX2/AEXC_INEX et applique l'ajustement d'arrondi
@@ -671,7 +690,8 @@ VmeIntMask, niveaux 4/2/1, IRQ niveau 5 vectorisée, décodage adresses impaires
 
 **Bilan 3ᵉ passe** : 1 HAUTE (SCU reset) + 2 ÉLEVÉES FPU (NaN/SNaN) + ~8 moyennes — tous **bornés et
 corrigeables sans oracle**, et **tous corrigés le jour même** (cf. le chapeau ci-dessus ; seuls
-restent différés le délai d'IRQ ACSI, l'Unicode macOS et deux points d'arrondi FPU) (logique pure, pas de cycle-exactness). C'est la passe la plus productive
+restent différés le délai d'IRQ ACSI et le décimal empaqueté FPU ; l'Unicode macOS est
+corrigé le 2026-09-02, les arrondis de conversion sortante FPU aussi) (logique pure, pas de cycle-exactness). C'est la passe la plus productive
 en correctifs actionnables, justifiant le ciblage des sous-systèmes vierges plutôt qu'un re-balayage.
 
 ---
