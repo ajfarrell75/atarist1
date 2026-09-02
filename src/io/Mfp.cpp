@@ -20,6 +20,17 @@
 namespace { const int g_mfpExact = []{ const char* s = std::getenv("NEOST_MFP_EXACT");
                                        return s ? std::atoi(s) : 3; }(); }
 
+// NEOST_MFP_UPDTIMERS : dispatch des timers MFP échus AVANT tout accès registre du MFP
+// — port de `MFP_UpdateTimers` (mfp.c:681). Défaut ON ; =0 restaure le comportement
+// « frontière de bloc » pour que l'A/B reste exécutable. Récit et cas Super Hang-On
+// dans `Scheduler::runMfpTimersTo`.
+namespace { const bool g_mfpUpdTimers = []{ const char* s = std::getenv("NEOST_MFP_UPDTIMERS");
+                                            return s ? std::atoi(s) != 0 : true; }(); }
+
+void Mfp::updateTimers() {
+    if (g_mfpUpdTimers && sched_) sched_->runMfpTimersTo(sched_->liveNow());
+}
+
 // RESET matériel du MC68901 (port de MFP_Reset, mfp.c:519-569). Le vrai MFP n'a PAS
 // de signal de reset dédié pour le GPIP/USART, mais sur l'ST la broche /RESET du 68000
 // le réinitialise (cf. reset.c:74, AVANT M68000_Reset). NeoST l'omettait → des IRQ
@@ -142,6 +153,7 @@ void Mfp::onSerialRxEvent() {
 // Les registres MFP sont sur les adresses IMPAIRES à partir de $FFFA00.
 // On indexe par l'offset bas (addr & 0x3F).
 uint8_t Mfp::read8(uint32_t addr) {
+    updateTimers();          // ≙ MFP_UpdateTimers en tête de MFP_*_ReadByte
     switch (addr & 0x3F) {
         case 0x01: {                // GPIP : lignes d'ENTRÉE matérielles (les écritures
                                     // CPU sur $FFFA01 ne doivent pas les écraser).
@@ -203,6 +215,7 @@ uint8_t Mfp::read8(uint32_t addr) {
 }
 
 void Mfp::write8(uint32_t addr, uint8_t v) {
+    updateTimers();          // ≙ MFP_UpdateTimers en tête de MFP_*_WriteByte
     switch (addr & 0x3F) {
         case 0x01: gpip = v; break;   // latch des bits de SORTIE (les entrées sont calculées)
         // Écriture AER : un changement du front actif peut DÉCLENCHER une IRQ GPIP même

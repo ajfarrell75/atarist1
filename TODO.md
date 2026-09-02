@@ -121,7 +121,9 @@ est continue, les trous sont du travail fait.
   debug, écran ST, callbacks GLFW, ancrage, CRT, manettes), chacun recevant `App&` en
   paramètre : la discipline de requêtes de `MediaPages` est généralisée, une page ne
   fait rien, elle pose une requête que la boucle consomme.
-  **Reste : `appLoop` — 1813 lignes d'un seul tenant** (`src/gui/AppLoop.cpp`). Elle a
+  **Reste : `appLoop` — 1909 lignes d'un seul tenant** (`src/gui/AppLoop.cpp` ; 1813
+  au 2026-08-30, +96 le 2026-09-02 pour les deux instruments d'affichage —
+  `--shot-window` et `NEOST_WBAND_DIAG`, cf. CHANGELOG). Elle a
   été DÉPLACÉE, pas découpée, et c'est délibéré : le garde-fou du plan interdit de
   combiner deux refontes, et celle-ci a deux verrous propres — une vingtaine de
   variables de trame partagées entre les phases (`fbw/fbh`, `cTop/cH/cW`, `menuH`,
@@ -531,8 +533,10 @@ décroissant, par priorité d'impact :
 6. **[VIDÉO, P3]** wakeup-state WS3 sous-pixel, mode 336 px STE (`bSteBorderFlag`), rendu
    live du retrait bas, interfoliage blitter → `docs/CYCLE_ACCURACY.md` §4.
 
-**Faisables sans oracle** : FPU packed decimal bit-exact — détaillé dans
-`docs/HATARI_DIVERGENCES.md`. ✅ La **recomposition Unicode NFD→NFC (cible macOS)** est FAITE le
+**Faisables sans oracle** : FPU packed decimal **bit-exact** (port de `softfloat_decimal.c`) —
+détaillé dans `docs/HATARI_DIVERGENCES.md`. ✅ Les deux points BORNÉS de cette puce sont faits
+le 2026-09-02 (±inf/NaN → exposant $FFF, OPERR si k > 17) ; INEX1 reste délibérément non posé
+tant que la conversion entrante passe par `strtod` — cf. § Roadmap / FPU. ✅ La **recomposition Unicode NFD→NFC (cible macOS)** est FAITE le
 2026-09-02 : `neost::hostpath::precomposeUtf8`, branchée sur `matchHostDirEntry` et le listing
 Fsfirst. Le bug était réel et mesuré — sans elle, un fichier accentué écrit en NFD (ce que macOS
 rend à `readdir`) est INTROUVABLE depuis le TOS (vérifié par mutation sur APFS). Gardé à deux
@@ -605,8 +609,24 @@ densité HD/ED STX (NeoST plus cohérent) ; RTC en temps émulé (déterminisme 
   corrigée dans `tools/run_selftests.py`.
   **Reste sur cette puce** : FSGLMUL/FSGLDIV (plage d'exposant ÉTENDUE avec mantisse 24 bits
   → porter `roundSigAndPackFloatx80`, softfloat.c:1502) — non touché.
-- **Packed decimal** : ±inf/NaN → exposant $FFF (pas du BCD invalide), INEX1 sur conversion
-  inexacte, OPERR si k>17.
+- ◐ **Packed decimal — 2 des 3 points FAITS le 2026-09-02.**
+  ✅ **±inf/NaN → exposant $FFF** : le 68881 n'émet pas de BCD pour un infini ou un NaN, il
+  recopie le motif étendu (≙ `fp_from_pack`, fpp_softfloat.c:702). NeoST tombait dans son
+  `snprintf("%+.*e")`, où la libc rend « +inf » et où le parseur BCD tirait des chiffres
+  ARBITRAIRES de « inf ». Le payload d'un NaN traverse désormais intact (vérifié).
+  ✅ **OPERR si k > 17** (≙ softfloat_decimal.c:412-414) : l'écrêtage à 17 se faisait EN
+  SILENCE. Ne vise que le k positif — un k négatif sélectionne le style point fixe.
+  Gardés par les tests 13 et 14 du banc (`make_fpu_testrom.py`, 12 → 14 tests), chacun
+  vérifié par mutation.
+  ⏸ **INEX1 : DÉLIBÉRÉMENT NON FAIT**, et la raison n'est pas le temps. Chez Hatari le
+  drapeau est `float_flag_decimal` → `FPSR_INEX1` (fpp_softfloat.c:100), et il est armé sur
+  la direction **décimal → étendu** (`floatdecimal_to_floatx80`, softfloat_decimal.c:369),
+  pas sur la sortie. Or NeoST approxime cette direction par `std::strtod` (53 bits pour
+  17 chiffres décimaux) : on ne SAIT pas quand la conversion a été exacte. Poser le drapeau
+  à l'estime serait pire que ne pas l'avoir — un programme qui teste INEX1 se fierait à une
+  information parfois fausse. Le débloquer demande le vrai `floatdecimal_to_floatx80`.
+  **Reste donc** : port de `softfloat_decimal.c` (génération de chiffres bit-exacte,
+  direction entrante, style point fixe k ≤ 0), qui livrerait INEX1 au passage.
 - FMOVECR : précision FPCR non appliquée après la table ; offsets indéfinis → table silicium
   (`fpp_cr_undef`) au lieu de 0.0. FMOD précision < étendu : ré-arrondir a (expDiff<−1).
 

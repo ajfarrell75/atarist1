@@ -14,8 +14,10 @@
 //  (c) 2026 VERHILLE Arnaud — projet NeoST.
 // =============================================================================
 #include "core/Pacing.hpp"
+#include "core/Framing.hpp"   // stContentRegion (diagnostic NEOST_FRAMING_DIAG)
 #include <algorithm>
 #include <cstdio>
+#include <vector>
 #include <cstdlib>
 #include <cstring>
 #include <cmath>
@@ -2004,6 +2006,75 @@ int main(int argc, char** argv) {
             }
         }
         machine.runFrame();
+        // NEOST_BAND_DIAG=1 : signale l'APPARITION d'une bande pleine largeur d'une
+        // seule couleur dans l'aire active — le symptôme rapporté sur Super Hang-On
+        // (« des bandes sur toute la largeur, à n'importe quelle hauteur, de temps en
+        // temps, souvent noires ou blanches »). On ne rapporte que la TRANSITION
+        // « ligne bariolée → ligne unie » : les bandeaux légitimes, unis à chaque
+        // trame, ne produisent donc rien, et le diagnostic reste lisible sur des
+        // dizaines de milliers de trames sans vider une seule image sur le disque.
+        // NEOST_BAND_DIAG=1 : bandes pleine largeur d'une seule couleur dans l'aire
+        // active. ⚠ On raisonne par PLAGE de lignes unies consécutives, pas ligne à
+        // ligne : une bande de 3 px de haut a des voisines IDENTIQUES en son milieu,
+        // et un test « diffère de ses deux voisines » la manque entièrement. C'était
+        // l'angle mort de la première version (2026-09-02) — elle rendait 0 sur
+        // 18 000 trames alors que l'utilisateur voyait bien des bandes.
+        // Une plage est SIGNALÉE si sa couleur tranche sur la ligne juste au-dessus
+        // ET juste en dessous de la PLAGE (un palier de dégradé de ciel, lui, partage
+        // sa couleur avec ce qui l'entoure).
+        { static const bool dz = std::getenv("NEOST_BAND_DIAG") != nullptr;
+          if (dz) {
+            const uint32_t* px = machine.shifter.pixels();
+            const int fw = machine.shifter.width();
+            const int x0 = machine.shifter.activeLeft();
+            const int x1 = x0 + machine.shifter.activeWidth();
+            const int y0 = machine.shifter.activeTop();
+            const int y1 = y0 + machine.shifter.activeHeight();
+            const int wA = x1 - x0;
+            auto uniColour = [&](int y, uint32_t& c) {
+                const uint32_t* row = px + size_t(y) * fw;
+                c = row[x0];
+                for (int x = x0 + 1; x < x1; ++x) if (row[x] != c) return false;
+                return true;
+            };
+            for (int y = y0; y < y1; ) {
+                uint32_t c = 0;
+                if (!uniColour(y, c)) { ++y; continue; }
+                int e = y + 1; uint32_t c2 = 0;
+                while (e < y1 && uniColour(e, c2) && c2 == c) ++e;   // plage [y, e)
+                const int above = y - 1, below = e;
+                if (above >= y0 && below < y1) {
+                    const uint32_t* ra = px + size_t(above) * fw;
+                    const uint32_t* rb = px + size_t(below) * fw;
+                    int da = 0, db = 0;
+                    for (int x = x0; x < x1; ++x) { if (ra[x] != c) ++da; if (rb[x] != c) ++db; }
+                    if (da > wA / 2 && db > wA / 2)
+                        std::fprintf(stderr, "[band] f=%d lignes=%d..%d (%d px) couleur=%06X\n",
+                                     frame, y, e - 1, e - y, c & 0xFFFFFFu);
+                }
+                y = e;
+            }
+          } }
+
+        // NEOST_FRAMING_DIAG=1 : cadrage adaptatif (autozoom) de la trame, en clair.
+        // C'est l'INSTRUMENT du chantier « autozoom Enchanted Land » (2026-09-02) — il
+        // rend visible, sans lancer l'interface, ce que stContentRegion décide et sur
+        // quels signaux Glue. Sans lui, la seule façon de juger le cadrage était de
+        // regarder une fenêtre à l'œil, donc de ne rien pouvoir mesurer ni comparer.
+        // Trace pure : n'influe sur AUCUN calcul d'émulation.
+        { static const bool dz = std::getenv("NEOST_FRAMING_DIAG") != nullptr;
+          if (dz) {
+            int ct = 0, ch = 0, cw = 0;
+            neost::stContentRegion(machine.shifter, ct, ch, cw);
+            std::fprintf(stderr,
+                "[frm] f=%d act=%d+%d live=%d+%d open=%d(side=%d/%d) buf=%dx%d"
+                " -> top=%d h=%d w=%d\n",
+                frame, machine.shifter.activeTop(), machine.shifter.activeHeight(),
+                machine.shifter.snapLiveTop(), machine.shifter.snapLiveHeight(),
+                machine.shifter.snapBordersOpen() ? 1 : 0,
+                machine.shifter.snapSideTrickLines(), machine.shifter.snapLiveHeight(),
+                machine.shifter.width(), machine.shifter.height(), ct, ch, cw);
+          } }
         if (machine.cpu.breakpointHit()) {
             const uint32_t bpa = machine.cpu.breakpointHitAddr();
             const bool     isW = machine.cpu.breakpointHitIsWatch();

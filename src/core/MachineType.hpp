@@ -28,6 +28,33 @@ inline const char* machineName(MachineType t) {
     return "ste";
 }
 
+// Un accès qui FAUTE tombe-t-il sur un périphérique que le profil courant n'a pas ?
+// Rend alors la puce visée et le profil minimal qui la porte, sinon nullptr.
+//
+// POURQUOI : un jeu STE-only lancé sur un profil ST lit un registre absent, prend une
+// bus error, et le gestionnaire du TOS 1.x recharge un A7 corrompu → double faute →
+// CPU halté, écran noir. Le comportement est FIDÈLE (Hatari halte à l'identique), mais
+// le bandeau de l'interface se contentait de « check the machine profile first » : rien
+// n'indiquait QUEL matériel manquait ni QUOI choisir. Cas vécu (Stardust, rapport du
+// 2026-09-02) : lecture de $FF8900 — le son DMA du STE — sur un profil ST.
+struct MissingHw { const char* chip; const char* needs; };
+inline bool mmioNeedsBetterMachine(uint32_t addr, MachineType cur, MissingHw& out) {
+    const uint32_t a = addr & 0x00FFFFFFu;          // le 68000 n'a que 24 bits d'adresse
+    const bool ste  = (cur == MachineType::Ste  || cur == MachineType::MegaSte);
+    const bool mega = (cur == MachineType::MegaSt || cur == MachineType::MegaSte);
+    // Son DMA + Microwire/LMC1992 : STE et Mega STE seulement.
+    if (a >= 0xFF8900u && a <= 0xFF893Fu && !ste) { out = {"STE DMA sound", "ste"}; return true; }
+    if (a >= 0xFF8920u && a <= 0xFF8925u && !ste) { out = {"STE Microwire / LMC1992", "ste"}; return true; }
+    // Joypads/paddles STE ($FF9200-$FF921F).
+    if (a >= 0xFF9200u && a <= 0xFF921Fu && !ste) { out = {"STE joypads", "ste"}; return true; }
+    // Blitter : Mega ST, STE et Mega STE — absent du ST nu.
+    if (a >= 0xFF8A00u && a <= 0xFF8A3Fu && !(mega || ste)) { out = {"Blitter", "megast or ste"}; return true; }
+    // SCU et SCC : Mega STE (et TT, non émulé).
+    if (a >= 0xFF8E00u && a <= 0xFF8E0Fu && cur != MachineType::MegaSte) { out = {"Mega STE SCU", "megaste"}; return true; }
+    if (a >= 0xFF8C80u && a <= 0xFF8C87u && cur != MachineType::MegaSte) { out = {"SCC 85C30", "megaste"}; return true; }
+    return false;
+}
+
 inline MachineType parseMachine(const std::string& s) {
     if (s == "st")      return MachineType::St;
     if (s == "megast")  return MachineType::MegaSt;

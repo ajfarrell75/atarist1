@@ -66,6 +66,7 @@
 #include "gui/KioskMenu.hpp"      // menu plein écran de la borne
 #include "gui/StScreenView.hpp"   // texture de l'écran ST + cadrages borne/bureau
 #include "gui/AppConfig.hpp"
+#include "util/MouseScale.hpp"
 #include "gui/StKeys.hpp"   // neost.cfg : structure, analyse, écriture, profils
 
 namespace fs = std::filesystem;
@@ -156,10 +157,15 @@ void appLoop(App& A) {
 
         if (A.mouseCaptured) {                  // mouvement relatif → paquet IKBD (boutons inclus)
             double mx, my; glfwGetCursorPos(window, &mx, &my);
-            const int dx = int(mx - lastMx), dy = int(my - lastMy);
+            // Sensibilité (A.mouseSpeed, page Input) : le delta HÔTE est mis à l'échelle
+            // AVANT d'atteindre l'IKBD. Le brut est consommé en entier et c'est le delta
+            // MIS À L'ÉCHELLE qui garde son reste fractionnaire — sinon un facteur < 1
+            // perdrait tous les petits mouvements et la souris ST ne bougerait plus du
+            // tout sur un déplacement lent.
+            const int dx = neost::mousescale::step(mx - lastMx, A.mouseSpeed, A.mouseAccX);
+            const int dy = neost::mousescale::step(my - lastMy, A.mouseSpeed, A.mouseAccY);
+            lastMx = mx; lastMy = my;             // le delta HÔTE est consommé en entier
             if (dx || dy) {
-                lastMx += dx; lastMy += dy;     // on ne consomme QUE l'entier → le reste
-                                                // fractionnaire s'accumule (drags lents)
                 // Souris débranchée du ST (joystick sur le port 0, ou overlay borne
                 // ouvert) : on CONSOMME quand même le delta, sinon il s'accumule et
                 // part en un saut géant au retour.
@@ -1009,6 +1015,7 @@ void appLoop(App& A) {
             }
             if (cfgUi.cfgDirty) {
                 cfg.autoZoom = A.autoZoom;
+                cfg.mouseSpeed = A.mouseSpeed;
                 cfg.crt = A.crtOn; cfg.crtParams = A.crtParams;
                 saveConfig(A, exeDir, cfg, &machine);
                 cfgUi.cfgDirty = false;
@@ -1546,7 +1553,14 @@ void appLoop(App& A) {
         if (machine.cpu.halted()) {
             const Cpu68k::Fault f = machine.cpu.lastFault();
             const ImGuiIO& io = ImGui::GetIO();
-            ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, 8.0f), ImGuiCond_Always, ImVec2(0.5f, 0.0f));
+            // Centré sur l'ÉCRAN ST, pas sur la fenêtre : au bureau l'écran n'occupe
+            // qu'une partie de celle-ci, et un bandeau centré sur la fenêtre recouvrait
+            // le menu et le panneau des disquettes (retour utilisateur du 2026-09-02).
+            // Repli sur le centre de la fenêtre tant qu'aucune trame n'a dessiné l'écran.
+            const ImVec2 c = A.stRectValid
+                ? ImVec2((A.stRectX0 + A.stRectX1) * 0.5f, (A.stRectY0 + A.stRectY1) * 0.5f)
+                : ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f);
+            ImGui::SetNextWindowPos(c, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
             ImGui::SetNextWindowBgAlpha(0.85f);
             ImGui::Begin("##haltmsg", nullptr,
                          ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs |
@@ -1558,7 +1572,20 @@ void appLoop(App& A) {
                 ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.35f, 1.0f),
                                    "last fault: %s at $%08X, PC=$%06X",
                                    f.write ? "writing" : "reading", f.addr, f.pc);
-            ImGui::TextDisabled("Reset to restart. If a demo does this, check the machine profile first.");
+            // Diagnostic CIBLÉ quand l'adresse fautive est un périphérique absent du
+            // profil courant : dire QUOI manquait et QUOI choisir, au lieu du conseil
+            // générique. C'est ce qui manquait au rapport Stardust du 2026-09-02 —
+            // l'utilisateur a conclu à un bug de NeoST là où le halt était fidèle.
+            MissingHw miss{};
+            if (f.valid && mmioNeedsBetterMachine(f.addr, machine.machineType(), miss)) {
+                ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.40f, 1.0f),
+                                   "$%06X is %s - absent from the \"%s\" profile.",
+                                   f.addr & 0xFFFFFFu, miss.chip, machineName(machine.machineType()));
+                ImGui::TextDisabled("This program needs machine = %s. Set it in Configuration "
+                                    "> Machine, then reset.", miss.needs);
+            } else {
+                ImGui::TextDisabled("Reset to restart. If a demo does this, check the machine profile first.");
+            }
             ImGui::End();
         }
 
@@ -1765,6 +1792,69 @@ void appLoop(App& A) {
         if (reqRebuild)   A.applyConfig();       // modèle/RAM/cœur/ROM → reconfig à chaud
         if (reqHardReset) machine.hardReset(); // power-cycle (RAM effacée, boot à froid)
         if (reqReset)     machine.reset();     // reset « doux » (RAM conservée)
+        // NEOST_WBAND_DIAG=1 : traque, dans l'image RÉELLEMENT AFFICHÉE, les bandes
+        // horizontales qui tranchent sur leurs deux voisines. On ne relit qu'une BANDE
+        // VERTICALE ÉTROITE (une bande pleine largeur la traverse forcément) : le coût
+        // reste négligeable là où relire toute la fenêtre coûterait 15 Mo par trame.
+        // Seules les APPARITIONS sont signalées, pour que les lignes légitimement
+        // contrastées (séparateurs du bandeau de jeu) ne noient pas le diagnostic.
+        // ⚠ À utiliser CRT ÉTEINT : les scanlines font trancher une ligne sur deux.
+        { static const bool dz = std::getenv("NEOST_WBAND_DIAG") != nullptr;
+          if (dz) {
+            int ww = 0, wh = 0;
+            glfwGetFramebufferSize(window, &ww, &wh);
+            const int sw = 16;
+            if (ww > sw && wh > 4) {
+                static std::vector<unsigned char> strip;
+                strip.resize(size_t(sw) * wh * 3);
+                glPixelStorei(GL_PACK_ALIGNMENT, 1);
+                glReadPixels(ww / 2 - sw / 2, 0, sw, wh, GL_RGB, GL_UNSIGNED_BYTE, strip.data());
+                static std::vector<uint8_t> prevOdd;
+                if ((int)prevOdd.size() != wh) prevOdd.assign(wh, 0);
+                auto rowAt = [&](int y) { return strip.data() + size_t(y) * sw * 3; };
+                for (int y = 1; y < wh - 1; ++y) {
+                    const unsigned char* c = rowAt(y);
+                    const unsigned char* u = rowAt(y - 1);
+                    const unsigned char* d = rowAt(y + 1);
+                    int du = 0, dd = 0;
+                    for (int x = 0; x < sw; ++x) {
+                        const int i = x * 3;
+                        if (c[i] != u[i] || c[i+1] != u[i+1] || c[i+2] != u[i+2]) ++du;
+                        if (c[i] != d[i] || c[i+1] != d[i+1] || c[i+2] != d[i+2]) ++dd;
+                    }
+                    const bool odd = (du > sw * 3 / 4) && (dd > sw * 3 / 4);
+                    if (odd && !prevOdd[y])
+                        std::fprintf(stderr, "[wband] f=%ld y=%d (sur %d) rvb=%02X%02X%02X\n",
+                                     A.emuFrame, y, wh, c[0], c[1], c[2]);
+                    prevOdd[y] = odd ? 1 : 0;
+                }
+            }
+          } }
+
+        // Capture de la FENÊTRE (cf. App::shotWinPrefix) — AVANT le swap, donc sur
+        // l'image réellement composée : échelle, filtrage et passe CRT compris.
+        if (!A.shotWinPrefix.empty() && A.shotWinDone < A.shotWinMax
+            && A.emuFrame >= A.shotWinFrom) {
+            int ww = 0, wh = 0;
+            glfwGetFramebufferSize(window, &ww, &wh);
+            if (ww > 0 && wh > 0) {
+                std::vector<unsigned char> buf(size_t(ww) * wh * 3);
+                glPixelStorei(GL_PACK_ALIGNMENT, 1);
+                glReadPixels(0, 0, ww, wh, GL_RGB, GL_UNSIGNED_BYTE, buf.data());
+                char path[512];
+                std::snprintf(path, sizeof path, "%s%05d.ppm",
+                              A.shotWinPrefix.c_str(), A.shotWinDone);
+                if (std::FILE* f = std::fopen(path, "wb")) {
+                    std::fprintf(f, "P6\n%d %d\n255\n", ww, wh);
+                    // glReadPixels rend l'origine EN BAS : on réécrit ligne par ligne
+                    // de haut en bas pour une PPM lisible par les outils du dépôt.
+                    for (int y = wh - 1; y >= 0; --y)
+                        std::fwrite(buf.data() + size_t(y) * ww * 3, 1, size_t(ww) * 3, f);
+                    std::fclose(f);
+                }
+                ++A.shotWinDone;
+            }
+        }
         glfwSwapBuffers(window);
 
         // Dort jusqu'à l'échéance de la prochaine trame émulée (posée par la boucle

@@ -117,6 +117,11 @@ public:
     uint8_t read8(uint32_t addr);
     void    write8(uint32_t addr, uint8_t v);
 
+    // Sert les timers délai ÉCHUS avant l'accès registre en cours (≙ MFP_UpdateTimers,
+    // mfp.c:681). Sans lui, un acquittement d'ISR peut travailler sur un ISR périmé —
+    // le cas « Super Hang On » nommé par Hatari, cf. Scheduler::runMfpTimersTo.
+    void updateTimers();
+
     // Auto-test DÉTERMINISTE du MFP : (a) bits d'ENTRÉE GPIP forcés à la lecture
     // (moniteur bit7, FDC bit5, ACIA bit4 en wire-OR) ; (b) détection de FRONT
     // (gpipSetLine lève le canal seulement sur le front sélectionné par l'AER, ligne en

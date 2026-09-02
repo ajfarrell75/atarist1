@@ -843,20 +843,32 @@ void Shifter::replayGlue() {
 
     // Détection : une bordure est-elle retirée ? (haut/bas déplacés, ou une ligne
     // affichée a un DE élargi gauche/droite).
-    if (glueStartHBL_ != baseStart || glueEndHBL_ != baseEnd) bordersTrick_ = true;
+    const bool vertMoved = (glueStartHBL_ != baseStart || glueEndHBL_ != baseEnd);
     // Les DE stockés par la Glue sont sur la table WS-décalée → les nominaux de
     // comparaison aussi (g.lineStart/EndCycle sont les ancres FIXES du rendu).
     const int nomStart = g.lineStartCycle + glue::timing(bus_.machine).inc;
     const int nomEnd   = g.lineEndCycle   + glue::timing(bus_.machine).inc;
-    if (!bordersTrick_) {
-        for (int sl = glueStartHBL_; sl < glueEndHBL_; ++sl) {
-            const GlueLine& L = glueLines_[sl];
-            if (L.displayStartCycle >= 0
-                && (L.displayStartCycle < nomStart || L.displayEndCycle > nomEnd)) {
-                bordersTrick_ = true; break;
-            }
-        }
+    // ⚠ Ce balayage n'est plus conditionné à `!bordersTrick_`. Il l'était, et c'est
+    // ce qui rendait le trick LATÉRAL indétectable dès qu'un trick VERTICAL avait
+    // mordu : un titre qui ouvre seulement la bordure HAUTE (Enchanted Land) sortait
+    // avec le même signal qu'un titre qui déborde vraiment sur les côtés (Closure),
+    // et le cadrage adaptatif élargissait à 416 px une image de 320 (cf.
+    // core/Framing.cpp). Le coût est un balayage des lignes affichées par trame.
+    // On COMPTE les lignes élargies au lieu de poser un simple booléen : c'est ce qui
+    // sépare un vrai débordement latéral d'un artefact de synchro. Mesuré le 2026-09-02 :
+    // Closure élargit 272-275 lignes sur 276 (99 %), là où Enchanted Land en élargit 4
+    // sur 229 et l'étalon overscan_top 5 sur 229 (~2 %) — chez ces deux-là les lignes
+    // élargies rendent du noir, l'image n'occupe que la zone active. Le cadrage adaptatif
+    // tranche sur cette proportion (cf. core/Framing.cpp).
+    sideTrickLines_ = 0;
+    for (int sl = glueStartHBL_; sl < glueEndHBL_; ++sl) {
+        const GlueLine& L = glueLines_[sl];
+        if (L.displayStartCycle >= 0
+            && (L.displayStartCycle < nomStart || L.displayEndCycle > nomEnd))
+            ++sideTrickLines_;
     }
+    sideTrick_ = (sideTrickLines_ > 0);
+    if (vertMoved || sideTrick_) bordersTrick_ = true;
 
     // Stat Glue (gated NEOST_GLUE_STAT) : liste les écritures freq/res datées de la
     // trame (ligne, cycle, registre, valeur) — diagnostic « pourquoi pas de trick ».

@@ -102,6 +102,18 @@ struct App {
     // bureau (F10 y est une touche du ST, on ne la confisque pas).
     bool autoZoom = true;
 
+    // ─── Sensibilité de la souris ÉMULÉE ─────────────────────────────────────
+    // Facteur appliqué au delta de la souris HÔTE avant qu'il n'atteigne l'IKBD.
+    // Pourquoi c'est nécessaire : le ST compte les crans de sa souris mécanique
+    // (~200 points/pouce) et le TOS n'a aucun réglage d'accélération digne de ce nom.
+    // Une souris moderne à 1600, 3200 voire 8000 dpi envoie donc jusqu'à 40× plus de
+    // pas pour le même geste : le pointeur du bureau GEM traverse l'écran au moindre
+    // mouvement et devient inutilisable. 1,0 = un pas hôte pour un pas ST (comportement
+    // d'origine) ; en dessous, on ralentit. S'applique au bureau ET à la borne — c'est
+    // le seul chemin de MOUVEMENT vers le ST (les autres appels à Ikbd::mouseEvent ne
+    // portent que les boutons).
+    float mouseSpeed = 1.0f;
+
     // ─── Menu borne plein écran (START manette ou F9) ────────────────────────
     // Le jeu est MIS EN PAUSE tant que le menu est ouvert (cf. boucle d'émulation).
     // Modèle « comme une vraie machine » :
@@ -287,6 +299,28 @@ struct App {
     // Cadence : échéance réelle de la PROCHAINE trame émulée (cf. la boucle).
     std::chrono::steady_clock::time_point emuNext{};
     double lastMx = 0, lastMy = 0;         // dernière position curseur (deltas souris)
+    // Reste FRACTIONNAIRE du delta souris mis à l'échelle (cf. mouseSpeed) : ce qui
+    // n'atteint pas un pas entier est reporté, sinon un réglage < 1 perdrait tous les
+    // petits mouvements et la souris ST resterait immobile sur un déplacement lent.
+    double mouseAccX = 0, mouseAccY = 0;
+
+    // Rectangle À L'ÉCRAN de l'image ST (px fenêtre), relevé à chaque trame par
+    // drawStScreen/drawStKiosk. Sert à centrer les bandeaux qui parlent de la MACHINE
+    // (« machine gelée ») sur l'écran ST plutôt que sur la fenêtre entière : au bureau
+    // l'écran ST n'occupe qu'une partie de la fenêtre, et un bandeau centré sur celle-ci
+    // recouvrait le menu et le panneau des disquettes.
+    // stRectValid = false tant qu'aucune trame n'a dessiné l'écran (repli : la fenêtre).
+    float stRectX0 = 0, stRectY0 = 0, stRectX1 = 0, stRectY1 = 0;
+    bool  stRectValid = false;
+
+    // --shot-window PREFIX FROM COUNT : capture de la FENÊTRE RENDUE (glReadPixels du
+    // framebuffer par défaut), une PPM par trame. Indispensable pour instruire un défaut
+    // d'AFFICHAGE : --shot ne rend que le framebuffer ÉMULÉ, donc tout ce qui se passe
+    // entre lui et l'écran (échelle, filtrage, passe CRT) était invisible au harnais —
+    // c'est ce qui a laissé passer les bandes rapportées sur Super Hang-On le 2026-09-02.
+    std::string shotWinPrefix;
+    long shotWinFrom = 0;
+    int  shotWinMax = 0, shotWinDone = 0;
     // Réglage « joystick au clavier » à RENDRE en quittant la borne. Initialisé à
     // false et non à kbdJoy : lancé en --kiosk, kbdJoy vaut déjà true, et la sortie
     // vers le bureau avalerait les flèches + Ctrl droit du ST sans rien afficher.

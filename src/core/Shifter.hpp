@@ -171,6 +171,15 @@ public:
         return std::min(curH_ - lt, (snapGlueEnd_ + snapGlueBlankLines_) - snapGlueStart_);
     }
     bool snapBordersOpen() const { return snapBordersTrick_ || snapGlueVOverscan_ != 0; }
+    // Les DEUX MOITIÉS du signal ci-dessus, séparément. Le cadrage adaptatif en a
+    // besoin : une bordure LATÉRALE retirée étend l'image en LARGEUR, une bordure
+    // haute/basse en HAUTEUR — et les confondre élargit à 416 px une image qui n'en
+    // occupe que 320 (cf. core/Framing.cpp, chantier Enchanted Land du 2026-09-02).
+    bool snapSideBordersOpen() const { return snapSideTrick_; }
+    // Nombre de lignes AFFICHÉES dont le DE déborde des cycles nominaux — la moitié
+    // LATÉRALE du trick, en proportion et non en booléen (cf. Framing.cpp).
+    int  snapSideTrickLines() const { return snapSideTrickLines_; }
+    bool snapVertBordersOpen() const { return snapGlueVOverscan_ != 0; }
 
     // Fréquence de rafraîchissement COURANTE (mono = 71 Hz, sinon $FF820A bit1 :
     // 50 Hz PAL / 60 Hz NTSC). Pour l'affichage / le débogage (la trame est cadencée
@@ -413,6 +422,13 @@ private:
     struct SyncWrite { int32_t frameCycle; uint8_t val; bool isRes; };
     std::vector<SyncWrite> syncWrites_;             // écritures freq/res de la trame
     bool   bordersTrick_ = false;                   // ≥1 ligne avec une bordure retirée
+    // Moitié LATÉRALE du signal ci-dessus (≥1 ligne affichée dont le DE déborde des
+    // cycles nominaux) — calculée séparément par replayGlue. NON SÉRIALISÉE À DESSEIN :
+    // entièrement re-dérivée à chaque finishFrame, elle ne pilote que le CADRAGE de
+    // l'interface. La sérialiser imposerait un bump du format de save-state pour un
+    // champ cosmétique dont la valeur est reconstruite à la trame suivante.
+    bool   sideTrick_ = false;
+    int    sideTrickLines_ = 0;                     // NOMBRE de lignes élargies (cf. sideTrick_)
 
     // État d'affichage d'UNE scanline, port de Hatari SHIFTER_LINE. Calculé par le
     // replay Glue (replayGlue) puis consommé par le rendu fenêtré (renderGlueFrame).
@@ -434,6 +450,8 @@ private:
     uint32_t snapGlueVOverscan_  = 0;
     int      snapGlueBlankLines_ = 0;
     bool     snapBordersTrick_   = false;
+    bool     snapSideTrick_      = false;   // cf. sideTrick_ (non sérialisé)
+    int      snapSideTrickLines_ = 0;
     // Sortie du canal HBL_Pos/nCyclesPerLine de updateGlueState (−1 = pas de match
     // freq sur cette écriture ; sinon position IRQ HBL et longueur de ligne).
     int  glueHblPos_     = -1;

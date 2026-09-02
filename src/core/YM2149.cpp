@@ -6,6 +6,7 @@
 //
 //  (c) 2026 VERHILLE Arnaud — projet NeoST.
 // =============================================================================
+#include <cstdio>
 #include "core/YM2149.hpp"
 
 #include <cmath>
@@ -316,7 +317,10 @@ float YM2149::nextResampleWeightedN(uint32_t sampleRate) {
     return fixedToSample(total / int64_t(intervalFract));
 }
 
-void YM2149::synthBlock(const uint8_t* r, float* out, uint32_t frames, uint32_t sampleRate) {
+// Pose l'état dérivé des registres (et consomme un rechargement d'enveloppe).
+// Extrait de synthBlock pour pouvoir être appelé À CHAQUE ÉVÉNEMENT REGISTRE, et non
+// une fois par bloc d'échantillons hôte — cf. synthesizeFrame.
+void YM2149::applyRegs(const uint8_t* r) {
     updateFromRegs(r);
     if (envReload_) {
         envReload_ = false;
@@ -324,7 +328,16 @@ void YM2149::synthBlock(const uint8_t* r, float* out, uint32_t frames, uint32_t 
         envCnt_    = 0;
         envShape_  = r[13] & 0x0f;
     }
+}
 
+void YM2149::synthBlock(const uint8_t* r, float* out, uint32_t frames, uint32_t sampleRate) {
+    applyRegs(r);
+    renderHost(out, frames, sampleRate);
+}
+
+// Rend `frames` échantillons HÔTE depuis le tampon 250 kHz (rééchantillonnage pondéré).
+// Ne touche PAS aux registres : l'état a déjà été posé par applyRegs.
+void YM2149::renderHost(float* out, uint32_t frames, uint32_t sampleRate) {
     for (uint32_t i = 0; i < frames; ++i) {
         ensureMargin(sampleRate);
         float s = nextResampleWeightedN(sampleRate);
@@ -353,19 +366,71 @@ void YM2149::synthesize(float* out, uint32_t frames, uint32_t sampleRate) {
 
 void YM2149::synthesizeFrame(float* out, uint32_t frames, uint32_t sampleRate, int64_t frameCycles) {
     if (frameCycles <= 0) frameCycles = 1;
-    uint32_t pos = 0;
-    // Pro Sound Designer : niveau du DAC parallèle (R15) ajouté à chaque segment. Amplitude
-    // d'un octet non signé ramenée à ±0.5 × outScale_ — du même ordre qu'une voie YM.
+    // Pro Sound Designer : niveau du DAC parallèle (R15) ajouté à chaque segment.
     auto dacSync = [&] { dacLevel_ = portBDac_ ? dacRaw(audioRegs_[15]) : 0.0f; };
     dacSync();
+
+    // ⚠ LES ÉVÉNEMENTS SONT DATÉS SUR LA GRILLE 250 kHz, PAS SUR L'ÉCHANTILLON HÔTE.
+    // C'était le défaut (corrigé le 2026-09-02) : l'ancienne version calculait l'offset
+    // en échantillons HÔTE (`e.cycle * frames / frameCycles`) et ne synthétisait qu'un
+    // bloc par offset — toutes les écritures tombant dans le même échantillon hôte
+    // étaient donc ÉCRASÉES, et une seule survivait. Sur un flux normal c'est un jitter
+    // de 21 µs sans conséquence, ce que l'inventaire des divergences en disait. Mais un
+    // DIGIDRUM joue un échantillon numérisé en martelant les registres de VOLUME : sur
+    // Super Hang-On, 897 écritures par trame (~45 kHz) pour 350 offsets hôte distincts —
+    // 61 % du flux perdu, c'est-à-dire une DÉCIMATION, donc du repliement : le
+    // grésillement rapporté. Sur la grille 250 kHz il y a ~5,6 pas internes par écriture,
+    // le rééchantillonneur pondéré (nextResampleWeightedN) fait ensuite sa moyenne, et le
+    // flux est FILTRÉ au lieu d'être décimé. C'est aussi ce que fait Hatari, qui applique
+    // les écritures à la frontière 250 kHz (Sound_Update avant Sound_WriteReg, psg.c:346).
+    const uint32_t n250 = sampleRate ? uint32_t(uint64_t(frames) * YM_250_HZ / sampleRate) : 0;
+    applyRegs(audioRegs_.data());
+    uint32_t gen = 0;
     for (const RegEvent& e : events_) {
-        uint32_t off = uint32_t(int64_t(e.cycle) * frames / frameCycles);
-        if (off > frames) off = frames;
-        if (off > pos) { synthBlock(audioRegs_.data(), out + pos, off - pos, sampleRate); pos = off; }
-        audioRegs_[e.reg & 15] = e.val;   // ET par ÉVÉNEMENT (pas par échantillon) : gratuit
-        if (e.reg == 13) envReload_ = true;
-        if (e.reg == 15) dacSync();
+        uint32_t off = uint32_t(int64_t(e.cycle) * n250 / frameCycles);
+        if (off > n250) off = n250;
+        if (off > gen) { doSamples250(int(off - gen)); gen = off; }
+        const int reg = e.reg & 15;
+        audioRegs_[reg] = e.val;
+        if (reg == 13) envReload_ = true;
+        if (reg == 15) dacSync();
+        applyRegs(audioRegs_.data());     // l'écriture prend effet ICI, au pas 250 kHz
     }
-    if (pos < frames) synthBlock(audioRegs_.data(), out + pos, frames - pos, sampleRate);
+    // NEOST_YMEV_DIAG=1 : par trame, le NOMBRE d'écritures registre, le nombre
+    // d'INSTANTS sonores distincts (cycles CPU distincts) et combien de ces instants
+    // chaque grille sait résoudre — l'ancienne (échantillon hôte) et celle-ci
+    // (250 kHz). C'est l'instrument qui a chiffré le défaut : sur Super Hang-On,
+    // 897 instants par trame (44,9 kHz, un digidrum), 350 résolus par la grille hôte
+    // contre 561 par la grille 250 kHz. Trace pure, sans effet sur l'émulation.
+    { static const bool dz = std::getenv("NEOST_YMEV_DIAG") != nullptr;
+      if (dz && !events_.empty()) {
+        static long fr = 0; ++fr;
+        int64_t lastCyc = -1; uint32_t lastH = 0xFFFFFFFFu, lastQ = 0xFFFFFFFFu;
+        int inst = 0, dh = 0, dq = 0;
+        for (const RegEvent& e : events_) {
+            if (int64_t(e.cycle) != lastCyc) { ++inst; lastCyc = int64_t(e.cycle); }
+            const uint32_t oh = uint32_t(int64_t(e.cycle) * frames / frameCycles);
+            const uint32_t oq = uint32_t(int64_t(e.cycle) * n250 / frameCycles);
+            if (oh != lastH) { ++dh; lastH = oh; }
+            if (oq != lastQ) { ++dq; lastQ = oq; }
+        }
+        // Histogramme des ÉCARTS entre instants consécutifs, en cycles CPU. Un pas
+        // 250 kHz vaut ~32 cycles à 8 MHz : tout écart inférieur tombe dans le même pas.
+        // Écarts entre écritures consécutives, en cycles CPU. Un pas 250 kHz vaut
+        // ~32 cycles à 8 MHz. La distribution est le vrai discriminant : un flux
+        // d'instants sonores distincts donne des écarts étalés, tandis qu'un mixeur
+        // qui pose R8/R9/R10 pour UN MÊME instant donne un histogramme bimodal
+        // (2 écarts courts pour 1 long) — cf. Super Hang-On, 66,7 % / 33,3 %.
+        int lt32 = 0, lt64 = 0, ge64 = 0; int64_t pc = -1;
+        for (const RegEvent& e : events_) {
+            if (pc >= 0) { const int64_t g = int64_t(e.cycle) - pc;
+                           if (g < 32) ++lt32; else if (g < 64) ++lt64; else ++ge64; }
+            pc = int64_t(e.cycle);
+        }
+        std::fprintf(stderr, "[ymev] f=%ld ecritures=%zu instants=%d resolus_hote=%d resolus_250k=%d ecarts <32=%d 32-63=%d >=64=%d\n",
+                     fr, events_.size(), inst, dh, dq, lt32, lt64, ge64);
+      } }
+    if (gen < n250) doSamples250(int(n250 - gen));
     events_.clear();
+    renderHost(out, frames, sampleRate);
 }

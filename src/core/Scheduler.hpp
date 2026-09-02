@@ -169,6 +169,65 @@ public:
         else now_ = cycle;
     }
 
+    // Dispatch CIBLÉ des timers MFP DATÉS (TIMER_A/B_DELAY/C/D) échus à `cycle` — port
+    // RESTREINT de `MFP_UpdateTimers` (hatari/src/mfp.c:681), qu'Hatari appelle avant
+    // CHAQUE accès registre du MFP « to ensure MFP timers are updated in chronological
+    // order ».
+    //
+    // POURQUOI C'EST NÉCESSAIRE, et le cas est nommé par Hatari lui-même (mfp.c:135,
+    // entrée du 2022/01/27) : « fix the game Super Hang On, where 'bclr #0,$fffffa0f'
+    // to clear Timer B ISR sometimes happens at the same time that Timer C expires,
+    // which used the wrong ISR value and gave FLICKERING RASTER COLORS ». Sans ce
+    // dispatch, l'écriture qui acquitte l'ISR de Timer B travaille sur un ISR qui
+    // n'inclut pas encore l'expiration de Timer C : l'acquittement porte alors sur la
+    // mauvaise valeur, une interruption raster est perdue ou rejouée, et la ligne sort
+    // avec la palette de sa voisine — des bandes de couleur pleine largeur, à hauteur
+    // arbitraire, par intermittence.
+    //
+    // ⚠ POURQUOI « CIBLÉ », ET NON LE `syncTo` NU QUE LA LETTRE D'HATARI SUGGÈRE.
+    // Hatari appelle `CycInt_Process_Clock`, qui sert TOUTES les sources échues. Le
+    // porter tel quel réactiverait le modèle SYNC-DRIVEN RÉFUTÉ par NeoST (deadlock
+    // Enchanted Land, ~1590 dispatches mid-instruction par trame — cf.
+    // `docs/HATARI_DIVERGENCES.md`) : servir HBL/VBL/RENDER au milieu d'une instruction
+    // déplace le faisceau vidéo sous les pieds du rendu. Les quatre timers DÉLAI du MFP,
+    // eux, ne touchent QUE l'état du MFP (compteur rechargé, IRQ antidatée à l'échéance
+    // via `firingDue()`), donc les anticiper ne peut réordonner aucune autre puce.
+    // TIMER_B (event-count) est délibérément EXCLU : il n'est pas daté par une période
+    // calculée mais posé par `Machine` sur le Display-Enable, et l'avancer déplacerait
+    // un tic vidéo.
+    //
+    // `now_` n'est PAS avancé : il reste l'horloge DISPATCHÉE du modèle bloc. On ne fait
+    // qu'anticiper des événements que le prochain `runTo` aurait servis de toute façon,
+    // à la date où le matériel les a réellement produits.
+    void runMfpTimersTo(int64_t cycle) {
+        if (!(armed_ & kMfpTimerMask)) return;   // O(1) : aucun timer daté armé
+        struct FiringGuard {                     // même garde RAII que runTo
+            int64_t& f; int64_t prev;
+            explicit FiringGuard(int64_t& b) : f(b), prev(b) {}
+            ~FiringGuard() { f = prev; }
+        } firingGuard{firingDue_};
+        uint32_t fired = 0;                      // anti-livelock : 1 tir max par source
+        bool any = false;
+        for (;;) {
+            int best = -1;
+            for (uint32_t m = armed_ & kMfpTimerMask; m; m &= m - 1) {
+                const int s = ctz32(m);
+                if (!((fired >> s) & 1u) && due_[s] <= cycle
+                    && (best < 0 || due_[s] < due_[best])) best = s;
+            }
+            if (best < 0) break;
+            const int64_t late = cycle - due_[best];
+            if (late > timerMaxLate) timerMaxLate = late;
+            fired |= 1u << best;
+            firingDue_ = due_[best];
+            due_[best] = kInactive;
+            armed_ &= ~(1u << best);
+            any = true;
+            if (cb_[best]) cb_[best]();
+        }
+        if (any) nextDue_ = scanNextDue();
+    }
+
     // Cycles de bus VOLÉS au CPU par un AUTRE maître de bus (le blitter) — port de
     // `Blitter_AddCycles` (hatari/src/blitter.c:342-354, symbole `all_cycles`).
     //
@@ -359,6 +418,9 @@ private:
     static bool isMfpTimer(int s) {              // sources dont le retard dépend de la préemption
         return s == TIMER_A || s == TIMER_B_DELAY || s == TIMER_C || s == TIMER_D;
     }
+    // Les MÊMES quatre sources en masque, pour runMfpTimersTo (TIMER_B event-count exclu).
+    static constexpr uint32_t kMfpTimerMask =
+        (1u << TIMER_A) | (1u << TIMER_B_DELAY) | (1u << TIMER_C) | (1u << TIMER_D);
     // Scan complet du plus proche événement dû (-1 si aucun). N'est plus sur le chemin
     // chaud : runTo calcule désormais ce minimum au passage (cf. minAll). Il ne reste
     // appelé que par cancel() de l'échéance minimale et par le nextDue() public.

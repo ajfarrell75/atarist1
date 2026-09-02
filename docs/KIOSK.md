@@ -24,7 +24,10 @@ instantané, le jeu en cours continue.
 d'erreur : `[Audio] ring underrun … emulation loop: XX real frames/s`.
 
 En borne : la souris est capturée et le curseur masqué ; l'**émulation joystick au
-clavier est activée** (flèches + Ctrl droit = feu) pour jouer sans manette. `neost.cfg`
+clavier est activée** (flèches + Ctrl droit = feu) pour jouer sans manette. La
+**sensibilité de la souris émulée** (`mousespeed=`, page **Input** du GUI) s'applique
+aussi en borne — mais la borne ne réécrit pas ce réglage : on le pose depuis le bureau
+(ou à la main dans `neost.cfg`) avant de basculer. `neost.cfg`
 n'est réécrit que pour les deux réglages que la borne doit mémoriser et qui se règlent
 depuis son menu — dossiers ROM additionnels et affectation des manettes. Jamais pour la
 ROM, la disquette ou le modèle de machine.

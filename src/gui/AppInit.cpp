@@ -149,6 +149,8 @@ static int parseCommandLine(App& A, int argc, char** argv, std::vector<std::stri
                 "  --crt-preset NAME     off|light|arcade|phosphor (implies --crt)\n"
                 "  --run-frames N        quit after N emulated frames (harness use)\n"
                 "  --shot PATH           dump the ST framebuffer as PPM before that exit\n"
+                "  --shot-window P N C   dump the RENDERED WINDOW as PPM (P00000.ppm...),\n"
+                "                        C frames from emulated frame N (display debugging)\n"
                 "  --scancode-at N H     raw ST scancodes (hex, comma-separated) at frame N\n"
                 "                        (repeatable; space=39, numeric pad 0-9 =\n"
                 "                         70,6d,6e,6f,6a,6b,6c,67,68,69)\n"
@@ -172,6 +174,11 @@ static int parseCommandLine(App& A, int argc, char** argv, std::vector<std::stri
         //   utilisateur (« l'écran est cassé à tel moment ») sans outil externe.
         else if (a == "--run-frames" && i + 1 < argc) { A.runFrames = std::atol(argv[++i]); A.harnessRun = true; }
         else if (a == "--shot" && i + 1 < argc)       A.shotPath = argv[++i];
+        else if (a == "--shot-window" && i + 3 < argc) {   // PREFIX FROM COUNT
+            A.shotWinPrefix = argv[++i];
+            A.shotWinFrom   = std::atol(argv[++i]);
+            A.shotWinMax    = std::atoi(argv[++i]);
+        }
         else if (a == "--key-hold" && i + 1 < argc)   A.keyHold = std::atoi(argv[++i]);
         else if (a == "--scancode-at" && i + 2 < argc) {
             const long f = std::atol(argv[++i]);
@@ -282,6 +289,7 @@ int appInit(App& A, int argc, char** argv) {
     cfg.uiVersion = kUiVersion;
     A.dockOn   = cfg.dock;     // mode ancré mémorisé (cf. renderDockSpace)
     A.autoZoom = cfg.autoZoom; // zoom adaptatif de l'écran ST (bureau ET kiosk)
+    A.mouseSpeed = cfg.mouseSpeed;   // sensibilité de la souris émulée (page Input)
     A.crtOn    = cfg.crt;      A.crtParams = cfg.crtParams;   // effets CRT (figés en kiosk)
     A.kioskRomDirs = cfg.romDirs;   // dossiers ROM additionnels du menu kiosk (persistés)
     const std::string defRom = cfg.rom.empty() ? std::string("roms/etos192us.img") : cfg.rom;
