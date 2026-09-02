@@ -10,6 +10,7 @@
   "NEOST_RAM_SLOT_PHASE": "phase de la grille du créneau RAM (calibration oracle).",
   "NEOST_MFP_EXACT": "datation exacte des accès MFP.",
   "NEOST_MFP_UPDTIMERS": "dispatch des timers MFP délai échus AVANT tout accès registre du MFP (défaut ON) — port de MFP_UpdateTimers (mfp.c:681). Corrige le cas « Super Hang On » nommé par Hatari : un bclr sur l'ISR concurrent d'une expiration de Timer C acquittait une valeur périmée, d'où des couleurs raster clignotantes. =0 pour l'A/B.",
+  "NEOST_MFP_WRITE_END": "décalage début→fin d'un accès MMIO appliqué à la datation des IRQ nées d'une ÉCRITURE registre MFP (défaut 2 cycles bus) — port de Cycles_GetInternalCycleOnWriteAccess (« currcycle + 4 » chez Hatari, +2 ici car Moira facture déjà le SYNC de tête). Hatari : « take the write cycles into account when updating MFP_IRQ_Time (properly fix Super Hang On) ». =0 restaure l'ancienne datation, antidatée de 2 cycles.",
   "NEOST_IACK": "int-ack vectorisé (défaut ON).",
   "NEOST_IACK_VIDEO": "durée d'IACK des IRQ vidéo (défaut 14 cyc).",
   "NEOST_IACK_MFP": "durée d'IACK MFP (défaut 16 cyc, mesuré à l'oracle sur Super Hang-On).",

@@ -898,6 +898,35 @@ TODO) :
   sources `TIMER_*` et surtout pas un `syncTo` nu, qui réactiverait le modèle sync-driven
   réfuté (deadlock Enchanted Land).
 
+- **Les DEUX autres pistes « Super Hang-On » d'Hatari, instruites le 2026-09-02.** Le nom
+  du jeu apparaît QUATRE fois dans les sources d'Hatari ; après `MFP_UpdateTimers`, les
+  trois restantes ont été lues et confrontées à NeoST :
+  - ✅ **Délai de 4 cycles sur la montée d'IRQ** (mfp.c:107, 2013/03/01, « fix […] Super
+    Hang On, Super Monaco GP, Bolo ») — **DÉJÀ PORTÉ** : `kIrqDelayToCpu`, `irqTime_` et
+    la source `Scheduler::MFP_IRQ` armée à `irqTime_ + 4`, avec le cas « délai déjà
+    écoulé » (≙ `MFP_ProcessIRQ`, verrou `NEOST_MFP_EXACT` bit1).
+  - ✅ **Bit pending posé DEUX FOIS avant l'IACK** (video.c:320, 2013/05/03, « correct fix
+    for Super Monaco GP, Super Hang On […] ») — **DÉJÀ CORRECT PAR CONSTRUCTION** : NeoST
+    modélise HBL/VBL par des BOOLÉENS (`hblPending`/`vblPending`, `Cpu68k.cpp:51-52`,
+    commentés « ≙ pendingInterrupts = 0 »), effacés à l'acquittement et lus comme un
+    NIVEAU pour l'IPL. Poser le bit deux fois s'y confond donc naturellement en une seule
+    interruption — ce qu'Hatari obtient par un code dédié.
+  - ✅ **Cycles d'écriture dans `MFP_IRQ_Time`** (mfp.c:113, 2013/03/14, « properly fix
+    Super Hang On ») — **MANQUAIT, porté le 2026-09-02**. Hatari date une écriture MMIO à
+    `currcycle + 4` (`Cycles_GetInternalCycleOnWriteAccess`), « the number of cycles when
+    the write will be **completed** ». NeoST datait ses IRQ nées d'une écriture registre à
+    `liveNow()`, or sa propre convention veut que la fin d'accès soit à **+2** (Moira a
+    déjà facturé le SYNC de tête — cf. `Cpu68k::cyclesIntoInstr`, convention que le
+    Shifter applique déjà à ses écritures palette). Les IRQ étaient donc antidatées de
+    2 cycles, et comme la visibilité CPU court depuis cet instant (`irqTime_ + 4`),
+    l'exception partait 2 cycles trop tôt. Corrigé (`Mfp::writeEventTime`, 9 sites).
+    ⚠ **Aucun effet pixel DÉMONTRÉ à la valeur juste** : sur Super Hang-On en jeu, `+0` et
+    `+2` rendent la même image. Ce qui EST démontré, c'est que le chemin pilote bien
+    l'émulation — `NEOST_MFP_WRITE_END=40` déplace 24 773 px sur la même trame. C'est donc
+    un port de FIDÉLITÉ, adopté sur la lettre d'Hatari et non sur une image, et c'est dit
+    ainsi. ⚠ `mfp_poll` ne peut pas juger ce point : son programme masque les IRQ
+    (`SR=$2700`), il est donc insensible même à un décalage de 40 cycles.
+
 - **[historique] ~~L'écart de latence IPR/ISR~~** Ce qui était écrit
   ici depuis le 2026-08-25 (« un timer expirant PENDANT l'instruction qui polle est vu en retard,
   jusqu'à 157 cycles ») décrivait un état dépassé. Confronté à l'oracle sur l'étalon `mfp_poll`,
