@@ -799,6 +799,42 @@ bool Mfp::mfpSelfTest() {
         chk("reset : GPIP d'entrée pristine", probe.gpipInput(), 0xB1);
     }
 
+    // --- (f) ÉLECTION DE L'EXCEPTION : la PLUS ANCIENNE l'emporte ------------------
+    // Table de vérité du chantier A42. La règle du 68901, portée d'Hatari
+    // (MFP_InterruptRequest, mfp.c:1005 : `Pending_Time[Int] <= Pending_Time_Min`), est
+    // que seules les requêtes les PLUS ANCIENNES concourent — la priorité ne départage
+    // qu'entre elles. Elle n'a de sens que si l'élection voit PLUSIEURS entrées à la
+    // fois, d'où l'élection groupée (flushIrqUpdate).
+    // ⚠ C'est l'exhibiteur que le TODO exigeait avant de toucher à ce chemin : sans lui,
+    // la règle était inobservable (aucun étalon pixel ne bouge, et `mfp_poll` masque les
+    // IRQ, donc il est aveugle à toute l'élection).
+    {
+        auto elect = [&](int firstSrc, int64_t firstT, int secondSrc, int64_t secondT) {
+            Scheduler s;
+            Mfp p;
+            p.setScheduler(&s);
+            p.iera = p.ierb = 0xFF;      // tous les canaux activés…
+            p.imra = p.imrb = 0xFF;      // …et non masqués
+            p.raiseAt(firstSrc, firstT);
+            p.raiseAt(secondSrc, secondT);   // AUCUNE élection entre les deux
+            p.flushIrqUpdate();
+            return p.currentInt_;
+        };
+        // Timer D (source 4, priorité BASSE) arrive AVANT Timer A (13, HAUTE) :
+        // c'est D qui doit être servi. Sans élection groupée, A l'emportait.
+        chk("élection : la PLUS ANCIENNE gagne (D avant A)",
+            elect(SRC_TIMERD, 100, SRC_TIMERA, 140), SRC_TIMERD);
+        // L'ordre des raise ne doit rien changer : c'est la DATE qui tranche.
+        chk("élection : ordre des entrées indifférent",
+            elect(SRC_TIMERA, 140, SRC_TIMERD, 100), SRC_TIMERD);
+        // Dates ÉGALES → la priorité reprend ses droits (la plus haute gagne).
+        chk("élection : à date égale, la plus PRIORITAIRE",
+            elect(SRC_TIMERD, 100, SRC_TIMERA, 100), SRC_TIMERA);
+        // La plus ancienne EST la plus prioritaire : pas de conflit.
+        chk("élection : plus ancienne ET prioritaire",
+            elect(SRC_TIMERA, 100, SRC_TIMERD, 140), SRC_TIMERA);
+    }
+
     std::fprintf(stderr, "[mfp-selftest] %d OK, %d FAIL\n", pass, fail);
     return fail == 0;
 }
@@ -891,7 +927,7 @@ void Mfp::raiseAt(int source, int64_t when) {
 // Élection différée (cf. Mfp.hpp). Event_Time = 0 → le front est daté de
 // `pendingTime_[canal élu]`, comme MFP_UpdateIRQ appelé depuis la boucle CPU.
 void Mfp::flushIrqUpdate() {
-    if (!irqUpdateNeeded_) return;
+    if (inDispatch_ || !irqUpdateNeeded_) return;   // lot en cours : on accumule encore
     irqUpdateNeeded_ = false;
     updateIrq(0);
 }

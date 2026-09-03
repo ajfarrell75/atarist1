@@ -238,6 +238,27 @@ Machine::Machine(std::size_t ramBytes, CpuCore cpuCore, MachineType machine)
         cpu.updateIpl();
     });
     mfp.setScheduler(&sched);   // le MFP date lui-même ses timers (A/C/D, mode délai)
+
+    // A42 — L'ÉLECTION DE L'IRQ MFP EST SUSPENDUE PENDANT UN LOT DE DISPATCH, puis
+    // tranchée UNE FOIS à la fin, avant que l'IPL ne soit relu. C'est l'ordre d'Hatari :
+    // CycInt_Process sert tous les événements échus, PUIS la boucle CPU fait
+    // `if (MFP_UpdateNeeded) MFP_UpdateIRQ_All(0)`, PUIS l'IPL est évalué
+    // (newcpu.c:3005, 5509). Sans ça, chaque callback élisait pour son compte — les 18
+    // `cpu.updateIpl()` de ce fichier — et la règle « seules les plus anciennes
+    // concourent » (`pendingTime_ <= pendingTimeMin_`) ne voyait jamais plus d'un
+    // candidat : deux timers échus dans le MÊME lot étaient élus séparément, et le plus
+    // RÉCENT mais plus prioritaire l'emportait. Verrou d'A/B : NEOST_IPL_BATCH=0.
+    // ⚠ Le CPU est ARRÊTÉ pendant le lot : les updateIpl() intermédiaires des callbacks
+    // deviennent donc sans effet observable (Moira ne relit sa broche qu'à une frontière
+    // d'instruction), et on les laisse en place — les retirer serait une seconde refonte.
+    {
+        static const bool iplBatch = []{ const char* e = std::getenv("NEOST_IPL_BATCH");
+                                         return e ? std::atoi(e) != 0 : true; }();
+        if (iplBatch)
+            sched.setDispatchHooks(
+                [this] { mfp.setInDispatch(true); },
+                [this] { mfp.setInDispatch(false); mfp.flushIrqUpdate(); cpu.updateIpl(); });
+    }
     ikbd.setScheduler(&sched);  // l'IKBD diffère sa réponse de reset ($F1)
     midi.setScheduler(&sched);  // l'ACIA MIDI date son TDRE sous TIE (cf. MIDI_TX)
     // Fixture de bouclage parallèle→joystick (test « Printer/Joystick », sous
