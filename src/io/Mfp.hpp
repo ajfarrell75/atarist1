@@ -134,11 +134,18 @@ public:
     // consommé par le calcul d'IPL qui suit tout dispatch. La sérialiser imposerait un
     // bump du format de save-state pour un drapeau qui vaut faux à toute frontière.
     void flushIrqUpdate();
+    // Pendant un LOT DE DISPATCH, l'élection est SUSPENDUE : les entrées s'accumulent et
+    // `flushIrqUpdate()` ne tranche pas. Machine l'arme sur les bornes du Scheduler.
+    // Hors lot, le flush reste immédiat au calcul d'IPL — un raise venu d'un chemin qui
+    // ne passe pas par le dispatch (écriture bus d'une autre puce) ne peut donc pas
+    // rester non élu.
+    void setInDispatch(bool b) { inDispatch_ = b; }
 
     // Fin d'accès d'une ÉCRITURE registre MFP (cf. Mfp.cpp) : c'est cet instant qui
     // date une IRQ née de l'écriture, pas le début de l'accès.
     int64_t writeEventTime() const;
     bool    irqUpdateNeeded_ = false;   // cf. flushIrqUpdate (non sérialisé)
+    bool    inDispatch_ = false;        // cf. setInDispatch (non sérialisé, transitoire)
     // Décalage « début → fin » d'un accès MMIO, en cycles bus (cf. Cpu68k::cyclesIntoInstr :
     // Moira a déjà facturé le SYNC(2) de tête, la fin d'accès est donc à +2).
     // Verrou d'A/B : NEOST_MFP_WRITE_END (défaut 2 ; =0 restaure l'ancienne datation).

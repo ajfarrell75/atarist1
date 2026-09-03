@@ -124,6 +124,50 @@ figée sans que rien ne le dise.
 ils ont leur propre chemin souris et leurs propres réglages, et je n'ai pas de moyen de
 les vérifier ici.
 
+## A42 soldé : l'élection de l'IRQ MFP voit enfin tout le lot de dispatch (2026-09-03)
+
+Suite et fin du dossier ouvert la veille. Le port de `MFP_UpdateNeeded` était PARTIEL :
+l'élection ne voyait qu'une entrée à la fois parce que `Machine` fait suivre chaque
+callback d'ordonnanceur d'un `cpu.updateIpl()` — 18 sites — qui la déclenchait aussitôt.
+
+**L'exhibiteur d'abord**, comme le TODO l'exigeait. Mais en **table de vérité** plutôt
+qu'en étalon pixel : la règle se teste sur la puce nue en quatre lignes, là où un
+programme ST aurait demandé deux handlers, un journal et un rendu pour une observation
+moins directe. Ajouté à `mfp-selftest` (31 → 35 contrôles) :
+
+- Timer D (priorité BASSE) arrive avant Timer A (HAUTE) → **c'est D qui est servi** ;
+- l'ordre des `raiseAt` est indifférent, c'est la DATE qui tranche ;
+- à date ÉGALE, la priorité reprend ses droits ;
+- plus ancienne ET prioritaire → pas de conflit.
+
+Vérifié par mutation : `NEOST_MFP_BATCH=0` fait échouer le premier cas — `got=13`
+(Timer A, plus récent mais plus prioritaire) au lieu de `want=4`. C'est exactement le
+défaut que corrige Hatari (2013/04/21, « fix Fuzion CD Menus 77, 78, 84 »).
+
+**La refonte.** `Scheduler::setDispatchHooks` borne le LOT — garde RAII et compteur de
+profondeur, parce que `runTo` est ré-entrant (`addStolenCycles` du blitter). `Machine` y
+suspend l'élection MFP pendant le lot et la tranche UNE FOIS à la fin, avant de relire
+l'IPL : l'ordre d'Hatari (`CycInt_Process`, puis `MFP_UpdateIRQ_All(0)`, puis IPL).
+Les `cpu.updateIpl()` des callbacks sont **laissés en place** : le CPU est arrêté pendant
+le lot et Moira ne relit sa broche qu'à une frontière d'instruction, donc les recalculs
+intermédiaires n'ont aucun effet observable — les retirer aurait été une seconde refonte
+pour rien. Verrou d'A/B : `NEOST_IPL_BATCH=0`.
+
+**Ce que ça change, mesuré** : le groupement passe de **0** à **123** entrées groupées sur
+Super Hang-On (sur 1 000 123) et **1 240** sur le bureau EmuTOS (sur 17,6 M) — environ
+1 entrée sur 10 000. « Rarissime », comme l'inventaire l'annonçait, mais non nul, et
+désormais servi dans le bon ordre.
+
+⚠ **Effet de bord assumé, et il fallait le regarder avant de le classer.** `dmasnd_poll`
+se décale de 288 px : cet étalon arme la VBL (`sr=$2300`), donc l'instant où l'exception
+est prise bouge d'un cheveu et la phase du poll avec. L'écart est **structurellement nul**
+— mêmes 61 valeurs distinctes, même histogramme de deltas `{6:47, 0:39, 8:12, 4:1}`, une
+seule position à 2 octets près (`0038` → `003A`). La propriété que l'étalon contraint — le
+compteur n'avance qu'au HBL — est intacte. Référence re-posée. Sa note dit ce qui la
+justifie **et ce qui ne la justifie pas** : c'est un snapshot sans oracle (Hatari ne se
+reproduit pas dessus), il ne peut donc pas arbitrer laquelle des deux phases est juste ;
+ce qui la fait re-poser est que le nouvel ordre est celui d'Hatari, pas une mesure pixel.
+
 ## CI : les deux téléchargements du job Android n'avaient aucun filet (2026-09-02)
 
 Le workflow *Artefacts* a échoué sur le push du 2026-09-02, sur le seul job `android` :

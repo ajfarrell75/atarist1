@@ -96,6 +96,17 @@ public:
     // PendingInterruptCount à chaque instruction). Sans ça, un timer court armé en
     // plein bloc ne se déclenche qu'à la fin du bloc (jusqu'à ~380 cycles de retard).
     void setEndSlice(std::function<void()> fn) { endSlice_ = std::move(fn); }
+
+    // Bornes d'un LOT DE DISPATCH (A42) : appelées au début et à la fin de runTo, une
+    // seule fois même en ré-entrance (compteur de profondeur). Machine s'en sert pour
+    // que l'élection de l'IRQ MFP voie TOUTES les entrées du lot avant de trancher —
+    // c'est l'ordre d'Hatari : CycInt_Process sert tous les événements échus, PUIS la
+    // boucle CPU fait `if (MFP_UpdateNeeded) MFP_UpdateIRQ_All(0)`, PUIS l'IPL est lu.
+    // Sans ça, chaque callback élisait pour son compte et la règle « la plus ancienne
+    // l'emporte » ne voyait jamais plus d'un candidat.
+    void setDispatchHooks(std::function<void()> begin, std::function<void()> end) {
+        dispatchBegin_ = std::move(begin); dispatchEnd_ = std::move(end);
+    }
     void beginRun(int64_t target) { runTarget_ = target; }
     void endRun() { runTarget_ = kInactive; }
 
@@ -328,6 +339,18 @@ public:
         } firingGuard{firingDue_};
         uint32_t fired = 0;
         static_assert(SRC_COUNT <= 32, "masque fired sur 32 bits");
+        // Bornes du lot (cf. setDispatchHooks). RAII : le lot se ferme même si un
+        // callback sort par exception (bus error), et la profondeur rend l'appel unique
+        // sous ré-entrance (addStolenCycles du blitter re-rentre dans runTo).
+        struct DispatchGuard {
+            Scheduler& s;
+            explicit DispatchGuard(Scheduler& sc) : s(sc) {
+                if (s.dispatchDepth_++ == 0 && s.dispatchBegin_) s.dispatchBegin_();
+            }
+            ~DispatchGuard() {
+                if (--s.dispatchDepth_ == 0 && s.dispatchEnd_) s.dispatchEnd_();
+            }
+        } dispatchGuard{*this};
         // Minimum de TOUTES les échéances armées, tenu à jour par la passe ci-dessous.
         // À la passe qui ne trouve plus rien à déclencher — donc après que tous les
         // callbacks ont replanifié — il vaut exactement ce que rendrait scanNextDue().
@@ -465,5 +488,7 @@ private:
     int64_t firingDue_ = kInactive;              // échéance de l'événement en cours de dispatch
     int64_t runTarget_ = kInactive;              // cible du bloc CPU courant (-1 = hors run)
     std::function<int64_t()> liveClock_{};       // horloge sous-quantum (cf. liveNow)
+    std::function<void()> dispatchBegin_{}, dispatchEnd_{};   // bornes du lot (cf. setDispatchHooks)
+    int dispatchDepth_ = 0;                     // profondeur de ré-entrance de runTo
     std::function<void()>    endSlice_{};         // coupe le timeslice CPU (préemption)
 };

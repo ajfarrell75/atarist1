@@ -301,7 +301,7 @@ est continue, les trous sont du travail fait.
 
 ### Chantiers structurels (UN à la fois, jamais combinés)
 
-- **A42 — Élection MFP : passer le flush d'IPL du CALLBACK à l'INSTRUCTION.**
+- ✅ **A42 — SOLDÉ le 2026-09-03 : le flush d'IPL passe du CALLBACK au LOT DE DISPATCH.**
   Ouvert le 2026-09-02, suite directe du port partiel de `MFP_UpdateNeeded`
   (cf. `CHANGELOG.md` et `docs/HATARI_DIVERGENCES.md` § MFP).
   **Le problème, en une phrase** : Hatari élit l'interruption MFP **une fois par
@@ -314,16 +314,30 @@ est continue, les trous sont du travail fait.
   `flushIrqUpdate()` élit au calcul d'IPL et en fin de `Mfp::updateTimers`. Les entrées
   multiples d'une MÊME fonction (`TXERR`→`TXEMPTY`, `RXERR`→`RXFULL`) sont correctes.
   Verrou d'A/B : `NEOST_MFP_BATCH=0`.
-  **Ce qui reste** : sortir `updateIpl()` des callbacks pour un appel UNIQUE en fin de
-  dispatch (`Scheduler::runTo`), de sorte que la fenêtre d'élection couvre toute
-  l'instruction. C'est une refonte du pilotage de l'IPL, pas un correctif local.
-  ⚠ **AVANT DE COMMENCER, deux choses à savoir.**
+  **Ce qui a été fait** : `Scheduler::setDispatchHooks` borne le LOT (garde RAII,
+  compteur de profondeur — `runTo` est ré-entrant via `addStolenCycles`) ; `Machine` y
+  suspend l'élection MFP pendant le lot et la tranche UNE FOIS à la fin, avant de relire
+  l'IPL. Les `cpu.updateIpl()` des callbacks sont LAISSÉS EN PLACE : le CPU est arrêté
+  pendant le lot, Moira ne relit sa broche qu'à une frontière d'instruction, donc les
+  recalculs intermédiaires n'ont aucun effet observable — les retirer aurait été une
+  seconde refonte pour rien. Verrou d'A/B : `NEOST_IPL_BATCH=0`.
+  **Ce que ça change, mesuré** : le groupement passe de **0** à **123** entrées groupées
+  sur Super Hang-On (1 000 123 entrées) et **1 240** sur le bureau EmuTOS (17,6 M), soit
+  ≈ 1 entrée sur 10 000 — « rarissime », mais non nul, et désormais servi dans le bon
+  ordre. Exhibiteur posé comme prescrit : 4 cas de table de vérité dans `mfp-selftest`
+  (« la plus ancienne gagne », ordre des entrées indifférent, à date égale la plus
+  prioritaire, plus ancienne ET prioritaire) — vérifiés par mutation, `NEOST_MFP_BATCH=0`
+  fait échouer le premier (`got=13` Timer A au lieu de `want=4` Timer D).
+  **Effet de bord assumé** : `dmasnd_poll` (snapshot, VBL armée) se décale de 288 px —
+  structurellement NUL (mêmes valeurs distinctes, même histogramme de deltas, une position
+  à 2 octets près). Référence re-posée, raison écrite dans son `ref_note`.
+  📌 **Les deux pièges annoncés, et ce qu'ils ont donné.**
   1. **Aucun exhibiteur connu.** Mesuré sur Super Hang-On : **0 groupement sur 1 000 000
      d'entrées**, et l'A/B rend 0 px sur Super Hang-On, `mfp_poll`, `blitter_timer` et
      `trace_odd`. Hatari cite « Fuzion CD Menus 77, 78, 84 » — disques absents du dépôt.
-     **Poser un exhibiteur d'abord** (étalon généré : deux timers programmés pour expirer
-     dans la même instruction, le plus ancien étant le MOINS prioritaire — l'image doit
-     montrer lequel a été servi), sinon la refonte se fera à l'aveugle.
+     Exhibiteur posé — mais en TABLE DE VÉRITÉ (`mfp-selftest`) plutôt qu'en étalon pixel :
+     la règle se teste sur la puce nue en quatre lignes, là où un programme ST aurait
+     demandé deux handlers, un journal et un rendu, pour une observation moins directe.
   2. **`mfp_poll` NE PEUT PAS arbitrer ce chantier** : son programme masque les IRQ
      (`SR=$2700`), il est aveugle à toute la datation et à la livraison des interruptions —
      vérifié, `NEOST_MFP_WRITE_END=40` le laisse à 0 px. C'est précisément cet étalon qui a
