@@ -679,8 +679,33 @@ Pour ce qui reste → [`../TODO.md`](../TODO.md).
 - Debug : `NEOST_DEBUG_IKBD=1` trace les commandes reçues par l'IKBD ;
   `NEOST_DEBUG_ACIA=1` trace chaque lecture du data register (valeur, file, cycle).
   Headless : `--mouse-at N "SCRIPT"` (script souris daté L/R/U/D/1/2/.) et
-  `--joy-script N "SCRIPT"` (état joystick par trame U/D/L/R/F/.) pour piloter des menus
-  de jeux ; `stScancode` étendu (flèches `<>[]`, Esc `=`, F1-F5 `!@#$%`…).
+  `--joy-script N "SCRIPT"` / `--joy-script-file N FICHIER` (état joystick par trame) pour
+  piloter des menus de jeux ; `stScancode` étendu (flèches `<>[]`, Esc `=`, F1-F5 `!@#$%`…).
+  Le script compile vers **un masque par trame** (`src/util/JoyScript.hpp`, couvert par
+  `neost-selftest`) : `U/D/L/R/F/.`, **combinaisons** `[UF]`/`[DL]` (feu + direction,
+  diagonales — sans quoi ni le tir ni la dynamite de Rick Dangerous ne sont exprimables),
+  masque brut `[$88]`, répétition `TOKEN*N`, total borné à 10 M de trames. Un script
+  fautif est refusé avant le boot au lieu d'être traduit en « neutre ».
+- **Pilotage externe déterministe** (headless, cf. `docs/OPENDST.md`) :
+  `--probe NOM=ADR:LEN` (répétable, 1/2/4 octets big-endian), `--probe-every N`,
+  `--hash-ram ADR:LEN` → une ligne `probe frame=… screen=<hash> ram=<hash> NOM=0x…` par
+  échantillon sur **stdout** (les journaux restent sur stderr). Lecture `Bus::peek8` :
+  **aucun effet de bord**, donc l'espace I/O se lit `$FF`.
+- **Mode serveur** (`--server`) : boucle de commandes texte sur stdin/stdout — `run N`,
+  `play SCRIPT`, `joy`, `key`, `mouse`, `peek`, `observe`, `save`/`load` sur des
+  emplacements d'état **en mémoire**, `export`/`import`, `probe`, `shot`, `slots`.
+  `run`/`play`/`load`/`observe` répondent avec les champs d'observation : un rollout = UN
+  aller-retour. Équivalence avec la boucle `--frames` vérifiée au palier `fast`
+  (`tools/run_server_equiv.py`), verdict MUTATION-TESTÉ.
+- **Save-states plus rapides** : CRC-32 par table (il était calculé bit à bit) et filet de
+  `loadState` sérialisé sans CRC — reprise 21,6 → 3,9 ms, sauvegarde 10,2 → 2,6 ms
+  (mesuré sur la lignée précédente), à format et valeurs INCHANGÉS. Le GUI (F7/F8) en
+  profite autant.
+- **Oracle différentiel NeoST↔Hatari** (`tools/opendst_oracle.py`) : le même script
+  d'entrées rejoué des deux côtés, images comparées, décalage de boot mesuré en deux
+  passes. Repose sur `tools/hatari_neost_oracle.patch` (script joystick daté par VBL +
+  graine `HATARI_SEED`) et sur `--joy-script-compile`. Client Go-Explore d'exemple :
+  `tools/opendst_explore.py`.
 
 ## Disquette (FDC WD1772 + DMA)
 - **WRITE TRACK (formatage) sur image .ST** : le flux MFM écrit par le programme

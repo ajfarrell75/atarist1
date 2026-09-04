@@ -6,6 +6,60 @@ l'ordre inverse. Version courante : **0.6.1**.
 - « NeoST gère-t-il X ? » → [`docs/IMPLEMENTED.md`](docs/IMPLEMENTED.md) (inventaire par puce)
 - « Que reste-t-il ? » → [`TODO.md`](TODO.md)
 
+## Pilotage externe déterministe de NeoST (2026-09-04)
+
+**But** : rendre `neost-headless` conduisible par un programme tiers — planner, fuzzer,
+explorateur d'états façon Go-Explore — et comparable à Hatari sur un même script
+d'entrées. Tout est documenté dans [`docs/OPENDST.md`](docs/OPENDST.md).
+
+**Entrées.** `--joy-script` ne posait **qu'un bit à la fois** : ni tir en mouvement, ni
+dynamite de Rick Dangerous (feu+bas). La grammaire devient un sur-ensemble
+rétro-compatible — combinaisons `[UF]`, masque brut `[$88]` (préfixe obligatoire : sans
+lui « DF » est ambigu), répétition `TOKEN*N`, total borné à 10 M de trames, commentaires
+`#` — plus `--joy-script-file` pour les rollouts qui ne tiennent plus sur `argv`. Un
+script fautif est **refusé avant le boot** au lieu d'être traduit en « neutre ». La
+grammaire est de la logique pure (`src/util/JoyScript.hpp`), couverte à la valeur près par
+`neost-selftest`.
+
+**Observation.** `--probe NOM=ADR:LEN`, `--probe-every N`, `--hash-ram ADR:LEN` émettent
+une ligne par échantillon sur **stdout** (journaux sur stderr). Lecture par `Bus::peek8` :
+**sans effet de bord**. Une première version passait par `read8` pour la MMIO — un
+`--probe FF9200:2` sur STE **terminait le processus** (bus error d'un registre whitelisté
+en accès octet, levée hors du `try/catch` de Moira : le piège que `Bus::dmaRead8`
+documente déjà). D'où le choix assumé : l'espace I/O n'est pas sondable.
+
+**Mode serveur** (`--server`) : boucle de commandes stdin/stdout avec des emplacements
+d'état **en mémoire**. Un rollout entier = un aller-retour. L'équivalence avec la boucle
+`--frames` est un **verdict du palier `fast`** (`tools/run_server_equiv.py`) — et il est
+MUTATION-TESTÉ : une inversion posant l'entrée après la trame le fait rougir sur la bonne
+ligne.
+
+**Save-states plus rapides.** Le mode serveur devait supprimer un coût de lancement de
+processus estimé à ~20 ms ; la mesure a démenti : le lancement pèse ~3 ms, et le coût
+dominant était **`loadState` lui-même à 21,6 ms** — CRC-32 calculé **bit à bit**, payé
+deux fois, plus une sérialisation complète pour le filet de sécurité. Table de CRC (mêmes
+valeurs, format inchangé, états existants toujours lisibles) et filet sérialisé sans CRC :
+reprise **21,6 → 3,9 ms**, sauvegarde **10,2 → 2,6 ms**. Le GUI (F7/F8) en profite autant.
+
+**Oracle différentiel** `tools/opendst_oracle.py` : *pour tout script d'entrées, NeoST ≡
+Hatari*. Deux obstacles levés côté oracle, dans un patch enfin **versionné**
+(`tools/hatari_neost_oracle.patch`, `extern/hatari` étant gitignoré) : un script joystick
+**daté par VBL** (`--cmd-fifo` ne connaît que des touches et tourne en temps réel) et une
+**graine figeable** (`HATARI_SEED`). Alignement en deux passes, parce qu'ancrer sur une
+scène d'attente ne suffit pas. ⚠ Limite mesurée : le décalage NeoST↔Hatari **saute à
+chaque chargement disque** (−7 / −11 / −110 / −200 trames sur Super Sprint), donc une
+comparaison n'est fiable que si l'ancre et la cible n'en sont pas séparées. Contrôle
+négatif fait : sans le script côté Hatari, aucune trame identique sur 241 (la plus proche
+à 2 280 px) ; avec, **0 px**.
+
+**Client d'exemple** `tools/opendst_explore.py` : boucle Go-Explore minimale sur le mode
+serveur. 60 itérations en 13,5 s sur Rick Dangerous depuis un état en jeu, 56 cellules
+relisibles par `--load-state`.
+
+**Deux chasses aux bugs** sur l'ensemble (16 défauts, dont 4 de ma conception : un verdict
+aveugle, une explication fausse écrite dans le code, quatre correctifs perdus par une
+restauration de sauvegarde, une couverture retirée sans raison).
+
 ## Numéros de version sautés
 
 Cette section existe pour qu'un trou dans la numérotation ne soit jamais SILENCIEUX —

@@ -16,6 +16,7 @@
 #include "core/Pacing.hpp"
 #include "core/Framing.hpp"   // stContentRegion (diagnostic NEOST_FRAMING_DIAG)
 #include <algorithm>
+#include <cerrno>
 #include <cstdio>
 #include <vector>
 #include <cstdlib>
@@ -26,6 +27,7 @@
 #include <memory>
 #include <string>
 #include <fstream>
+#include <iterator>
 #include <thread>
 
 // Sockets du répondeur loopback de --slirp-selftest (point 4). Si libslirp est
@@ -59,6 +61,14 @@
 #include "io/DongleTable.hpp"
 #include "core/Symbols.hpp"
 #include "core/AudioMix.hpp"   // chaîne de mixage partagée (--sound-dump)
+#include "util/JoyScript.hpp"  // grammaire des scripts joystick (logique pure)
+#include "headless/Observe.hpp" // sondes, hachages de cellule, capture PPM
+#include "headless/Server.hpp"  // --server : boucle de commandes stdin/stdout
+
+// Machine et consorts vivent dans l'espace global ; l'outillage récent est rangé
+// sous neost::. Deux alias pour ne pas alourdir chaque appel.
+namespace observe = neost::observe;
+namespace server  = neost::server;
 
 namespace {
 void usage() {
@@ -103,9 +113,16 @@ void usage() {
         "                     70,6d,6e,6f,6a,6b,6c,67,68,69, Enter 72, dot 71)\n"
         "  --joy-at N VAL    set the port 1 joystick to VAL at frame N (same bits as --joy)\n"
         "                    (repeatable)\n"
-        "  --joy-script N S  joystick script from frame N: U/D/L/R/F/. = one frame each\n"
+        "  --joy-script N S  joystick script from frame N, one token per frame:\n"
+        "                    U/D/L/R/F = direction or fire, . = neutral,\n"
+        "                    [UF]/[DL] = COMBINATION (fire+direction, diagonals),\n"
+        "                    [$88] = raw hex mask, TOKEN*N = repeat N times.\n"
         "                    (repeatable; while a script runs it drives port 1 every frame,\n"
         "                     so a static --joy cannot hold during that window)\n"
+        "  --joy-script-file N F  same, read from file F: whitespace and # comments\n"
+        "                    are ignored — long rollouts no longer fit on argv\n"
+        "  --joy-script-compile F  write the COMPILED script (one mask byte per frame)\n"
+        "                    to F and exit: feeds the same input to the Hatari oracle\n"
         "  --mouse-at N S    mouse script from frame N: L/R/U/D = +/-8 px, 1/2 = left/\n"
         "                    right click, . = idle (one frame each)\n"
         "                    (repeatable)\n"
@@ -195,6 +212,16 @@ void usage() {
         "  --serial-dump F   write the raw RS-232 serial bytes into F (NEOST-TEST verdicts)\n"
         "  --from-cfg F      replay the GUI config (neost.cfg); later options override it\n"
         "  --dump-at N A L F raw dump of L bytes of RAM from $A (hex) after frame N → F\n"
+        "  --probe NAME=A:L  sample L bytes (1/2/4) at hex address A, repeatable.\n"
+        "                    Side-effect free (debugger read): I/O registers read $FF\n"
+        "  --probe-every N   emit one sample line on STDOUT every N frames:\n"
+        "                    'probe frame=.. screen=<hash> [ram=<hash>] NAME=0x..'\n"
+        "  --hash-ram A:L    add ram=<hash> over L bytes at $A (both hex): a cheap\n"
+        "                    cell key for an external state-space explorer\n"
+        "  --server          command loop on stdin/stdout instead of --frames:\n"
+        "                    run/play/save/load/peek/observe with IN-MEMORY state\n"
+        "                    slots, for an external driver (see docs/OPENDST.md)\n"
+        "  --server-slots N  number of in-memory state slots (default 64, max 4096)\n"
         "  --screenshot PPM  dump the final framebuffer in PPM format\n"
         "  --shot-every N P  dump a PPM every N frames, named P00000.ppm, P00001.ppm...\n"
         "  --shot-from N     only start the --shot-every dumps at frame N\n"
@@ -978,25 +1005,6 @@ int slirpSelfTest(Machine& machine) {
     return failed == 0 ? 0 : 1;
 }
 
-// Dump du framebuffer décodé en PPM binaire (P6) — comparable visuellement.
-bool writePpm(const char* path, const uint32_t* px, int w, int h) {
-    std::FILE* f = std::fopen(path, "wb");
-    if (!f) return false;
-    std::fprintf(f, "P6\n%d %d\n255\n", w, h);
-    bool ok = true;
-    for (int i = 0; i < w * h; ++i) {
-        const uint32_t c = px[i];                 // ARGB8888
-        const unsigned char rgb[3] = {
-            static_cast<unsigned char>((c >> 16) & 0xFF),
-            static_cast<unsigned char>((c >> 8)  & 0xFF),
-            static_cast<unsigned char>( c        & 0xFF) };
-        if (std::fwrite(rgb, 1, 3, f) != 3) { ok = false; break; }
-    }
-    // fclose vérifié aussi : un disque plein peut n'échouer qu'au flush final —
-    // une capture tronquée qui « réussit » finit diffée comme si c'était l'image.
-    if (std::fclose(f) != 0) ok = false;
-    return ok;
-}
 
 // --azerty : les TOS français lisent un clavier AZERTY ; A/Q, Z/W et M n'ont pas le même
 // scancode qu'en QWERTY. Sans ce drapeau, « M » tapé dans un sélecteur de fichier GEM
@@ -1192,7 +1200,20 @@ int main(int argc, char** argv) {
     // ⚠ Tant qu'un script est ACTIF il écrit l'état du port 1 à CHAQUE trame, y compris
     // l'état neutre pour un '.' : un `--joy` statique ne peut donc pas « tenir » pendant
     // cette fenêtre. C'est voulu (un script décrit l'état complet, trame par trame).
-    std::vector<std::pair<int, std::string>> joyScrList;
+    // Chaque script est COMPILÉ dès l'analyse des options (un masque par trame,
+    // util/JoyScript.hpp) : combinaisons [UF], masque brut [$88], répétition
+    // TOKEN*N — et un script fautif échoue AVANT le boot au lieu d'être traduit
+    // en « neutre ». Cf. docs/OPENDST.md.
+    std::vector<std::pair<int, std::vector<uint8_t>>> joyScrList;
+    std::string joyScrCompile;        // --joy-script-compile F : écrit le script compilé
+    // Sondes mémoire (--probe/--probe-every/--hash-ram) : observation périodique bon
+    // marché pour un pilote externe. Cf. headless/Observe.hpp.
+    observe::ProbeSet probeSet;
+    int         probeEvery  = 0;      // 0 = pas d'échantillonnage
+    // --server : la même machine, conduite au tuyau au lieu d'être rejouée en entier
+    // à chaque itération. Cf. headless/Server.cpp et docs/OPENDST.md.
+    bool        serverMode  = false;
+    int         serverSlots = 64;
     // --dump-at N ADDR LEN FILE : dump brut de LEN octets de RAM à partir d'ADDR
     // (hex) après la trame N — diff de buffers contre l'oracle Hatari (débogueur
     // « m addr len »). Lectures via bus.read8 (RAM : sans effet de bord).
@@ -1328,7 +1349,71 @@ int main(int argc, char** argv) {
                                                      const uint8_t v = (uint8_t)std::strtoul(next(a), nullptr, 0);
                                                      joyAtList.emplace_back(f, v); }
         else if (!std::strcmp(a, "--mouse-at"))    { const int f = std::atoi(next(a)); mouseAtList.emplace_back(f, next(a)); }
-        else if (!std::strcmp(a, "--joy-script"))  { const int f = std::atoi(next(a)); joyScrList.emplace_back(f, next(a)); }
+        else if (!std::strcmp(a, "--joy-script")) {
+            const int f = std::atoi(next(a));
+            const char* txt = next(a);
+            std::vector<uint8_t> masks; std::string jerr;
+            if (!neost::joyscript::parse(txt, masks, jerr)) {
+                std::fprintf(stderr, "--joy-script: %s\n", jerr.c_str());
+                return 2;
+            }
+            joyScrList.emplace_back(f, std::move(masks));
+        }
+        else if (!std::strcmp(a, "--joy-script-file")) {
+            const int f = std::atoi(next(a));
+            const char* path = next(a);
+            std::ifstream jf(path);
+            if (!jf) { std::fprintf(stderr, "cannot read joystick script %s\n", path); return 2; }
+            const std::string all((std::istreambuf_iterator<char>(jf)),
+                                  std::istreambuf_iterator<char>());
+            std::vector<uint8_t> masks; std::string jerr;
+            if (!neost::joyscript::parse(all, masks, jerr)) {
+                std::fprintf(stderr, "--joy-script-file: %s\n", jerr.c_str());
+                return 2;
+            }
+            joyScrList.emplace_back(f, std::move(masks));
+        }
+        else if (!std::strcmp(a, "--joy-script-compile")) joyScrCompile = next(a);
+        else if (!std::strcmp(a, "--probe")) {
+            observe::ProbeSpec p; std::string e;
+            if (!observe::parseProbeSpec(next(a), p, e)) {
+                std::fprintf(stderr, "--probe: %s\n", e.c_str());
+                return 2;
+            }
+            probeSet.probes.push_back(p);
+        }
+        else if (!std::strcmp(a, "--probe-every")) probeEvery = std::max(1, std::atoi(next(a)));
+        else if (!std::strcmp(a, "--hash-ram")) {
+            // LEN borné à la plus grande ST-RAM (4 Mo) : « 0:FFFFFFFF » faisait
+            // boucler quatre milliards de lectures À CHAQUE échantillon.
+            const std::string t = next(a);
+            const std::size_t c = t.find(':');
+            if (c == std::string::npos || !neost::joyscript::parseHexU32(t.substr(0, c), probeSet.hashRamAddr)
+                                       || !neost::joyscript::parseHexU32(t.substr(c + 1), probeSet.hashRamLen)
+                                       || probeSet.hashRamLen == 0
+                                       || probeSet.hashRamLen > 0x400000u) {
+                std::fprintf(stderr, "--hash-ram expects ADDR:LEN, both hex, LEN in 1..400000\n");
+                return 2;
+            }
+            probeSet.hashRam = true;
+        }
+        else if (!std::strcmp(a, "--server"))      serverMode = true;
+        else if (!std::strcmp(a, "--server-slots")) {
+            // Borné : « 2000000000 » allouait le vecteur d'emplacements d'un coup et
+            // tuait le processus sur un bad_alloc non rattrapé. Analysé STRICTEMENT
+            // (std::atoi est UB hors plage int) et le rabotage se DIT.
+            const char* txt = next(a);
+            char* end = nullptr;
+            errno = 0;
+            const long v = std::strtol(txt, &end, 10);
+            if (*end || end == txt || errno == ERANGE || v < 1) {
+                std::fprintf(stderr, "--server-slots expects a positive integer (got '%s')\n", txt);
+                return 2;
+            }
+            serverSlots = int(std::min<long>(v, 4096));
+            if (v > 4096)
+                std::fprintf(stderr, "[headless] --server-slots %ld clamped to %d\n", v, serverSlots);
+        }
         else if (!std::strcmp(a, "--dump-at"))     { dumpAtFrame = std::atoi(next(a));
                                                      dumpAddr = (uint32_t)std::strtoul(next(a), nullptr, 16);
                                                      dumpLen  = (uint32_t)std::strtoul(next(a), nullptr, 0);
@@ -1439,6 +1524,28 @@ int main(int argc, char** argv) {
         if (ins.empty()) std::printf("  (none plugged in)\n");
         return 0;
     }
+    // --joy-script-compile : écrit le script COMPILÉ (un masque par trame) et sort.
+    // C'est ainsi que l'oracle différentiel donne le MÊME script à Hatari sans
+    // réimplémenter la grammaire ailleurs (cf. tools/hatari_neost_oracle.patch).
+    if (!joyScrCompile.empty()) {
+        if (joyScrList.size() != 1) {
+            std::fprintf(stderr, "[headless] --joy-script-compile needs exactly one "
+                                 "--joy-script/--joy-script-file (got %zu)\n", joyScrList.size());
+            return 2;
+        }
+        const std::vector<uint8_t>& masks = joyScrList.front().second;
+        std::ofstream cf(joyScrCompile, std::ios::binary);
+        cf.write(reinterpret_cast<const char*>(masks.data()), std::streamsize(masks.size()));
+        cf.close();
+        if (!cf) {
+            std::fprintf(stderr, "[headless] cannot write %s\n", joyScrCompile.c_str());
+            return 2;
+        }
+        std::fprintf(stderr, "[headless] compiled script → %s (%zu frames)\n",
+                     joyScrCompile.c_str(), masks.size());
+        return 0;
+    }
+
     // Abaisse la machine si le TOS ne la supporte pas (TOS <= 1.04 → ST), comme Hatari.
     machType = Machine::adjustMachineForTos(machType, romPath);
     Machine machine(ramBytes, cpuCore, machType);
@@ -1467,8 +1574,12 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "[headless] cannot load %s\n", romPath.c_str());
         return 1;
     }
-    machine.loadDisk(diskPath);   // lecteur A (optionnel)
-    if (!diskBPath.empty()) machine.loadDiskB(diskBPath);   // lecteur B (optionnel)
+    // En mode serveur, « hello » ANNONCE les médias : démarrer sans la disquette
+    // demandée servirait au pilote un bureau nu en lui affirmant qu'il a le jeu.
+    // La boucle --frames, elle, garde son comportement historique.
+    const bool diskAOk = machine.loadDisk(diskPath);          // lecteur A (optionnel)
+    const bool diskBOk = diskBPath.empty() || machine.loadDiskB(diskBPath);
+    if (serverMode && (!diskAOk || !diskBOk)) outFail = true;
     machine.fdc.setFastFdc(fastFdc);   // FDC rapide (--fastfdc) : accès disque ÷10
     // A14 : --disk-ro protège le FICHIER, pas la disquette. Les écritures continuent
     // d'aller dans l'image en RAM (le programme invité relit ce qu'il a écrit, rien
@@ -1776,13 +1887,7 @@ int main(int argc, char** argv) {
     // Une divergence d'état affiche le 1ᵉʳ offset qui diffère → localise le champ oublié
     // (l'ordre de sérialisation est connu : Machine::serializeState).
     if (saveStateTest) {
-        auto screenHash = [&]() -> uint64_t {   // FNV-1a 64 bits sur le framebuffer
-            const uint8_t* p = reinterpret_cast<const uint8_t*>(machine.shifter.pixels());
-            const size_t n = size_t(machine.shifter.width()) * machine.shifter.height() * 4;
-            uint64_t h = 1469598103934665603ull;
-            for (size_t i = 0; i < n; ++i) { h ^= p[i]; h *= 1099511628211ull; }
-            return h;
-        };
+        auto screenHash = [&]() -> uint64_t { return observe::screenHash(machine); };
         const int runLen = 200;
         for (int i = 0; i < frames; ++i) machine.runFrame();       // → point de sauvegarde
         std::vector<uint8_t> A; machine.saveState(A);
@@ -1839,6 +1944,48 @@ int main(int argc, char** argv) {
             }
         }
     }
+    // Mode serveur : la boucle de commandes REMPLACE la boucle --frames. Tout ce qui
+    // précède — machine, médias, éventuel --load-state — est le point de départ commun
+    // aux deux modes, et c'est ce qui garantit qu'un rejeu au tuyau vaut le rejeu en
+    // ligne de commande (vérifié au palier fast : tools/run_server_equiv.py).
+    if (serverMode) {
+        if (outFail) {
+            std::fprintf(stderr, "[server] refusing to start: a startup step failed "
+                                 "(see above) — the session would not begin where asked, "
+                                 "and 'hello' would advertise media it never had\n");
+            return 1;
+        }
+        if (tracePath == "-") {
+            std::fprintf(stderr, "[server] --trace - would corrupt the protocol on stdout; "
+                                 "trace to a file instead\n");
+            return 2;
+        }
+        if (!joyScrList.empty())
+            std::fprintf(stderr, "[server] ignoring --joy-script/--joy-script-file: "
+                                 "use the 'play' command instead\n");
+        if (!shotPath.empty() || !soundDumpPath.empty() || !saveStatePath.empty()
+            || shotEvery > 0 || dumpAtFrame >= 0 || probeEvery > 0)
+            std::fprintf(stderr, "[server] ignoring end-of-run options (--screenshot, "
+                                 "--sound-dump, --save-state, --shot-every, --dump-at, "
+                                 "--probe-every): use the shot/save/observe commands\n");
+        server::Options so;
+        so.probes = probeSet;
+        so.slots  = serverSlots;
+        char id[768];
+        std::snprintf(id, sizeof id,
+                      "neost=%s machine=%s ram=%s tos=%s disk=%s diskb=%s fastfdc=%d",
+#ifdef NEOST_VERSION
+                      NEOST_VERSION,
+#else
+                      "unknown",
+#endif
+                      machineName(machType), ramLabel(ramBytes), romPath.c_str(),
+                      diskPath.c_str(), diskBPath.empty() ? "-" : diskBPath.c_str(),
+                      fastFdc ? 1 : 0);
+        so.identity = id;
+        return server::run(machine, so);
+    }
+
     bool traceAttached = false;   // --trace-from réellement atteint ? (cf. garde de fin)
     // --loopback × injections DATÉES (--keys-at / --scancode-at / --key-down) : le
     // branchement du connecteur ne vivait que dans le chemin --keys (post-boucle) —
@@ -1859,7 +2006,13 @@ int main(int argc, char** argv) {
         loopbackAtFrame = (last < 0) ? 0 : last + 8;
     }
     if (loopbackAt >= 0) loopbackAtFrame = loopbackAt;   // --loopback-at N : la recette décide
+    int  framesRun = 0;           // trames RÉELLEMENT exécutées (un break peut écourter)
     for (int frame = 0; frame < frames; ++frame) {
+        // Sonde périodique : l'état publié est celui qui SUIT `frame` trames exécutées
+        // (même convention que --dump-at) et PRÉCÈDE les injections de la trame
+        // courante — ce que « voyait » la machine quand le pilote a décidé l'entrée.
+        if (probeEvery > 0 && (frame % probeEvery) == 0)
+            observe::emitProbeLine(frame, machine, probeSet);
         if (frame == loopbackAtFrame) {
             machine.mfp.setLoopback(true); machine.midi.setLoopback(true); machine.scc.setLoopback(true);
             std::fprintf(stderr, "[headless] loopback connectors plugged at frame %d\n", frame);
@@ -1987,25 +2140,18 @@ int main(int argc, char** argv) {
         // Script joystick daté (--joy-script) : 1 token = 1 trame. Pulse feu / déplace
         // une sélection dans un menu joystick (ex. menu Vroom atteint au feu).
         for (const auto& js : joyScrList) {
-            const std::string& joyScr = js.second;
+            const std::vector<uint8_t>& joyScr = js.second;
             if (frame < js.first) continue;
             const int idx = frame - js.first;
             if (idx < (int)joyScr.size()) {
-                uint8_t st = 0;
-                switch (joyScr[idx]) {
-                    case 'U': st = 0x01; break;
-                    case 'D': st = 0x02; break;
-                    case 'L': st = 0x04; break;
-                    case 'R': st = 0x08; break;
-                    case 'F': st = 0x80; break;
-                    default:  st = 0x00; break;    // '.' = neutre
-                }
+                const uint8_t st = joyScr[std::size_t(idx)];   // script COMPILÉ
                 machine.ikbd.setJoystick(0, st);
                 machine.bus.stePads.setJoystick(0, st);   // joypads STE ($FF9200/02)
                 machine.cpu.updateIpl();
             }
         }
         machine.runFrame();
+        framesRun = frame + 1;
         // NEOST_BAND_DIAG=1 : signale l'APPARITION d'une bande pleine largeur d'une
         // seule couleur dans l'aire active — le symptôme rapporté sur Super Hang-On
         // (« des bandes sur toute la largeur, à n'importe quelle hauteur, de temps en
@@ -2098,7 +2244,7 @@ int main(int argc, char** argv) {
         if (shotEvery > 0 && frame >= shotFrom && (frame % shotEvery) == 0) {
             char path[512];
             std::snprintf(path, sizeof(path), "%s%05d.ppm", shotPrefix.c_str(), frame);
-            if (!writePpm(path, machine.shifter.pixels(),
+            if (!observe::writePpm(path, machine.shifter.pixels(),
                           machine.shifter.width(), machine.shifter.height())) {
                 std::fprintf(stderr, "[headless] FAILED periodic screenshot %s\n", path);
                 outFail = true;
@@ -2109,6 +2255,10 @@ int main(int argc, char** argv) {
             break;
         }
     }
+    // Dernier échantillon : sans lui, l'état FINAL — celui que --save-state grave et
+    // sur lequel le pilote va rebondir — ne serait jamais publié.
+    if (probeEvery > 0)
+        observe::emitProbeLine(framesRun, machine, probeSet);
 
     if (!saveStatePath.empty()) {   // sauvegarde l'état à la fin de la boucle
         const bool ok = machine.saveStateFile(saveStatePath);
@@ -2211,7 +2361,7 @@ int main(int argc, char** argv) {
                  machine.shifter.width(), machine.shifter.height(), machine.shifter.refreshHz());
 
     if (!shotPath.empty()) {
-        if (writePpm(shotPath.c_str(), machine.shifter.pixels(),
+        if (observe::writePpm(shotPath.c_str(), machine.shifter.pixels(),
                      machine.shifter.width(), machine.shifter.height()))
             std::fprintf(stderr, "[headless] screenshot → %s (%dx%d)\n",
                          shotPath.c_str(), machine.shifter.width(), machine.shifter.height());

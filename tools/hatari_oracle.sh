@@ -149,6 +149,19 @@ if [[ ! -s "$AVI" ]]; then
   tail -20 "$LOG" >&2 || true
   exit 1
 fi
+# Le log est un fichier temporaire supprimé à la sortie : on remonte la ligne du
+# script joystick (patch NeoST, cf. tools/hatari_neost_oracle.patch), sinon un
+# oracle tournant SANS le patch se distingue mal d'un oracle qui l'applique — et
+# un script silencieusement ignoré rendrait toute comparaison mensongère.
+if [[ -n "${NEOST_JOY_SCRIPT:-}" ]]; then
+  if grep -q "\[NEOST\] joystick script loaded" "$LOG"; then
+    grep -m1 "\[NEOST\] joystick script" "$LOG"
+  else
+    echo "ATTENTION : NEOST_JOY_SCRIPT est posé mais hatari ne l'a pas chargé —" >&2
+    echo "  le patch tools/hatari_neost_oracle.patch est-il appliqué ET recompilé ?" >&2
+    exit 1
+  fi
+fi
 # HATARI_ORACLE_SCAN=N : au lieu d'UNE image, extrait la FENÊTRE [FRAME-N, FRAME+N]
 # dans "<OUT sans .png>.scan/f_%05d.png" (l'appelant choisit). Indispensable pour les
 # étalons qui BOOTENT UN DISQUE : Hatari fait `Hatari_srand(time(NULL))` (sdl/main_sdl.c)

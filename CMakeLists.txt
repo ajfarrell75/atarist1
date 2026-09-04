@@ -276,7 +276,7 @@ endif()
 # un appareil réel dans le MIDI IN du ST. Le pendant sortant reste hors du headless —
 # --midi-dump capture déjà ce que le ST émet, sans dépendre du matériel branché, et
 # lier MidiOutHost tirerait AudioToolbox (synthé GM) dans une cible qui n'a pas d'audio.
-add_executable(neost-headless src/headless/main_headless.cpp src/audio/MidiInHost.cpp)
+add_executable(neost-headless src/headless/main_headless.cpp src/audio/MidiInHost.cpp src/headless/Server.cpp)
 target_link_libraries(neost-headless PRIVATE neost_net)  # neost_core via neost_net (PUBLIC)
 if(APPLE)
     target_link_libraries(neost-headless PRIVATE "-framework CoreFoundation" "-framework CoreMIDI")
@@ -293,7 +293,7 @@ if(WIN32)
     target_link_libraries(neost-headless PRIVATE winmm)
 endif()
 target_compile_definitions(neost-headless PRIVATE NEOST_VERSION="${NEOST_VERSION_STR}")
-set_source_files_properties(src/headless/main_headless.cpp
+set_source_files_properties(src/headless/main_headless.cpp src/headless/Server.cpp
     PROPERTIES COMPILE_OPTIONS "${NEOST_STRICT_OPTS}")
 
 # =============================================================================

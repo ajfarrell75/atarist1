@@ -131,6 +131,12 @@ FAST = [
     # qu'aucun palier ne la voie — ce verdict la rend impossible à reproduire.
     ("Save-state round-trip (config par défaut)",
      [str(HEADLESS), "roms/etos192us.img", "--frames", "30", "--save-state-test"]),
+    # Le mode serveur (--server) doit rendre EXACTEMENT ce que rend la boucle
+    # --frames : un pilote externe archive des cellules et rejoue des scripts au
+    # tuyau ; une divergence entre les deux chemins fausserait toute son archive,
+    # et silencieusement — les deux « marchent ». Verdict MUTATION-TESTÉ.
+    ("Serveur == boucle --frames (observation, entrées, écran, état exporté)",
+     [sys.executable, str(TOOLS / "run_server_equiv.py")]),
     # Disquette livrée dans TOUS les paquets : elle avait été écrasée par un test
     # d'écriture secteur et n'était plus lisible sous TOS (issue #38), sans qu'aucun
     # palier ne relise jamais cette image.

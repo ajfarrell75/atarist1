@@ -36,6 +36,23 @@ Corrections au passage, mesurées : `--fast-forward on` **fonctionne** avec `--c
 à 1707 VBL/s), contrairement à ce qui était écrit ; et `hatari-debug screenshot <chemin>`
 exige un nom de fichier.
 
+## ⚠ L'oracle local est PATCHÉ (et le patch, lui, est versionné)
+
+`extern/hatari` est gitignoré : les modifications NeoST qu'il porte ne survivent à aucun
+clone frais. Elles sont donc conservées dans **`tools/hatari_neost_oracle.patch`** —
+événements souris de la fifo, **script joystick daté par VBL** (`NEOST_JOY_SCRIPT` /
+`NEOST_JOY_START`), **graine figeable** (`HATARI_SEED`, déterminisme run-à-run) et trois
+diagnostics conditionnés par variable d'environnement. Aucune ne change le matériel émulé.
+
+```sh
+git -C extern/hatari apply ../../tools/hatari_neost_oracle.patch
+cmake --build extern/hatari/build -j
+```
+
+⚠ Figer la graine ne rend PAS les deux timelines parallèles : le décalage NeoST↔Hatari
+**dérive** et saute à chaque chargement disque (mesuré sur Super Sprint, graine 1 : −7
+trames à la trame 600, −11 à 1000, −110 à 1500, −200 à 2000). Cf. `docs/OPENDST.md` § 9.
+
 ## Se procurer l'oracle (rien ne le fait à votre place)
 
 ⚠ `extern/hatari` est **gitignoré et n'est PAS un sous-module** : `git clone` du dépôt
