@@ -311,7 +311,9 @@ Options : `--cpu moira` (seul cœur, optionnel), `--machine st|megast|ste|megast
 `--keys-at N "STR"` (scancodes étendus : flèches `<>[]`, Esc `=`, F1-F5 `!@#$%`, `.` et
 `|` = point et Enter du **pavé numérique** — même caractère sur tout TOS ; `--azerty` pour
 un TOS FR : A/Q, Z/W, M permutés, sinon « M » tombe en virgule dans un sélecteur GEM),
-`--joy-at N VAL`, `--joy-script N "SCRIPT"` (U/D/L/R/F/`.` = 1 trame),
+`--joy-at N VAL`, `--joy-script N "SCRIPT"` / `--joy-script-file N FICHIER` (1 token =
+1 trame : `U/D/L/R/F/.`, combinaison `[UF]`, masque brut `[$88]`, répétition `TOKEN*N` —
+grammaire et raisons dans `src/util/JoyScript.hpp`, testée par `neost-selftest`),
 `--mouse-at N "SCRIPT"` (L/R/U/D = ±8 px, `1`/`2` = clic gauche/droit, `.` = idle — c'est
 ainsi qu'on pilote Vroom : clic droit au titre, clic droit en course). Debug entrées :
 `NEOST_DEBUG_IKBD=1` (commandes reçues par l'IKBD), `NEOST_DEBUG_ACIA=1` (chaque lecture
@@ -320,6 +322,17 @@ du data register $FFFC02 : valeur, file restante, cycle). MIDI : `--midi-dump FI
 (appareils MIDI de l'hôte) et `--midi-in-device NAME` (un clavier maître entre dans le
 MIDI IN du ST ; bilan « N bytes into the ACIA » en fin de run), `--dongle
 cubase3|cubase2|auto` (clé Steinberg sur /ROM3, cf. `docs/EXTENSIONS.md`).
+
+**Pilotage externe déterministe** (`docs/OPENDST.md`) : `--probe NOM=ADR:LEN` (répétable),
+`--probe-every N`, `--hash-ram ADR:LEN` émettent sur **stdout** une ligne
+`probe frame=… screen=<hash> ram=<hash> NOM=0x…` par échantillon — lecture `peek8`, **sans
+effet de bord** (l'espace I/O se lit `$FF` ; pour une puce, c'est `--dump-at`). `--server`
+remplace la boucle `--frames` par une **boucle de commandes** stdin/stdout (`run`, `play`,
+`joy`, `key`, `mouse`, `peek`, `observe`, `save`/`load` sur des emplacements d'état EN
+MÉMOIRE, `export`/`import`, `shot`) : `src/headless/Server.cpp`. L'équivalence serveur ↔
+boucle `--frames` est un verdict du palier `fast` (`tools/run_server_equiv.py`), et il est
+MUTATION-TESTÉ. Oracle DIFFÉRENTIEL NeoST↔Hatari : `tools/opendst_oracle.py`, qui exige
+`tools/hatari_neost_oracle.patch` appliqué à `extern/hatari`.
 
 Format de trace (la séquence de PC est le signal de diff) :
 ```

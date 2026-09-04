@@ -1,0 +1,242 @@
+# =============================================================================
+#  hatari_neost_oracle.patch — instrumentation NeoST de l'oracle Hatari.
+#
+#  extern/hatari est GITIGNORÉ et peut être absent : ces modifications ne
+#  survivent donc à aucun clone frais, et le premier symptôme est un oracle qui
+#  « marche » mais ne répond plus aux entrées (ou perd ses traces de diagnostic)
+#  sans qu'on sache pourquoi. D'où ce patch, lui, versionné.
+#
+#  Aucun de ces ajouts ne change le matériel émulé : les trois diagnostics sont
+#  conditionnés par une variable d'environnement, les événements souris et le
+#  script joystick ne font qu'ouvrir une voie d'injection d'entrée.
+#
+#    src/control.c    events fifo « leftdown/leftup/rightdown/rightup »
+#                     (oracle des menus SOURIS)
+#    src/joy.c        NEOST_JOY_SCRIPT / NEOST_JOY_START : état joystick 1 posé
+#                     par VBL depuis un fichier — l'oracle DIFFÉRENTIEL rejoue
+#                     ainsi le script d'entrées de NeoST à la trame près
+#    src/sdl/main_sdl.c HATARI_SEED=<n> : fige la graine du RNG. Sans elle,
+#                     Hatari_srand(time(NULL)) tire la position angulaire initiale
+#                     de la disquette, donc la durée du boot : deux runs de la
+#                     MÊME ligne de commande ne rendent pas la même image au même
+#                     numéro de trame. Un oracle différentiel ne peut pas vivre
+#                     avec ça. Sans la variable, comportement amont intact.
+#    src/video.c      HATARI_LINE_ADDR=1 : adresse d'entrée de ligne du raster
+#    src/cpu/newcpu.c NEOST_HAT_IPLDIAG=1 : positions vidéo des exceptions,
+#                     fetch d'IPL et changements de broche IPL
+#
+#  Application (depuis la racine du dépôt NeoST) :
+#      git -C extern/hatari apply ../../tools/hatari_neost_oracle.patch
+#      cmake --build extern/hatari/build -j
+#  Recettes et pièges : docs/HATARI_AUTOMATION.md.
+#
+#  Base : hatari 981f291 (« Add mime type configuration for IPF and SCP disk
+#  images », v2.6.1-devel). Un rebase amont peut demander un rafraîchissement.
+# =============================================================================
+diff --git a/src/control.c b/src/control.c
+index 0eb5e80..1d54c65 100644
+--- a/src/control.c
++++ b/src/control.c
+@@ -155,6 +155,15 @@ static bool Control_InsertEvent(const char *event)
+ 		Keyboard.LButtonDblClk = 1;
+ 		return true;
+ 	}
++	/* NeoST: injection bouton GAUCHE pour l'oracle headless (menus souris) */
++	if (strcmp(event, "leftdown") == 0) {
++		Keyboard.bLButtonDown |= BUTTON_MOUSE;
++		return true;
++	}
++	if (strcmp(event, "leftup") == 0) {
++		Keyboard.bLButtonDown &= ~BUTTON_MOUSE;
++		return true;
++	}
+ 	if (strcmp(event, "rightdown") == 0) {
+ 		Keyboard.bRButtonDown |= BUTTON_MOUSE;
+ 		return true;
+diff --git a/src/cpu/newcpu.c b/src/cpu/newcpu.c
+index 836afe8..0005995 100644
+--- a/src/cpu/newcpu.c
++++ b/src/cpu/newcpu.c
+@@ -113,6 +113,7 @@ int m68k_pc_indirect;
+ bool m68k_interrupt_delay;
+ int slow_cpu_access;
+ static bool m68k_accurate_ipl;
++static int neost_ipldiag = -1;
+ static bool m68k_reset_delay;
+ static bool ismoves_nommu;
+ static bool need_opcode_swap;
+@@ -3035,6 +3036,16 @@ static void Exception_ce000 (int nr)
+ //fprintf ( stderr , "ex in %d %ld %ld\n" , nr , currcycle , CyclesGlobalClockCounter );
+ 	start = 6;
+ 	interrupt = nr >= 24 && nr < 24 + 8;
++	if (neost_ipldiag > 0 && (interrupt || (nr >= 64 && nr < 80))) {
++		/* NeoST diag : position vidéo (ligne, cycle dans la ligne) a l'entree
++		 * d'exception — comparable au t0 de Moira ([EXC]) via l'origine HBL. */
++		extern void Video_GetPosition(int *pFrameCycles, int *pHBL, int *pLineCycles);
++		int vfc, vhbl, vlc;
++		Video_GetPosition(&vfc, &vhbl, &vlc);
++		fprintf(stderr, "[HEXC] nr=%d clk=%llu hbl=%d lc=%d pc=%x\n", nr,
++			(unsigned long long)(CyclesGlobalClockCounter + currcycle*2/CYCLE_UNIT),
++			vhbl, vlc, currpc);
++	}
+ 	if (!interrupt) {
+ 		start = 4;
+ 		if (nr == 7) { // TRAPV
+@@ -5008,6 +5019,11 @@ void ipl_fetch_next(void)
+ 	} else {
+ 		regs.ipl[1] = regs.ipl_pin;
+ 	}
++	if (neost_ipldiag > 0 && regs.ipl_pin > 0 && cd <= 64 * cpucycleunit)
++		fprintf(stderr, "[HFETCH] clk=%llu cd=%lld cdp=%lld pin=%d ipl0=%d ipl1=%d\n",
++			(unsigned long long)(CyclesGlobalClockCounter + currcycle*2/CYCLE_UNIT),
++			(long long)(cd / cpucycleunit),
++			(long long)(cdp / cpucycleunit), regs.ipl_pin, regs.ipl[0], regs.ipl[1]);
+ }
+ 
+ void intlev_load(void)
+@@ -5021,6 +5037,10 @@ void intlev_load(void)
+ static void update_ipl(int ipl)
+ {
+ 	evt_t c = get_cycles();
++	if (neost_ipldiag < 0) neost_ipldiag = getenv("NEOST_HAT_IPLDIAG") ? 1 : 0;
++	if (neost_ipldiag)
++		fprintf(stderr, "[HPIN] ipl=%d clk=%llu\n", ipl,
++			(unsigned long long)(CyclesGlobalClockCounter + currcycle*2/CYCLE_UNIT));
+ 	regs.ipl_pin_change_evt_p = regs.ipl_pin_change_evt;
+ 	regs.ipl_pin_p = regs.ipl_pin;
+ 	regs.ipl_pin_change_evt = c;
+diff --git a/src/joy.c b/src/joy.c
+index 6a97a80..0bab093 100644
+--- a/src/joy.c
++++ b/src/joy.c
+@@ -81,10 +81,86 @@ static uint8_t Joy_ButtonSpaceJump(int press, bool jump)
+  * NOTE : ID 0 is Joystick 0/Mouse and ID 1 is Joystick 1 (default),
+  *        ID 2 and 3 are STE joypads and ID 4 and 5 are parport joysticks.
+  */
++/* =========================================================================
++ * NeoST — script joystick INDEXÉ SUR LA VBL, pour l'oracle différentiel.
++ *
++ * Pourquoi ici : Hatari n'a aucun moyen d'injecter un état joystick daté.
++ * `--cmd-fifo` ne connaît que des touches, tourne en TEMPS RÉEL (il désactive
++ * le fast-forward) et ne peut donc pas poser une entrée à la trame près. Or
++ * comparer NeoST à Hatari sur un jeu suppose de rejouer LA MÊME séquence
++ * d'entrées des deux côtés, trame par trame.
++ *
++ * Ce que ça change au matériel émulé : RIEN. On substitue la valeur rendue par
++ * la lecture du joystick 1, exactement comme si un humain tenait le stick ;
++ * aucun chemin d'émulation n'est modifié, et sans NEOST_JOY_SCRIPT la fonction
++ * se comporte à l'identique (le test sort au premier `if`).
++ *
++ * Fichier : un octet par VBL, masque ST (haut $01, bas $02, gauche $04,
++ * droite $08, feu $80) — produit par `neost-headless --joy-script-compile`,
++ * pour que la grammaire n'ait qu'UNE implémentation.
++ *   NEOST_JOY_SCRIPT=<fichier>   NEOST_JOY_START=<VBL de la 1ʳᵉ entrée>
++ * ========================================================================= */
++static uint8_t *neost_joy_script = NULL;
++static long     neost_joy_len    = 0;
++static int      neost_joy_start  = 0;
++static int      neost_joy_loaded = 0;
++
++static bool NeoST_JoyScriptMask(int nStJoyId, uint8_t *pMask)
++{
++	if (nStJoyId != JOYID_JOYSTICK1)
++		return false;
++	if (!neost_joy_loaded)
++	{
++		const char *path  = getenv("NEOST_JOY_SCRIPT");
++		const char *start = getenv("NEOST_JOY_START");
++		neost_joy_loaded = 1;
++		neost_joy_start  = start ? atoi(start) : 0;
++		if (path && *path)
++		{
++			FILE *f = fopen(path, "rb");
++			if (f)
++			{
++				long n;
++				fseek(f, 0, SEEK_END);
++				n = ftell(f);
++				fseek(f, 0, SEEK_SET);
++				if (n > 0 && n <= 64 * 1024 * 1024)
++				{
++					neost_joy_script = malloc((size_t)n);
++					if (neost_joy_script && fread(neost_joy_script, 1, (size_t)n, f) == (size_t)n)
++						neost_joy_len = n;
++					else
++					{
++						free(neost_joy_script);
++						neost_joy_script = NULL;
++					}
++				}
++				fclose(f);
++			}
++			fprintf(stderr, "[NEOST] joystick script %s: %ld frames from vbl %d\n",
++			        neost_joy_script ? "loaded" : "FAILED", neost_joy_len, neost_joy_start);
++		}
++	}
++	if (!neost_joy_script)
++		return false;
++	{
++		long idx = (long)nVBLs - (long)neost_joy_start;
++		if (idx < 0 || idx >= neost_joy_len)
++			return false;
++		*pMask = neost_joy_script[idx];
++	}
++	return true;
++}
++
+ uint8_t Joy_GetStickData(int nStJoyId)
+ {
+ 	uint8_t nData = 0;
+ 	JOYREADING JoyReading;
++	uint8_t nScripted;
++
++	/* NeoST : le script daté prime sur toute autre source (cf. ci-dessus). */
++	if (NeoST_JoyScriptMask(nStJoyId, &nScripted))
++		return nScripted;
+ 
+ 	/* Are we emulating the joystick via the keyboard? */
+ 	if (ConfigureParams.Joysticks.Joy[nStJoyId].nJoystickMode == JOYSTICK_KEYBOARD)
+diff --git a/src/sdl/main_sdl.c b/src/sdl/main_sdl.c
+index 22c73be..bdb7e02 100644
+--- a/src/sdl/main_sdl.c
++++ b/src/sdl/main_sdl.c
+@@ -116,8 +116,19 @@ void Main_ErrorExit(const char *msg1, const char *msg2, int errval)
+  */
+ int main(int argc, char *argv[])
+ {
+-	/* Generate random seed */
+-	Hatari_srand(time(NULL));
++	/* Generate random seed.
++	 * NeoST : HATARI_SEED=<n> fige la graine. Sans elle, Hatari_srand(time(NULL))
++	 * tire notamment la POSITION ANGULAIRE INITIALE de la disquette (fdc.c), donc
++	 * la durée du boot : deux runs de la MÊME ligne de commande ne rendent pas la
++	 * même image au même numéro de trame. Un oracle DIFFÉRENTIEL qui rejoue un
++	 * script d'entrées daté ne peut pas vivre avec ça — l'entrée tomberait à un
++	 * instant-programme différent d'un run à l'autre. Aucune valeur par défaut
++	 * n'est changée : sans la variable, le comportement amont est intact. */
++	{
++		const char *neost_seed = getenv("HATARI_SEED");
++		Hatari_srand(neost_seed ? (unsigned int)strtoul(neost_seed, NULL, 0)
++		                        : (unsigned int)time(NULL));
++	}
+ 
+ 	Main_Init(argc, argv);
+ 
+diff --git a/src/video.c b/src/video.c
+index 6a06fc3..565c91f 100644
+--- a/src/video.c
++++ b/src/video.c
+@@ -3889,6 +3889,13 @@ static void Video_CopyScreenLineColor(void)
+ 	int i;
+ 	uint32_t VideoMask;
+ 
++	/* NEOST TEMP for closure : adresse d'entree de ligne du raster video, pour
++	 * comparer les octets consommes par ligne avec NeoST (deltas invariants a
++	 * l'ancrage de boot). Active par HATARI_LINE_ADDR=1. */
++	if (getenv("HATARI_LINE_ADDR"))
++		fprintf(stderr, "[LADDR] vbl=%d hbl=%d addr=%x\n",
++		        nVBLs, nHBL, (int)(pVideoRaster - STRam));
++
+ 	LineBorderMask = ShifterFrame.ShifterLines[ nHBL ].BorderMask;
+ 	STF_PixelScroll = ShifterFrame.ShifterLines[ nHBL ].DisplayPixelShift;
+ 

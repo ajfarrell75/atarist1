@@ -17,6 +17,7 @@
 // =============================================================================
 #include "gui/AppConfig.hpp"
 #include "util/HostPath.hpp"
+#include "util/JoyScript.hpp"
 #include "util/ConfigPath.hpp"
 
 #include <map>
@@ -2335,6 +2336,97 @@ static void testGmSynth() {
     checkBool("close() : plus ouvert", gm.isOpen(), false);
 }
 
+// -----------------------------------------------------------------------------
+//  Scripts joystick (util/JoyScript.hpp) — la grammaire de --joy-script.
+//  Elle décide de ce qu'un pilote EXTERNE peut demander à la machine : une
+//  combinaison mal compilée, c'est un jeu qu'on ne sait pas jouer (le tir de
+//  Rick Dangerous = feu+direction) ou, pire, une entrée silencieusement fausse
+//  qui rendrait irreproductible un rejeu censé l'être. D'où le test à la valeur
+//  près, et pas seulement au nombre de trames.
+// -----------------------------------------------------------------------------
+static void checkMasks(const char* what, const std::string& src,
+                       const std::vector<uint8_t>& want) {
+    std::vector<uint8_t> got;
+    std::string err;
+    if (!neost::joyscript::parse(src, got, err)) {
+        ++g_fail;
+        std::printf("  FAIL %-46s refusé : %s\n", what, err.c_str());
+        return;
+    }
+    if (got == want) { ++g_ok; return; }
+    ++g_fail;
+    std::printf("  FAIL %-46s = [", what);
+    for (const uint8_t b : got) std::printf("%02X ", b);
+    std::printf("]\n%54s attendu [", "");
+    for (const uint8_t b : want) std::printf("%02X ", b);
+    std::printf("]\n");
+}
+
+static void checkRejected(const char* what, const std::string& src) {
+    std::vector<uint8_t> got;
+    std::string err;
+    if (!neost::joyscript::parse(src, got, err)) { ++g_ok; return; }
+    ++g_fail;
+    std::printf("  FAIL %-46s ACCEPTÉ (%zu trames) — devait être refusé\n",
+                what, got.size());
+}
+
+static void testJoyScript() {
+    using namespace neost::joyscript;
+    std::printf("scripts joystick (util/JoyScript.hpp)\n");
+
+    // Rétro-compatibilité : les recettes existantes (Lethal Xcess « FFFF ») ne
+    // doivent pas changer de sens en gagnant la nouvelle grammaire.
+    checkMasks("\"FFFF\" (recette existante)", "FFFF", {0x80, 0x80, 0x80, 0x80});
+    checkMasks("\"UDLRF.\" bits ST",           "UDLRF.", {0x01, 0x02, 0x04, 0x08, 0x80, 0x00});
+
+    // Combinaisons : la raison d'être du lot. [DF] est bas+feu ($82), surtout
+    // PAS la valeur hexa $DF — c'est le piège que le préfixe $ vient trancher.
+    checkMasks("[UF] = feu + haut",            "[UF]", {0x81});
+    checkMasks("[DF] = feu + bas (dynamite)",  "[DF]", {0x82});
+    checkMasks("[UL] = diagonale",             "[UL]", {0x05});
+    checkMasks("[$88] masque hexa brut",       "[$88]", {0x88});
+    checkMasks("[0x0F] masque hexa 0x",        "[0x0F]", {0x0F});
+
+    // Répétition : N est le TOTAL, pas un ajout.
+    checkMasks("\"R*3\" répétition",           "R*3", {0x08, 0x08, 0x08});
+    checkMasks("\"[UF]*2.\" sur groupe",       "[UF]*2.", {0x81, 0x81, 0x00});
+    checkMasks("\"F*1\" répétition à 1",       "F*1", {0x80});
+    checkMasks("\"F*0\" répétition à 0",       "F*0", {});
+
+    // Confort des scripts en fichier : blancs ignorés, « # » commente la ligne.
+    checkMasks("blancs et sauts de ligne",     " R\tR\n R ", {0x08, 0x08, 0x08});
+    checkMasks("commentaire # jusqu'au \\n",   "# feu\nF F", {0x80, 0x80});
+    checkMasks("script vide",                  "", {});
+
+    // Refus : un script fautif doit échouer AVANT le boot, pas se taire. L'ancien
+    // parseur traduisait tout token inconnu en « neutre » — une faute de frappe
+    // devenait une entrée muette, donc un rejeu faussé sans le moindre message.
+    checkRejected("'[' non fermé",             "R*30[DF");
+    checkRejected("token inconnu 'Z'",         "R*30ZZ");
+    checkRejected("'*' sans compte",           "R*");
+    checkRejected("groupe vide '[]'",          "[]");
+    checkRejected("masque hexa > $FF",         "[$1FF]");
+    checkRejected("hexa invalide '[$ZZ]'",     "[$ZZ]");
+    checkRejected("lettre inconnue en groupe", "[UX]");
+    checkRejected("répétition démesurée",      "R*99999999");
+    // Le plafond PAR TOKEN ne bornait pas le TOTAL : « R*10000000 » répété 200 fois
+    // compilait 2 milliards de trames et 2,5 Go de RSS avant que quiconque ne s'en
+    // aperçoive. C'est le total qui doit être borné.
+    checkRejected("total > 10M trames",        "R*9000000 R*9000000");
+    checkMasks("10M trames exactement acceptées", "R*10000000",
+               std::vector<uint8_t>(10000000, 0x08));
+
+    // parseHexU32 : partagé avec --probe/--hash-ram, donc testé ici aussi.
+    uint32_t v = 0;
+    checkBool("parseHexU32($FF8240)", parseHexU32("$FF8240", v) && v == 0xFF8240u, true);
+    checkBool("parseHexU32(0x1000)",  parseHexU32("0x1000", v)  && v == 0x1000u,   true);
+    checkBool("parseHexU32(466)",     parseHexU32("466", v)     && v == 0x466u,    true);
+    checkBool("parseHexU32(\"\") refusé",   parseHexU32("", v),          false);
+    checkBool("parseHexU32(xyz) refusé",    parseHexU32("xyz", v),       false);
+    checkBool("parseHexU32(9 chiffres) refusé", parseHexU32("123456789", v), false);
+}
+
 int main() {
     testDongleTable();
     testCartridgeKey();
@@ -2353,6 +2445,7 @@ int main() {
     testPacing();
     testMmioTable();
     testTwoCpus();
+    testJoyScript();
     testWindowsPaths();
     testPosixPaths();
     testNativeDefaults();
