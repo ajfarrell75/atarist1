@@ -184,6 +184,15 @@
     </fieldset>
 
     <fieldset>
+      <legend>Save states</legend>
+      <div class="row">
+        <button id="btnSaveState" title="Download the current state as a local .state file">Save state</button>
+        <label class="file" for="stateFile" title="Restore a previously downloaded .state file">Load state…</label>
+        <input type="file" id="stateFile" accept=".state,application/octet-stream">
+      </div>
+    </fieldset>
+
+    <fieldset>
       <legend>Display &amp; peripherals</legend>
       <div class="row">
         <button id="btnMono" class="toggle" title="Toggle color monitor (low/medium res) ↔ monochrome (high res) — triggers a reset">Screen: Color</button>
@@ -224,6 +233,7 @@
       <li><b>USB pads</b>: detected automatically — first pad on port 1, second on port 0. The <b>dead zone</b> slider only affects analog sticks, not the D-pad.</li>
       <li><b>Reset</b>: a <b>cold</b> reset (power-cycle) — ST-RAM is wiped and TOS boots from scratch, which is also what mounting a floppy in A: does.</li>
       <li><b>Game floppies</b>: "Mount A: + Reset" switches to a <b>real TOS</b> when one is available (EmuTOS boots system floppies only) — TOS 2.06 on STE/Mega STE, TOS 1.0x on ST. <b>This build bundles EmuTOS alone</b>, which is free software; original Atari TOS ROMs are not ours to ship. Most commercial games therefore need you to add one to <code>/roms</code> and pick it above. The bundled <b>demos</b> boot fine on EmuTOS.</li>
+      <li><b>Save states</b>: <b>Save state</b> downloads a <code>.state</code> file to your browser's Downloads folder. Use <b>Load state…</b> to restore it with the same machine, RAM size, and ROM.</li>
       <li><b>Drag and drop</b>: drop a <code>.st</code> / <code>.msa</code> / <code>.dim</code> / <code>.stx</code> image straight onto the screen to mount it in A: and reboot. Drop a <code>.img</code> / <code>.rom</code> / <code>.tos</code> / <code>.bin</code> file to load it as the ROM instead; it stays only in this browser tab.</li>
       <li><b>Machine &amp; RAM</b>: fixed when the machine is built → changing them reloads the page (URL parameters <code>?machine=</code> and <code>?mem=</code>, shareable).</li>
       <li><b>Sound</b>: browsers require a user gesture — click once inside the screen to unlock audio (YM2149 + STE DMA + drive noises).</li>
@@ -589,6 +599,74 @@
     })();
 
     document.getElementById('btnReset').addEventListener('click', callReset);
+
+    function stateFilename() {
+      return 'neost-' + new Date().toISOString().replace(/[:.]/g, '-') + '.state';
+    }
+
+    document.getElementById('btnSaveState').addEventListener('click', function () {
+      if (!ready) return;
+      var size = Module.ccall('neost_save_state_size', 'number');
+      if (size <= 0) {
+        Module.setStatus('Cannot save state: the emulator is not ready.');
+        return;
+      }
+      var ptr = Module._malloc(size);
+      if (!ptr) {
+        Module.setStatus('Cannot save state: browser memory allocation failed.');
+        return;
+      }
+      try {
+        var written = Module.ccall('neost_save_state_copy', 'number',
+                                   ['number', 'number'], [ptr, size]);
+        if (written !== size) {
+          Module.setStatus('Cannot save state: serialization failed.');
+          return;
+        }
+        var bytes = Module.HEAPU8.slice(ptr, ptr + size);
+        var link = document.createElement('a');
+        link.href = URL.createObjectURL(new Blob([bytes], { type: 'application/octet-stream' }));
+        link.download = stateFilename();
+        link.click();
+        setTimeout(function () { URL.revokeObjectURL(link.href); }, 0);
+        setStatusOk('State downloaded: ' + link.download);
+      } finally {
+        Module._free(ptr);
+      }
+    });
+
+    document.getElementById('stateFile').addEventListener('change', function () {
+      var file = this.files[0];
+      this.value = '';
+      if (!file || !ready) return;
+      if (file.size > 64 * 1024 * 1024) {
+        Module.setStatus('State file is too large: ' + file.name);
+        return;
+      }
+      var reader = new FileReader();
+      reader.onerror = function () {
+        Module.setStatus('Cannot read state file: ' + file.name);
+      };
+      reader.onload = function () {
+        var bytes = new Uint8Array(reader.result);
+        var ptr = Module._malloc(bytes.length);
+        if (!ptr) {
+          Module.setStatus('Cannot load state: browser memory allocation failed.');
+          return;
+        }
+        try {
+          Module.HEAPU8.set(bytes, ptr);
+          if (Module.ccall('neost_load_state', 'number',
+                           ['number', 'number'], [ptr, bytes.length]))
+            setStatusOk('State restored: ' + file.name);
+          else
+            Module.setStatus('State rejected: use the same machine, RAM size, and ROM.');
+        } finally {
+          Module._free(ptr);
+        }
+      };
+      reader.readAsArrayBuffer(file);
+    });
 
     // Plein écran sur le bezel (le canvas s'y étire en conservant le ratio).
     document.getElementById('btnFullscreen').addEventListener('click', function () {

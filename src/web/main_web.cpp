@@ -25,6 +25,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstring>
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -505,6 +506,29 @@ EMSCRIPTEN_KEEPALIVE void neost_load_tos(const char* path) {
     g_machine->loadTos(path);
     neost::stkeys::setCountryFromTos(g_machine->bus.rom);   // pays clavier de la nouvelle ROM
     g_machine->reset();
+}
+
+// Le shell télécharge/recharge ces octets sous forme de fichier .state : aucun
+// état utilisateur ne transite par Pages ni ne reste dans le FS du site.
+EMSCRIPTEN_KEEPALIVE int neost_save_state_size() {
+    if (!g_machine) return 0;
+    std::vector<uint8_t> state;
+    g_machine->saveState(state);
+    return static_cast<int>(state.size());
+}
+
+EMSCRIPTEN_KEEPALIVE int neost_save_state_copy(uint8_t* out, int capacity) {
+    if (!g_machine || !out || capacity <= 0) return 0;
+    std::vector<uint8_t> state;
+    g_machine->saveState(state);
+    if (state.size() > static_cast<std::size_t>(capacity)) return 0;
+    std::memcpy(out, state.data(), state.size());
+    return static_cast<int>(state.size());
+}
+
+EMSCRIPTEN_KEEPALIVE int neost_load_state(const uint8_t* data, int size) {
+    if (!g_machine || !data || size <= 0) return 0;
+    return g_machine->loadState(data, static_cast<std::size_t>(size)) ? 1 : 0;
 }
 
 // mono != 0 → moniteur monochrome (haute résolution) ; sinon couleur (basse rés).
