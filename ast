@@ -1,0 +1,5 @@
+git submodule update --init --recursive
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j
+./build/neost                                    # picks up your last ROM, or EmuTOS
+./build/neost roms/etos192fr.img disks/diskA.st  # or be explicit
