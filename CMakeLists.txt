@@ -488,7 +488,6 @@ if(EMSCRIPTEN)
         set(NEOST_WEB_PRELOAD
             roms/etos192us.img
             roms/etos192fr.img
-            roms/etos193us.img
             # EmuTOS 256 Ko : GPL lui aussi, et INDISPENSABLE au STE/Mega STE — sans lui
             # le frontend web se rabat sur l'EmuTOS 192 Ko, qui se présente en TOS 1.4 et
             # fait rétrograder la machine en ST (adjustMachineForTos) : le mode STE du
