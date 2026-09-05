@@ -179,7 +179,7 @@
         <select id="diskSel" title="Bundled floppy image"></select>
         <button id="btnMount" class="primary" title="Mount in A: and reboot">Mount A: + Reset</button>
         <button id="btnMountB" title="Mount the selected floppy in drive B (no reset)">→ B:</button>
-        <span class="badge" title="Drop a .st / .msa / .dim / .stx file anywhere on the screen to mount it in A:">or drop a floppy on the screen</span>
+        <span class="badge" title="Drop a floppy image or a local ROM anywhere on the screen. ROM files stay in this browser tab.">or drop a floppy / ROM on the screen</span>
       </div>
     </fieldset>
 
@@ -224,7 +224,7 @@
       <li><b>USB pads</b>: detected automatically — first pad on port 1, second on port 0. The <b>dead zone</b> slider only affects analog sticks, not the D-pad.</li>
       <li><b>Reset</b>: a <b>cold</b> reset (power-cycle) — ST-RAM is wiped and TOS boots from scratch, which is also what mounting a floppy in A: does.</li>
       <li><b>Game floppies</b>: "Mount A: + Reset" switches to a <b>real TOS</b> when one is available (EmuTOS boots system floppies only) — TOS 2.06 on STE/Mega STE, TOS 1.0x on ST. <b>This build bundles EmuTOS alone</b>, which is free software; original Atari TOS ROMs are not ours to ship. Most commercial games therefore need you to add one to <code>/roms</code> and pick it above. The bundled <b>demos</b> boot fine on EmuTOS.</li>
-      <li><b>Drag and drop</b>: drop a <code>.st</code> / <code>.msa</code> / <code>.dim</code> / <code>.stx</code> image straight onto the screen to mount it in A: and reboot.</li>
+      <li><b>Drag and drop</b>: drop a <code>.st</code> / <code>.msa</code> / <code>.dim</code> / <code>.stx</code> image straight onto the screen to mount it in A: and reboot. Drop a <code>.img</code> / <code>.rom</code> / <code>.tos</code> / <code>.bin</code> file to load it as the ROM instead; it stays only in this browser tab.</li>
       <li><b>Machine &amp; RAM</b>: fixed when the machine is built → changing them reloads the page (URL parameters <code>?machine=</code> and <code>?mem=</code>, shareable).</li>
       <li><b>Sound</b>: browsers require a user gesture — click once inside the screen to unlock audio (YM2149 + STE DMA + drive noises).</li>
     </ul>
@@ -741,11 +741,50 @@
       reader.readAsArrayBuffer(file);
     }
 
+    // Charge une ROM locale dans MEMFS : elle n'est jamais envoyée au serveur et
+    // disparaît au rechargement de la page. Le choix est ajouté au menu afin que
+    // le montage de disquette conserve le TOS explicitement choisi.
+    function loadLocalRom(file) {
+      if (!file || !ready) return;
+      if (file.size > 1024 * 1024) {
+        Module.setStatus('File too large for a ROM image: ' + file.name);
+        return;
+      }
+      var reader = new FileReader();
+      reader.onerror = function () {
+        Module.setStatus('Cannot read file: ' + file.name);
+      };
+      reader.onload = function () {
+        var data = new Uint8Array(reader.result);
+        var path = '/roms/_upload.img';
+        try {
+          Module.FS.writeFile(path, data);
+          var sel = document.getElementById('romSel');
+          var opt = Array.prototype.find.call(sel.options, function (o) {
+            return o.value === path;
+          });
+          if (!opt) {
+            opt = document.createElement('option');
+            opt.value = path;
+            sel.appendChild(opt);
+          }
+          opt.textContent = file.name + ' (local)';
+          sel.value = path;
+          romUserChosen = true;
+          callLoadTos(path);
+          setStatusOk('ROM loaded locally: ' + file.name);
+        } catch (e) {
+          Module.setStatus('Cannot store the ROM (' + e + ')');
+        }
+      };
+      reader.readAsArrayBuffer(file);
+    }
+
     // (Le sélecteur de fichier « Open a file… » a été retiré : le glisser-déposer
     // ci-dessous fait la même chose et se passe d'un bouton. mountLocalFile reste
     // le chemin commun — c'est lui que le drop appelle.)
 
-    // Glisser-déposer d'une image disquette directement sur l'écran.
+    // Glisser-déposer d'une image disquette ou d'une ROM locale sur l'écran.
     (function () {
       var bezel = document.getElementById('bezel');
       ['dragenter', 'dragover'].forEach(function (t) {
@@ -761,8 +800,12 @@
         });
       });
       bezel.addEventListener('drop', function (e) {
-        if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length)
-          mountLocalFile(e.dataTransfer.files[0]);
+        if (!e.dataTransfer || !e.dataTransfer.files || !e.dataTransfer.files.length) return;
+        var file = e.dataTransfer.files[0];
+        if (/\.(img|rom|tos|bin)$/i.test(file.name))
+          loadLocalRom(file);
+        else
+          mountLocalFile(file);
       });
     })();
   </script>
