@@ -538,6 +538,11 @@ EMSCRIPTEN_KEEPALIVE void neost_touch_mouse(int dx, int dy, int leftDown) {
     g_machine->ikbd.mouseEvent(dx * MOUSE_X_SIGN, dy * MOUSE_Y_SIGN, leftDown != 0, false);
 }
 
+EMSCRIPTEN_KEEPALIVE void neost_mouse_buttons(int leftDown, int rightDown) {
+    if (!g_machine) return;
+    g_machine->ikbd.mouseEvent(0, 0, leftDown != 0, rightDown != 0);
+}
+
 EMSCRIPTEN_KEEPALIVE void neost_key_event(int scancode, int pressed) {
     if (!g_machine || scancode <= 0 || scancode > 0x7F) return;
     g_machine->ikbd.keyEvent(static_cast<uint8_t>(scancode), pressed != 0);

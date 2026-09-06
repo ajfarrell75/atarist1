@@ -132,6 +132,10 @@
     button.stkey.wide { min-width: 3.8rem; }
     button.stkey.space { min-width: min(40vw, 16rem); }
     button.stkey.armed { background: var(--on); border-color: #3f7a5c; }
+    #mouseButtons {
+      display: flex; justify-content: center; gap: 0.45rem; margin-top: 0.45rem;
+    }
+    #mouseButtons button { min-width: 8rem; touch-action: none; user-select: none; }
 
     /* --- Aide -------------------------------------------------------------- */
     details {
@@ -264,6 +268,10 @@
   </details>
   <div id="keyboardOverlay" aria-label="Atari ST on-screen keyboard">
     <div id="keyboardRows"></div>
+    <div id="mouseButtons">
+      <button type="button" id="btnMouseLeft">Mouse left</button>
+      <button type="button" id="btnMouseRight">Mouse right</button>
+    </div>
   </div>
 
   <script type='text/javascript'>
@@ -760,6 +768,8 @@
       var button = document.getElementById('btnKeyboard');
       var shiftDown = false;
       var keyboard = [
+        [['F1', 0x3B], ['F2', 0x3C], ['F3', 0x3D], ['F4', 0x3E], ['F5', 0x3F],
+         ['F6', 0x40], ['F7', 0x41], ['F8', 0x42], ['F9', 0x43], ['F10', 0x44]],
         [['Esc', 0x01, 'wide'], ['1', 0x02], ['2', 0x03], ['3', 0x04], ['4', 0x05],
          ['5', 0x06], ['6', 0x07], ['7', 0x08], ['8', 0x09], ['9', 0x0A], ['0', 0x0B],
          ['-', 0x0C], ['=', 0x0D], ['Back', 0x0E, 'wide']],
@@ -814,8 +824,37 @@
         });
         rows.appendChild(row);
       });
+      var leftButton = false, rightButton = false;
+      function sendMouseButtons() {
+        if (ready) Module.ccall('neost_mouse_buttons', null,
+                                ['number', 'number'], [leftButton ? 1 : 0, rightButton ? 1 : 0]);
+      }
+      function bindMouseButton(id, isLeft) {
+        var el = document.getElementById(id);
+        el.addEventListener('pointerdown', function (e) {
+          e.preventDefault();
+          el.setPointerCapture(e.pointerId);
+          if (isLeft) leftButton = true; else rightButton = true;
+          sendMouseButtons();
+        });
+        function release(e) {
+          if (!el.hasPointerCapture(e.pointerId)) return;
+          el.releasePointerCapture(e.pointerId);
+          if (isLeft) leftButton = false; else rightButton = false;
+          sendMouseButtons();
+        }
+        el.addEventListener('pointerup', release);
+        el.addEventListener('pointercancel', release);
+      }
+      bindMouseButton('btnMouseLeft', true);
+      bindMouseButton('btnMouseRight', false);
       button.addEventListener('click', function () {
         var open = overlay.classList.toggle('open');
+        if (!open) {
+          leftButton = false;
+          rightButton = false;
+          sendMouseButtons();
+        }
         button.textContent = open ? 'ST keyboard: on' : 'ST keyboard: off';
         button.classList.toggle('on', open);
       });
