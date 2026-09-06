@@ -132,10 +132,16 @@
     button.stkey.wide { min-width: 3.8rem; }
     button.stkey.space { min-width: min(40vw, 16rem); }
     button.stkey.armed { background: var(--on); border-color: #3f7a5c; }
-    #mouseButtons {
-      display: flex; justify-content: center; gap: 0.45rem; margin-top: 0.45rem;
+    #touchMouseOverlay {
+      display: none; position: fixed; z-index: 11; left: 50%; bottom: 0.8rem;
+      transform: translateX(-50%); padding: 0.45rem; border: 1px solid var(--border);
+      border-radius: 10px; background: rgba(16,16,20,0.97);
+      box-shadow: 0 8px 28px rgba(0,0,0,0.45);
     }
-    #mouseButtons button { min-width: 8rem; touch-action: none; user-select: none; }
+    #touchMouseOverlay.open {
+      display: flex; justify-content: center; gap: 0.45rem;
+    }
+    #touchMouseOverlay button { min-width: 8rem; touch-action: none; user-select: none; }
 
     /* --- Aide -------------------------------------------------------------- */
     details {
@@ -266,12 +272,12 @@
       <li><b>Sound</b>: browsers require a user gesture — click once inside the screen to unlock audio (YM2149 + STE DMA + drive noises).</li>
     </ul>
   </details>
+  <div id="touchMouseOverlay" aria-label="Atari ST touch mouse buttons">
+    <button type="button" id="btnMouseLeft">Mouse left</button>
+    <button type="button" id="btnMouseRight">Mouse right</button>
+  </div>
   <div id="keyboardOverlay" aria-label="Atari ST on-screen keyboard">
     <div id="keyboardRows"></div>
-    <div id="mouseButtons">
-      <button type="button" id="btnMouseLeft">Mouse left</button>
-      <button type="button" id="btnMouseRight">Mouse right</button>
-    </div>
   </div>
 
   <script type='text/javascript'>
@@ -824,37 +830,8 @@
         });
         rows.appendChild(row);
       });
-      var leftButton = false, rightButton = false;
-      function sendMouseButtons() {
-        if (ready) Module.ccall('neost_mouse_buttons', null,
-                                ['number', 'number'], [leftButton ? 1 : 0, rightButton ? 1 : 0]);
-      }
-      function bindMouseButton(id, isLeft) {
-        var el = document.getElementById(id);
-        el.addEventListener('pointerdown', function (e) {
-          e.preventDefault();
-          el.setPointerCapture(e.pointerId);
-          if (isLeft) leftButton = true; else rightButton = true;
-          sendMouseButtons();
-        });
-        function release(e) {
-          if (!el.hasPointerCapture(e.pointerId)) return;
-          el.releasePointerCapture(e.pointerId);
-          if (isLeft) leftButton = false; else rightButton = false;
-          sendMouseButtons();
-        }
-        el.addEventListener('pointerup', release);
-        el.addEventListener('pointercancel', release);
-      }
-      bindMouseButton('btnMouseLeft', true);
-      bindMouseButton('btnMouseRight', false);
       button.addEventListener('click', function () {
         var open = overlay.classList.toggle('open');
-        if (!open) {
-          leftButton = false;
-          rightButton = false;
-          sendMouseButtons();
-        }
         button.textContent = open ? 'ST keyboard: on' : 'ST keyboard: off';
         button.classList.toggle('on', open);
       });
@@ -863,19 +840,51 @@
     (function () {
       var button = document.getElementById('btnTouchMouse');
       var canvas = document.getElementById('canvas');
+      var buttons = document.getElementById('touchMouseOverlay');
       var touchId = null;
       var lastX = 0, lastY = 0;
+      var leftButton = false, rightButton = false;
 
       function send(dx, dy, down) {
         if (ready) Module.ccall('neost_touch_mouse', null,
                                 ['number', 'number', 'number'], [dx, dy, down ? 1 : 0]);
       }
+      function sendButtons() {
+        if (ready) Module.ccall('neost_mouse_buttons', null,
+                                ['number', 'number'], [leftButton ? 1 : 0, rightButton ? 1 : 0]);
+      }
+
+      function bindMouseButton(id, isLeft) {
+        var el = document.getElementById(id);
+        el.addEventListener('pointerdown', function (e) {
+          e.preventDefault();
+          el.setPointerCapture(e.pointerId);
+          if (isLeft) leftButton = true; else rightButton = true;
+          sendButtons();
+        });
+        function release(e) {
+          if (!el.hasPointerCapture(e.pointerId)) return;
+          el.releasePointerCapture(e.pointerId);
+          if (isLeft) leftButton = false; else rightButton = false;
+          sendButtons();
+        }
+        el.addEventListener('pointerup', release);
+        el.addEventListener('pointercancel', release);
+      }
+      bindMouseButton('btnMouseLeft', true);
+      bindMouseButton('btnMouseRight', false);
 
       button.addEventListener('click', function () {
         touchMouseOn = !touchMouseOn;
-        if (!touchMouseOn && touchId !== null) send(0, 0, false);
+        if (!touchMouseOn) {
+          if (touchId !== null) send(0, 0, false);
+          leftButton = false;
+          rightButton = false;
+          sendButtons();
+        }
         touchId = null;
         canvas.style.touchAction = touchMouseOn ? 'none' : '';
+        buttons.classList.toggle('open', touchMouseOn);
         button.textContent = touchMouseOn ? 'Touch mouse: on' : 'Touch mouse: off';
         button.classList.toggle('on', touchMouseOn);
         setStatusOk(touchMouseOn
