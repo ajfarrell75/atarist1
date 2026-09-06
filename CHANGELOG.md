@@ -1,10 +1,22 @@
 # Changelog — NeoST
 
 (c) 2026 VERHILLE Arnaud. **La chronologie** : releases, puis les chantiers datés dans
-l'ordre inverse. Version courante : **0.6.1**.
+l'ordre inverse. Version courante : **0.6.2**.
 
 - « NeoST gère-t-il X ? » → [`docs/IMPLEMENTED.md`](docs/IMPLEMENTED.md) (inventaire par puce)
 - « Que reste-t-il ? » → [`TODO.md`](TODO.md)
+
+## 0.6.2 — navigateur : ROM locale et save-states (2026-09-06)
+
+**NeoST WebAssembly accepte désormais une ROM locale par glisser-déposer.** Elle est
+chargée uniquement dans la mémoire du navigateur, ajoutée au sélecteur de ROM, puis
+effacée au rechargement de la page : aucun firmware n'est envoyé à GitHub Pages ni
+embarqué dans le paquet public.
+
+**Les save-states du navigateur sont téléchargeables.** Le bouton `Save state` écrit un
+fichier `.state` dans le dossier Downloads du navigateur ; `Load state…` le restaure. La
+reprise exige le même modèle de machine, la même taille de RAM et l'image ROM exacte,
+comme les frontends natifs.
 
 ## Pilotage externe déterministe de NeoST (2026-09-04)
 
