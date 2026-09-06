@@ -43,6 +43,7 @@ GLFWwindow* g_window = nullptr;
 bool   g_kbdJoy = false;                 // émulation joystick clavier (flèches + Ctrl droit)
 int    g_kbdJoyPort = 1;                 // port ST visé par l'émulation clavier
 float  g_joyDeadzone = 0.30f;            // zone morte centrale des sticks analogiques
+uint8_t g_touchJoy = 0;                  // pad tactile, port joystick 1
 
 // --- État vidéo WebGL --------------------------------------------------------
 GLuint g_tex = 0, g_prog = 0, g_vbo = 0;
@@ -402,6 +403,7 @@ void mainLoop() {
     {
         uint8_t joy0 = 0, joy1 = 0;
         stjoy::compose(g_window, g_kbdJoy, g_kbdJoyPort, g_joyDeadzone, joy0, joy1);
+        joy1 |= g_touchJoy;
         g_machine->ikbd.setJoystick(joy0, joy1);
         g_machine->bus.stePads.setJoystick(joy0, joy1);   // joypads STE ($FF9200/02)
     }
@@ -550,6 +552,11 @@ EMSCRIPTEN_KEEPALIVE void neost_mouse_buttons(int leftDown, int rightDown) {
 EMSCRIPTEN_KEEPALIVE void neost_key_event(int scancode, int pressed) {
     if (!g_machine || scancode <= 0 || scancode > 0x7F) return;
     g_machine->ikbd.keyEvent(static_cast<uint8_t>(scancode), pressed != 0);
+}
+
+EMSCRIPTEN_KEEPALIVE void neost_set_touch_joystick(int bits) {
+    g_touchJoy = static_cast<uint8_t>(bits) & (stjoy::UP | stjoy::DOWN | stjoy::LEFT
+                                                | stjoy::RIGHT | stjoy::FIRE);
 }
 
 // mono != 0 → moniteur monochrome (haute résolution) ; sinon couleur (basse rés).
