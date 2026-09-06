@@ -531,6 +531,13 @@ EMSCRIPTEN_KEEPALIVE int neost_load_state(const uint8_t* data, int size) {
     return g_machine->loadState(data, static_cast<std::size_t>(size)) ? 1 : 0;
 }
 
+// Les écrans tactiles n'ont pas de pointer-lock. Le shell traduit donc un geste
+// mono-doigt en mouvement relatif + clic gauche et le remet directement à l'IKBD.
+EMSCRIPTEN_KEEPALIVE void neost_touch_mouse(int dx, int dy, int leftDown) {
+    if (!g_machine) return;
+    g_machine->ikbd.mouseEvent(dx * MOUSE_X_SIGN, dy * MOUSE_Y_SIGN, leftDown != 0, false);
+}
+
 // mono != 0 → moniteur monochrome (haute résolution) ; sinon couleur (basse rés).
 // Comme sur le matériel, le type de moniteur est lu au reset → on reset.
 EMSCRIPTEN_KEEPALIVE void neost_set_mono(int mono) {

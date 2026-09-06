@@ -198,6 +198,7 @@
         <button id="btnMono" class="toggle" title="Toggle color monitor (low/medium res) ↔ monochrome (high res) — triggers a reset">Screen: Color</button>
         <button id="btnSound" class="toggle on" title="Mechanical floppy drive noises">Drive sound: on</button>
         <button id="btnZoom" class="toggle on" title="Crop to the active picture instead of the whole buffer — the frame widens on its own when a demo opens the borders">Auto zoom: on</button>
+        <button id="btnTouchMouse" class="toggle" title="Use one-finger touch on the screen as the Atari mouse">Touch mouse: off</button>
       </div>
       <div class="row" style="margin-top:0.45rem">
         <label for="volSlider" style="font-size:0.78rem;color:var(--muted)">Volume</label>
@@ -229,6 +230,7 @@
     <summary>Help &amp; shortcuts</summary>
     <ul>
       <li><b>Mouse</b>: click the middle button (usually the wheel), or press <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>G</kbd>, to <b>capture or release</b> it (GEM cursor). <kbd>Esc</kbd> and <kbd>Del</kbd> are sent to the ST.</li>
+      <li><b>Touch mouse</b>: enable it in Display &amp; peripherals, then drag one finger on the screen to move the GEM mouse; touching the screen holds the left button. It is off by default so the page can still scroll normally.</li>
       <li><b>Keyboard</b>: routed to the IKBD (US layout). <b>Keyboard joystick</b>: arrows + <kbd>right Ctrl</kbd> = fire, on the port picked in the Joystick box (port 1 by default).</li>
       <li><b>USB pads</b>: detected automatically — first pad on port 1, second on port 0. The <b>dead zone</b> slider only affects analog sticks, not the D-pad.</li>
       <li><b>Reset</b>: a <b>cold</b> reset (power-cycle) — ST-RAM is wiped and TOS boots from scratch, which is also what mounting a floppy in A: does.</li>
@@ -244,6 +246,7 @@
     var statusEl = document.getElementById('status');
     var monoOn = false;
     var joyOn = false;
+    var touchMouseOn = false;
     var zoomOn = true;    // doit refléter g_autoZoom de main_web.cpp (ON par défaut)
     var ready = false;
     var romUserChosen = false;   // l'utilisateur a-t-il choisi une ROM à la main ?
@@ -726,6 +729,68 @@
       this.textContent = monoOn ? 'Screen: Monochrome' : 'Screen: Color';
       this.classList.toggle('on', monoOn);
     });
+
+    (function () {
+      var button = document.getElementById('btnTouchMouse');
+      var canvas = document.getElementById('canvas');
+      var touchId = null;
+      var lastX = 0, lastY = 0;
+
+      function send(dx, dy, down) {
+        if (ready) Module.ccall('neost_touch_mouse', null,
+                                ['number', 'number', 'number'], [dx, dy, down ? 1 : 0]);
+      }
+
+      button.addEventListener('click', function () {
+        touchMouseOn = !touchMouseOn;
+        if (!touchMouseOn && touchId !== null) send(0, 0, false);
+        touchId = null;
+        canvas.style.touchAction = touchMouseOn ? 'none' : '';
+        button.textContent = touchMouseOn ? 'Touch mouse: on' : 'Touch mouse: off';
+        button.classList.toggle('on', touchMouseOn);
+        setStatusOk(touchMouseOn
+          ? 'Touch mouse enabled — drag one finger on the screen.'
+          : 'Touch mouse disabled.');
+      });
+
+      canvas.addEventListener('touchstart', function (e) {
+        if (!touchMouseOn || touchId !== null || !e.changedTouches.length) return;
+        var touch = e.changedTouches[0];
+        touchId = touch.identifier;
+        lastX = touch.clientX;
+        lastY = touch.clientY;
+        e.preventDefault();
+        send(0, 0, true);
+      }, { passive: false });
+
+      canvas.addEventListener('touchmove', function (e) {
+        if (!touchMouseOn || touchId === null) return;
+        for (var i = 0; i < e.changedTouches.length; i++) {
+          var touch = e.changedTouches[i];
+          if (touch.identifier !== touchId) continue;
+          var dx = Math.round(touch.clientX - lastX);
+          var dy = Math.round(touch.clientY - lastY);
+          lastX = touch.clientX;
+          lastY = touch.clientY;
+          if (dx || dy) send(dx, dy, true);
+          e.preventDefault();
+          break;
+        }
+      }, { passive: false });
+
+      function releaseTouch(e) {
+        if (touchId === null) return;
+        for (var i = 0; i < e.changedTouches.length; i++) {
+          if (e.changedTouches[i].identifier !== touchId) continue;
+          send(0, 0, false);
+          touchId = null;
+          e.preventDefault();
+          break;
+        }
+      }
+      canvas.addEventListener('touchend', releaseTouch, { passive: false });
+      canvas.addEventListener('touchcancel', releaseTouch, { passive: false });
+    })();
 
     document.getElementById('btnJoy').addEventListener('click', function () {
       joyOn = !joyOn;
