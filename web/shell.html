@@ -184,6 +184,8 @@
           <option value="4m">4 MB</option>
         </select>
         <select id="romSel" title="ROM / TOS (swap + reset)"></select>
+        <label class="file" for="romFile" title="Load a ROM from this device; it stays only in this browser tab">Load local ROM…</label>
+        <input type="file" id="romFile" accept=".img,.rom,.tos,.bin,application/octet-stream">
         <button id="btnReset" title="Cold reset: wipes ST-RAM, so TOS boots from scratch (power-cycle)">Reset</button>
       </div>
     </fieldset>
@@ -1009,6 +1011,12 @@
       };
       reader.readAsArrayBuffer(file);
     }
+
+    document.getElementById('romFile').addEventListener('change', function () {
+      var file = this.files[0];
+      this.value = '';
+      if (file) loadLocalRom(file);
+    });
 
     // (Le sélecteur de fichier « Open a file… » a été retiré : le glisser-déposer
     // ci-dessous fait la même chose et se passe d'un bouton. mountLocalFile reste
