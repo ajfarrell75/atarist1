@@ -117,6 +117,21 @@
     button.toggle.on { background: var(--on); border-color: #3f7a5c; }
     select { max-width: 100%; }
     input[type=file] { display: none; }
+    #keyboardOverlay {
+      display: none; position: fixed; z-index: 10; left: 0; right: 0; bottom: 0;
+      padding: 0.55rem; background: rgba(16,16,20,0.97); border-top: 1px solid var(--border);
+      box-shadow: 0 -10px 28px rgba(0,0,0,0.45);
+    }
+    #keyboardOverlay.open { display: block; }
+    #keyboardRows { width: min(100%, 900px); margin: auto; }
+    .keyrow { display: flex; justify-content: center; gap: 0.22rem; margin: 0.22rem 0; }
+    button.stkey {
+      min-width: 2.1rem; padding: 0.45rem 0.25rem; font-size: 0.78rem; touch-action: none;
+      user-select: none; -webkit-user-select: none;
+    }
+    button.stkey.wide { min-width: 3.8rem; }
+    button.stkey.space { min-width: min(40vw, 16rem); }
+    button.stkey.armed { background: var(--on); border-color: #3f7a5c; }
 
     /* --- Aide -------------------------------------------------------------- */
     details {
@@ -199,6 +214,7 @@
         <button id="btnSound" class="toggle on" title="Mechanical floppy drive noises">Drive sound: on</button>
         <button id="btnZoom" class="toggle on" title="Crop to the active picture instead of the whole buffer — the frame widens on its own when a demo opens the borders">Auto zoom: on</button>
         <button id="btnTouchMouse" class="toggle" title="Use one-finger touch on the screen as the Atari mouse">Touch mouse: off</button>
+        <button id="btnKeyboard" class="toggle" title="Show an on-screen Atari ST keyboard">ST keyboard: off</button>
       </div>
       <div class="row" style="margin-top:0.45rem">
         <label for="volSlider" style="font-size:0.78rem;color:var(--muted)">Volume</label>
@@ -231,6 +247,7 @@
     <ul>
       <li><b>Mouse</b>: click the middle button (usually the wheel), or press <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>G</kbd>, to <b>capture or release</b> it (GEM cursor). <kbd>Esc</kbd> and <kbd>Del</kbd> are sent to the ST.</li>
       <li><b>Touch mouse</b>: enable it in Display &amp; peripherals, then drag one finger on the screen to move the GEM mouse; touching the screen holds the left button. It is off by default so the page can still scroll normally.</li>
+      <li><b>ST keyboard</b>: enable the on-screen keyboard in Display &amp; peripherals. Keys are sent directly to the Atari IKBD; Shift remains active for the next key.</li>
       <li><b>Keyboard</b>: routed to the IKBD (US layout). <b>Keyboard joystick</b>: arrows + <kbd>right Ctrl</kbd> = fire, on the port picked in the Joystick box (port 1 by default).</li>
       <li><b>USB pads</b>: detected automatically — first pad on port 1, second on port 0. The <b>dead zone</b> slider only affects analog sticks, not the D-pad.</li>
       <li><b>Reset</b>: a <b>cold</b> reset (power-cycle) — ST-RAM is wiped and TOS boots from scratch, which is also what mounting a floppy in A: does.</li>
@@ -241,6 +258,9 @@
       <li><b>Sound</b>: browsers require a user gesture — click once inside the screen to unlock audio (YM2149 + STE DMA + drive noises).</li>
     </ul>
   </details>
+  <div id="keyboardOverlay" aria-label="Atari ST on-screen keyboard">
+    <div id="keyboardRows"></div>
+  </div>
 
   <script type='text/javascript'>
     var statusEl = document.getElementById('status');
@@ -729,6 +749,73 @@
       this.textContent = monoOn ? 'Screen: Monochrome' : 'Screen: Color';
       this.classList.toggle('on', monoOn);
     });
+
+    (function () {
+      var overlay = document.getElementById('keyboardOverlay');
+      var rows = document.getElementById('keyboardRows');
+      var button = document.getElementById('btnKeyboard');
+      var shiftDown = false;
+      var keyboard = [
+        [['Esc', 0x01, 'wide'], ['1', 0x02], ['2', 0x03], ['3', 0x04], ['4', 0x05],
+         ['5', 0x06], ['6', 0x07], ['7', 0x08], ['8', 0x09], ['9', 0x0A], ['0', 0x0B],
+         ['-', 0x0C], ['=', 0x0D], ['Back', 0x0E, 'wide']],
+        [['Tab', 0x0F, 'wide'], ['Q', 0x10], ['W', 0x11], ['E', 0x12], ['R', 0x13],
+         ['T', 0x14], ['Y', 0x15], ['U', 0x16], ['I', 0x17], ['O', 0x18], ['P', 0x19],
+         ['[', 0x1A], [']', 0x1B], ['Return', 0x1C, 'wide']],
+        [['Shift', 0x2A, 'wide', true], ['A', 0x1E], ['S', 0x1F], ['D', 0x20], ['F', 0x21],
+         ['G', 0x22], ['H', 0x23], ['J', 0x24], ['K', 0x25], ['L', 0x26], [';', 0x27],
+         ["'", 0x28], ['←', 0x4B], ['↑', 0x48], ['↓', 0x50], ['→', 0x4D]],
+        [['Ctrl', 0x1D, 'wide'], ['Alt', 0x38, 'wide'], ['Space', 0x39, 'space'],
+         ['Undo', 0x61, 'wide'], ['Help', 0x62, 'wide'], ['Del', 0x53, 'wide']]
+      ];
+
+      function keyEvent(scancode, pressed) {
+        if (ready) Module.ccall('neost_key_event', null,
+                                ['number', 'number'], [scancode, pressed ? 1 : 0]);
+      }
+      keyboard.forEach(function (keys) {
+        var row = document.createElement('div');
+        row.className = 'keyrow';
+        keys.forEach(function (key) {
+          var el = document.createElement('button');
+          el.type = 'button';
+          el.className = 'stkey ' + (key[2] || '');
+          el.textContent = key[0];
+          if (key[3]) {
+            el.addEventListener('click', function () {
+              shiftDown = !shiftDown;
+              el.classList.toggle('armed', shiftDown);
+              keyEvent(key[1], shiftDown);
+            });
+          } else {
+            el.addEventListener('pointerdown', function (e) {
+              e.preventDefault();
+              el.setPointerCapture(e.pointerId);
+              keyEvent(key[1], true);
+            });
+            function release(e) {
+              if (!el.hasPointerCapture(e.pointerId)) return;
+              el.releasePointerCapture(e.pointerId);
+              keyEvent(key[1], false);
+              if (shiftDown) {
+                shiftDown = false;
+                keyEvent(0x2A, false);
+                rows.querySelector('.armed').classList.remove('armed');
+              }
+            }
+            el.addEventListener('pointerup', release);
+            el.addEventListener('pointercancel', release);
+          }
+          row.appendChild(el);
+        });
+        rows.appendChild(row);
+      });
+      button.addEventListener('click', function () {
+        var open = overlay.classList.toggle('open');
+        button.textContent = open ? 'ST keyboard: on' : 'ST keyboard: off';
+        button.classList.toggle('on', open);
+      });
+    })();
 
     (function () {
       var button = document.getElementById('btnTouchMouse');

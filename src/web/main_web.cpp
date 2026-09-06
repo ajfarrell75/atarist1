@@ -538,6 +538,11 @@ EMSCRIPTEN_KEEPALIVE void neost_touch_mouse(int dx, int dy, int leftDown) {
     g_machine->ikbd.mouseEvent(dx * MOUSE_X_SIGN, dy * MOUSE_Y_SIGN, leftDown != 0, false);
 }
 
+EMSCRIPTEN_KEEPALIVE void neost_key_event(int scancode, int pressed) {
+    if (!g_machine || scancode <= 0 || scancode > 0x7F) return;
+    g_machine->ikbd.keyEvent(static_cast<uint8_t>(scancode), pressed != 0);
+}
+
 // mono != 0 → moniteur monochrome (haute résolution) ; sinon couleur (basse rés).
 // Comme sur le matériel, le type de moniteur est lu au reset → on reset.
 EMSCRIPTEN_KEEPALIVE void neost_set_mono(int mono) {
