@@ -172,6 +172,7 @@
     <div id="screenbar">
       <span id="status">Loading the WebAssembly module…</span>
       <span class="badge" id="machineBadge">—</span>
+      <button class="iconbtn" id="btnCapture" title="Save the current Atari ST screen as a PNG download">▣ Capture</button>
       <button class="iconbtn" id="btnFullscreen" title="Full screen — adaptive zoom on the active area (Esc to leave)">⛶ Full screen</button>
     </div>
   </div>
@@ -260,7 +261,7 @@
     <summary>Help &amp; shortcuts</summary>
     <ul>
       <li><b>Mouse</b>: click the middle button (usually the wheel), or press <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>G</kbd>, to <b>capture or release</b> it (GEM cursor). <kbd>Esc</kbd> and <kbd>Del</kbd> are sent to the ST.</li>
-      <li><b>Touch mouse</b>: enable it in Display &amp; peripherals, then drag one finger on the screen to move the GEM mouse; touching the screen holds the left button. It is off by default so the page can still scroll normally.</li>
+      <li><b>Touch mouse</b>: enable it in Display &amp; peripherals, then drag one finger on the screen to move the GEM mouse. The left and right mouse buttons appear below the screen. It is off by default so the page can still scroll normally.</li>
       <li><b>ST keyboard</b>: enable the on-screen keyboard in Display &amp; peripherals. Keys are sent directly to the Atari IKBD; Shift remains active for the next key.</li>
       <li><b>Keyboard</b>: routed to the IKBD (US layout). <b>Keyboard joystick</b>: arrows + <kbd>right Ctrl</kbd> = fire, on the port picked in the Joystick box (port 1 by default).</li>
       <li><b>USB pads</b>: detected automatically — first pad on port 1, second on port 0. The <b>dead zone</b> slider only affects analog sticks, not the D-pad.</li>
@@ -641,6 +642,23 @@
 
     document.getElementById('btnReset').addEventListener('click', callReset);
 
+    document.getElementById('btnCapture').addEventListener('click', function () {
+      if (!ready) return;
+      var canvas = document.getElementById('canvas');
+      canvas.toBlob(function (blob) {
+        if (!blob) {
+          Module.setStatus('Cannot capture the current screen.');
+          return;
+        }
+        var link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.download = 'neost-screen-' + new Date().toISOString().replace(/[:.]/g, '-') + '.png';
+        link.click();
+        setTimeout(function () { URL.revokeObjectURL(link.href); }, 0);
+        setStatusOk('Screen capture downloaded: ' + link.download);
+      }, 'image/png');
+    });
+
     function stateFilename() {
       return 'neost-' + new Date().toISOString().replace(/[:.]/g, '-') + '.state';
     }
@@ -845,9 +863,9 @@
       var lastX = 0, lastY = 0;
       var leftButton = false, rightButton = false;
 
-      function send(dx, dy, down) {
+      function send(dx, dy) {
         if (ready) Module.ccall('neost_touch_mouse', null,
-                                ['number', 'number', 'number'], [dx, dy, down ? 1 : 0]);
+                                ['number', 'number'], [dx, dy]);
       }
       function sendButtons() {
         if (ready) Module.ccall('neost_mouse_buttons', null,
@@ -877,7 +895,6 @@
       button.addEventListener('click', function () {
         touchMouseOn = !touchMouseOn;
         if (!touchMouseOn) {
-          if (touchId !== null) send(0, 0, false);
           leftButton = false;
           rightButton = false;
           sendButtons();
@@ -899,7 +916,6 @@
         lastX = touch.clientX;
         lastY = touch.clientY;
         e.preventDefault();
-        send(0, 0, true);
       }, { passive: false });
 
       canvas.addEventListener('touchmove', function (e) {
@@ -911,7 +927,7 @@
           var dy = Math.round(touch.clientY - lastY);
           lastX = touch.clientX;
           lastY = touch.clientY;
-          if (dx || dy) send(dx, dy, true);
+          if (dx || dy) send(dx, dy);
           e.preventDefault();
           break;
         }
@@ -921,7 +937,6 @@
         if (touchId === null) return;
         for (var i = 0; i < e.changedTouches.length; i++) {
           if (e.changedTouches[i].identifier !== touchId) continue;
-          send(0, 0, false);
           touchId = null;
           e.preventDefault();
           break;

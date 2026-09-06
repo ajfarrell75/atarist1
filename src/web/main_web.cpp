@@ -85,6 +85,7 @@ bool   g_autoZoom = true;
 // --- État souris -------------------------------------------------------------
 bool   g_mouseCaptured = false;
 double g_lastMx = 0, g_lastMy = 0;
+bool   g_webMouseLeft = false, g_webMouseRight = false;
 
 // Signe des deltas souris → IKBD (identique au frontend natif, cf. main.cpp).
 constexpr int MOUSE_X_SIGN = +1;
@@ -532,15 +533,18 @@ EMSCRIPTEN_KEEPALIVE int neost_load_state(const uint8_t* data, int size) {
 }
 
 // Les écrans tactiles n'ont pas de pointer-lock. Le shell traduit donc un geste
-// mono-doigt en mouvement relatif + clic gauche et le remet directement à l'IKBD.
-EMSCRIPTEN_KEEPALIVE void neost_touch_mouse(int dx, int dy, int leftDown) {
+// mono-doigt en mouvement relatif ; les clics viennent des boutons superposés.
+EMSCRIPTEN_KEEPALIVE void neost_touch_mouse(int dx, int dy) {
     if (!g_machine) return;
-    g_machine->ikbd.mouseEvent(dx * MOUSE_X_SIGN, dy * MOUSE_Y_SIGN, leftDown != 0, false);
+    g_machine->ikbd.mouseEvent(dx * MOUSE_X_SIGN, dy * MOUSE_Y_SIGN,
+                               g_webMouseLeft, g_webMouseRight);
 }
 
 EMSCRIPTEN_KEEPALIVE void neost_mouse_buttons(int leftDown, int rightDown) {
     if (!g_machine) return;
-    g_machine->ikbd.mouseEvent(0, 0, leftDown != 0, rightDown != 0);
+    g_webMouseLeft = leftDown != 0;
+    g_webMouseRight = rightDown != 0;
+    g_machine->ikbd.mouseEvent(0, 0, g_webMouseLeft, g_webMouseRight);
 }
 
 EMSCRIPTEN_KEEPALIVE void neost_key_event(int scancode, int pressed) {
