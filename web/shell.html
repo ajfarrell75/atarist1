@@ -261,7 +261,7 @@
     <summary>Help &amp; shortcuts</summary>
     <ul>
       <li><b>Mouse</b>: click the middle button (usually the wheel), or press <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>G</kbd>, to <b>capture or release</b> it (GEM cursor). <kbd>Esc</kbd> and <kbd>Del</kbd> are sent to the ST.</li>
-      <li><b>Touch mouse</b>: enable it in Display &amp; peripherals, then drag one finger on the screen to move the GEM mouse. The left and right mouse buttons appear below the screen. It is off by default so the page can still scroll normally.</li>
+      <li><b>Touch mouse</b>: enable it in Display &amp; peripherals, then drag one finger on the screen to move the GEM mouse. Double-tap for a left click; the left and right mouse buttons also appear below the screen. It is off by default so the page can still scroll normally.</li>
       <li><b>ST keyboard</b>: enable the on-screen keyboard in Display &amp; peripherals. Keys are sent directly to the Atari IKBD; Shift remains active for the next key.</li>
       <li><b>Keyboard</b>: routed to the IKBD (US layout). <b>Keyboard joystick</b>: arrows + <kbd>right Ctrl</kbd> = fire, on the port picked in the Joystick box (port 1 by default).</li>
       <li><b>USB pads</b>: detected automatically — first pad on port 1, second on port 0. The <b>dead zone</b> slider only affects analog sticks, not the D-pad.</li>
@@ -861,7 +861,9 @@
       var buttons = document.getElementById('touchMouseOverlay');
       var touchId = null;
       var lastX = 0, lastY = 0;
-      var leftButton = false, rightButton = false;
+      var touchStartX = 0, touchStartY = 0, touchStartAt = 0;
+      var lastTapAt = 0, lastTapX = 0, lastTapY = 0;
+      var leftButton = false, tapLeftButton = false, rightButton = false;
 
       function send(dx, dy) {
         if (ready) Module.ccall('neost_touch_mouse', null,
@@ -869,7 +871,8 @@
       }
       function sendButtons() {
         if (ready) Module.ccall('neost_mouse_buttons', null,
-                                ['number', 'number'], [leftButton ? 1 : 0, rightButton ? 1 : 0]);
+                                ['number', 'number'],
+                                [(leftButton || tapLeftButton) ? 1 : 0, rightButton ? 1 : 0]);
       }
 
       function bindMouseButton(id, isLeft) {
@@ -896,6 +899,7 @@
         touchMouseOn = !touchMouseOn;
         if (!touchMouseOn) {
           leftButton = false;
+          tapLeftButton = false;
           rightButton = false;
           sendButtons();
         }
@@ -915,6 +919,9 @@
         touchId = touch.identifier;
         lastX = touch.clientX;
         lastY = touch.clientY;
+        touchStartX = lastX;
+        touchStartY = lastY;
+        touchStartAt = Date.now();
         e.preventDefault();
       }, { passive: false });
 
@@ -937,6 +944,26 @@
         if (touchId === null) return;
         for (var i = 0; i < e.changedTouches.length; i++) {
           if (e.changedTouches[i].identifier !== touchId) continue;
+          var touch = e.changedTouches[i];
+          var now = Date.now();
+          var tap = now - touchStartAt < 300
+            && Math.abs(touch.clientX - touchStartX) < 16
+            && Math.abs(touch.clientY - touchStartY) < 16;
+          if (tap && now - lastTapAt < 350
+              && Math.abs(touch.clientX - lastTapX) < 32
+              && Math.abs(touch.clientY - lastTapY) < 32) {
+            tapLeftButton = true;
+            sendButtons();
+            setTimeout(function () {
+              tapLeftButton = false;
+              sendButtons();
+            }, 45);
+            lastTapAt = 0;
+          } else if (tap) {
+            lastTapAt = now;
+            lastTapX = touch.clientX;
+            lastTapY = touch.clientY;
+          }
           touchId = null;
           e.preventDefault();
           break;
