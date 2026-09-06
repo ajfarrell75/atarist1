@@ -194,6 +194,8 @@
       <legend>Floppies</legend>
       <div class="row">
         <select id="diskSel" title="Bundled floppy image"></select>
+        <label class="file" for="diskFile" title="Load a floppy image from this device into drive A">Load local floppy…</label>
+        <input type="file" id="diskFile" accept=".st,.msa,.dim,.stx,application/octet-stream">
         <button id="btnMount" class="primary" title="Mount in A: and reboot">Mount A: + Reset</button>
         <button id="btnMountB" title="Mount the selected floppy in drive B (no reset)">→ B:</button>
         <span class="badge" title="Drop a floppy image or a local ROM anywhere on the screen. ROM files stay in this browser tab.">or drop a floppy / ROM on the screen</span>
@@ -1016,6 +1018,12 @@
       var file = this.files[0];
       this.value = '';
       if (file) loadLocalRom(file);
+    });
+
+    document.getElementById('diskFile').addEventListener('change', function () {
+      var file = this.files[0];
+      this.value = '';
+      if (file) mountLocalFile(file);
     });
 
     // (Le sélecteur de fichier « Open a file… » a été retiré : le glisser-déposer
