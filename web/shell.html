@@ -264,6 +264,13 @@
                title="How far a USB pad's analog stick must move before the ST sees a direction. No effect on the D-pad or the keyboard joystick.">
         <span id="joyDzValue" class="badge">0.30</span>
       </div>
+      <div class="row" style="margin-top:0.45rem">
+        <label for="touchActionA" style="font-size:0.78rem;color:var(--muted)">Touch buttons</label>
+        <select id="touchActionA" title="Assignment for touch button A"></select>
+        <select id="touchActionB" title="Assignment for touch button B"></select>
+        <select id="touchActionX" title="Assignment for touch button X"></select>
+        <select id="touchActionY" title="Assignment for touch button Y"></select>
+      </div>
     </fieldset>
   </div>
 
@@ -274,7 +281,7 @@
       <li><b>Touch mouse</b>: enable it in Display &amp; peripherals, then drag one finger on the screen to move the GEM mouse. Double-tap for a left click; the left and right mouse buttons also appear below the screen. It is off by default so the page can still scroll normally.</li>
       <li><b>ST keyboard</b>: enable the on-screen keyboard in Display &amp; peripherals. Keys are sent directly to the Atari IKBD; Shift remains active for the next key.</li>
       <li><b>Keyboard</b>: routed to the IKBD (US layout). <b>Keyboard joystick</b>: arrows + <kbd>right Ctrl</kbd> = fire, on the port picked in the Joystick box (port 1 by default).</li>
-      <li><b>Touch joystick</b>: enable the floating eight-direction pad and four action buttons on joystick port 1. The Atari ST has one fire input, so every action button sends Fire.</li>
+      <li><b>Touch joystick</b>: enable the floating eight-direction pad and four action buttons on joystick port 1. Assign each action button to Fire, Space, Return, or a function key in the Joystick controls.</li>
       <li><b>USB pads</b>: detected automatically — first pad on port 1, second on port 0. The <b>dead zone</b> slider only affects analog sticks, not the D-pad.</li>
       <li><b>Reset</b>: a <b>cold</b> reset (power-cycle) — ST-RAM is wiped and TOS boots from scratch, which is also what mounting a floppy in A: does.</li>
       <li><b>Game floppies</b>: "Mount A: + Reset" switches to a <b>real TOS</b> when one is available (EmuTOS boots system floppies only) — TOS 2.06 on STE/Mega STE, TOS 1.0x on ST. <b>This build bundles EmuTOS alone</b>, which is free software; original Atari TOS ROMs are not ours to ship. Most commercial games therefore need you to add one to <code>/roms</code> and pick it above. The bundled <b>demos</b> boot fine on EmuTOS.</li>
@@ -295,8 +302,8 @@
       <button type="button" data-joy="6">↙</button><button type="button" data-joy="2">▼</button><button type="button" data-joy="10">↘</button>
     </div>
     <div id="joyActions">
-      <button type="button" data-joy="128">A</button><button type="button" data-joy="128">B</button>
-      <button type="button" data-joy="128">X</button><button type="button" data-joy="128">Y</button>
+      <button type="button" data-action="A">A</button><button type="button" data-action="B">B</button>
+      <button type="button" data-action="X">X</button><button type="button" data-action="Y">Y</button>
     </div>
   </div>
   <div id="keyboardOverlay" aria-label="Atari ST on-screen keyboard">
@@ -798,7 +805,8 @@
       var shiftDown = false;
       var keyboard = [
         [['F1', 0x3B], ['F2', 0x3C], ['F3', 0x3D], ['F4', 0x3E], ['F5', 0x3F],
-         ['F6', 0x40], ['F7', 0x41], ['F8', 0x42], ['F9', 0x43], ['F10', 0x44]],
+         ['F6', 0x40], ['F7', 0x41], ['F8', 0x42], ['F9', 0x43], ['F10', 0x44],
+         ['F11', 0x57], ['F12', 0x58]],
         [['Esc', 0x01, 'wide'], ['1', 0x02], ['2', 0x03], ['3', 0x04], ['4', 0x05],
          ['5', 0x06], ['6', 0x07], ['7', 0x08], ['8', 0x09], ['9', 0x0A], ['0', 0x0B],
          ['-', 0x0C], ['=', 0x0D], ['Back', 0x0E, 'wide']],
@@ -990,8 +998,18 @@
       var button = document.getElementById('btnTouchJoy');
       var overlay = document.getElementById('joystickOverlay');
       var bits = 0;
+      var fireActions = 0;
+      var assignments = {
+        A: 'fire', B: '57', X: '28', Y: '59'
+      };
+      var assignmentOptions = [
+        ['fire', 'Fire'], ['57', 'Space'], ['28', 'Return'],
+        ['59', 'F1'], ['60', 'F2'], ['61', 'F3'], ['62', 'F4'], ['63', 'F5'], ['64', 'F6'],
+        ['65', 'F7'], ['66', 'F8'], ['67', 'F9'], ['68', 'F10'], ['87', 'F11'], ['88', 'F12']
+      ];
       function update() {
-        if (ready) Module.ccall('neost_set_touch_joystick', null, ['number'], [bits]);
+        if (ready) Module.ccall('neost_set_touch_joystick', null, ['number'],
+                                [bits | (fireActions ? 128 : 0)]);
       }
       overlay.querySelectorAll('[data-joy]').forEach(function (el) {
         var bit = parseInt(el.dataset.joy, 10);
@@ -1012,9 +1030,51 @@
         el.addEventListener('contextmenu', function (e) { e.preventDefault(); });
       });
       overlay.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+      ['A', 'B', 'X', 'Y'].forEach(function (name) {
+        var select = document.getElementById('touchAction' + name);
+        assignmentOptions.forEach(function (entry) {
+          var option = document.createElement('option');
+          option.value = entry[0];
+          option.textContent = name + ': ' + entry[1];
+          select.appendChild(option);
+        });
+        select.value = assignments[name];
+        select.addEventListener('change', function () {
+          assignments[name] = select.value;
+        });
+      });
+      overlay.querySelectorAll('[data-action]').forEach(function (el) {
+        var action = el.dataset.action;
+        var active = null;
+        el.addEventListener('pointerdown', function (e) {
+          e.preventDefault();
+          el.setPointerCapture(e.pointerId);
+          active = assignments[action];
+          if (active === 'fire') {
+            fireActions++;
+            update();
+          } else if (ready) {
+            Module.ccall('neost_key_event', null, ['number', 'number'], [parseInt(active, 10), 1]);
+          }
+        });
+        function release(e) {
+          if (!el.hasPointerCapture(e.pointerId)) return;
+          el.releasePointerCapture(e.pointerId);
+          if (active === 'fire') {
+            fireActions--;
+            update();
+          } else if (active && ready) {
+            Module.ccall('neost_key_event', null, ['number', 'number'], [parseInt(active, 10), 0]);
+          }
+          active = null;
+        }
+        el.addEventListener('pointerup', release);
+        el.addEventListener('pointercancel', release);
+        el.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+      });
       button.addEventListener('click', function () {
         var open = overlay.classList.toggle('open');
-        if (!open) { bits = 0; update(); }
+        if (!open) { bits = 0; fireActions = 0; update(); }
         button.textContent = open ? 'Touch joystick: on' : 'Touch joystick: off';
         button.classList.toggle('on', open);
       });
