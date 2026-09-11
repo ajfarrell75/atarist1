@@ -72,6 +72,11 @@
     }
     #bezel:fullscreen { border-radius: 0; }
     #bezel:fullscreen #canvas { width: 100%; height: 100%; object-fit: contain; }
+    #bezel.immersive {
+      position: fixed; z-index: 30; inset: 0; width: 100vw; width: 100dvw;
+      height: 100vh; height: 100dvh; border: 0; border-radius: 0;
+    }
+    #bezel.immersive #canvas { width: 100%; height: 100%; max-height: none; object-fit: contain; }
 
     /* Barre d'état sous l'écran : statut + badge machine + plein écran */
     #screenbar {
@@ -119,15 +124,21 @@
     input[type=file] { display: none; }
     #keyboardOverlay {
       display: none; position: fixed; z-index: 10; left: 0; right: 0; bottom: 0;
-      padding: 0.55rem; background: rgba(16,16,20,0.97); border-top: 1px solid var(--border);
-      box-shadow: 0 -10px 28px rgba(0,0,0,0.45);
+      padding: 0.65rem; background: linear-gradient(#d8d1be, #a49c89);
+      border-top: 5px solid #575247; box-shadow: 0 -10px 28px rgba(0,0,0,0.55);
     }
     #keyboardOverlay.open { display: block; }
-    #keyboardRows { width: min(100%, 900px); margin: auto; }
-    .keyrow { display: flex; justify-content: center; gap: 0.22rem; margin: 0.22rem 0; }
+    #keyboardRows {
+      width: min(100%, 900px); margin: auto; padding: 0.45rem; border-radius: 7px;
+      background: linear-gradient(145deg, #777166, #4f4a42); border: 2px solid #37342e;
+      box-shadow: inset 0 1px #aaa392, 0 2px 4px rgba(0,0,0,0.45);
+    }
+    .keyrow { display: flex; justify-content: center; gap: 0.18rem; margin: 0.18rem 0; }
     button.stkey {
-      min-width: 2.1rem; padding: 0.45rem 0.25rem; font-size: 0.78rem; touch-action: none;
-      user-select: none; -webkit-user-select: none;
+      min-width: 2.1rem; padding: 0.42rem 0.25rem; font-size: 0.75rem; color: #e8e5dc;
+      background: linear-gradient(#55524c, #2d2b28); border: 1px solid #171614;
+      border-bottom: 3px solid #151411; border-radius: 3px; touch-action: none;
+      user-select: none; -webkit-user-select: none; text-shadow: 0 1px #000;
     }
     button.stkey.wide { min-width: 3.8rem; }
     button.stkey.space { min-width: min(40vw, 16rem); }
@@ -141,7 +152,17 @@
     #touchMouseOverlay.open, #joystickOverlay.open {
       display: flex; justify-content: center; gap: 0.45rem;
     }
-    #touchMouseOverlay button { min-width: 8rem; touch-action: none; user-select: none; }
+    #touchMouseOverlay.open {
+      display: block; z-index: 31; inset: 0; transform: none; padding: 0;
+      border: 0; border-radius: 0; background: transparent; box-shadow: none; pointer-events: none;
+    }
+    #touchMouseOverlay button {
+      position: absolute; top: 50%; min-width: 0; width: 4.7rem; height: 7rem;
+      transform: translateY(-50%); touch-action: none; user-select: none; pointer-events: auto;
+      background: rgba(34, 34, 43, 0.9); border-color: #646475;
+    }
+    #btnMouseLeft { left: max(0.6rem, env(safe-area-inset-left)); }
+    #btnMouseRight { right: max(0.6rem, env(safe-area-inset-right)); }
     #joystickOverlay {
       align-items: center; gap: 1rem; touch-action: none; user-select: none;
       -webkit-user-select: none; -webkit-touch-callout: none;
@@ -742,8 +763,20 @@
     // Plein écran sur le bezel (le canvas s'y étire en conservant le ratio).
     document.getElementById('btnFullscreen').addEventListener('click', function () {
       var bezel = document.getElementById('bezel');
-      if (document.fullscreenElement) document.exitFullscreen();
-      else if (bezel.requestFullscreen) bezel.requestFullscreen();
+      if (document.fullscreenElement || bezel.classList.contains('immersive')) {
+        if (document.fullscreenElement) document.exitFullscreen();
+        bezel.classList.remove('immersive');
+        if (ready) Module.ccall('neost_set_fullscreen', null, ['number'], [0]);
+      } else if (bezel.requestFullscreen) {
+        var request = bezel.requestFullscreen();
+        if (request && request.catch) request.catch(function () {
+          bezel.classList.add('immersive');   // iOS Safari: no element fullscreen API
+          if (ready) Module.ccall('neost_set_fullscreen', null, ['number'], [1]);
+        });
+      } else {
+        bezel.classList.add('immersive');
+        if (ready) Module.ccall('neost_set_fullscreen', null, ['number'], [1]);
+      }
       document.getElementById('canvas').focus();
     });
     // Plein écran ⇒ ZOOM ADAPTATIF côté cœur (cadrage sur la zone active, comme
@@ -752,6 +785,10 @@
     document.addEventListener('fullscreenchange', function () {
       if (ready) Module.ccall('neost_set_fullscreen', null, ['number'],
                               [document.fullscreenElement ? 1 : 0]);
+    });
+    document.addEventListener('webkitfullscreenchange', function () {
+      if (ready) Module.ccall('neost_set_fullscreen', null, ['number'],
+                              [document.webkitFullscreenElement ? 1 : 0]);
     });
 
     // Changer de ROM/TOS dans le menu = chargement à chaud + reset (choix explicite).
