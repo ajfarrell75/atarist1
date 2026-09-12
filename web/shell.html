@@ -25,6 +25,9 @@
       --accent: #7aa2ff;
       --accent2: #57d9a3;
       --on: #2f5d46;
+      --keyboard-opacity: 0.5;
+      --mouse-opacity: 0.5;
+      --joystick-opacity: 0.5;
     }
     * { box-sizing: border-box; }
     body {
@@ -72,6 +75,11 @@
     }
     #bezel:fullscreen { border-radius: 0; }
     #bezel:fullscreen #canvas { width: 100%; height: 100%; object-fit: contain; }
+    #exitFullscreen {
+      display: none; position: absolute; z-index: 40; top: max(0.7rem, env(safe-area-inset-top));
+      right: max(0.7rem, env(safe-area-inset-right)); background: rgba(34,34,43,0.85);
+    }
+    #bezel:fullscreen #exitFullscreen, #bezel.immersive #exitFullscreen { display: block; }
     #bezel.immersive {
       position: fixed; z-index: 30; inset: 0; width: 100vw; width: 100dvw;
       height: 100vh; height: 100dvh; border: 0; border-radius: 0;
@@ -126,21 +134,21 @@
       display: none; position: fixed; z-index: 10; left: 0; right: 0; bottom: 0;
       padding: 0.5rem max(0.5rem, env(safe-area-inset-right)) max(0.5rem, env(safe-area-inset-bottom))
                max(0.5rem, env(safe-area-inset-left));
-      background: linear-gradient(rgba(216,209,190,0.82), rgba(164,156,137,0.82));
+      background: linear-gradient(rgba(216,209,190,var(--keyboard-opacity)), rgba(164,156,137,var(--keyboard-opacity)));
       border-top: 5px solid #575247; box-shadow: 0 -10px 28px rgba(0,0,0,0.55);
       touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
     }
     #keyboardOverlay.open { display: block; }
     #keyboardRows {
       width: 100%; max-width: 900px; margin: auto; padding: 0.35rem; border-radius: 7px;
-      background: linear-gradient(145deg, rgba(119,113,102,0.84), rgba(79,74,66,0.84));
+      background: linear-gradient(145deg, rgba(119,113,102,var(--keyboard-opacity)), rgba(79,74,66,var(--keyboard-opacity)));
       border: 2px solid #37342e;
       box-shadow: inset 0 1px #aaa392, 0 2px 4px rgba(0,0,0,0.45);
     }
     .keyrow { display: flex; justify-content: center; gap: 0.12rem; margin: 0.12rem 0; }
     button.stkey {
       flex: 1 1 0; min-width: 0; padding: 0.4rem 0.1rem; font-size: clamp(0.55rem, 2.8vw, 0.75rem); color: #e8e5dc;
-      background: linear-gradient(rgba(85,82,76,0.88), rgba(45,43,40,0.88)); border: 1px solid #171614;
+      background: linear-gradient(rgba(85,82,76,var(--keyboard-opacity)), rgba(45,43,40,var(--keyboard-opacity))); border: 1px solid #171614;
       border-bottom: 3px solid #151411; border-radius: 3px; touch-action: none;
       user-select: none; -webkit-user-select: none; text-shadow: 0 1px #000;
     }
@@ -150,7 +158,7 @@
     #touchMouseOverlay, #joystickOverlay {
       display: none; position: fixed; z-index: 11; left: 50%; bottom: 0.8rem;
       transform: translateX(-50%); padding: 0.45rem; border: 1px solid var(--border);
-      border-radius: 10px; background: rgba(16,16,20,0.62);
+      border-radius: 10px; background: rgba(16,16,20,var(--joystick-opacity));
       box-shadow: 0 8px 28px rgba(0,0,0,0.45);
     }
     #touchMouseOverlay.open, #joystickOverlay.open {
@@ -163,7 +171,7 @@
     #touchMouseOverlay button {
       position: absolute; top: 50%; min-width: 0; width: 4.7rem; height: 7rem;
       transform: translateY(-50%); touch-action: none; user-select: none; pointer-events: auto;
-      background: rgba(34, 34, 43, 0.9); border-color: #646475;
+      background: rgba(34, 34, 43, var(--mouse-opacity)); border-color: #646475;
       -webkit-user-select: none; -webkit-touch-callout: none;
     }
     #btnMouseLeft { left: max(0.6rem, env(safe-area-inset-left)); }
@@ -172,7 +180,7 @@
       align-items: center; gap: 1rem; z-index: 32; touch-action: none; user-select: none;
       -webkit-user-select: none; -webkit-touch-callout: none;
     }
-    #joystickOverlay button { background: rgba(34, 34, 43, 0.78); }
+    #joystickOverlay button { background: rgba(34, 34, 43, var(--joystick-opacity)); }
     #bezel:fullscreen #joystickOverlay.open, #bezel.immersive #joystickOverlay.open {
       bottom: max(0.8rem, env(safe-area-inset-bottom));
     }
@@ -208,6 +216,7 @@
   <div id="monitor">
     <div id="bezel">
       <canvas id="canvas" tabindex="0" oncontextmenu="event.preventDefault()" onauxclick="event.preventDefault()"></canvas>
+      <button class="iconbtn" id="exitFullscreen" type="button" title="Exit full screen">Exit full screen</button>
       <div id="joystickOverlay" aria-label="Atari ST touch joystick">
         <div id="joyDpad">
           <button type="button" data-joy="5">↖</button><button type="button" data-joy="1">▲</button><button type="button" data-joy="9">↗</button>
@@ -218,6 +227,9 @@
           <button type="button" data-action="A">A</button><button type="button" data-action="B">B</button>
           <button type="button" data-action="X">X</button><button type="button" data-action="Y">Y</button>
         </div>
+      </div>
+      <div id="keyboardOverlay" aria-label="Atari ST on-screen keyboard">
+        <div id="keyboardRows"></div>
       </div>
     </div>
     <div id="screenbar">
@@ -287,6 +299,16 @@
                title="Master volume of the machine sound (YM2149 + STE DMA)">
         <span id="volValue" class="badge">80 %</span>
       </div>
+      <div class="row" style="margin-top:0.45rem">
+        <label for="keyboardOpacity" style="font-size:0.78rem;color:var(--muted)">Keyboard opacity</label>
+        <input type="range" id="keyboardOpacity" min="10" max="100" value="50" style="flex:1;min-width:90px">
+        <span id="keyboardOpacityValue" class="badge">50 %</span>
+      </div>
+      <div class="row" style="margin-top:0.45rem">
+        <label for="mouseOpacity" style="font-size:0.78rem;color:var(--muted)">Mouse opacity</label>
+        <input type="range" id="mouseOpacity" min="10" max="100" value="50" style="flex:1;min-width:90px">
+        <span id="mouseOpacityValue" class="badge">50 %</span>
+      </div>
     </fieldset>
 
     <fieldset>
@@ -304,6 +326,11 @@
         <input type="range" id="joyDzSlider" min="0" max="95" value="30" style="flex:1;min-width:110px"
                title="How far a USB pad's analog stick must move before the ST sees a direction. No effect on the D-pad or the keyboard joystick.">
         <span id="joyDzValue" class="badge">0.30</span>
+      </div>
+      <div class="row" style="margin-top:0.45rem">
+        <label for="joystickOpacity" style="font-size:0.78rem;color:var(--muted)">Joystick opacity</label>
+        <input type="range" id="joystickOpacity" min="10" max="100" value="50" style="flex:1;min-width:90px">
+        <span id="joystickOpacityValue" class="badge">50 %</span>
       </div>
       <div class="row" style="margin-top:0.45rem">
         <label for="touchActionA" style="font-size:0.78rem;color:var(--muted)">Touch buttons</label>
@@ -336,10 +363,6 @@
     <button type="button" id="btnMouseLeft">Mouse left</button>
     <button type="button" id="btnMouseRight">Mouse right</button>
   </div>
-  <div id="keyboardOverlay" aria-label="Atari ST on-screen keyboard">
-    <div id="keyboardRows"></div>
-  </div>
-
   <script type='text/javascript'>
     var statusEl = document.getElementById('status');
     var monoOn = false;
@@ -701,6 +724,19 @@
 
     document.getElementById('btnReset').addEventListener('click', callReset);
 
+    [['keyboardOpacity', '--keyboard-opacity'], ['mouseOpacity', '--mouse-opacity'],
+     ['joystickOpacity', '--joystick-opacity']].forEach(function (setting) {
+      var slider = document.getElementById(setting[0]);
+      var value = document.getElementById(setting[0] + 'Value');
+      function apply() {
+        var percent = parseInt(slider.value, 10);
+        document.documentElement.style.setProperty(setting[1], (percent / 100).toFixed(2));
+        value.textContent = percent + ' %';
+      }
+      slider.addEventListener('input', apply);
+      apply();
+    });
+
     function stateFilename() {
       return 'neost-' + new Date().toISOString().replace(/[:.]/g, '-') + '.state';
     }
@@ -769,13 +805,17 @@
       reader.readAsArrayBuffer(file);
     });
 
+    function leaveFullscreen() {
+      var bezel = document.getElementById('bezel');
+      if (document.fullscreenElement) document.exitFullscreen();
+      bezel.classList.remove('immersive');
+      if (ready) Module.ccall('neost_set_fullscreen', null, ['number'], [0]);
+    }
     // Plein écran sur le bezel (le canvas s'y étire en conservant le ratio).
     document.getElementById('btnFullscreen').addEventListener('click', function () {
       var bezel = document.getElementById('bezel');
       if (document.fullscreenElement || bezel.classList.contains('immersive')) {
-        if (document.fullscreenElement) document.exitFullscreen();
-        bezel.classList.remove('immersive');
-        if (ready) Module.ccall('neost_set_fullscreen', null, ['number'], [0]);
+        leaveFullscreen();
       } else if (bezel.requestFullscreen) {
         var request = bezel.requestFullscreen();
         if (request && request.catch) request.catch(function () {
@@ -788,6 +828,7 @@
       }
       document.getElementById('canvas').focus();
     });
+    document.getElementById('exitFullscreen').addEventListener('click', leaveFullscreen);
     // Plein écran ⇒ ZOOM ADAPTATIF côté cœur (cadrage sur la zone active, comme
     // le mode borne du bureau ; cadre entier dès qu'une démo ouvre les bordures).
     // L'écouteur couvre AUSSI la sortie par Échap, que le bouton ne voit pas.
