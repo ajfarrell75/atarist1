@@ -146,7 +146,7 @@
     #touchMouseOverlay, #joystickOverlay {
       display: none; position: fixed; z-index: 11; left: 50%; bottom: 0.8rem;
       transform: translateX(-50%); padding: 0.45rem; border: 1px solid var(--border);
-      border-radius: 10px; background: rgba(16,16,20,0.97);
+      border-radius: 10px; background: rgba(16,16,20,0.62);
       box-shadow: 0 8px 28px rgba(0,0,0,0.45);
     }
     #touchMouseOverlay.open, #joystickOverlay.open {
@@ -164,8 +164,12 @@
     #btnMouseLeft { left: max(0.6rem, env(safe-area-inset-left)); }
     #btnMouseRight { right: max(0.6rem, env(safe-area-inset-right)); }
     #joystickOverlay {
-      align-items: center; gap: 1rem; touch-action: none; user-select: none;
+      align-items: center; gap: 1rem; z-index: 32; touch-action: none; user-select: none;
       -webkit-user-select: none; -webkit-touch-callout: none;
+    }
+    #joystickOverlay button { background: rgba(34, 34, 43, 0.78); }
+    #bezel:fullscreen #joystickOverlay.open, #bezel.immersive #joystickOverlay.open {
+      bottom: max(0.8rem, env(safe-area-inset-bottom));
     }
     #joyDpad { display: grid; grid-template-columns: repeat(3, 3rem); gap: 0.2rem; }
     #joyDpad button, #joyActions button {
@@ -199,6 +203,17 @@
   <div id="monitor">
     <div id="bezel">
       <canvas id="canvas" tabindex="0" oncontextmenu="event.preventDefault()" onauxclick="event.preventDefault()"></canvas>
+      <div id="joystickOverlay" aria-label="Atari ST touch joystick">
+        <div id="joyDpad">
+          <button type="button" data-joy="5">↖</button><button type="button" data-joy="1">▲</button><button type="button" data-joy="9">↗</button>
+          <button type="button" data-joy="4">◀</button><span></span><button type="button" data-joy="8">▶</button>
+          <button type="button" data-joy="6">↙</button><button type="button" data-joy="2">▼</button><button type="button" data-joy="10">↘</button>
+        </div>
+        <div id="joyActions">
+          <button type="button" data-action="A">A</button><button type="button" data-action="B">B</button>
+          <button type="button" data-action="X">X</button><button type="button" data-action="Y">Y</button>
+        </div>
+      </div>
     </div>
     <div id="screenbar">
       <span id="status">Loading the WebAssembly module…</span>
@@ -315,17 +330,6 @@
   <div id="touchMouseOverlay" aria-label="Atari ST touch mouse buttons">
     <button type="button" id="btnMouseLeft">Mouse left</button>
     <button type="button" id="btnMouseRight">Mouse right</button>
-  </div>
-  <div id="joystickOverlay" aria-label="Atari ST touch joystick">
-    <div id="joyDpad">
-      <button type="button" data-joy="5">↖</button><button type="button" data-joy="1">▲</button><button type="button" data-joy="9">↗</button>
-      <button type="button" data-joy="4">◀</button><span></span><button type="button" data-joy="8">▶</button>
-      <button type="button" data-joy="6">↙</button><button type="button" data-joy="2">▼</button><button type="button" data-joy="10">↘</button>
-    </div>
-    <div id="joyActions">
-      <button type="button" data-action="A">A</button><button type="button" data-action="B">B</button>
-      <button type="button" data-action="X">X</button><button type="button" data-action="Y">Y</button>
-    </div>
   </div>
   <div id="keyboardOverlay" aria-label="Atari ST on-screen keyboard">
     <div id="keyboardRows"></div>
