@@ -75,11 +75,13 @@
     }
     #bezel:fullscreen { border-radius: 0; }
     #bezel:fullscreen #canvas { width: 100%; height: 100%; object-fit: contain; }
-    #exitFullscreen {
+    #exitFullscreen, #displayKeyboard {
       display: none; position: absolute; z-index: 40; top: max(0.7rem, env(safe-area-inset-top));
       right: max(0.7rem, env(safe-area-inset-right)); background: rgba(34,34,43,0.85);
     }
-    #bezel:fullscreen #exitFullscreen, #bezel.immersive #exitFullscreen { display: block; }
+    #displayKeyboard { right: calc(max(0.7rem, env(safe-area-inset-right)) + 8.7rem); }
+    #bezel:fullscreen #exitFullscreen, #bezel:fullscreen #displayKeyboard,
+    #bezel.immersive #exitFullscreen, #bezel.immersive #displayKeyboard { display: block; }
     #bezel.immersive {
       position: fixed; z-index: 30; inset: 0; width: 100vw; width: 100dvw;
       height: 100vh; height: 100dvh; border: 0; border-radius: 0;
@@ -132,22 +134,22 @@
     input[type=file] { display: none; }
     #keyboardOverlay {
       display: none; position: fixed; z-index: 10; left: 0; right: 0; bottom: 0;
-      padding: 0.5rem max(0.5rem, env(safe-area-inset-right)) max(0.5rem, env(safe-area-inset-bottom))
-               max(0.5rem, env(safe-area-inset-left));
+      padding: 0.4rem max(0.4rem, env(safe-area-inset-right)) max(0.4rem, env(safe-area-inset-bottom))
+               max(0.4rem, env(safe-area-inset-left));
       background: linear-gradient(rgba(216,209,190,var(--keyboard-opacity)), rgba(164,156,137,var(--keyboard-opacity)));
       border-top: 5px solid #575247; box-shadow: 0 -10px 28px rgba(0,0,0,0.55);
       touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
     }
     #keyboardOverlay.open { display: block; }
     #keyboardRows {
-      width: 100%; max-width: 900px; margin: auto; padding: 0.35rem; border-radius: 7px;
+      width: 100%; max-width: 900px; margin: auto; padding: 0.28rem; border-radius: 7px;
       background: linear-gradient(145deg, rgba(119,113,102,var(--keyboard-opacity)), rgba(79,74,66,var(--keyboard-opacity)));
       border: 2px solid #37342e;
       box-shadow: inset 0 1px #aaa392, 0 2px 4px rgba(0,0,0,0.45);
     }
-    .keyrow { display: flex; justify-content: center; gap: 0.12rem; margin: 0.12rem 0; }
+    .keyrow { display: flex; justify-content: center; gap: 0.1rem; margin: 0.1rem 0; }
     button.stkey {
-      flex: 1 1 0; min-width: 0; padding: 0.4rem 0.1rem; font-size: clamp(0.55rem, 2.8vw, 0.75rem); color: #e8e5dc;
+      flex: 1 1 0; min-width: 0; padding: 0.32rem 0.1rem; font-size: clamp(0.55rem, 2.8vw, 0.75rem); color: #e8e5dc;
       background: linear-gradient(rgba(85,82,76,var(--keyboard-opacity)), rgba(45,43,40,var(--keyboard-opacity))); border: 1px solid #171614;
       border-bottom: 3px solid #151411; border-radius: 3px; touch-action: none;
       user-select: none; -webkit-user-select: none; text-shadow: 0 1px #000;
@@ -190,6 +192,8 @@
       -webkit-user-select: none; -webkit-touch-callout: none;
     }
     #joyActions { display: grid; grid-template-columns: repeat(2, 3.4rem); gap: 0.3rem; }
+    .joy-extra { display: none; }
+    #joystickOverlay.six-buttons .joy-extra, #controls.six-buttons .joy-extra { display: inline-block; }
 
     /* --- Aide -------------------------------------------------------------- */
     details {
@@ -216,6 +220,7 @@
   <div id="monitor">
     <div id="bezel">
       <canvas id="canvas" tabindex="0" oncontextmenu="event.preventDefault()" onauxclick="event.preventDefault()"></canvas>
+      <button class="iconbtn" id="displayKeyboard" type="button" title="Show the Atari ST keyboard">Display keyboard</button>
       <button class="iconbtn" id="exitFullscreen" type="button" title="Exit full screen">Exit full screen</button>
       <div id="joystickOverlay" aria-label="Atari ST touch joystick">
         <div id="joyDpad">
@@ -226,6 +231,7 @@
         <div id="joyActions">
           <button type="button" data-action="A">A</button><button type="button" data-action="B">B</button>
           <button type="button" data-action="X">X</button><button type="button" data-action="Y">Y</button>
+          <button class="joy-extra" type="button" data-action="E">E</button><button class="joy-extra" type="button" data-action="F">F</button>
         </div>
       </div>
       <div id="keyboardOverlay" aria-label="Atari ST on-screen keyboard">
@@ -333,11 +339,20 @@
         <span id="joystickOpacityValue" class="badge">50 %</span>
       </div>
       <div class="row" style="margin-top:0.45rem">
+        <label for="joyButtonCount" style="font-size:0.78rem;color:var(--muted)">Button count</label>
+        <select id="joyButtonCount" title="Number of action buttons on the touch joystick">
+          <option value="4">4 buttons</option>
+          <option value="6">6 buttons</option>
+        </select>
+      </div>
+      <div class="row" style="margin-top:0.45rem">
         <label for="touchActionA" style="font-size:0.78rem;color:var(--muted)">Touch buttons</label>
         <select id="touchActionA" title="Assignment for touch button A"></select>
         <select id="touchActionB" title="Assignment for touch button B"></select>
         <select id="touchActionX" title="Assignment for touch button X"></select>
         <select id="touchActionY" title="Assignment for touch button Y"></select>
+        <select id="touchActionE" class="joy-extra" title="Assignment for touch button E"></select>
+        <select id="touchActionF" class="joy-extra" title="Assignment for touch button F"></select>
       </div>
     </fieldset>
   </div>
@@ -347,7 +362,7 @@
     <ul>
       <li><b>Mouse</b>: click the middle button (usually the wheel), or press <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>G</kbd>, to <b>capture or release</b> it (GEM cursor). <kbd>Esc</kbd> and <kbd>Del</kbd> are sent to the ST.</li>
       <li><b>Touch mouse</b>: enable it in Display &amp; peripherals, then drag one finger on the screen to move the GEM mouse. Double-tap for a left click; the left and right mouse buttons also appear below the screen. It is off by default so the page can still scroll normally.</li>
-      <li><b>ST keyboard</b>: enable the on-screen keyboard in Display &amp; peripherals. Keys are sent directly to the Atari IKBD; Shift remains active for the next key.</li>
+      <li><b>ST keyboard</b>: enable the on-screen keyboard in Display &amp; peripherals, or use Display keyboard in full screen. Keys are sent directly to the Atari IKBD; Shift remains active for the next key.</li>
       <li><b>Keyboard</b>: routed to the IKBD (US layout). <b>Keyboard joystick</b>: arrows + <kbd>right Ctrl</kbd> = fire, on the port picked in the Joystick box (port 1 by default).</li>
       <li><b>Touch joystick</b>: enable the floating eight-direction pad and four action buttons on joystick port 1. Assign A/B to common actions, or X/Y to any Atari ST keyboard key in the Joystick controls.</li>
       <li><b>Bluetooth &amp; USB controllers</b>: pair or connect the controller with your device, then press any controller button once in this page. The first controller is assigned to joystick port 1 and the second to port 0. The <b>dead zone</b> slider only affects analog sticks, not the D-pad.</li>
@@ -949,10 +964,16 @@
         });
         rows.appendChild(row);
       });
-      button.addEventListener('click', function () {
-        var open = overlay.classList.toggle('open');
+      function setOpen(open) {
+        overlay.classList.toggle('open', open);
         button.textContent = open ? 'ST keyboard: on' : 'ST keyboard: off';
         button.classList.toggle('on', open);
+      }
+      button.addEventListener('click', function () {
+        setOpen(!overlay.classList.contains('open'));
+      });
+      document.getElementById('displayKeyboard').addEventListener('click', function () {
+        setOpen(true);
       });
     })();
 
@@ -1100,7 +1121,7 @@
       var bits = 0;
       var fireActions = 0;
       var assignments = {
-        A: 'fire', B: '57', X: '28', Y: '59'
+        A: 'fire', B: '57', X: '28', Y: '59', E: '60', F: '61'
       };
       var actionOptions = [
         ['fire', 'Fire'], ['57', 'Space'], ['28', 'Return'],
@@ -1150,9 +1171,10 @@
         el.addEventListener('contextmenu', function (e) { e.preventDefault(); });
       });
       overlay.addEventListener('contextmenu', function (e) { e.preventDefault(); });
-      ['A', 'B', 'X', 'Y'].forEach(function (name) {
+      ['A', 'B', 'X', 'Y', 'E', 'F'].forEach(function (name) {
         var select = document.getElementById('touchAction' + name);
-        (name === 'X' || name === 'Y' ? actionOptions.concat(keyboardOptions) : actionOptions)
+        (name === 'X' || name === 'Y' || name === 'E' || name === 'F'
+          ? actionOptions.concat(keyboardOptions) : actionOptions)
           .filter(function (entry, index, choices) {
             return choices.findIndex(function (candidate) { return candidate[0] === entry[0]; }) === index;
           }).forEach(function (entry) {
@@ -1165,6 +1187,11 @@
         select.addEventListener('change', function () {
           assignments[name] = select.value;
         });
+      });
+      document.getElementById('joyButtonCount').addEventListener('change', function () {
+        var sixButtons = this.value === '6';
+        overlay.classList.toggle('six-buttons', sixButtons);
+        document.getElementById('controls').classList.toggle('six-buttons', sixButtons);
       });
       overlay.querySelectorAll('[data-action]').forEach(function (el) {
         var action = el.dataset.action;
