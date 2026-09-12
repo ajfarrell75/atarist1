@@ -124,24 +124,28 @@
     input[type=file] { display: none; }
     #keyboardOverlay {
       display: none; position: fixed; z-index: 10; left: 0; right: 0; bottom: 0;
-      padding: 0.65rem; background: linear-gradient(#d8d1be, #a49c89);
+      padding: 0.5rem max(0.5rem, env(safe-area-inset-right)) max(0.5rem, env(safe-area-inset-bottom))
+               max(0.5rem, env(safe-area-inset-left));
+      background: linear-gradient(rgba(216,209,190,0.82), rgba(164,156,137,0.82));
       border-top: 5px solid #575247; box-shadow: 0 -10px 28px rgba(0,0,0,0.55);
+      touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
     }
     #keyboardOverlay.open { display: block; }
     #keyboardRows {
-      width: min(100%, 900px); margin: auto; padding: 0.45rem; border-radius: 7px;
-      background: linear-gradient(145deg, #777166, #4f4a42); border: 2px solid #37342e;
+      width: 100%; max-width: 900px; margin: auto; padding: 0.35rem; border-radius: 7px;
+      background: linear-gradient(145deg, rgba(119,113,102,0.84), rgba(79,74,66,0.84));
+      border: 2px solid #37342e;
       box-shadow: inset 0 1px #aaa392, 0 2px 4px rgba(0,0,0,0.45);
     }
-    .keyrow { display: flex; justify-content: center; gap: 0.18rem; margin: 0.18rem 0; }
+    .keyrow { display: flex; justify-content: center; gap: 0.12rem; margin: 0.12rem 0; }
     button.stkey {
-      min-width: 2.1rem; padding: 0.42rem 0.25rem; font-size: 0.75rem; color: #e8e5dc;
-      background: linear-gradient(#55524c, #2d2b28); border: 1px solid #171614;
+      flex: 1 1 0; min-width: 0; padding: 0.4rem 0.1rem; font-size: clamp(0.55rem, 2.8vw, 0.75rem); color: #e8e5dc;
+      background: linear-gradient(rgba(85,82,76,0.88), rgba(45,43,40,0.88)); border: 1px solid #171614;
       border-bottom: 3px solid #151411; border-radius: 3px; touch-action: none;
       user-select: none; -webkit-user-select: none; text-shadow: 0 1px #000;
     }
-    button.stkey.wide { min-width: 3.8rem; }
-    button.stkey.space { min-width: min(40vw, 16rem); }
+    button.stkey.wide { flex-grow: 1.6; }
+    button.stkey.space { flex-grow: 5; }
     button.stkey.armed { background: var(--on); border-color: #3f7a5c; }
     #touchMouseOverlay, #joystickOverlay {
       display: none; position: fixed; z-index: 11; left: 50%; bottom: 0.8rem;
@@ -160,6 +164,7 @@
       position: absolute; top: 50%; min-width: 0; width: 4.7rem; height: 7rem;
       transform: translateY(-50%); touch-action: none; user-select: none; pointer-events: auto;
       background: rgba(34, 34, 43, 0.9); border-color: #646475;
+      -webkit-user-select: none; -webkit-touch-callout: none;
     }
     #btnMouseLeft { left: max(0.6rem, env(safe-area-inset-left)); }
     #btnMouseRight { right: max(0.6rem, env(safe-area-inset-right)); }
@@ -898,6 +903,7 @@
             el.addEventListener('pointerup', release);
             el.addEventListener('pointercancel', release);
           }
+          el.addEventListener('contextmenu', function (e) { e.preventDefault(); });
           row.appendChild(el);
         });
         rows.appendChild(row);
@@ -945,9 +951,11 @@
         }
         el.addEventListener('pointerup', release);
         el.addEventListener('pointercancel', release);
+        el.addEventListener('contextmenu', function (e) { e.preventDefault(); });
       }
       bindMouseButton('btnMouseLeft', true);
       bindMouseButton('btnMouseRight', false);
+      buttons.addEventListener('contextmenu', function (e) { e.preventDefault(); });
 
       button.addEventListener('click', function () {
         touchMouseOn = !touchMouseOn;
