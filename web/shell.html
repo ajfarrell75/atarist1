@@ -348,6 +348,12 @@
         </select>
       </div>
       <div class="row" style="margin-top:0.45rem">
+        <label for="ps5Button" style="font-size:0.78rem;color:var(--muted)">PS5 button</label>
+        <select id="ps5Button" title="Physical PS5 controller button to configure"></select>
+        <label for="ps5Key" style="font-size:0.78rem;color:var(--muted)">ST key</label>
+        <select id="ps5Key" title="Atari ST keyboard key sent by this PS5 controller button"></select>
+      </div>
+      <div class="row" style="margin-top:0.45rem">
         <label for="touchActionA" style="font-size:0.78rem;color:var(--muted)">Touch buttons</label>
         <select id="touchActionA" title="Assignment for touch button A"></select>
         <select id="touchActionB" title="Assignment for touch button B"></select>
@@ -367,7 +373,7 @@
       <li><b>ST keyboard</b>: enable the on-screen keyboard in Display &amp; peripherals, or use Display keyboard in full screen. Keys are sent directly to the Atari IKBD; Shift remains active for the next key.</li>
       <li><b>Keyboard</b>: routed to the IKBD (US layout). <b>Keyboard joystick</b>: arrows + <kbd>right Ctrl</kbd> = fire, on the port picked in the Joystick box (port 1 by default).</li>
       <li><b>Touch joystick</b>: enable the floating eight-direction pad and four action buttons on joystick port 1. Assign A/B to common actions, or X/Y to any Atari ST keyboard key in the Joystick controls.</li>
-      <li><b>Bluetooth &amp; USB controllers</b>: pair or connect the controller with your device, then press any controller button once in this page. The first controller is assigned to joystick port 1 and the second to port 0. The <b>dead zone</b> slider only affects analog sticks, not the D-pad.</li>
+      <li><b>Bluetooth &amp; USB controllers</b>: pair or connect the controller with your device, then press any controller button once in this page. The first controller is assigned to joystick port 1 and the second to port 0. Use the <b>PS5 button</b> and <b>ST key</b> controls to map any DualSense button to any Atari ST keyboard key. The <b>dead zone</b> slider only affects analog sticks, not the D-pad.</li>
       <li><b>Reset</b>: a <b>cold</b> reset (power-cycle) — ST-RAM is wiped and TOS boots from scratch, which is also what mounting a floppy in A: does.</li>
       <li><b>Game floppies</b>: "Mount A: + Reset" switches to a <b>real TOS</b> when one is available (EmuTOS boots system floppies only) — TOS 2.06 on STE/Mega STE, TOS 1.0x on ST. <b>This build bundles EmuTOS alone</b>, which is free software; original Atari TOS ROMs are not ours to ship. Most commercial games therefore need you to add one to <code>/roms</code> and pick it above. The bundled <b>demos</b> boot fine on EmuTOS.</li>
       <li><b>Save states</b>: <b>Save state</b> downloads a <code>.state</code> file to your browser's Downloads folder. Use <b>Load state…</b> to restore it with the same machine, RAM size, and ROM.</li>
@@ -1156,6 +1162,60 @@
         ['108', 'Keypad 6'], ['109', 'Keypad 1'], ['110', 'Keypad 2'], ['111', 'Keypad 3'],
         ['112', 'Keypad 0'], ['113', 'Keypad .'], ['114', 'Keypad Enter']
       ];
+      var ps5Buttons = [
+        'Cross', 'Circle', 'Square', 'Triangle', 'L1', 'R1', 'L2', 'R2',
+        'Create', 'Options', 'L3', 'R3', 'D-pad Up', 'D-pad Down',
+        'D-pad Left', 'D-pad Right', 'PS'
+      ];
+      var ps5Assignments = new Array(ps5Buttons.length).fill('');
+      var ps5Pressed = new Array(ps5Buttons.length).fill(false);
+      var ps5Button = document.getElementById('ps5Button');
+      var ps5Key = document.getElementById('ps5Key');
+      ps5Buttons.forEach(function (name, index) {
+        var option = document.createElement('option');
+        option.value = index;
+        option.textContent = name;
+        ps5Button.appendChild(option);
+      });
+      [['', 'Unassigned']].concat(keyboardOptions).forEach(function (entry) {
+        var option = document.createElement('option');
+        option.value = entry[0];
+        option.textContent = entry[1];
+        ps5Key.appendChild(option);
+      });
+      function releasePs5Keys() {
+        ps5Assignments.forEach(function (scancode, index) {
+          if (ps5Pressed[index] && scancode && ready)
+            Module.ccall('neost_key_event', null, ['number', 'number'], [parseInt(scancode, 10), 0]);
+          ps5Pressed[index] = false;
+        });
+      }
+      function pollPs5Keyboard() {
+        var pads = navigator.getGamepads ? navigator.getGamepads() : [];
+        var pad = null;
+        for (var i = 0; i < pads.length; i++)
+          if (pads[i] && pads[i].mapping === 'standard') { pad = pads[i]; break; }
+        ps5Assignments.forEach(function (scancode, index) {
+          var pressed = !!(pad && pad.buttons[index] &&
+                           (pad.buttons[index].pressed || pad.buttons[index].value > 0.5));
+          if (pressed !== ps5Pressed[index]) {
+            ps5Pressed[index] = pressed;
+            if (scancode && ready)
+              Module.ccall('neost_key_event', null, ['number', 'number'],
+                           [parseInt(scancode, 10), pressed ? 1 : 0]);
+          }
+        });
+        requestAnimationFrame(pollPs5Keyboard);
+      }
+      ps5Button.addEventListener('change', function () {
+        ps5Key.value = ps5Assignments[parseInt(ps5Button.value, 10)];
+      });
+      ps5Key.addEventListener('change', function () {
+        releasePs5Keys();
+        ps5Assignments[parseInt(ps5Button.value, 10)] = ps5Key.value;
+      });
+      window.addEventListener('pagehide', releasePs5Keys);
+      pollPs5Keyboard();
       function update() {
         if (ready) Module.ccall('neost_set_touch_joystick', null, ['number'],
                                 [bits | (fireActions ? 128 : 0)]);
