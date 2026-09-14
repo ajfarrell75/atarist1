@@ -44,6 +44,7 @@ bool   g_kbdJoy = false;                 // émulation joystick clavier (flèche
 int    g_kbdJoyPort = 1;                 // port ST visé par l'émulation clavier
 float  g_joyDeadzone = 0.30f;            // zone morte centrale des sticks analogiques
 uint8_t g_touchJoy = 0;                  // pad tactile, port joystick 1
+bool    g_webControllerFire = false;     // bouton physique assigné au feu ST
 
 // --- État vidéo WebGL --------------------------------------------------------
 GLuint g_tex = 0, g_prog = 0, g_vbo = 0;
@@ -403,7 +404,7 @@ void mainLoop() {
     {
         uint8_t joy0 = 0, joy1 = 0;
         stjoy::compose(g_window, g_kbdJoy, g_kbdJoyPort, g_joyDeadzone, joy0, joy1);
-        joy1 |= g_touchJoy;
+        joy1 |= g_touchJoy | (g_webControllerFire ? stjoy::FIRE : 0);
         g_machine->ikbd.setJoystick(joy0, joy1);
         g_machine->bus.stePads.setJoystick(joy0, joy1);   // joypads STE ($FF9200/02)
     }
@@ -557,6 +558,11 @@ EMSCRIPTEN_KEEPALIVE void neost_key_event(int scancode, int pressed) {
 EMSCRIPTEN_KEEPALIVE void neost_set_touch_joystick(int bits) {
     g_touchJoy = static_cast<uint8_t>(bits) & (stjoy::UP | stjoy::DOWN | stjoy::LEFT
                                                 | stjoy::RIGHT | stjoy::FIRE);
+}
+
+// Un bouton Gamepad configuré dans le shell peut compléter le feu du port 1.
+EMSCRIPTEN_KEEPALIVE void neost_set_controller_fire(int pressed) {
+    g_webControllerFire = pressed != 0;
 }
 
 // mono != 0 → moniteur monochrome (haute résolution) ; sinon couleur (basse rés).

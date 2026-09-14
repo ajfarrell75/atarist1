@@ -1177,7 +1177,7 @@
         option.textContent = name;
         ps5Button.appendChild(option);
       });
-      [['', 'Unassigned']].concat(keyboardOptions).forEach(function (entry) {
+      [['', 'Unassigned'], ['fire', 'Joystick fire']].concat(keyboardOptions).forEach(function (entry) {
         var option = document.createElement('option');
         option.value = entry[0];
         option.textContent = entry[1];
@@ -1185,10 +1185,11 @@
       });
       function releasePs5Keys() {
         ps5Assignments.forEach(function (scancode, index) {
-          if (ps5Pressed[index] && scancode && ready)
+          if (ps5Pressed[index] && scancode && scancode !== 'fire' && ready)
             Module.ccall('neost_key_event', null, ['number', 'number'], [parseInt(scancode, 10), 0]);
           ps5Pressed[index] = false;
         });
+        if (ready) Module.ccall('neost_set_controller_fire', null, ['number'], [0]);
       }
       function pollPs5Keyboard() {
         var pads = navigator.getGamepads ? navigator.getGamepads() : [];
@@ -1200,13 +1201,20 @@
                            (pad.buttons[index].pressed || pad.buttons[index].value > 0.5));
           if (pressed !== ps5Pressed[index]) {
             ps5Pressed[index] = pressed;
-            if (scancode && ready)
+            if (scancode && scancode !== 'fire' && ready)
               Module.ccall('neost_key_event', null, ['number', 'number'],
                            [parseInt(scancode, 10), pressed ? 1 : 0]);
           }
         });
+        var firePressed = ps5Assignments.some(function (scancode, index) {
+          return scancode === 'fire' && ps5Pressed[index];
+        });
+        if (firePressed !== pollPs5Keyboard.firePressed && ready)
+          Module.ccall('neost_set_controller_fire', null, ['number'], [firePressed ? 1 : 0]);
+        pollPs5Keyboard.firePressed = firePressed;
         requestAnimationFrame(pollPs5Keyboard);
       }
+      pollPs5Keyboard.firePressed = false;
       ps5Button.addEventListener('change', function () {
         ps5Key.value = ps5Assignments[parseInt(ps5Button.value, 10)];
       });
